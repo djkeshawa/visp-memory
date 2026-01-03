@@ -56,7 +56,8 @@ def get_memory() -> Memory:
 def init(
     project_type: str = typer.Option("code", "--type", "-t", help="Project type: code, writing, research, general"),
     name: str = typer.Option(None, "--name", "-n", help="Project name"),
-    data_dir: str = typer.Option(".llm-memory", "--data", "-d", help="Data directory")
+    data_dir: str = typer.Option(".llm-memory", "--data", "-d", help="Data directory"),
+    repo: str = typer.Option(None, "--repo", "-r", help="Default repository/project ID")
 ):
     """Initialize LLM Memory in the current directory."""
     config_path = Path("llm-memory.yaml")
@@ -68,7 +69,8 @@ def init(
     # Create config
     config = MemoryConfig(
         project_name=name or Path.cwd().name,
-        project_type=project_type
+        project_type=project_type,
+        repo_id=repo
     )
     config.storage.data_dir = Path(data_dir) / "data"
 

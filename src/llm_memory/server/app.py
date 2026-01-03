@@ -99,7 +99,9 @@ async def create_memory(memory: MemoryCreate, api_key: str = Depends(get_api_key
         layer=memory.layer,
         category=memory.category,
         importance=memory.importance,
-        repo_id=memory.repo_id,
+        importance=memory.importance,
+        repo_id=memory.repo_id or config.repo_id,
+        tags=memory.tags,
         tags=memory.tags,
         metadata=memory.metadata
     )
@@ -115,7 +117,8 @@ async def recall(query: SearchQuery, api_key: str = Depends(get_api_key)):
     results = storage.search_memories(
         query=query.query,
         limit=query.limit,
-        repo_id=query.repo_id
+        limit=query.limit,
+        repo_id=query.repo_id or config.repo_id
     )
     return [
         {

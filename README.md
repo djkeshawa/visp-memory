@@ -170,19 +170,21 @@ llm-memory recall "framework"  # Won't show experiment-temp memories
 
 ### Configuration
 
-#### Option 1: Per-Command Isolation
+#### Option 1: Persistent Project Scope (Recommended)
+Initialize your project with a repository ID. All subsequent commands will automatically act within this scope.
+
+```bash
+llm-memory init --repo client-xyz
+llm-memory record "Updates for client"  # Automatically scoped to client-xyz
+```
+
+#### Option 2: Per-Command Isolation
 ```bash
 llm-memory record "..." --repo isolated-project
 llm-memory recall "..." --repo isolated-project
 ```
 
-#### Option 2: Set Default repo_id in Config
-Edit `~/.llm-memory/config.yaml`:
-```yaml
-repo_id: client-xyz  # All commands now scoped to this project
-```
-
-Or use environment variable:
+#### Option 3: Environment Variable
 ```bash
 export LLM_MEMORY_REPO_ID=client-xyz
 ```

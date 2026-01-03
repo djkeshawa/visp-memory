@@ -133,6 +133,7 @@ class MemoryConfig(BaseSettings):
     # Project identification
     project_name: str = "default"
     project_type: Literal["code", "writing", "research", "general"] = "general"
+    repo_id: Optional[str] = Field(default=None, env="LLM_MEMORY_REPO_ID")
 
     # Sub-configurations
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)

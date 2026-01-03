@@ -130,6 +130,10 @@ class Memory:
         except ValueError:
             cat = category
 
+        # Use configured repo_id if not provided
+        if kwargs.get("repo_id") is None and self.config.repo_id:
+            kwargs["repo_id"] = self.config.repo_id
+
         return self.episodic.record(
             content=event,
             category=cat,
@@ -263,11 +267,14 @@ class Memory:
         layers = layers or ["episodic", "semantic", "intent"]
         results = []
 
+        # Use configured repo_id if not provided
+        search_repo_id = repo_id or self.config.repo_id
+
         for layer in layers:
             layer_results = self._storage.search_memories(
                 query=query,
                 layer=layer if layer != "intent" else None,
-                repo_id=repo_id,
+                repo_id=search_repo_id,
                 limit=limit
             )
             results.extend(layer_results)
