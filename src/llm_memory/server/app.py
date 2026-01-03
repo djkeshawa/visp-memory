@@ -75,8 +75,8 @@ async def root():
     return stats
 
 @app.get("/memories", response_model=List[MemoryResponse])
-async def list_memories(api_key: str = Depends(get_api_key)):
-    memories = storage.list_memories(limit=50) # Default limit
+async def list_memories(repo_id: str = None, api_key: str = Depends(get_api_key)):
+    memories = storage.list_memories(limit=50, repo_id=repo_id or config.repo_id) # Default limit
     return [
         {
             "id": m["id"],
@@ -136,9 +136,9 @@ async def recall(query: SearchQuery, api_key: str = Depends(get_api_key)):
     ]
 
 @app.get("/intents", response_model=List[IntentResponse])
-async def list_intents(api_key: str = Depends(get_api_key)):
+async def list_intents(repo_id: str = None, api_key: str = Depends(get_api_key)):
     # Use the dedicated storage method to fetch active intents
-    intents = storage.get_active_intents()
+    intents = storage.get_active_intents(repo_id=repo_id or config.repo_id)
     
     return [
         {
@@ -152,10 +152,11 @@ async def list_intents(api_key: str = Depends(get_api_key)):
     ]
 
 @app.get("/graph")
-async def get_graph(api_key: str = Depends(get_api_key)):
+async def get_graph(repo_id: str = None, api_key: str = Depends(get_api_key)):
     """Get memory graph (nodes and edges)."""
-    memories = storage.list_memories(limit=200)
-    relationships = storage.get_all_relationships()
+    graph_repo_id = repo_id or config.repo_id
+    memories = storage.list_memories(limit=200, repo_id=graph_repo_id)
+    relationships = storage.get_all_relationships(repo_id=graph_repo_id)
     
     return {
         "nodes": [

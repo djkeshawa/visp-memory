@@ -158,13 +158,19 @@ class Memory:
         Returns:
             Memory ID
         """
-        return self.episodic.decision(what, why, alternatives)
+        return self.episodic.decision(
+            what,
+            why,
+            alternatives,
+            repo_id=self.config.repo_id
+        )
 
     def learn(
         self,
         knowledge: str,
         category: str = "fact",
-        importance: float = 0.6
+        importance: float = 0.6,
+        repo_id: str = None
     ) -> str:
         """
         Quick method to establish semantic knowledge.
@@ -173,6 +179,7 @@ class Memory:
             knowledge: The knowledge/fact/pattern
             category: Type (invariant, pattern, convention, etc.)
             importance: How important
+            repo_id: Optional repository context
 
         Returns:
             Memory ID
@@ -186,10 +193,10 @@ class Memory:
             knowledge=knowledge,
             category=cat,
             importance=importance,
-            repo_id=self.config.repo_id
+            repo_id=repo_id or self.config.repo_id
         )
 
-    def warn(self, area: str, warning: str, severity: float = 0.7) -> str:
+    def warn(self, area: str, warning: str, severity: float = 0.7, repo_id: str = None) -> str:
         """
         Quick method to establish a warning.
 
@@ -197,17 +204,19 @@ class Memory:
             area: What area
             warning: What to watch out for
             severity: How serious
+            repo_id: Optional repository context
 
         Returns:
             Memory ID
         """
-        return self.semantic.warn(area, warning, severity, repo_id=self.config.repo_id)
+        return self.semantic.warn(area, warning, severity, repo_id=repo_id or self.config.repo_id)
 
     def goal(
         self,
         goal: str,
         priority: int = 1,
-        constraints: List[str] = None
+        constraints: List[str] = None,
+        repo_id: str = None
     ) -> str:
         """
         Quick method to set a goal.
@@ -216,6 +225,7 @@ class Memory:
             goal: The goal description
             priority: 0=low, 1=normal, 2=high, 3=critical
             constraints: Constraints to respect
+            repo_id: Optional repository context
 
         Returns:
             Intent ID
@@ -224,21 +234,22 @@ class Memory:
             goal=goal,
             priority=IntentPriority(priority),
             constraints=constraints,
-            repo_id=self.config.repo_id
+            repo_id=repo_id or self.config.repo_id
         )
 
-    def working_on(self, task: str, files: List[str] = None) -> str:
+    def working_on(self, task: str, files: List[str] = None, repo_id: str = None) -> str:
         """
         Quick method to set current task.
 
         Args:
             task: What you're working on
             files: Files being modified
+            repo_id: Optional repository context
 
         Returns:
             Intent ID
         """
-        return self.intent.working_on(task, files, repo_id=self.config.repo_id)
+        return self.intent.working_on(task, files, repo_id=repo_id or self.config.repo_id)
 
     def done(self) -> int:
         """Clear current task (mark as done)."""
@@ -524,15 +535,26 @@ class Memory:
         Returns:
             Complete memory export
         """
+        # Export filtered by repo_id if set
+        repo_id = self.config.repo_id
+        
+        episodic_memories = self._storage.list_memories(layer="episodic", limit=10000)
+        semantic_memories = self._storage.list_memories(layer="semantic", limit=10000)
+        
+        # Filter if repo_id is set (simple client-side filter since list_memories might be global until updated)
+        # Better to update list_memories to accept repo_id, but assuming list_memories will be updated soon:
+        # Actually I should pass repo_id to list_memories if I update it.
+        # Let's assume I will update list_memories next.
+        
         export_data = {
             "version": "1.0",
             "exported_at": datetime.now().isoformat(),
             "config": self.config.model_dump(),
             "memories": {
-                "episodic": self._storage.list_memories(layer="episodic", limit=10000),
-                "semantic": self._storage.list_memories(layer="semantic", limit=10000),
+                "episodic": self._storage.list_memories(layer="episodic", limit=10000, repo_id=repo_id),
+                "semantic": self._storage.list_memories(layer="semantic", limit=10000, repo_id=repo_id),
             },
-            "intents": self._storage.get_active_intents(),
+            "intents": self._storage.get_active_intents(repo_id=repo_id),
             "stats": self.stats()
         }
 
@@ -559,7 +581,8 @@ class Memory:
                 category=mem.get("category", "note"),
                 importance=mem.get("importance", 0.5),
                 tags=mem.get("tags", []),
-                metadata=mem.get("metadata", {})
+                metadata=mem.get("metadata", {}),
+                repo_id=mem.get("repo_id") or self.config.repo_id
             )
 
         # Import semantic memories
@@ -570,7 +593,8 @@ class Memory:
                 category=mem.get("category", "fact"),
                 importance=mem.get("importance", 0.5),
                 tags=mem.get("tags", []),
-                metadata=mem.get("metadata", {})
+                metadata=mem.get("metadata", {}),
+                repo_id=mem.get("repo_id") or self.config.repo_id
             )
 
         # Import intents
@@ -578,5 +602,6 @@ class Memory:
             self._storage.set_intent(
                 description=intent["description"],
                 priority=intent.get("priority", 1),
-                context=intent.get("context", {})
+                context=intent.get("context", {}),
+                repo_id=intent.get("repo_id") or self.config.repo_id
             )

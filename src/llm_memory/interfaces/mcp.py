@@ -265,6 +265,10 @@ def create_mcp_server() -> "Server":
                             "type": "array",
                             "items": {"type": "string"},
                             "description": "Alternatives that were considered"
+                        },
+                        "repo_id": {
+                            "type": "string",
+                            "description": "Repository/project ID (optional)"
                         }
                     },
                     "required": ["what", "why"]
@@ -297,6 +301,10 @@ def create_mcp_server() -> "Server":
                             "maximum": 1,
                             "default": 0.6,
                             "description": "How important (0.0-1.0)"
+                        },
+                        "repo_id": {
+                            "type": "string",
+                            "description": "Repository/project ID (optional)"
                         }
                     },
                     "required": ["knowledge"]
@@ -322,6 +330,10 @@ def create_mcp_server() -> "Server":
                             "maximum": 1,
                             "default": 0.7,
                             "description": "How serious (0.0-1.0)"
+                        },
+                        "repo_id": {
+                            "type": "string",
+                            "description": "Repository/project ID (optional)"
                         }
                     },
                     "required": ["area", "warning"]
@@ -374,6 +386,10 @@ def create_mcp_server() -> "Server":
                             "type": "array",
                             "items": {"type": "string"},
                             "description": "Constraints to respect"
+                        },
+                        "repo_id": {
+                            "type": "string",
+                            "description": "Repository/project ID (optional)"
                         }
                     },
                     "required": ["goal"]
@@ -393,6 +409,10 @@ def create_mcp_server() -> "Server":
                             "type": "array",
                             "items": {"type": "string"},
                             "description": "Files being modified"
+                        },
+                        "repo_id": {
+                            "type": "string",
+                            "description": "Repository/project ID (optional)"
                         }
                     },
                     "required": ["task"]
@@ -833,7 +853,8 @@ def _handle_recording(name: str, args: dict[str, Any], memory: Memory) -> str:
         mem_id = memory.decision(
             what=args["what"],
             why=args["why"],
-            alternatives=args.get("alternatives")
+            alternatives=args.get("alternatives"),
+            repo_id=args.get("repo_id")
         )
         return f"Decision recorded (ID: {mem_id}): {args['what']}"
 
@@ -846,7 +867,8 @@ def _handle_knowledge(name: str, args: dict[str, Any], memory: Memory) -> str:
         mem_id = memory.learn(
             knowledge=args["knowledge"],
             category=args.get("category", "fact"),
-            importance=args.get("importance", 0.6)
+            importance=args.get("importance", 0.6),
+            repo_id=args.get("repo_id")
         )
         return f"Knowledge established (ID: {mem_id}): {args['knowledge']}"
 
@@ -854,7 +876,8 @@ def _handle_knowledge(name: str, args: dict[str, Any], memory: Memory) -> str:
         mem_id = memory.warn(
             area=args["area"],
             warning=args["warning"],
-            severity=args.get("severity", 0.7)
+            severity=args.get("severity", 0.7),
+            repo_id=args.get("repo_id")
         )
         return f"Warning added for {args['area']}: {args['warning']}"
 
@@ -862,7 +885,8 @@ def _handle_knowledge(name: str, args: dict[str, Any], memory: Memory) -> str:
         mem_id = memory.semantic.known_issue(
             issue=args["issue"],
             workaround=args.get("workaround"),
-            priority=args.get("priority", 0.5)
+            priority=args.get("priority", 0.5),
+            repo_id=args.get("repo_id")
         )
         return f"Known issue documented: {args['issue']}"
 
@@ -875,14 +899,16 @@ def _handle_intent(name: str, args: dict[str, Any], memory: Memory) -> str:
         intent_id = memory.goal(
             goal=args["goal"],
             priority=args.get("priority", 1),
-            constraints=args.get("constraints")
+            constraints=args.get("constraints"),
+            repo_id=args.get("repo_id")
         )
         return f"Goal set (ID: {intent_id}): {args['goal']}"
 
     elif name == "memory_working_on":
         intent_id = memory.working_on(
             task=args["task"],
-            files=args.get("files")
+            files=args.get("files"),
+            repo_id=args.get("repo_id")
         )
         return f"Working on: {args['task']}"
 

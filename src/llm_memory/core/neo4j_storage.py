@@ -371,14 +371,21 @@ class Neo4jStorage(BaseStorage):
                 items.append(item)
             return items
 
-    def get_all_relationships(self) -> List[Dict[str, Any]]:
+    def get_all_relationships(self, repo_id: str = None) -> List[Dict[str, Any]]:
         """Get all relationships for visualization."""
         with self.driver.session() as session:
-            result = session.run("""
+            query = """
                 MATCH (a)-[r]->(b)
                 WHERE a:Memory AND b:Memory
-                RETURN a.id as source, b.id as target, type(r) as type, r.weight as weight, r.id as id
-            """)
+            """
+            params = {}
+            if repo_id:
+                query += " AND a.repo_id = $repo_id AND b.repo_id = $repo_id"
+                params["repo_id"] = repo_id
+            
+            query += " RETURN a.id as source, b.id as target, type(r) as type, r.weight as weight, r.id as id"
+            
+            result = session.run(query, params)
             return [{
                 "id": rec.get("id") or f"{rec['source']}-{rec['target']}",
                 "source_id": rec["source"],

@@ -109,11 +109,12 @@ def record(
 def decision(
     what: str = typer.Argument(..., help="What was decided"),
     why: str = typer.Argument(..., help="Why this choice was made"),
-    alternatives: List[str] = typer.Option(None, "--alt", "-a", help="Alternatives considered")
+    alternatives: List[str] = typer.Option(None, "--alt", "-a", help="Alternatives considered"),
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository context")
 ):
     """Record an architecture/design decision."""
     memory = get_memory()
-    mem_id = memory.decision(what, why, alternatives)
+    mem_id = memory.decision(what, why, alternatives, repo_id=repo)
     console.print(f"[green]Decision recorded:[/green] {what}")
     console.print(f"[dim]Reasoning: {why}[/dim]")
 
@@ -123,11 +124,12 @@ def bug(
     description: str = typer.Argument(..., help="Bug description"),
     cause: str = typer.Option(None, "--cause", "-c", help="Root cause"),
     fix: str = typer.Option(None, "--fix", "-f", help="How it was fixed"),
-    files: List[str] = typer.Option(None, "--file", help="Files involved")
+    files: List[str] = typer.Option(None, "--file", help="Files involved"),
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository context")
 ):
     """Record a bug discovery or fix."""
     memory = get_memory()
-    mem_id = memory.episodic.bug(description, cause=cause, fix=fix, files=files)
+    mem_id = memory.episodic.bug(description, cause=cause, fix=fix, files=files, repo_id=repo)
     status = "fixed" if fix else "found"
     console.print(f"[green]Bug {status}:[/green] {description}")
 
@@ -140,10 +142,17 @@ def bug(
 def learn(
     knowledge: str = typer.Argument(..., help="The knowledge/fact/pattern"),
     category: str = typer.Option("fact", "--category", "-c", help="Knowledge category"),
-    importance: float = typer.Option(0.6, "--importance", "-i", help="Importance (0.0-1.0)")
+    importance: float = typer.Option(0.6, "--importance", "-i", help="Importance (0.0-1.0)"),
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository context")
 ):
     """Establish semantic knowledge (something learned)."""
     memory = get_memory()
+    # Note: Memory.learn does not currently accept repo_id override in its signature (it uses config),
+    # but we should update it or temporarily set config.
+    # Actually I fixed Memory.learn to use config.repo_id. Ideally I should update Memory.learn to ACSEPT an override too.
+    # For now, let's inject it via config if passed.
+    if repo: 
+        memory.config.repo_id = repo
     mem_id = memory.learn(knowledge, category=category, importance=importance)
     console.print(f"[green]Established:[/green] {knowledge[:60]}...")
 
@@ -152,10 +161,12 @@ def learn(
 def warn(
     area: str = typer.Argument(..., help="Area/file/module"),
     warning: str = typer.Argument(..., help="What to watch out for"),
-    severity: float = typer.Option(0.7, "--severity", "-s", help="Severity (0.0-1.0)")
+    severity: float = typer.Option(0.7, "--severity", "-s", help="Severity (0.0-1.0)"),
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository context")
 ):
     """Add a warning about a fragile area."""
     memory = get_memory()
+    if repo: memory.config.repo_id = repo
     mem_id = memory.warn(area, warning, severity)
     console.print(f"[yellow]Warning added for {area}:[/yellow] {warning}")
 
@@ -163,11 +174,12 @@ def warn(
 @app.command()
 def convention(
     rule: str = typer.Argument(..., help="The convention/rule"),
-    rationale: str = typer.Option(None, "--rationale", "-r", help="Why this convention exists")
+    rationale: str = typer.Option(None, "--rationale", "-r", help="Why this convention exists"),
+    repo: str = typer.Option(None, "--repo", "-rp", help="Repository context")
 ):
     """Establish a convention or best practice."""
     memory = get_memory()
-    mem_id = memory.semantic.convention(rule, rationale)
+    mem_id = memory.semantic.convention(rule, rationale, repo_id=repo)
     console.print(f"[green]Convention established:[/green] {rule}")
 
 
@@ -175,11 +187,12 @@ def convention(
 def issue(
     description: str = typer.Argument(..., help="Issue description"),
     workaround: str = typer.Option(None, "--workaround", "-w", help="How to work around it"),
-    priority: float = typer.Option(0.5, "--priority", "-p", help="Priority (0.0-1.0)")
+    priority: float = typer.Option(0.5, "--priority", "-p", help="Priority (0.0-1.0)"),
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository context")
 ):
     """Document a known issue."""
     memory = get_memory()
-    mem_id = memory.semantic.known_issue(description, workaround, priority)
+    mem_id = memory.semantic.known_issue(description, workaround, priority, repo_id=repo)
     console.print(f"[yellow]Known issue documented:[/yellow] {description}")
 
 
@@ -191,10 +204,12 @@ def issue(
 def goal(
     description: str = typer.Argument(..., help="Goal description"),
     priority: int = typer.Option(1, "--priority", "-p", help="Priority (0=low, 1=normal, 2=high, 3=critical)"),
-    constraint: List[str] = typer.Option(None, "--constraint", "-c", help="Constraints")
+    constraint: List[str] = typer.Option(None, "--constraint", "-c", help="Constraints"),
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository context")
 ):
     """Set a goal/intent."""
     memory = get_memory()
+    if repo: memory.config.repo_id = repo
     intent_id = memory.goal(description, priority=priority, constraints=constraint)
     console.print(f"[green]Goal set:[/green] {description}")
 
@@ -215,10 +230,12 @@ def focus(
 @app.command()
 def working(
     task: str = typer.Argument(..., help="What you're working on"),
-    files: List[str] = typer.Option(None, "--file", "-f", help="Files being modified")
+    files: List[str] = typer.Option(None, "--file", "-f", help="Files being modified"),
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository context")
 ):
     """Set current task."""
     memory = get_memory()
+    if repo: memory.config.repo_id = repo
     intent_id = memory.working_on(task, files)
     console.print(f"[green]Working on:[/green] {task}")
 

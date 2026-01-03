@@ -106,6 +106,7 @@ class EpisodicMemory(BaseMemoryLayer):
         why: str,
         alternatives: List[str] = None,
         importance: float = 0.7,
+        repo_id: str = None,
         tags: List[str] = None
     ) -> str:
         """
@@ -136,6 +137,7 @@ class EpisodicMemory(BaseMemoryLayer):
             content=content,
             category=EpisodeCategory.ARCHITECTURE_DECISION,
             importance=importance,
+            repo_id=repo_id,
             context={"alternatives": alternatives or []},
             tags=tags
         )
@@ -146,7 +148,8 @@ class EpisodicMemory(BaseMemoryLayer):
         cause: str = None,
         fix: str = None,
         files: List[str] = None,
-        importance: float = 0.6
+        importance: float = 0.6,
+        repo_id: str = None
     ) -> str:
         """
         Record a bug discovery or fix.
@@ -173,6 +176,7 @@ class EpisodicMemory(BaseMemoryLayer):
             content=content,
             category=category,
             importance=importance,
+            repo_id=repo_id,
             context={"files": files or []},
             tags=["bug"]
         )
@@ -181,7 +185,8 @@ class EpisodicMemory(BaseMemoryLayer):
         self,
         insight: str,
         context: str = None,
-        importance: float = 0.5
+        importance: float = 0.5,
+        repo_id: str = None
     ) -> str:
         """
         Record a discovery or learning.
@@ -201,7 +206,8 @@ class EpisodicMemory(BaseMemoryLayer):
         return self.record(
             content=content,
             category=EpisodeCategory.DISCOVERY,
-            importance=importance
+            importance=importance,
+            repo_id=repo_id
         )
 
     def search(

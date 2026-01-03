@@ -149,6 +149,7 @@ class SemanticMemory(BaseMemoryLayer):
         rule: str,
         rationale: str = None,
         importance: float = 0.5,
+        repo_id: str = None,
         tags: List[str] = None
     ) -> str:
         """
@@ -177,6 +178,7 @@ class SemanticMemory(BaseMemoryLayer):
             knowledge=knowledge,
             category=KnowledgeCategory.CONVENTION,
             importance=importance,
+            repo_id=repo_id,
             tags=tags
         )
 
@@ -185,6 +187,7 @@ class SemanticMemory(BaseMemoryLayer):
         issue: str,
         workaround: str = None,
         priority: float = 0.5,
+        repo_id: str = None,
         tags: List[str] = None
     ) -> str:
         """
@@ -214,6 +217,7 @@ class SemanticMemory(BaseMemoryLayer):
             knowledge=knowledge,
             category=KnowledgeCategory.KNOWN_ISSUE,
             importance=priority,
+            repo_id=repo_id,
             tags=["known_issue"] + (tags or [])
         )
 
