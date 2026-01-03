@@ -185,7 +185,8 @@ class Memory:
         return self.semantic.establish(
             knowledge=knowledge,
             category=cat,
-            importance=importance
+            importance=importance,
+            repo_id=self.config.repo_id
         )
 
     def warn(self, area: str, warning: str, severity: float = 0.7) -> str:
@@ -200,7 +201,7 @@ class Memory:
         Returns:
             Memory ID
         """
-        return self.semantic.warn(area, warning, severity)
+        return self.semantic.warn(area, warning, severity, repo_id=self.config.repo_id)
 
     def goal(
         self,

@@ -65,6 +65,7 @@ class SemanticMemory(BaseMemoryLayer):
         importance: float = 0.6,
         applies_to: List[str] = None,
         source_episodes: List[str] = None,
+        repo_id: str = None,
         tags: List[str] = None
     ) -> str:
         """
@@ -99,6 +100,7 @@ class SemanticMemory(BaseMemoryLayer):
             layer="semantic",
             category=category.value if isinstance(category, KnowledgeCategory) else category,
             importance=importance,
+            repo_id=repo_id,
             tags=tags or [],
             metadata=metadata,
             source_ids=source_episodes or []
@@ -109,6 +111,7 @@ class SemanticMemory(BaseMemoryLayer):
         area: str,
         warning: str,
         severity: float = 0.7,
+        repo_id: str = None,
         tags: List[str] = None
     ) -> str:
         """
@@ -137,6 +140,7 @@ class SemanticMemory(BaseMemoryLayer):
             category=KnowledgeCategory.FRAGILE_AREA,
             importance=severity,
             applies_to=[area],
+            repo_id=repo_id,
             tags=["warning"] + (tags or [])
         )
 
