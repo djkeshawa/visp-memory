@@ -31,11 +31,17 @@ class StorageConfig(BaseSettings):
 
     data_dir: Path = Path(".llm-memory/data")
     vector_db: Literal["chroma", "memory"] = "chroma"
+    backend: Literal["sqlite", "neo4j"] = "neo4j" # Default to neo4j for migration
     
     # Client-Server Mode
     mode: Literal["local", "client"] = "local"
     server_url: str = "http://localhost:8000"
     api_key: Optional[str] = Field(default=None, env="LLM_MEMORY_API_KEY")
+
+    # Neo4j Configuration
+    neo4j_uri: str = Field(default="bolt://localhost:7687", env="NEO4J_URI")
+    neo4j_user: str = Field(default="neo4j", env="NEO4J_USER")
+    neo4j_password: str = Field(default="djk199108", env="NEO4J_PASSWORD")
 
     class Config:
         env_prefix = "LLM_MEMORY_STORAGE_"

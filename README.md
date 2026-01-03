@@ -22,91 +22,165 @@ By injecting this pre-formed context, your LLM (Claude, ChatGPT, etc.) instantly
 
 ---
 
-## Quick Start (Local Mode)
+## 🚀 Capabilities
 
-Currently, LLM Memory runs in **Local Mode** (SQLite per project).
+| Interface | Description | Key Features |
+|-----------|-------------|--------------|
+| **CLI** | Command Line Tool | `llm-memory record`, `recall`, `decision`, `warn` |
+| **MCP Server** | Model Context Protocol | Exposes memory tools directly to Claude/IDE |
+| **Dashboard** | Web Interface | Graph visualization, intent management, stats |
 
-### 1. Install
+---
+
+## 📦 Installation
+
 ```bash
 pip install llm-memory
 ```
 
-### 2. Initialize
+To install all dependencies (API, MCP, Capture):
 ```bash
-cd your-project
+pip install "llm-memory[all]"
+```
+
+---
+
+## ⚡ Quick Start (CLI)
+
+Initialize LLM Memory in your project root:
+
+```bash
 llm-memory init --type code
 ```
 
+### Core Commands
 
-### 3. Record & Recall
 ```bash
 # Record a decision
 llm-memory decision "Use JWT tokens" "Stateless scaling needed"
 
-# Save a warning for future sessions
-llm-memory warn "auth/token.py" "Race condition possible - use mutex"
+# Save a warning for specific files
+llm-memory warn "src/auth.py" "Race condition possible - use mutex"
 
-# Get context for your LLM
+# Set a goal
+llm-memory goal "Refactor Database Layer" --priority 2
+
+# Search memories
+llm-memory recall "authentication"
+
+# Get full context for your LLM (copy to clipboard)
 llm-memory context | xclip -sel clip
 ```
 
+---
 
-### 4. Web Dashboard
-Visualize memory and manage intents with the modern web interface.
+## 🤖 MCP Server (Claude Desktop / IDEs)
 
-1. Start the backend:
-```bash
-# Install server dependencies
-pip install ".[api]"
+LLM Memory implements the **Model Context Protocol (MCP)**, allowing AI assistants to directly read and write to your project's memory.
 
-# Start the API server
-llm-memory serve
+### Configuration
+
+Add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "llm-memory": {
+      "command": "llm-memory-mcp",
+      "args": []
+    }
+  }
+}
 ```
 
-2. Start the frontend:
+### Available Tools
+- `memory_recall`: Search past events and knowledge.
+- `memory_record`: Save new findings or events.
+- `memory_decision`: document architectural choices.
+- `memory_warn`: Flag fragile code areas.
+- `memory_goal`: Manage project intent.
+- `memory_file_context`: Get proactive context for specific files.
+
+---
+
+## 📊 Web Dashboard
+
+Visualize your project's memory graph and manage intents visually.
+
+### 1. Start the Backend API
 ```bash
-cd web
+# Run from your project root
+python3 -m uvicorn llm_memory.server.app:app --port 8000
+```
+*Note: Ensure you have `pip install "llm-memory[api]"`*
+
+### 2. Start the Frontend
+The dashboard is located in `llm-memory-dashboard`.
+
+```bash
+cd llm-memory-dashboard
 npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser.
+Open [http://localhost:3000](http://localhost:3000) (or the port shown in terminal) to view the graph.
 
 ---
 
-## Project Status & Roadmap
+---
 
-We are actively evolving towards a **Central Memory System**.
+## How It Works
 
-- **Phase 1: Foundation (Current)** - Local SQLite storage, core memory layers, CLI/MCP interfaces. ✅
-- **Phase 2: Active Memory** - Automatic capture from Git commits, test failures, and conversations. 🚧
-- **Phase 3: Central Memory** - Shared server for teams and cross-repo context (Service A knowing about Service B's breaking changes). 🔮
+### The Write Path (Capture & Learning)
+1.  **Capture**: You record an event via CLI (`llm-memory record`), or the system auto-captures a Git commit.
+2.  **Layering**: The event enters **Episodic Memory**.
+3.  **Synthesis**: Over time, repeated episodes are compressed into **Semantic Memory** (patterns/rules).
+4.  **Storage**: Metadata, relationships, and vector embeddings are stored in **Neo4j** (GraphRAG).
 
-See [ROADMAP.md](ROADMAP.md) for details.
+### The Read Path (Context Injection)
+1.  **Trigger**: You ask for context via CLI (`llm-memory context`) or an MCP-enabled IDE requests it.
+2.  **Recall**: The system fetches:
+    *   Active **Intents** (Goal: "Refactor API")
+    *   Relevant **Knowledge** (Rule: "Always use strict typing")
+    *   Recent **Episodes** (Event: "Fixed auth bug yesterday")
+    *   **Graph Traversals**: Related concepts via knowledge graph links.
+3.  **Synthesis**: Data is formatted into a concise Markdown prompt.
+4.  **Injection**: The prompt is fed to the LLM, giving it instant "memory" of the project.
 
 ---
 
-## Architecture
+## 🧠 Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        LLM Memory                           │
-├─────────────────────────────────────────────────────────────┤
-│  Intent Layer          │  "What are we doing?"              │
-│  (goals, focus,        │  Short-term, high influence        │
-│   constraints)         │                                    │
-├────────────────────────┼────────────────────────────────────┤
-│  Semantic Layer        │  "What do we know?"                │
-│  (knowledge, patterns, │  Timeless, applies everywhere      │
-│   warnings, rules)     │                                    │
-├────────────────────────┼────────────────────────────────────┤
-│  Episodic Layer        │  "What happened?"                  │
-│  (events, decisions,   │  Time-bound, compresses over time  │
-│   bugs, discoveries)   │                                    │
-├─────────────────────────────────────────────────────────────┤
-│  Storage: SQLite (structured) + ChromaDB (vectors)          │
-│  Embeddings: sentence-transformers / OpenAI / Ollama        │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    User[User / IDE]
+    
+    subgraph Interfaces
+        CLI[CLI Tool]
+        MCP[MCP Server]
+        API[FastAPI Server]
+        Dash[Web Dashboard]
+    end
+
+    subgraph Memory Core
+        Intent[Intent Layer]
+        Semantic[Semantic Layer]
+        Episodic[Episodic Layer]
+    end
+
+    subgraph Storage
+        Neo4j[(Neo4j)]
+    end
+
+    User --> CLI
+    User --> MCP
+    Dash --> API
+    
+    CLI --> Memory Core
+    MCP --> Memory Core
+    API --> Memory Core
+    
+    Memory Core --> Neo4j
 ```
 
 ## Comparisons
@@ -115,8 +189,8 @@ See [ROADMAP.md](ROADMAP.md) for details.
 |---------|------------|-----|-----------|
 | **Structured Knowledge** | ✅ | ❌ | ❌ |
 | **Goal Tracking** | ✅ | ❌ | ❌ |
-| **Memory Compression** | ✅ | ❌ | ❌ |
-| **Semantic Search** | ✅ | ✅ | ✅ |
+| **Memory Graph** | ✅ | ❌ | ❌ |
+| **Proactive Warnings** | ✅ | ❌ | ❌ |
 | **Time-Awareness** | ✅ | ❌ | ❌ |
 
 ---

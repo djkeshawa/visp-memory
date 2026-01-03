@@ -35,3 +35,15 @@ class IntentResponse(IntentCreate):
     id: str
     status: str
     created_at: datetime
+
+class MemoryUpdate(BaseModel):
+    content: Optional[str] = None
+    importance: Optional[float] = None
+    tags: Optional[List[str]] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+class RelationshipCreate(BaseModel):
+    source_id: str
+    target_id: str
+    relationship: str
+    strength: float = 1.0

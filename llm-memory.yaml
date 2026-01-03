@@ -16,3 +16,7 @@ project_type: code
 storage:
   data_dir: .llm-memory/data
   vector_db: chroma
+  backend: neo4j
+  neo4j_uri: bolt://localhost:7687
+  neo4j_user: neo4j
+  neo4j_password: djk199108

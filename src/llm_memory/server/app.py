@@ -8,16 +8,37 @@ try:
 except ImportError:
     raise ImportError("FastAPI not installed. Run: pip install llm-memory[api]")
 
-from llm_memory.server.schemas import MemoryCreate, MemoryResponse, SearchQuery, IntentCreate, IntentResponse
+from llm_memory.server.schemas import (
+    MemoryCreate, 
+    MemoryResponse, 
+    SearchQuery, 
+    IntentCreate, 
+    IntentResponse,
+    MemoryUpdate,
+    RelationshipCreate
+)
 from typing import List
 
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
 from llm_memory.core.storage import LocalStorage
+from llm_memory.core.neo4j_storage import Neo4jStorage
 from llm_memory.config import load_config
+import logging
+
+logger = logging.getLogger(__name__)
 
 config = load_config()
-storage = LocalStorage(config.storage.data_dir)
+
+if config.storage.backend == "neo4j":
+    try:
+        storage = Neo4jStorage()
+        logger.info("Initialized Neo4j Storage")
+    except Exception as e:
+        logger.error(f"Failed to initialize Neo4j, falling back to SQLite: {e}")
+        storage = LocalStorage(config.storage.data_dir)
+else:
+    storage = LocalStorage(config.storage.data_dir)
 
 # In real implementation, this would connect to the Storage backend
 # For now, it's a skeleton
@@ -113,19 +134,17 @@ async def recall(query: SearchQuery, api_key: str = Depends(get_api_key)):
 
 @app.get("/intents", response_model=List[IntentResponse])
 async def list_intents(api_key: str = Depends(get_api_key)):
-    # Placeholder for intents - Storage doesn't explicitly expose list_intents yet, 
-    # but we can filter memories by layer='intent'
-    intents = storage.list_memories(limit=100)
-    intents = [i for i in intents if i['layer'] == 'intent']
+    # Use the dedicated storage method to fetch active intents
+    intents = storage.get_active_intents()
     
     return [
         {
             "id": i["id"],
-            "description": i["content"],
-            "priority": i.get("importance", 1) * 10, # Map 0.1-1.0 to 1-10 roughly
-            "context": i.get("metadata", {}),
-            "status": i.get("metadata", {}).get("status", "active"),
-            "created_at": datetime.fromisoformat(i["created_at"]) if isinstance(i["created_at"], str) else i["created_at"]
+            "description": i["description"],
+            "priority": i["priority"],  
+            "context": i.get("context", {}),
+            "status": i["status"],
+            "created_at": i["created_at"]
         } for i in intents
     ]
 
@@ -173,3 +192,55 @@ async def create_intent(intent: IntentCreate, api_key: str = Depends(get_api_key
         "context": intent.context,
         "created_at": datetime.now()
     }
+
+@app.get("/memories/{memory_id}", response_model=MemoryResponse)
+async def get_memory(memory_id: str, api_key: str = Depends(get_api_key)):
+    """Get a single memory by ID."""
+    mem = storage.get_memory(memory_id)
+    if not mem:
+        raise HTTPException(status_code=404, detail="Memory not found")
+    
+    return {
+        "id": mem["id"],
+        "content": mem["content"],
+        "layer": mem["layer"],
+        "category": mem["category"],
+        "repo_id": mem.get("repo_id"),
+        "importance": mem.get("importance", 0.5),
+        "tags": mem.get("tags", []),
+        "metadata": mem.get("metadata", {}),
+        "created_at": datetime.fromisoformat(mem["created_at"]) if isinstance(mem["created_at"], str) else mem["created_at"],
+        "accessed_at": datetime.now()
+    }
+
+@app.delete("/memories/{memory_id}")
+async def delete_memory(memory_id: str, api_key: str = Depends(get_api_key)):
+    """Delete a memory."""
+    success = storage.delete_memory(memory_id)
+    if not success:
+         raise HTTPException(status_code=404, detail="Memory not found")
+    return {"status": "deleted", "id": memory_id}
+
+@app.patch("/memories/{memory_id}")
+async def update_memory(memory_id: str, update: MemoryUpdate, api_key: str = Depends(get_api_key)):
+    """Update a memory."""
+    # Filter out None values
+    update_data = {k: v for k, v in update.model_dump().items() if v is not None}
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No fields to update")
+        
+    success = storage.update_memory(memory_id, **update_data)
+    if not success:
+         raise HTTPException(status_code=404, detail="Memory not found")
+    return {"status": "updated", "id": memory_id}
+
+@app.post("/relationships")
+async def create_relationship(rel: RelationshipCreate, api_key: str = Depends(get_api_key)):
+    """Create a relationship between memories."""
+    rel_id = storage.add_relationship(
+        source_id=rel.source_id,
+        target_id=rel.target_id,
+        relationship=rel.relationship,
+        strength=rel.strength
+    )
+    return {"id": rel_id, "status": "created"}

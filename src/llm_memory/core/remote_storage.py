@@ -84,16 +84,33 @@ class RemoteStorage(BaseStorage):
             return []
 
     def list_memories(self, repo_id: str = None, **kwargs) -> List[Dict[str, Any]]:
-        return [] # TODO: Implement list endpoint
+        """List memories with optional filtering."""
+        try:
+            params = {"repo_id": repo_id, **kwargs}
+            response = self.session.get(f"{self.server_url}/memories", params=params)
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException:
+            return []
 
     def update_memory(self, memory_id: str, **kwargs) -> bool:
-        return False # TODO
+        """Update a memory."""
+        try:
+            response = self.session.patch(f"{self.server_url}/memories/{memory_id}", json=kwargs)
+            return response.status_code == 200
+        except requests.RequestException:
+            return False
 
     def delete_memory(self, memory_id: str) -> bool:
-        return False # TODO
+        """Delete a memory."""
+        try:
+            response = self.session.delete(f"{self.server_url}/memories/{memory_id}")
+            return response.status_code == 200
+        except requests.RequestException:
+            return False
 
     def get_collection(self, layer: str):
-        return None # Remote storage doesn't expose vector collections directly
+        return None  # Remote storage doesn't expose vector collections directly
 
     # Intent Operations
     def set_intent(self, description: str, priority: int = 0, context: Dict[str, Any] = None) -> str:
@@ -110,25 +127,54 @@ class RemoteStorage(BaseStorage):
             return "error"
 
     def get_active_intents(self) -> List[Dict[str, Any]]:
-        return []
+        """Get active intents."""
+        try:
+            response = self.session.get(f"{self.server_url}/intents")
+            response.raise_for_status()
+            # Filter for active ones client-side if needed, but endpoint returns list
+            return [i for i in response.json() if i.get("status") == "active"]
+        except requests.RequestException:
+            return []
 
     def complete_intent(self, intent_id: str) -> bool:
-        return False
+        """Mark intent as complete."""
+        # Mapping to update_memory since intents are memories
+        return self.update_memory(intent_id, metadata={"status": "completed"})
 
     # Relationship Operations
     def add_relationship(self, source_id: str, target_id: str, relationship: str, strength: float = 1.0) -> str:
-        return "not_implemented"
+        """Create a relationship."""
+        try:
+            payload = {
+                "source_id": source_id,
+                "target_id": target_id,
+                "relationship": relationship,
+                "strength": strength
+            }
+            response = self.session.post(f"{self.server_url}/relationships", json=payload)
+            response.raise_for_status()
+            return response.json()["id"]
+        except requests.RequestException:
+            return "error"
 
     def get_related_memories(self, memory_id: str, relationship: str = None) -> List[Dict[str, Any]]:
+        # Not currently exposed via API explicitly
         return []
 
     # Session Operations
     def start_session(self) -> str:
-        return "session_mock"
+        return "session_remote"
 
     def end_session(self, session_id: str, summary: str, memory_ids: List[str]):
         pass
 
     # Stats
     def get_stats(self) -> Dict[str, Any]:
-        return {}
+        """Get server stats."""
+        try:
+            response = self.session.get(f"{self.server_url}/")
+            if response.status_code == 200:
+                return response.json()
+            return {}
+        except requests.RequestException:
+            return {}

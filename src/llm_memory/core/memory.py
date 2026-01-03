@@ -16,6 +16,7 @@ import json
 from llm_memory.config import MemoryConfig
 from llm_memory.core.storage import LocalStorage
 from llm_memory.core.remote_storage import RemoteStorage
+from llm_memory.core.neo4j_storage import Neo4jStorage
 from llm_memory.core.compression import MemoryCompressor, create_llm_compressor
 from llm_memory.layers.episodic import EpisodicMemory, EpisodeCategory
 from llm_memory.layers.semantic import SemanticMemory, KnowledgeCategory
@@ -72,6 +73,12 @@ class Memory:
             self._storage = RemoteStorage(
                 server_url=self.config.storage.server_url,
                 api_key=self.config.storage.api_key
+            )
+        elif self.config.storage.backend == "neo4j":
+            self._storage = Neo4jStorage(
+                uri=self.config.storage.neo4j_uri,
+                user=self.config.storage.neo4j_user,
+                password=self.config.storage.neo4j_password
             )
         else:
             self._storage = LocalStorage(self.config.storage.data_dir)
