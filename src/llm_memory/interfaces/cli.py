@@ -444,6 +444,347 @@ def list_issues():
 
 
 # =============================================================================
+# Recall Commands (Proactive)
+# =============================================================================
+
+@app.command()
+def inject(
+    files: List[str] = typer.Option(None, "--file", "-f", help="Files to get context for"),
+    task: str = typer.Option(None, "--task", "-t", help="Task description"),
+    format: str = typer.Option("markdown", "--format", help="Output format: markdown, plain, json"),
+    max_length: int = typer.Option(2000, "--max-length", "-m", help="Max output length")
+):
+    """
+    Inject relevant memory context for files or task.
+
+    This command surfaces warnings, bugs, decisions, and knowledge
+    relevant to specific files or tasks without being asked.
+    """
+    from llm_memory.recall.proactive import ProactiveRecall
+
+    memory = get_memory()
+    recall = ProactiveRecall(memory)
+
+    if files and task:
+        # Comprehensive context for task with files
+        context = recall.find_relevant_for_task(
+            task_description=task,
+            files=files
+        )
+        output = recall.format_injection(context, format=format, max_length=max_length)
+
+    elif files:
+        # File-specific context
+        if len(files) == 1:
+            context = recall.on_file_open(files[0])
+        else:
+            # Multiple files - aggregate
+            context = {
+                "warnings": [],
+                "bugs": [],
+                "decisions": [],
+                "knowledge": []
+            }
+            for file in files:
+                file_context = recall.on_file_open(file)
+                for key in context:
+                    context[key].extend(file_context.get(key, []))
+
+        output = recall.format_injection(context, format=format, max_length=max_length)
+
+    elif task:
+        # Task-only context
+        context = recall.find_relevant_for_task(task_description=task)
+        output = recall.format_injection(context, format=format, max_length=max_length)
+
+    else:
+        console.print("[yellow]Provide --file or --task[/yellow]")
+        raise typer.Exit(1)
+
+    if output.strip():
+        console.print(output)
+    else:
+        console.print("[dim]No relevant context found[/dim]")
+
+
+@app.command("find-error")
+def find_error(
+    error: str = typer.Argument(..., help="Error message to search for"),
+    error_type: str = typer.Option(None, "--type", "-t", help="Error type (e.g., TypeError)"),
+    file: str = typer.Option(None, "--file", "-f", help="File where error occurred"),
+    limit: int = typer.Option(5, "--limit", "-n", help="Max results")
+):
+    """
+    Find similar errors that occurred in the past.
+
+    Searches for similar error messages along with their fixes
+    and workarounds.
+    """
+    from llm_memory.recall.proactive import ProactiveRecall
+
+    memory = get_memory()
+    recall = ProactiveRecall(memory)
+
+    similar = recall.on_error(
+        error_message=error,
+        error_type=error_type,
+        file_path=file,
+        limit=limit
+    )
+
+    if not similar:
+        console.print("[yellow]No similar errors found[/yellow]")
+        return
+
+    console.print(Panel(f"[bold]Similar Past Errors ({len(similar)})[/bold]"))
+
+    for i, err in enumerate(similar, 1):
+        similarity = err.get("similarity", 0)
+        content = err["content"]
+
+        console.print(f"\n[cyan]{i}. Similarity: {similarity:.2f}[/cyan]")
+        console.print(f"   {content[:200]}")
+
+        # Show fix if available
+        if "fix" in content.lower() or "solution" in content.lower():
+            console.print("   [green]✓ Contains fix/solution[/green]")
+
+
+# =============================================================================
+# Capture Commands
+# =============================================================================
+
+# Create capture sub-app
+capture_app = typer.Typer(help="Automatic memory capture from development activity")
+app.add_typer(capture_app, name="capture")
+
+
+@capture_app.command("git")
+def capture_git(
+    action: str = typer.Argument(..., help="Action: install, uninstall, sync, commit, merge"),
+    commit_ref: str = typer.Option("HEAD", "--ref", "-r", help="Commit reference for 'commit' action"),
+    since: str = typer.Option(None, "--since", "-s", help="Date for 'sync' (e.g., '1 week ago')"),
+    limit: int = typer.Option(100, "--limit", "-n", help="Max commits for 'sync'")
+):
+    """
+    Git capture commands.
+
+    Actions:
+        install   - Install git hooks for automatic capture
+        uninstall - Remove git hooks
+        sync      - Sync from git history
+        commit    - Manually capture a commit
+        merge     - Manually capture a merge
+    """
+    try:
+        from llm_memory.capture.git import GitCapture
+    except ImportError:
+        console.print("[red]Git capture not available.[/red]")
+        console.print("Install with: [bold]pip install llm-memory[capture][/bold]")
+        raise typer.Exit(1)
+
+    memory = get_memory()
+
+    try:
+        git_capture = GitCapture(memory)
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    if action == "install":
+        console.print("Installing git hooks...")
+        results = git_capture.install_hooks()
+
+        for hook, success in results.items():
+            if success:
+                console.print(f"[green]✓[/green] Installed {hook}")
+            else:
+                console.print(f"[yellow]✗[/yellow] Failed to install {hook}")
+
+        console.print("\n[green]Git hooks installed![/green]")
+        console.print("Commits and merges will now be auto-captured.")
+
+    elif action == "uninstall":
+        console.print("Removing git hooks...")
+        results = git_capture.uninstall_hooks()
+
+        for hook, success in results.items():
+            if success:
+                console.print(f"[green]✓[/green] Removed {hook}")
+            else:
+                console.print(f"[yellow]✗[/yellow] Could not remove {hook} (not installed by llm-memory)")
+
+        console.print("\n[green]Git hooks removed.[/green]")
+
+    elif action == "sync":
+        console.print(f"Syncing git history (limit: {limit})...")
+
+        memory_ids = git_capture.sync_history(since=since, limit=limit)
+
+        console.print(f"[green]Captured {len(memory_ids)} commits from history[/green]")
+
+    elif action == "commit":
+        console.print(f"Capturing commit {commit_ref}...")
+
+        memory_id = git_capture.on_commit(commit_ref)
+
+        if memory_id:
+            console.print(f"[green]Captured commit[/green]")
+            console.print(f"[dim]Memory ID: {memory_id}[/dim]")
+        else:
+            console.print("[yellow]Commit skipped[/yellow]")
+
+    elif action == "merge":
+        console.print("Capturing merge...")
+
+        memory_id = git_capture.on_merge()
+
+        if memory_id:
+            console.print(f"[green]Captured merge[/green]")
+            console.print(f"[dim]Memory ID: {memory_id}[/dim]")
+        else:
+            console.print("[yellow]Not a merge commit[/yellow]")
+
+    else:
+        console.print(f"[red]Unknown action: {action}[/red]")
+        console.print("Valid actions: install, uninstall, sync, commit, merge")
+        raise typer.Exit(1)
+
+
+# =============================================================================
+# Hooks Commands (LLM Tool Integration)
+# =============================================================================
+
+# Create hooks sub-app
+hooks_app = typer.Typer(help="Integration with LLM tools (Claude Code, Cursor, Aider)")
+app.add_typer(hooks_app, name="hooks")
+
+
+@hooks_app.command("install")
+def hooks_install(
+    tool: str = typer.Argument(..., help="Tool name: claude-code, cursor, aider, generic")
+):
+    """
+    Install hooks for an LLM tool.
+
+    Installs context injection for the specified tool.
+    """
+    from llm_memory.hooks import get_adapter
+
+    memory = get_memory()
+
+    try:
+        adapter = get_adapter(tool, memory=memory)
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    console.print(f"Installing {tool} integration...")
+
+    results = adapter.install()
+
+    for component, success in results.items():
+        if success:
+            console.print(f"[green]✓[/green] {component}")
+        else:
+            console.print(f"[yellow]✗[/yellow] {component}")
+
+    console.print(f"\n[green]{tool} integration installed![/green]")
+    console.print(f"Context file: {adapter.get_context_file_path()}")
+    console.print(f"\nUpdate context with: [bold]llm-memory hooks update {tool}[/bold]")
+
+
+@hooks_app.command("uninstall")
+def hooks_uninstall(
+    tool: str = typer.Argument(..., help="Tool name: claude-code, cursor, aider, generic")
+):
+    """Remove hooks for an LLM tool."""
+    from llm_memory.hooks import get_adapter
+
+    memory = get_memory()
+
+    try:
+        adapter = get_adapter(tool, memory=memory)
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    console.print(f"Uninstalling {tool} integration...")
+
+    results = adapter.uninstall()
+
+    for component, success in results.items():
+        if success:
+            console.print(f"[green]✓[/green] {component} removed")
+        else:
+            console.print(f"[yellow]✗[/yellow] {component} not found")
+
+    console.print(f"\n[green]{tool} integration removed.[/green]")
+
+
+@hooks_app.command("update")
+def hooks_update(
+    tool: str = typer.Argument(..., help="Tool name: claude-code, cursor, aider, generic"),
+    files: List[str] = typer.Option(None, "--file", "-f", help="Files being worked on"),
+    task: str = typer.Option(None, "--task", "-t", help="Task description")
+):
+    """
+    Update context for an LLM tool.
+
+    Refreshes the tool's context file with current memory.
+    """
+    from llm_memory.hooks import get_adapter
+
+    memory = get_memory()
+
+    try:
+        adapter = get_adapter(tool, memory=memory)
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    if not adapter.is_installed():
+        console.print(f"[yellow]{tool} integration not installed.[/yellow]")
+        console.print(f"Install with: [bold]llm-memory hooks install {tool}[/bold]")
+        raise typer.Exit(1)
+
+    console.print(f"Updating {tool} context...")
+
+    success = adapter.update_context(files=files, task=task)
+
+    if success:
+        console.print(f"[green]✓ Context updated[/green]")
+        console.print(f"File: {adapter.get_context_file_path()}")
+    else:
+        console.print(f"[red]✗ Failed to update context[/red]")
+
+
+@hooks_app.command("list")
+def hooks_list():
+    """List available LLM tool integrations."""
+    console.print(Panel("[bold]Available LLM Tool Integrations[/bold]"))
+
+    tools = [
+        ("claude-code", "Claude Code / Claude Desktop", "CLAUDE.md"),
+        ("cursor", "Cursor IDE", ".cursorrules"),
+        ("aider", "Aider", ".aider"),
+        ("generic", "Generic (any context file)", "Custom file"),
+    ]
+
+    table = Table(show_header=True)
+    table.add_column("Tool", style="cyan")
+    table.add_column("Description")
+    table.add_column("Context File", style="dim")
+
+    for tool, desc, file in tools:
+        table.add_row(tool, desc, file)
+
+    console.print(table)
+
+    console.print("\n[dim]Install with:[/dim] [bold]llm-memory hooks install <tool>[/bold]")
+
+
+# =============================================================================
 # MCP Server Command
 # =============================================================================
 

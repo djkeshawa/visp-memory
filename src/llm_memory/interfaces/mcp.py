@@ -140,6 +140,73 @@ def create_mcp_server() -> "Server":
                 }
             ),
 
+            # Proactive Recall
+            Tool(
+                name="memory_file_context",
+                description="Get proactive context for a specific file (warnings, bugs, decisions, knowledge).",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "Path to the file"
+                        },
+                        "include_related": {
+                            "type": "boolean",
+                            "default": True,
+                            "description": "Include related files"
+                        }
+                    },
+                    "required": ["file_path"]
+                }
+            ),
+            Tool(
+                name="memory_find_error",
+                description="Find similar past errors with fixes and workarounds.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "error_message": {
+                            "type": "string",
+                            "description": "The error message to search for"
+                        },
+                        "error_type": {
+                            "type": "string",
+                            "description": "Optional error type (e.g., TypeError, ValueError)"
+                        },
+                        "file_path": {
+                            "type": "string",
+                            "description": "Optional file where error occurred"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "default": 5,
+                            "description": "Maximum similar errors to return"
+                        }
+                    },
+                    "required": ["error_message"]
+                }
+            ),
+            Tool(
+                name="memory_directory_context",
+                description="Get aggregated knowledge for an entire directory.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "dir_path": {
+                            "type": "string",
+                            "description": "Directory path"
+                        },
+                        "recursive": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Include subdirectories"
+                        }
+                    },
+                    "required": ["dir_path"]
+                }
+            ),
+
             # Recording Events
             Tool(
                 name="memory_record",
@@ -437,6 +504,18 @@ def create_mcp_server() -> "Server":
                 description="Statistics about stored memories",
                 mimeType="application/json"
             ),
+            Resource(
+                uri="memory://file/{path}",
+                name="File Context",
+                description="Get context for a specific file (use actual path, e.g., memory://file/src/auth.py)",
+                mimeType="text/markdown"
+            ),
+            Resource(
+                uri="memory://session",
+                name="Current Session",
+                description="Current session context and active work",
+                mimeType="text/markdown"
+            ),
         ]
 
     @server.read_resource()
@@ -471,6 +550,45 @@ def create_mcp_server() -> "Server":
 
         elif uri_str == "memory://stats":
             return json.dumps(memory.stats(), indent=2)
+
+        elif uri_str.startswith("memory://file/"):
+            # Extract file path from URI
+            file_path = uri_str.replace("memory://file/", "")
+
+            from llm_memory.recall.proactive import ProactiveRecall
+            recall = ProactiveRecall(memory)
+
+            context = recall.on_file_open(file_path)
+            formatted = recall.format_injection(context, format="markdown")
+
+            return f"# Context for {file_path}\n\n{formatted}"
+
+        elif uri_str == "memory://session":
+            # Get current session context
+            summary = memory.intent.summarize()
+
+            lines = ["# Current Session\n"]
+
+            if summary.get("current_task"):
+                lines.append(f"**Current Task:** {summary['current_task']['description']}\n")
+
+            if summary.get("focus"):
+                lines.append(f"**Focus:** {summary['focus']['description']}\n")
+
+            if summary.get("constraints"):
+                lines.append("\n**Constraints:**")
+                for c in summary["constraints"]:
+                    lines.append(f"- {c}")
+                lines.append("")
+
+            # Add recent activity
+            recent = memory.episodic.recent(limit=5)
+            if recent:
+                lines.append("\n**Recent Activity:**")
+                for r in recent:
+                    lines.append(f"- [{r['category']}] {r['content'][:100]}")
+
+            return "\n".join(lines)
 
         else:
             raise ValueError(f"Unknown resource: {uri_str}")
@@ -633,6 +751,56 @@ async def handle_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
                 output.append(f"  - {h['content']}")
 
         return "\n".join(output) if output else "No relevant memories found."
+
+    # Proactive Recall
+    elif name == "memory_file_context":
+        from llm_memory.recall.proactive import ProactiveRecall
+        recall = ProactiveRecall(memory)
+
+        context = recall.on_file_open(
+            file_path=args["file_path"],
+            include_related=args.get("include_related", True)
+        )
+
+        formatted = recall.format_injection(context, format="markdown")
+        return formatted if formatted.strip() else "No context found for this file."
+
+    elif name == "memory_find_error":
+        from llm_memory.recall.proactive import ProactiveRecall
+        recall = ProactiveRecall(memory)
+
+        similar = recall.on_error(
+            error_message=args["error_message"],
+            error_type=args.get("error_type"),
+            file_path=args.get("file_path"),
+            limit=args.get("limit", 5)
+        )
+
+        if not similar:
+            return "No similar errors found."
+
+        output = [f"Found {len(similar)} similar errors:\n"]
+        for i, err in enumerate(similar, 1):
+            similarity = err.get("similarity", 0)
+            content = err["content"][:200]
+            output.append(f"{i}. [Similarity: {similarity:.2f}] {content}")
+
+            if "fix" in content.lower() or "solution" in content.lower():
+                output.append("   ✓ Contains fix/solution")
+
+        return "\n".join(output)
+
+    elif name == "memory_directory_context":
+        from llm_memory.recall.proactive import ProactiveRecall
+        recall = ProactiveRecall(memory)
+
+        context = recall.on_directory(
+            dir_path=args["dir_path"],
+            recursive=args.get("recursive", False)
+        )
+
+        formatted = recall.format_injection(context, format="markdown")
+        return formatted if formatted.strip() else "No context found for this directory."
 
     # Recording Events
     elif name == "memory_record":

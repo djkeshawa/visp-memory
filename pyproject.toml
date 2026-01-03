@@ -33,12 +33,19 @@ openai = ["openai>=1.0.0"]
 ollama = ["ollama>=0.1.0"]
 api = ["fastapi>=0.100.0", "uvicorn>=0.23.0"]
 mcp = ["mcp>=0.1.0"]
+capture = [
+    "gitpython>=3.1.0",
+    "watchdog>=3.0.0",
+]
+analysis = [
+    "scikit-learn>=1.0.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
     "ruff>=0.1.0",
 ]
-all = ["llm-memory[openai,ollama,api,mcp,dev]"]
+all = ["llm-memory[openai,ollama,api,mcp,capture,analysis,dev]"]
 
 [project.scripts]
 llm-memory = "llm_memory.interfaces.cli:app"

@@ -53,6 +53,69 @@ class CompressionConfig(BaseSettings):
         env_prefix = "LLM_MEMORY_COMPRESSION_"
 
 
+class CaptureConfig(BaseSettings):
+    """Automatic capture configuration."""
+
+    # Git capture settings
+    git_enabled: bool = True
+    git_auto_install_hooks: bool = False
+    git_parse_conventional_commits: bool = True
+
+    # Test capture settings
+    tests_enabled: bool = False
+    tests_pytest_plugin: bool = False
+
+    # Conversation capture settings
+    conversation_enabled: bool = False  # Requires explicit opt-in
+
+    class Config:
+        env_prefix = "LLM_MEMORY_CAPTURE_"
+
+
+class RecallConfig(BaseSettings):
+    """Proactive recall configuration."""
+
+    proactive: bool = True
+    file_triggered: bool = True
+    error_matching: bool = True
+
+    class Config:
+        env_prefix = "LLM_MEMORY_RECALL_"
+
+
+class AnalysisConfig(BaseSettings):
+    """Pattern detection and analysis configuration."""
+
+    pattern_detection: bool = True
+    auto_extract: bool = True
+    run_interval_hours: int = 24
+
+    class Config:
+        env_prefix = "LLM_MEMORY_ANALYSIS_"
+
+
+class QualityConfig(BaseSettings):
+    """Memory quality management configuration."""
+
+    deduplication: bool = True
+    similarity_threshold: float = 0.9
+    conflict_detection: bool = True
+
+    class Config:
+        env_prefix = "LLM_MEMORY_QUALITY_"
+
+
+class FeedbackConfig(BaseSettings):
+    """Feedback and validation configuration."""
+
+    collection: bool = True
+    auto_validate: bool = True
+    validate_interval_hours: int = 168  # Weekly
+
+    class Config:
+        env_prefix = "LLM_MEMORY_FEEDBACK_"
+
+
 class MemoryConfig(BaseSettings):
     """Main configuration for LLM Memory system."""
 
@@ -64,6 +127,11 @@ class MemoryConfig(BaseSettings):
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     compression: CompressionConfig = Field(default_factory=CompressionConfig)
+    capture: CaptureConfig = Field(default_factory=CaptureConfig)
+    recall: RecallConfig = Field(default_factory=RecallConfig)
+    analysis: AnalysisConfig = Field(default_factory=AnalysisConfig)
+    quality: QualityConfig = Field(default_factory=QualityConfig)
+    feedback: FeedbackConfig = Field(default_factory=FeedbackConfig)
 
     # Memory behavior
     auto_compress: bool = True  # Automatically compress old memories
