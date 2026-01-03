@@ -287,7 +287,7 @@ class Neo4jStorage(BaseStorage):
         return None
 
     # Intent Operations
-    def set_intent(self, description: str, priority: int = 0, context: Dict[str, Any] = None) -> str:
+    def set_intent(self, description: str, priority: int = 0, repo_id: str = None, context: Dict[str, Any] = None) -> str:
         intent_id = self._generate_id(description)
         context = context or {}
         
@@ -297,19 +297,24 @@ class Neo4jStorage(BaseStorage):
                 SET i.description = $description,
                     i.priority = $priority,
                     i.status = 'active',
+                    i.repo_id = $repo_id,
                     i.context = $context,
                     i.created_at = datetime(),
                     i.updated_at = datetime()
-            """, id=intent_id, description=description, priority=priority, context=self._json_serialize(context))
+            """, id=intent_id, description=description, priority=priority, repo_id=repo_id, context=self._json_serialize(context))
         return intent_id
 
-    def get_active_intents(self) -> List[Dict[str, Any]]:
+    def get_active_intents(self, repo_id: str = None) -> List[Dict[str, Any]]:
         with self.driver.session() as session:
-            result = session.run("""
-                MATCH (i:Intent {status: 'active'})
-                RETURN i
-                ORDER BY i.priority DESC, i.created_at DESC
-            """)
+            query = "MATCH (i:Intent {status: 'active'})"
+            params = {}
+            if repo_id:
+                query += " WHERE i.repo_id = $repo_id"
+                params["repo_id"] = repo_id
+            
+            query += " RETURN i ORDER BY i.priority DESC, i.created_at DESC"
+            
+            result = session.run(query, params)
             return [self._node_to_dict(dict(rec["i"])) for rec in result]
 
     def complete_intent(self, intent_id: str) -> bool:
@@ -398,23 +403,70 @@ class Neo4jStorage(BaseStorage):
                     s.ended_at = datetime()
             """, id=session_id, summary=summary, mem_ids=memory_ids)
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self, repo_id: str = None) -> Dict[str, Any]:
         with self.driver.session() as session:
             stats = {}
+            
+            # Base match clause
+            match_clause = "MATCH (m:Memory)"
+            where_clause = ""
+            params = {}
+            
+            if repo_id:
+                where_clause = " WHERE m.repo_id = $repo_id"
+                params["repo_id"] = repo_id
+                
             # Count by layer
-            res = session.run("MATCH (m:Memory) RETURN m.layer as layer, count(m) as c")
+            query = f"{match_clause}{where_clause} RETURN m.layer as layer, count(m) as c"
+            res = session.run(query, params)
             stats["memories_by_layer"] = {rec["layer"]: rec["c"] for rec in res}
             
             # Total
             stats["total_memories"] = sum(stats["memories_by_layer"].values())
             
-            # Intents
-            res = session.run("MATCH (i:Intent {status: 'active'}) RETURN count(i) as c")
-            stats["active_intents"] = res.single()["c"]
+            # Intents (Intents might not have repo_id property on the node itself yet? 
+            # We implemented set_intent but need to check if it adds repo_id)
+            # Assuming we want to filter intents too if we add repo_id to them. 
+            # For now, let's keep intents global or update set_intent? 
+            # set_intent in Neo4jStorage doesn't seem to take repo_id in the signature shown earlier?
+            # Let's check set_intent first. For now, leaving intents as is, or adding simple filter if properties exist.
+            
+            # Count active intents
+            # If intents are shared, maybe we don't filter? 
+            # But goals should probably be isolated too.
+            # Let's check if we can filter by repo_id on Intent nodes. 
+            # Assuming set_intent adds it if passed.
+            
+            # For now, just filtering Memories.
             
             # Rels
-            res = session.run("MATCH ()-[r]->() RETURN count(r) as c")
+            # Rels between filtered memories
+            rel_query = """
+                MATCH (a:Memory)-[r]->(b:Memory)
+                """
+            if repo_id:
+                rel_query += " WHERE a.repo_id = $repo_id AND b.repo_id = $repo_id"
+            rel_query += " RETURN count(r) as c"
+            
+            res = session.run(rel_query, params)
             stats["total_relationships"] = res.single()["c"]
+            
+            # Active Intents count - if we want to isolate, we need to ensure Intent nodes have repo_id
+            # Let's query active intents with repo_id if available
+            intent_query = "MATCH (i:Intent {status: 'active'})"
+            # Note: We haven't verified if Intent nodes have repo_id. 
+            # If not, this might return 0 if we filter. 
+            # Let's assume for this step we only filter Memories strictly.
+            # But for consistency, valid project stats should include project goals.
+            
+            # Let's assume global intents for now or filter if property exists
+            if repo_id:
+                 intent_query += " WHERE i.repo_id = $repo_id"
+                 
+            intent_query += " RETURN count(i) as c"
+            
+            res = session.run(intent_query, params)
+            stats["active_intents"] = res.single()["c"] 
             
             return stats
 

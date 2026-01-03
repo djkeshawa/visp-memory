@@ -44,6 +44,7 @@ class IntentMemory(BaseMemoryLayer):
         goal: str,
         priority: IntentPriority = IntentPriority.NORMAL,
         constraints: List[str] = None,
+        repo_id: str = None,
         context: Dict[str, Any] = None
     ) -> str:
         """
@@ -77,6 +78,7 @@ class IntentMemory(BaseMemoryLayer):
         return self.storage.set_intent(
             description=goal,
             priority=priority.value if isinstance(priority, IntentPriority) else priority,
+            repo_id=repo_id,
             context=ctx
         )
 
@@ -145,7 +147,8 @@ class IntentMemory(BaseMemoryLayer):
         self,
         task: str,
         files: List[str] = None,
-        notes: str = None
+        notes: str = None,
+        repo_id: str = None
     ) -> str:
         """
         Record what is currently being worked on.
@@ -168,6 +171,7 @@ class IntentMemory(BaseMemoryLayer):
         return self.set_goal(
             goal=f"WORKING ON: {task}",
             priority=IntentPriority.HIGH,
+            repo_id=repo_id,
             context={
                 "files": files or [],
                 "notes": notes
@@ -215,9 +219,9 @@ class IntentMemory(BaseMemoryLayer):
             self.complete(intent["id"])
         return len(intents)
 
-    def get_active(self) -> List[Dict[str, Any]]:
+    def get_active(self, repo_id: str = None) -> List[Dict[str, Any]]:
         """Get all active intents, ordered by priority."""
-        return self.storage.get_active_intents()
+        return self.storage.get_active_intents(repo_id=repo_id)
 
     def get_current_focus(self) -> Optional[Dict[str, Any]]:
         """Get the current primary focus."""
@@ -260,14 +264,14 @@ class IntentMemory(BaseMemoryLayer):
 
         return None
 
-    def summarize(self) -> Dict[str, Any]:
+    def summarize(self, repo_id: str = None) -> Dict[str, Any]:
         """
         Get a summary of current intent state.
 
         Returns:
             Dict with focus, constraints, current_task, and all goals
         """
-        intents = self.get_active()
+        intents = self.get_active(repo_id=repo_id)
 
         return {
             "focus": self.get_current_focus(),

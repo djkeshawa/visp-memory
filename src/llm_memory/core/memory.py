@@ -222,7 +222,8 @@ class Memory:
         return self.intent.set_goal(
             goal=goal,
             priority=IntentPriority(priority),
-            constraints=constraints
+            constraints=constraints,
+            repo_id=self.config.repo_id
         )
 
     def working_on(self, task: str, files: List[str] = None) -> str:
@@ -236,7 +237,7 @@ class Memory:
         Returns:
             Intent ID
         """
-        return self.intent.working_on(task, files)
+        return self.intent.working_on(task, files, repo_id=self.config.repo_id)
 
     def done(self) -> int:
         """Clear current task (mark as done)."""
@@ -356,7 +357,7 @@ class Memory:
 
         # Intent (current direction)
         if include_intent:
-            intent_summary = self.intent.summarize()
+            intent_summary = self.intent.summarize(repo_id=self.config.repo_id)
             context["intent"] = {
                 "current_focus": intent_summary["focus"]["description"] if intent_summary["focus"] else None,
                 "current_task": intent_summary["current_task"]["description"] if intent_summary["current_task"] else None,
@@ -506,7 +507,7 @@ class Memory:
 
     def stats(self) -> Dict[str, Any]:
         """Get memory statistics."""
-        return self._storage.get_stats()
+        return self._storage.get_stats(repo_id=self.config.repo_id)
 
     # =========================================================================
     # Import/Export
