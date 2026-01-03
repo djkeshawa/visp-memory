@@ -1,0 +1,25 @@
+{
+  "name": "visp-memory",
+  "version": "0.1.0",
+  "description": "Local-first Codex integration for Visp Memory recall, capture, diagnostics, and maintenance.",
+  "author": {
+    "name": "Visp Memory"
+  },
+  "license": "MIT",
+  "keywords": ["memory", "codex", "recall", "local-first"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Visp Memory",
+    "shortDescription": "Use project memory directly from Codex.",
+    "longDescription": "Local-first Codex workflows for recalling project context, capturing decisions, running diagnostics, and maintaining Visp Memory without requiring cloud AI credentials.",
+    "developerName": "Visp Memory",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": [
+      "Recall memory for this repo",
+      "Capture this coding session",
+      "Run Visp Memory diagnostics"
+    ],
+    "brandColor": "#2563EB"
+  }
+}

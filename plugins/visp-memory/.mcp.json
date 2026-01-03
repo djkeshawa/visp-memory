@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "visp-memory": {
+      "command": "python3",
+      "args": ["-m", "visp_memory.interfaces.mcp"],
+      "env": {
+        "VISP_MEMORY_STORAGE_MODE": "client",
+        "VISP_MEMORY_STORAGE_SERVER_URL": "http://127.0.0.1:8000",
+        "VISP_MEMORY_REPO_ID": "visp-memory",
+        "VISP_MEMORY_EMBEDDING_PROVIDER": "noop"
+      }
+    }
+  }
+}

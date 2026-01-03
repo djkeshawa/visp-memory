@@ -1,0 +1,22 @@
+auto_compress: true
+compression:
+  compression_level: 0.5
+  episodic_threshold: 10
+  llm_model: null
+  llm_provider: null
+decay_enabled: true
+decay_halflife_days: 30
+embedding:
+  api_base: null
+  api_key: null
+  model: all-MiniLM-L6-v2
+  provider: sentence-transformers
+project_name: visp-memory
+project_type: code
+storage:
+  data_dir: .visp-memory/data
+  vector_db: chroma
+  backend: sqlite
+  neo4j_uri: bolt://localhost:7687
+  neo4j_user: neo4j
+  neo4j_password: ''
