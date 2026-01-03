@@ -102,6 +102,11 @@ class BaseStorage(ABC):
         """End a session."""
         pass
 
+    @abstractmethod
+    def get_all_relationships(self) -> List[Dict[str, Any]]:
+        """Get all relationships."""
+        pass
+
     # Stats
     @abstractmethod
     def get_stats(self) -> Dict[str, Any]:
@@ -111,7 +116,6 @@ class BaseStorage(ABC):
 
 class LocalStorage(BaseStorage):
     """Unified storage for structured data and vector embeddings (Local SQLite + Chroma)."""
-
     def __init__(self, data_dir: Path, embedding_fn=None):
         """
         Initialize storage.
@@ -679,6 +683,12 @@ class LocalStorage(BaseStorage):
             stats["total_relationships"] = cursor.fetchone()[0]
 
             return stats
+
+    def get_all_relationships(self) -> List[Dict[str, Any]]:
+        """Get all relationships for graph visualization."""
+        with self._get_db() as conn:
+            cursor = conn.execute("SELECT * FROM relationships")
+            return [dict(row) for row in cursor.fetchall()]
 
     @staticmethod
     def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:

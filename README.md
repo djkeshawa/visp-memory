@@ -37,6 +37,7 @@ cd your-project
 llm-memory init --type code
 ```
 
+
 ### 3. Record & Recall
 ```bash
 # Record a decision
@@ -48,6 +49,28 @@ llm-memory warn "auth/token.py" "Race condition possible - use mutex"
 # Get context for your LLM
 llm-memory context | xclip -sel clip
 ```
+
+
+### 4. Web Dashboard
+Visualize memory and manage intents with the modern web interface.
+
+1. Start the backend:
+```bash
+# Install server dependencies
+pip install ".[api]"
+
+# Start the API server
+llm-memory serve
+```
+
+2. Start the frontend:
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ---
 

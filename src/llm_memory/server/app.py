@@ -128,3 +128,48 @@ async def list_intents(api_key: str = Depends(get_api_key)):
             "created_at": datetime.fromisoformat(i["created_at"]) if isinstance(i["created_at"], str) else i["created_at"]
         } for i in intents
     ]
+
+@app.get("/graph")
+async def get_graph(api_key: str = Depends(get_api_key)):
+    """Get memory graph (nodes and edges)."""
+    memories = storage.list_memories(limit=200)
+    relationships = storage.get_all_relationships()
+    
+    return {
+        "nodes": [
+            {
+                "id": m["id"],
+                "group": m["layer"],
+                "label": m["content"][:30] + "..." if len(m["content"]) > 30 else m["content"],
+                "full_label": m["content"],
+                "radius": 5 + (m.get("importance", 0.5) * 5),
+                "layer": m["layer"]
+            } for m in memories
+        ],
+        "links": [
+            {
+                "source": r["source_id"],
+                "target": r["target_id"],
+                "value": r["strength"],
+                "label": r["relationship"]
+            } for r in relationships
+        ]
+    }
+
+@app.post("/intents", response_model=IntentResponse)
+async def create_intent(intent: IntentCreate, api_key: str = Depends(get_api_key)):
+    """Create a new intent."""
+    intent_id = storage.set_intent(
+        description=intent.description,
+        priority=intent.priority if hasattr(intent, "priority") else 0,
+        context=intent.context
+    )
+    
+    return {
+        "id": intent_id,
+        "description": intent.description,
+        "priority": intent.priority * 10,
+        "status": "active",
+        "context": intent.context,
+        "created_at": datetime.now()
+    }
