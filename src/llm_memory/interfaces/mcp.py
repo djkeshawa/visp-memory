@@ -116,6 +116,10 @@ def create_mcp_server() -> "Server":
                             "type": "integer",
                             "default": 10,
                             "description": "Maximum results to return"
+                        },
+                        "repo_id": {
+                            "type": "string",
+                            "description": "Filter by repository/project ID for isolation (optional)"
                         }
                     },
                     "required": ["query"]
@@ -234,6 +238,10 @@ def create_mcp_server() -> "Server":
                             "maximum": 1,
                             "default": 0.5,
                             "description": "How important (0.0-1.0)"
+                        },
+                        "repo_id": {
+                            "type": "string",
+                            "description": "Repository/project ID for isolation (optional)"
                         }
                     },
                     "required": ["event"]
@@ -717,7 +725,8 @@ def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
     if name == "memory_recall":
         results = memory.recall(
             query=args["query"],
-            limit=args.get("limit", 10)
+            limit=args.get("limit", 10),
+            repo_id=args.get("repo_id")
         )
         if not results:
             return "No memories found matching query."
@@ -815,7 +824,8 @@ def _handle_recording(name: str, args: dict[str, Any], memory: Memory) -> str:
         mem_id = memory.record(
             event=args["event"],
             category=args.get("category", "note"),
-            importance=args.get("importance", 0.5)
+            importance=args.get("importance", 0.5),
+            repo_id=args.get("repo_id")
         )
         return f"Recorded event (ID: {mem_id}): {args['event']}"
 

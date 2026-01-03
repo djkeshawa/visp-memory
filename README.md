@@ -127,6 +127,90 @@ Open [http://localhost:3000](http://localhost:3000) (or the port shown in termin
 
 ---
 
+## 🌐 Workspace Scope & Multi-Project Usage
+
+LLM Memory is designed to **share knowledge across your entire workspace by default**, enabling cross-project learning and intelligent connections.
+
+### Default Behavior: Unified Workspace Memory
+
+By default, all memories are stored **without isolation**, creating a shared knowledge base across all your projects:
+
+```bash
+# These all share the same memory space
+cd ~/project-a
+llm-memory record "Implemented OAuth with JWT tokens"
+
+cd ~/project-b  
+llm-memory record "Frontend expects JWT in headers"
+
+# The LLM can now connect these across projects!
+llm-memory recall "authentication"
+# Returns both memories, showing the relationship
+```
+
+**Why this matters:**
+- 🔗 **Cross-project insights**: "I changed the auth system in service-a, which affects service-b"
+- 📚 **Pattern reuse**: "This approach I used in project-x solved a similar problem in project-y"
+- 🧠 **Unified knowledge**: Your LLM builds one coherent understanding of your entire codebase ecosystem
+
+### Optional: Project Isolation
+
+For **completely unrelated work** (client projects, experiments, etc.), use the `--repo` flag to create an isolated memory space:
+
+```bash
+# Isolated client work
+llm-memory record "Client XYZ specific logic" --repo client-xyz
+
+# Isolated experiment
+llm-memory record "Testing new framework" --repo experiment-temp
+
+# These won't appear in your main workspace recalls
+llm-memory recall "framework"  # Won't show experiment-temp memories
+```
+
+### Configuration
+
+#### Option 1: Per-Command Isolation
+```bash
+llm-memory record "..." --repo isolated-project
+llm-memory recall "..." --repo isolated-project
+```
+
+#### Option 2: Set Default repo_id in Config
+Edit `~/.llm-memory/config.yaml`:
+```yaml
+repo_id: client-xyz  # All commands now scoped to this project
+```
+
+Or use environment variable:
+```bash
+export LLM_MEMORY_REPO_ID=client-xyz
+```
+
+### Best Practices
+
+✅ **DO**: Use shared workspace memory for:
+- Related microservices
+- Frontend + Backend of same product
+- Internal tools and libraries
+- Any projects that should learn from each other
+
+❌ **DON'T**: Use isolation unless absolutely necessary:
+- Client confidential work
+- Throwaway experiments
+- Completely unrelated domains
+
+### Dashboard & API
+
+The web dashboard shows your **unified workspace** by default. All memories without a `repo_id` are visible, creating the full knowledge graph.
+
+To filter by project in API calls:
+```bash
+curl "http://localhost:8000/memories?repo_id=client-xyz"
+```
+
+---
+
 ---
 
 ## How It Works
