@@ -16,7 +16,8 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 from enum import Enum
 
-from llm_memory.core.storage import Storage
+from llm_memory.core.storage import BaseStorage
+from llm_memory.layers.base import BaseMemoryLayer
 
 
 class KnowledgeCategory(str, Enum):
@@ -45,7 +46,7 @@ class KnowledgeCategory(str, Enum):
     FACT = "fact"  # General knowledge
 
 
-class SemanticMemory:
+class SemanticMemory(BaseMemoryLayer):
     """
     Manages semantic (knowledge-based) memories.
 
@@ -54,8 +55,8 @@ class SemanticMemory:
     compressed from multiple episodic memories.
     """
 
-    def __init__(self, storage: Storage):
-        self.storage = storage
+    def __init__(self, storage: BaseStorage):
+        super().__init__(storage)
 
     def establish(
         self,
@@ -229,7 +230,7 @@ class SemanticMemory:
         Returns:
             List of matching knowledge
         """
-        return self.storage.search_memories(
+        return super().search(
             query=query,
             layer="semantic",
             category=category.value if category else None,
@@ -238,7 +239,7 @@ class SemanticMemory:
 
     def get_warnings(self, area: str = None) -> List[Dict[str, Any]]:
         """Get warnings, optionally filtered by area."""
-        results = self.storage.list_memories(
+        results = self.list_items(
             layer="semantic",
             category=KnowledgeCategory.FRAGILE_AREA.value,
             limit=100
@@ -255,7 +256,7 @@ class SemanticMemory:
 
     def get_conventions(self) -> List[Dict[str, Any]]:
         """Get all established conventions."""
-        return self.storage.list_memories(
+        return self.list_items(
             layer="semantic",
             category=KnowledgeCategory.CONVENTION.value,
             limit=100,
@@ -264,7 +265,7 @@ class SemanticMemory:
 
     def get_known_issues(self) -> List[Dict[str, Any]]:
         """Get all known issues."""
-        return self.storage.list_memories(
+        return self.list_items(
             layer="semantic",
             category=KnowledgeCategory.KNOWN_ISSUE.value,
             limit=100,

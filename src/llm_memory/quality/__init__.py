@@ -1,0 +1,3 @@
+"""
+Quality Management Module
+"""

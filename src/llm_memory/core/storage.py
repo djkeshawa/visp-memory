@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Literal
 from contextlib import contextmanager
+from abc import ABC, abstractmethod
 
 try:
     import chromadb
@@ -25,8 +26,91 @@ except ImportError:
 MemoryLayer = Literal["raw", "episodic", "semantic", "intent"]
 
 
-class Storage:
-    """Unified storage for structured data and vector embeddings."""
+class BaseStorage(ABC):
+    """Abstract interface for memory storage."""
+    
+    @abstractmethod
+    def store_memory(self, content: str, layer: MemoryLayer = "episodic", repo_id: str = None, **kwargs) -> str:
+        """Store a memory."""
+        pass
+
+    @abstractmethod
+    def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
+        """Get a memory by ID."""
+        pass
+        
+    @abstractmethod
+    def search_memories(self, query: str, repo_id: str = None, **kwargs) -> List[Dict[str, Any]]:
+        """Search across memories."""
+        pass
+
+    @abstractmethod
+    def list_memories(self, repo_id: str = None, **kwargs) -> List[Dict[str, Any]]:
+        """List memories."""
+        pass
+
+    @abstractmethod
+    def update_memory(self, memory_id: str, **kwargs) -> bool:
+        """Update a memory."""
+        pass
+
+    @abstractmethod
+    def delete_memory(self, memory_id: str) -> bool:
+        """Delete a memory."""
+        pass
+    
+    @abstractmethod
+    def get_collection(self, layer: str):
+        """Get underlying vector collection (if applicable)."""
+        pass
+
+    # Intent Operations
+    @abstractmethod
+    def set_intent(self, description: str, priority: int = 0, context: Dict[str, Any] = None) -> str:
+        """Set a new intent."""
+        pass
+
+    @abstractmethod
+    def get_active_intents(self) -> List[Dict[str, Any]]:
+        """Get active intents."""
+        pass
+    
+    @abstractmethod
+    def complete_intent(self, intent_id: str) -> bool:
+        """Complete an intent."""
+        pass
+        
+    # Relationship Operations
+    @abstractmethod
+    def add_relationship(self, source_id: str, target_id: str, relationship: str, strength: float = 1.0) -> str:
+        """Add a relationship."""
+        pass
+        
+    @abstractmethod
+    def get_related_memories(self, memory_id: str, relationship: str = None) -> List[Dict[str, Any]]:
+        """Get related memories."""
+        pass
+
+    # Session Operations
+    @abstractmethod
+    def start_session(self) -> str:
+        """Start a session."""
+        pass
+
+    @abstractmethod
+    def end_session(self, session_id: str, summary: str, memory_ids: List[str]):
+        """End a session."""
+        pass
+
+    # Stats
+    @abstractmethod
+    def get_stats(self) -> Dict[str, Any]:
+        """Get statistics."""
+        pass
+
+
+class LocalStorage(BaseStorage):
+    """Unified storage for structured data and vector embeddings (Local SQLite + Chroma)."""
 
     def __init__(self, data_dir: Path, embedding_fn=None):
         """
@@ -60,6 +144,7 @@ class Storage:
                     layer TEXT NOT NULL DEFAULT 'episodic',
                     category TEXT DEFAULT 'general',
                     importance REAL DEFAULT 0.5,
+                    repo_id TEXT DEFAULT NULL,
                     access_count INTEGER DEFAULT 0,
                     tags TEXT DEFAULT '[]',
                     metadata TEXT DEFAULT '{}',
@@ -69,6 +154,14 @@ class Storage:
                     compressed_at TIMESTAMP DEFAULT NULL
                 )
             """)
+            
+            # Migration: Check if repo_id column exists
+            try:
+                conn.execute("SELECT repo_id FROM memories LIMIT 1")
+            except sqlite3.OperationalError:
+                # Column doesn't exist, add it
+                conn.execute("ALTER TABLE memories ADD COLUMN repo_id TEXT DEFAULT NULL")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_repo ON memories(repo_id)")
 
             # Intent tracking (current direction/goals)
             conn.execute("""
@@ -111,6 +204,7 @@ class Storage:
             # Indexes
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_layer ON memories(layer)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_repo ON memories(repo_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_intents_status ON intents(status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_relationships_source ON relationships(source_id)")
@@ -145,6 +239,10 @@ class Storage:
 
         return self._chroma_client
 
+    def get_collection(self, layer: str):
+        """Public accessor for vector collection."""
+        return self._get_collection(layer)
+
     def _get_collection(self, layer: MemoryLayer):
         """Get or create ChromaDB collection for a layer."""
         client = self._get_chroma()
@@ -168,14 +266,26 @@ class Storage:
         timestamp = datetime.now().isoformat()
         return hashlib.sha256(f"{content}{timestamp}".encode()).hexdigest()[:16]
 
-    # =========================================================================
-    # Memory CRUD Operations
-    # =========================================================================
+    @staticmethod
+    def _json_serialize(data: Any) -> str:
+        """Serialize data to JSON."""
+        return json.dumps(data)
+
+    @staticmethod
+    def _json_deserialize(data: str) -> Any:
+        """Deserialize data from JSON."""
+        if not data:
+            return None
+        try:
+            return json.loads(data)
+        except (json.JSONDecodeError, TypeError):
+            return data
 
     def store_memory(
         self,
         content: str,
         layer: MemoryLayer = "episodic",
+        repo_id: str = None,
         category: str = "general",
         importance: float = 0.5,
         tags: List[str] = None,
@@ -189,6 +299,7 @@ class Storage:
         Args:
             content: The memory content
             layer: Memory layer (raw, episodic, semantic, intent)
+            repo_id: Repository identifier for context
             category: Category for organization
             importance: Importance score (0.0 to 1.0)
             tags: List of tags
@@ -207,31 +318,36 @@ class Storage:
         # Store in SQLite
         with self._get_db() as conn:
             conn.execute("""
-                INSERT INTO memories (id, content, layer, category, importance, tags, metadata, source_ids)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO memories (id, content, layer, repo_id, category, importance, tags, metadata, source_ids)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 memory_id,
                 content,
                 layer,
+                repo_id,
                 category,
                 importance,
-                json.dumps(tags),
-                json.dumps(metadata),
-                json.dumps(source_ids)
+                self._json_serialize(tags),
+                self._json_serialize(metadata),
+                self._json_serialize(source_ids)
             ))
             conn.commit()
 
         # Store in vector DB
         collection = self._get_collection(layer)
         if collection is not None:
+            metadata_dict = {
+                "category": category,
+                "importance": importance,
+                "tags": self._json_serialize(tags)
+            }
+            if repo_id:
+                metadata_dict["repo_id"] = repo_id
+                
             add_kwargs = {
                 "ids": [memory_id],
                 "documents": [content],
-                "metadatas": [{
-                    "category": category,
-                    "importance": importance,
-                    "tags": json.dumps(tags)
-                }]
+                "metadatas": [metadata_dict]
             }
 
             if embedding is not None:
@@ -267,6 +383,7 @@ class Storage:
         self,
         query: str,
         layer: MemoryLayer = None,
+        repo_id: str = None,
         category: str = None,
         limit: int = 10,
         min_importance: float = 0.0
@@ -277,6 +394,7 @@ class Storage:
         Args:
             query: Search query (natural language)
             layer: Filter by layer
+            repo_id: Filter by repository context
             category: Filter by category
             limit: Maximum results
             min_importance: Minimum importance threshold
@@ -298,6 +416,8 @@ class Storage:
             where = {}
             if category:
                 where["category"] = category
+            if repo_id:
+                where["repo_id"] = repo_id
             if min_importance > 0:
                 where["importance"] = {"$gte": min_importance}
 
@@ -329,6 +449,7 @@ class Storage:
     def list_memories(
         self,
         layer: MemoryLayer = None,
+        repo_id: str = None,
         category: str = None,
         limit: int = 50,
         order_by: str = "created_at DESC"
@@ -340,6 +461,10 @@ class Storage:
         if layer:
             query += " AND layer = ?"
             params.append(layer)
+
+        if repo_id:
+            query += " AND repo_id = ?"
+            params.append(repo_id)
 
         if category:
             query += " AND category = ?"
@@ -374,11 +499,11 @@ class Storage:
 
         if tags is not None:
             updates.append("tags = ?")
-            params.append(json.dumps(tags))
+            params.append(self._json_serialize(tags))
 
         if metadata is not None:
             updates.append("metadata = ?")
-            params.append(json.dumps(metadata))
+            params.append(self._json_serialize(metadata))
 
         if not updates:
             return False
@@ -417,10 +542,6 @@ class Storage:
 
         return True
 
-    # =========================================================================
-    # Intent Operations
-    # =========================================================================
-
     def set_intent(
         self,
         description: str,
@@ -435,7 +556,7 @@ class Storage:
             conn.execute("""
                 INSERT INTO intents (id, description, priority, context)
                 VALUES (?, ?, ?, ?)
-            """, (intent_id, description, priority, json.dumps(context)))
+            """, (intent_id, description, priority, self._json_serialize(context)))
             conn.commit()
 
         return intent_id
@@ -460,10 +581,6 @@ class Storage:
             """, (intent_id,))
             conn.commit()
             return cursor.rowcount > 0
-
-    # =========================================================================
-    # Relationship Operations
-    # =========================================================================
 
     def add_relationship(
         self,
@@ -507,10 +624,6 @@ class Storage:
             cursor = conn.execute(query, params)
             return [self._row_to_dict(row) for row in cursor.fetchall()]
 
-    # =========================================================================
-    # Session Operations
-    # =========================================================================
-
     def start_session(self) -> str:
         """Start a new session for tracking."""
         session_id = self._generate_id("session")
@@ -531,12 +644,8 @@ class Storage:
                 UPDATE sessions
                 SET summary = ?, memory_ids = ?, ended_at = CURRENT_TIMESTAMP
                 WHERE id = ?
-            """, (summary, json.dumps(memory_ids), session_id))
+            """, (summary, self._json_serialize(memory_ids), session_id))
             conn.commit()
-
-    # =========================================================================
-    # Statistics
-    # =========================================================================
 
     def get_stats(self) -> Dict[str, Any]:
         """Get storage statistics."""
@@ -579,9 +688,6 @@ class Storage:
         # Parse JSON fields
         for field in ["tags", "metadata", "source_ids", "memory_ids", "context"]:
             if field in d and d[field]:
-                try:
-                    d[field] = json.loads(d[field])
-                except (json.JSONDecodeError, TypeError):
-                    pass
-
+                d[field] = LocalStorage._json_deserialize(d[field])
+        
         return d

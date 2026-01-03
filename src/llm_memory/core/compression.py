@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Callable
 from collections import defaultdict
 
-from llm_memory.core.storage import Storage
+from llm_memory.core.storage import BaseStorage
 
 
 class MemoryCompressor:
@@ -30,7 +30,7 @@ class MemoryCompressor:
 
     def __init__(
         self,
-        storage: Storage,
+        storage: BaseStorage,
         llm_compress_fn: Optional[Callable[[List[str]], str]] = None
     ):
         """
@@ -166,6 +166,73 @@ class MemoryCompressor:
         else:
             return f"Pattern ({len(contents)} instances): {contents[0][:100]}..."
 
+    def compress_semantic_to_principle(
+        self,
+        memories: List[Dict[str, Any]]
+    ) -> Optional[str]:
+        """
+        Level 2 Compression: Semantic Knowledge -> Higher-Level Principles.
+        
+        Args:
+            memories: List of semantic memories to compress
+            
+        Returns:
+            ID of created principle memory
+        """
+        if not memories or len(memories) < 3:
+            return None
+
+        contents = [m["content"] for m in memories]
+        source_ids = [m["id"] for m in memories]
+
+        # Calculate importance (higher for principles)
+        avg_importance = sum(m.get("importance", 0.5) for m in memories) / len(memories)
+        importance = min(1.0, avg_importance + 0.2)
+
+        # Compress
+        prompt_suffix = "\n\nExtract the underlying universal principle or rule that explains these facts."
+        if self._llm_compress:
+            # We wrap the underlying compress fn to add specific instruction
+            # This is a bit hacky but works without changing the interface
+            raw_compress = self._llm_compress
+            self._llm_compress = lambda c: raw_compress(c + [prompt_suffix])
+            try:
+                compressed = self._llm_compress(contents)
+            finally:
+                self._llm_compress = raw_compress
+        else:
+            compressed = f"Principle derived from {len(memories)} facts: " + self._heuristic_compress(contents)
+
+        if not compressed:
+            return None
+
+        # Store principle
+        principle_id = self.storage.store_memory(
+            content=compressed,
+            layer="semantic",
+            category="principle",
+            importance=importance,
+            tags=["compressed", "principle"],
+            metadata={
+                "compressed_from": len(memories),
+                "level": 2,
+                "compressed_at": datetime.now().isoformat()
+            },
+            source_ids=source_ids
+        )
+        
+        # Link source memories to this principle (don't mark as compressed/hidden, 
+        # as semantic memories are still valid on their own)
+        for mem in memories:
+            self.storage.add_relationship(
+                source_id=mem["id"],
+                target_id=principle_id,
+                relationship="supports_principle",
+                strength=0.9
+            )
+
+        return principle_id
+
     def auto_compress(
         self,
         min_episodes: int = 5,
@@ -173,20 +240,15 @@ class MemoryCompressor:
         age_days: int = 7
     ) -> List[str]:
         """
-        Automatically compress old episodic memories.
-
-        Finds groups of related episodes and compresses them.
-
-        Args:
-            min_episodes: Minimum episodes needed to trigger compression
-            category_threshold: Episodes per category to trigger
-            age_days: Only compress episodes older than this
-
-        Returns:
-            List of created semantic memory IDs
+        Run hierarchical compression.
+        
+        1. Episodic -> Semantic (Level 1)
+        2. Semantic -> Principle (Level 2)
         """
         created = []
 
+        # --- Level 1: Episodic -> Semantic ---
+        
         # Get uncompressed episodes
         episodes = self.storage.list_memories(
             layer="episodic",
@@ -202,23 +264,45 @@ class MemoryCompressor:
             and datetime.fromisoformat(ep["created_at"].replace("Z", "")) < cutoff
         ]
 
-        if len(old_episodes) < min_episodes:
-            return created
+        if len(old_episodes) >= min_episodes:
+            # Group by category
+            by_category = defaultdict(list)
+            for ep in old_episodes:
+                by_category[ep.get("category", "general")].append(ep)
 
-        # Group by category
+            # Compress categories
+            for category, cat_episodes in by_category.items():
+                if len(cat_episodes) >= category_threshold:
+                    semantic_id = self.compress_episodes_to_semantic(
+                        cat_episodes,
+                        category=category
+                    )
+                    if semantic_id:
+                        created.append(semantic_id)
+
+        # --- Level 2: Semantic -> Principle ---
+        
+        # Get all semantic memories (excluding principles)
+        semantic = self.storage.list_memories(layer="semantic", limit=1000)
+        facts = [
+            m for m in semantic 
+            if m.get("category") != "principle" 
+            and m.get("metadata", {}).get("level", 1) == 1
+        ]
+        
+        # Cluster them (naive approach: group by auto-extracted topics/tags would be better)
+        # For now, we'll try to group by category/tags
         by_category = defaultdict(list)
-        for ep in old_episodes:
-            by_category[ep.get("category", "general")].append(ep)
-
-        # Compress categories with enough episodes
-        for category, cat_episodes in by_category.items():
-            if len(cat_episodes) >= category_threshold:
-                semantic_id = self.compress_episodes_to_semantic(
-                    cat_episodes,
-                    category=category
-                )
-                if semantic_id:
-                    created.append(semantic_id)
+        for m in facts:
+            by_category[m.get("category", "general")].append(m)
+            
+        for category, items in by_category.items():
+            if len(items) >= 5:  # Need more evidence for a principle
+                # Only check items not already supporting a principle to avoid loops
+                # (Ideally we checks relationships, but simplified for MVP)
+                principle_id = self.compress_semantic_to_principle(items)
+                if principle_id:
+                    created.append(principle_id)
 
         return created
 

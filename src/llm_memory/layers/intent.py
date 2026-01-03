@@ -14,7 +14,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from llm_memory.core.storage import Storage
+from llm_memory.core.storage import BaseStorage
+from llm_memory.layers.base import BaseMemoryLayer
 
 
 class IntentPriority(int, Enum):
@@ -25,7 +26,7 @@ class IntentPriority(int, Enum):
     CRITICAL = 3
 
 
-class IntentMemory:
+class IntentMemory(BaseMemoryLayer):
     """
     Manages intent (goal/direction) tracking.
 
@@ -35,8 +36,8 @@ class IntentMemory:
     - What constraints should guide decisions?
     """
 
-    def __init__(self, storage: Storage):
-        self.storage = storage
+    def __init__(self, storage: BaseStorage):
+        super().__init__(storage)
 
     def set_goal(
         self,

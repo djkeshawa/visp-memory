@@ -31,6 +31,11 @@ class StorageConfig(BaseSettings):
 
     data_dir: Path = Path(".llm-memory/data")
     vector_db: Literal["chroma", "memory"] = "chroma"
+    
+    # Client-Server Mode
+    mode: Literal["local", "client"] = "local"
+    server_url: str = "http://localhost:8000"
+    api_key: Optional[str] = Field(default=None, env="LLM_MEMORY_API_KEY")
 
     class Config:
         env_prefix = "LLM_MEMORY_STORAGE_"
@@ -205,3 +210,8 @@ class MemoryConfig(BaseSettings):
             content = json.dumps(data, indent=2)
 
         path.write_text(content)
+
+
+def load_config(start_dir: Path = None) -> "MemoryConfig":
+    """Helper function to load configuration."""
+    return MemoryConfig.find_and_load(start_dir)

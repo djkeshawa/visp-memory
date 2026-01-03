@@ -699,22 +699,22 @@ def create_mcp_server() -> "Server":
     return server
 
 
-async def handle_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
-    """Route tool calls to memory methods."""
+def _handle_context(args: dict[str, Any], memory: Memory) -> str:
+    """Handle context tools."""
+    fmt = args.get("format", "text")
+    include_history = args.get("include_history", True)
+    ctx = memory.context(
+        format=fmt,
+        include_history=include_history
+    )
+    if fmt == "json":
+        return json.dumps(ctx, indent=2, default=str)
+    return ctx
 
-    # Context & Search
-    if name == "memory_context":
-        fmt = args.get("format", "text")
-        include_history = args.get("include_history", True)
-        ctx = memory.context(
-            format=fmt,
-            include_history=include_history
-        )
-        if fmt == "json":
-            return json.dumps(ctx, indent=2, default=str)
-        return ctx
 
-    elif name == "memory_recall":
+def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
+    """Handle search tools."""
+    if name == "memory_recall":
         results = memory.recall(
             query=args["query"],
             limit=args.get("limit", 10)
@@ -751,9 +751,13 @@ async def handle_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
                 output.append(f"  - {h['content']}")
 
         return "\n".join(output) if output else "No relevant memories found."
+    
+    return f"Unknown search tool: {name}"
 
-    # Proactive Recall
-    elif name == "memory_file_context":
+
+def _handle_proactive(name: str, args: dict[str, Any], memory: Memory) -> str:
+    """Handle proactive recall tools."""
+    if name == "memory_file_context":
         from llm_memory.recall.proactive import ProactiveRecall
         recall = ProactiveRecall(memory)
 
@@ -802,8 +806,12 @@ async def handle_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
         formatted = recall.format_injection(context, format="markdown")
         return formatted if formatted.strip() else "No context found for this directory."
 
-    # Recording Events
-    elif name == "memory_record":
+    return f"Unknown proactive tool: {name}"
+
+
+def _handle_recording(name: str, args: dict[str, Any], memory: Memory) -> str:
+    """Handle recording tools."""
+    if name == "memory_record":
         mem_id = memory.record(
             event=args["event"],
             category=args.get("category", "note"),
@@ -819,8 +827,12 @@ async def handle_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
         )
         return f"Decision recorded (ID: {mem_id}): {args['what']}"
 
-    # Establishing Knowledge
-    elif name == "memory_learn":
+    return f"Unknown recording tool: {name}"
+
+
+def _handle_knowledge(name: str, args: dict[str, Any], memory: Memory) -> str:
+    """Handle knowledge tools."""
+    if name == "memory_learn":
         mem_id = memory.learn(
             knowledge=args["knowledge"],
             category=args.get("category", "fact"),
@@ -844,8 +856,12 @@ async def handle_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
         )
         return f"Known issue documented: {args['issue']}"
 
-    # Intent Management
-    elif name == "memory_goal":
+    return f"Unknown knowledge tool: {name}"
+
+
+def _handle_intent(name: str, args: dict[str, Any], memory: Memory) -> str:
+    """Handle intent tools."""
+    if name == "memory_goal":
         intent_id = memory.goal(
             goal=args["goal"],
             priority=args.get("priority", 1),
@@ -864,8 +880,12 @@ async def handle_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
         cleared = memory.done()
         return f"Cleared {cleared} task(s)"
 
-    # Utility
-    elif name == "memory_stats":
+    return f"Unknown intent tool: {name}"
+
+
+def _handle_utility(name: str, args: dict[str, Any], memory: Memory) -> str:
+    """Handle utility tools."""
+    if name == "memory_stats":
         stats = memory.stats()
         return json.dumps(stats, indent=2)
 
@@ -887,8 +907,12 @@ async def handle_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
             output.append(f"- [{p}] {i['description']}")
         return "\n".join(output)
 
-    # Maintenance
-    elif name == "memory_compress":
+    return f"Unknown utility tool: {name}"
+
+
+def _handle_maintenance(name: str, args: dict[str, Any], memory: Memory) -> str:
+    """Handle maintenance tools."""
+    if name == "memory_compress":
         created = memory.compress()
         return f"Compression complete. Created {len(created)} semantic memories."
 
@@ -900,8 +924,45 @@ async def handle_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
         cleared = memory.intent.clear_all()
         return f"Cleared {cleared} goals."
 
-    else:
-        return f"Unknown tool: {name}"
+    return f"Unknown maintenance tool: {name}"
+
+
+async def handle_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
+    """Route tool calls to specialized handlers."""
+    
+    # Context
+    if name == "memory_context":
+        return _handle_context(args, memory)
+        
+    # Search
+    if name in ["memory_recall", "memory_relevant"]:
+        return _handle_search(name, args, memory)
+        
+    # Proactive
+    if name in ["memory_file_context", "memory_find_error", "memory_directory_context"]:
+        return _handle_proactive(name, args, memory)
+        
+    # Recording
+    if name in ["memory_record", "memory_decision"]:
+        return _handle_recording(name, args, memory)
+        
+    # Knowledge
+    if name in ["memory_learn", "memory_warn", "memory_issue"]:
+        return _handle_knowledge(name, args, memory)
+        
+    # Intent
+    if name in ["memory_goal", "memory_working_on", "memory_done"]:
+        return _handle_intent(name, args, memory)
+        
+    # Utility
+    if name in ["memory_stats", "memory_list_warnings", "memory_list_intents"]:
+        return _handle_utility(name, args, memory)
+        
+    # Maintenance
+    if name in ["memory_compress", "memory_decay", "memory_clear_goals"]:
+        return _handle_maintenance(name, args, memory)
+        
+    return f"Unknown tool: {name}"
 
 
 async def run_server():

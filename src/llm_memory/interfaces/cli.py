@@ -24,6 +24,8 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.markdown import Markdown
+from rich.layout import Layout
+from rich.console import Group
 
 from llm_memory import Memory, MemoryConfig
 
@@ -91,11 +93,12 @@ def init(
 def record(
     event: str = typer.Argument(..., help="What happened"),
     category: str = typer.Option("note", "--category", "-c", help="Event category"),
-    importance: float = typer.Option(0.5, "--importance", "-i", help="Importance (0.0-1.0)")
+    importance: float = typer.Option(0.5, "--importance", "-i", help="Importance (0.0-1.0)"),
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository context")
 ):
     """Record an episodic memory (something that happened)."""
     memory = get_memory()
-    mem_id = memory.record(event, category=category, importance=importance)
+    mem_id = memory.record(event, category=category, importance=importance, repo_id=repo)
     console.print(f"[green]Recorded:[/green] {event[:60]}...")
     console.print(f"[dim]ID: {mem_id}[/dim]")
 
@@ -234,28 +237,38 @@ def done():
 def recall(
     query: str = typer.Argument(..., help="Search query"),
     limit: int = typer.Option(10, "--limit", "-n", help="Maximum results"),
-    layer: str = typer.Option(None, "--layer", "-l", help="Filter by layer")
+    layer: str = typer.Option(None, "--layer", "-l", help="Filter by layer"),
+    repo: str = typer.Option(None, "--repo", "-r", help="Filter by repository")
 ):
     """Search across all memories."""
     memory = get_memory()
 
     layers = [layer] if layer else None
-    results = memory.recall(query, layers=layers, limit=limit)
+    results = memory.recall(query, layers=layers, limit=limit, repo_id=repo)
 
     if not results:
         console.print("[yellow]No results found[/yellow]")
         return
 
-    table = Table(title=f"Search Results for '{query}'")
-    table.add_column("Layer", style="cyan")
-    table.add_column("Category", style="green")
+    from rich.box import ROUNDED
+    table = Table(title=f"Search Results for '{query}'", box=ROUNDED)
+    table.add_column("Layer", style="cyan", width=10)
+    table.add_column("Category", style="green", width=12)
     table.add_column("Content")
-    table.add_column("Score", justify="right")
+    table.add_column("Score", justify="right", style="magenta")
 
     for r in results:
         score = f"{r.get('similarity', 0):.2f}" if r.get('similarity') else "-"
-        content = r['content'][:60] + "..." if len(r['content']) > 60 else r['content']
-        table.add_row(r['layer'], r.get('category', '-'), content, score)
+        content = r['content'].replace("\n", " ")
+        if len(content) > 80:
+            content = content[:77] + "..."
+            
+        table.add_row(
+            r['layer'], 
+            r.get('category', '-'), 
+            content, 
+            score
+        )
 
     console.print(table)
 
@@ -367,6 +380,32 @@ def decay():
 
 
 @app.command()
+def dedup(
+    layer: str = typer.Option("episodic", "--layer", "-l", help="Layer to check"),
+    threshold: float = typer.Option(0.9, "--threshold", "-t", help="Similarity threshold")
+):
+    """Find and merge duplicate memories."""
+    from llm_memory.core.memory import Memory
+
+    memory = get_memory()
+    duplicates = memory.deduplicate(layer=layer, threshold=threshold)
+
+    if not duplicates:
+        console.print("[green]No duplicates found.[/green]")
+        return
+        
+    console.print(f"[yellow]Found {len(duplicates)} potential duplicates[/yellow]")
+    
+    # Simple listing for now
+    for group in duplicates:
+        console.print("--- Group ---")
+        for mem in group:
+            console.print(f"[{mem['id']}] {mem['content'][:50]}... ({mem.get('similarity', 0):.2f})")
+            
+    # TODO: Interactive merge workflow could be added here
+
+
+@app.command()
 def export(
     output: str = typer.Argument("memory-export.json", help="Output file path")
 ):
@@ -389,6 +428,53 @@ def import_memories(
 # =============================================================================
 # List Commands
 # =============================================================================
+
+@app.command("list")
+def list_memories(
+    layer: str = typer.Option(None, "--layer", "-l", help="Filter by layer"),
+    category: str = typer.Option(None, "--category", "-c", help="Filter by category"),
+    limit: int = typer.Option(20, "--limit", "-n", help="Max results"),
+    full: bool = typer.Option(False, "--full", help="Show full content")
+):
+    """List recent memories."""
+    from rich.box import ROUNDED
+    memory = get_memory()
+    
+    # We need to access storage directly for list listing or expose it in Memory
+    # Using private storage access for now as Memory doesn't have generic list
+    memories = memory._storage.list_memories(
+        layer=layer,
+        category=category,
+        limit=limit,
+        order_by="created_at DESC"
+    )
+
+    if not memories:
+        console.print("[yellow]No memories found[/yellow]")
+        return
+
+    table = Table(title="Recent Memories", box=ROUNDED)
+    table.add_column("ID", style="dim", width=8, overflow="ignore")
+    table.add_column("Time", style="dim", width=16)
+    table.add_column("Layer", style="cyan", width=10)
+    table.add_column("Category", style="green", width=12)
+    table.add_column("Content")
+
+    for m in memories:
+        content = m['content'].replace("\n", " ")
+        if not full and len(content) > 80:
+            content = content[:77] + "..."
+            
+        table.add_row(
+            m['id'][:8],
+            m['created_at'][:16].replace("T", " "),
+            m['layer'],
+            m.get('category', '-'),
+            content
+        )
+
+    console.print(table)
+
 
 @app.command()
 def list_intents():
@@ -651,6 +737,27 @@ def capture_git(
         raise typer.Exit(1)
 
 
+@capture_app.command("tests")
+def capture_tests(
+    report: str = typer.Argument("report.xml", help="Path to JUnit XML report")
+):
+    """Capture test failures from JUnit XML report."""
+    from llm_memory.capture.tests import TestCapture
+
+    memory = get_memory()
+    capture = TestCapture(memory)
+
+    try:
+        memory_ids = capture.on_pytest_session(report)
+        if memory_ids:
+            console.print(f"[green]Captured {len(memory_ids)} test failures[/green]")
+        else:
+            console.print("[green]No significant failures captured[/green]")
+    except Exception as e:
+        console.print(f"[red]Error parsing report:[/red] {e}")
+        raise typer.Exit(1)
+
+
 # =============================================================================
 # Hooks Commands (LLM Tool Integration)
 # =============================================================================
@@ -789,15 +896,130 @@ def hooks_list():
 # =============================================================================
 
 @app.command()
-def serve():
-    """Run the MCP server for LLM tool integration."""
+def serve(
+    host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind"),
+    port: int = typer.Option(8000, "--port", "-p", help="Port to bind"),
+    reload: bool = typer.Option(False, "--reload", help="Enable auto-reload")
+):
+    """Run the MCP or Central Memory Server."""
+    # Note: Currently this command is ambiguous between MCP and FastAPI
+    # Once we switch to client-server, this will run the FastAPI server
+    # For now, let's make it run the FastAPI skeleton if requested, or MCP by default?
+    # Actually, let's keep it specific.
+    
+    console.print(f"[green]Starting Central Memory Server at http://{host}:{port}[/green]")
     try:
-        from llm_memory.interfaces.mcp import main as mcp_main
-        mcp_main()
-    except ImportError as e:
-        console.print("[red]MCP package not installed.[/red]")
-        console.print("Install with: [bold]pip install llm-memory[mcp][/bold]")
+        import uvicorn
+        uvicorn.run("llm_memory.server.app:app", host=host, port=port, reload=reload)
+    except ImportError:
+        console.print("[red]uvicorn not installed.[/red]")
+        console.print("Install with: [bold]pip install llm-memory[api][/bold]")
         raise typer.Exit(1)
+
+
+
+# =============================================================================
+# Dashboard Commands
+# =============================================================================
+
+@app.command()
+def status():
+    """Show system status dashboard."""
+    from rich.layout import Layout
+    from rich.align import Align
+    from rich.box import ROUNDED
+    from rich.text import Text
+
+    memory = get_memory()
+    stats = memory.stats()
+    
+    # 1. System Info
+    info_table = Table(box=None, show_header=False, padding=(0, 2))
+    info_table.add_row("Active Config", memory.config.storage.data_dir.name)
+    info_table.add_row("Total Memories", str(stats.get("total_memories", 0)))
+    info_table.add_row("Active Intents", str(stats.get("active_intents", 0)))
+    info_table.add_row("Relationships", str(stats.get("total_relationships", 0)))
+
+    # 2. Key Stats (Memories by Layer)
+    layer_table = Table(title="Memories by Layer", box=ROUNDED, show_header=True)
+    layer_table.add_column("Layer", style="cyan")
+    layer_table.add_column("Count", justify="right")
+    
+    for layer, count in stats.get("memories_by_layer", {}).items():
+        layer_table.add_row(layer.capitalize(), str(count))
+
+    # 3. Recent Activity (Last 5 Episodic)
+    recent = memory.episodic.recent(limit=5)
+    activity_table = Table(title="Recent Activity", box=ROUNDED, show_header=True, expand=True)
+    activity_table.add_column("Time", style="dim", width=12)
+    activity_table.add_column("Category", style="green", width=10)
+    activity_table.add_column("Event")
+
+    for m in recent:
+        # Simple time format (just HH:MM or date if old)
+        # For now just truncated string
+        time_str = m["created_at"][11:16] 
+        activity_table.add_row(time_str, m["category"], m["content"][:60])
+
+    # 4. Current Context (Intents/Warnings)
+    intent_summary = memory.intent.summarize()
+    
+    focus_text = "[italic dim]No current focus[/]"
+    if intent_summary.get("focus"):
+        focus_text = f"[bold cyan]{intent_summary['focus']['description']}[/bold cyan]"
+        
+    task_text = "[italic dim]No active task[/]"
+    if intent_summary.get("current_task"):
+        task_text = f"[bold yellow]{intent_summary['current_task']['description']}[/bold yellow]"
+
+    context_panel = Panel(
+        Group(
+            Text("Current Focus:", style="dim"),
+            Text.from_markup(focus_text),
+            Text(""),
+            Text("Working On:", style="dim"),
+            Text.from_markup(task_text)
+        ),
+        title="Active Context",
+        box=ROUNDED
+    )
+
+    # Layout Construction
+    layout = Layout()
+    layout.split_column(
+        Layout(name="header", size=3),
+        Layout(name="main", ratio=1),
+        Layout(name="footer", size=3)
+    )
+    
+    layout["header"].update(
+        Panel(
+            Align.center(f"[bold blue]LLM Memory System[/bold blue] - {memory.config.storage.data_dir}"),
+            box=ROUNDED,
+            style="white on black"
+        )
+    )
+    
+    layout["main"].split_row(
+        Layout(name="left", ratio=1),
+        Layout(name="right", ratio=2)
+    )
+    
+    layout["left"].split_column(
+        Layout(name="context", ratio=1),
+        Layout(name="stats", ratio=1)
+    )
+    
+    layout["left"]["context"].update(context_panel)
+    layout["left"]["stats"].update(layer_table)
+    
+    layout["right"].update(activity_table)
+    
+    layout["footer"].update(
+        Align.center("[dim]Run 'llm-memory help' for commands | 'llm-memory recall' to search[/dim]")
+    )
+
+    console.print(layout)
 
 
 def main():

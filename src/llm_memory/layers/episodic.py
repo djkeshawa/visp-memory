@@ -15,7 +15,8 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 from enum import Enum
 
-from llm_memory.core.storage import Storage
+from llm_memory.core.storage import BaseStorage
+from llm_memory.layers.base import BaseMemoryLayer
 
 
 class EpisodeCategory(str, Enum):
@@ -43,7 +44,7 @@ class EpisodeCategory(str, Enum):
     SESSION = "session"
 
 
-class EpisodicMemory:
+class EpisodicMemory(BaseMemoryLayer):
     """
     Manages episodic (event-based) memories.
 
@@ -51,14 +52,15 @@ class EpisodicMemory:
     Over time, they can be compressed into semantic knowledge.
     """
 
-    def __init__(self, storage: Storage):
-        self.storage = storage
+    def __init__(self, storage: BaseStorage):
+        super().__init__(storage)
 
     def record(
         self,
         content: str,
         category: EpisodeCategory = EpisodeCategory.NOTE,
         importance: float = 0.5,
+        repo_id: str = None,
         context: Dict[str, Any] = None,
         tags: List[str] = None
     ) -> str:
@@ -91,6 +93,7 @@ class EpisodicMemory:
         return self.storage.store_memory(
             content=content,
             layer="episodic",
+            repo_id=repo_id,
             category=category.value if isinstance(category, EpisodeCategory) else category,
             importance=importance,
             tags=tags or [],
@@ -218,7 +221,7 @@ class EpisodicMemory:
         Returns:
             List of matching memories
         """
-        return self.storage.search_memories(
+        return super().search(
             query=query,
             layer="episodic",
             category=category.value if category else None,
@@ -231,7 +234,7 @@ class EpisodicMemory:
         category: EpisodeCategory = None
     ) -> List[Dict[str, Any]]:
         """Get recent episodic memories."""
-        return self.storage.list_memories(
+        return self.list_items(
             layer="episodic",
             category=category.value if category else None,
             limit=limit,
@@ -240,7 +243,7 @@ class EpisodicMemory:
 
     def get_uncompressed(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Get episodic memories that haven't been compressed yet."""
-        return self.storage.list_memories(
+        return self.list_items(
             layer="episodic",
             limit=limit,
             order_by="created_at ASC"

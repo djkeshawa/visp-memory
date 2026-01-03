@@ -14,11 +14,13 @@ from datetime import datetime
 import json
 
 from llm_memory.config import MemoryConfig
-from llm_memory.core.storage import Storage
+from llm_memory.core.storage import LocalStorage
+from llm_memory.core.remote_storage import RemoteStorage
 from llm_memory.core.compression import MemoryCompressor, create_llm_compressor
 from llm_memory.layers.episodic import EpisodicMemory, EpisodeCategory
 from llm_memory.layers.semantic import SemanticMemory, KnowledgeCategory
 from llm_memory.layers.intent import IntentMemory, IntentPriority
+from llm_memory.quality.dedup import Deduplicator
 
 
 class Memory:
@@ -66,7 +68,13 @@ class Memory:
             self.config = MemoryConfig.find_and_load()
 
         # Initialize storage
-        self._storage = Storage(self.config.storage.data_dir)
+        if self.config.storage.mode == "client":
+            self._storage = RemoteStorage(
+                server_url=self.config.storage.server_url,
+                api_key=self.config.storage.api_key
+            )
+        else:
+            self._storage = LocalStorage(self.config.storage.data_dir)
 
         # Initialize layers
         self.episodic = EpisodicMemory(self._storage)
@@ -85,6 +93,7 @@ class Memory:
                 pass  # Fall back to heuristic compression
 
         self._compressor = MemoryCompressor(self._storage, compress_fn)
+        self.deduplicator = Deduplicator(self._storage)
 
     # =========================================================================
     # Quick Access Methods
@@ -230,6 +239,7 @@ class Memory:
         self,
         query: str,
         layers: List[str] = None,
+        repo_id: str = None,
         limit: int = 10
     ) -> List[Dict[str, Any]]:
         """
@@ -250,6 +260,7 @@ class Memory:
             layer_results = self._storage.search_memories(
                 query=query,
                 layer=layer if layer != "intent" else None,
+                repo_id=repo_id,
                 limit=limit
             )
             results.extend(layer_results)
@@ -466,6 +477,18 @@ class Memory:
         return self._compressor.decay_old_memories(
             halflife_days=self.config.decay_halflife_days
         )
+
+    # =========================================================================
+    # Quality Management
+    # =========================================================================
+
+    def deduplicate(self, layer: str = "episodic", threshold: float = 0.9) -> List[Dict[str, Any]]:
+        """Find and list duplicate memories."""
+        return self.deduplicator.find_duplicates(layer=layer, threshold=threshold)
+
+    # =========================================================================
+    # Maintenance
+    # =========================================================================
 
     def stats(self) -> Dict[str, Any]:
         """Get memory statistics."""
