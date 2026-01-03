@@ -221,16 +221,24 @@ class EpisodicMemory(BaseMemoryLayer):
 
         Args:
             query: Search query (semantic search)
-            category: Filter by category
+            category: Filter by category (EpisodeCategory enum or string)
             limit: Maximum results
 
         Returns:
             List of matching memories
         """
+        # Handle both enum and string category inputs
+        if isinstance(category, EpisodeCategory):
+            category_value = category.value
+        elif isinstance(category, str):
+            category_value = category
+        else:
+            category_value = None
+
         return super().search(
             query=query,
             layer="episodic",
-            category=category.value if category else None,
+            category=category_value,
             limit=limit
         )
 

@@ -232,16 +232,24 @@ class SemanticMemory(BaseMemoryLayer):
 
         Args:
             query: Search query (semantic search)
-            category: Filter by category
+            category: Filter by category (KnowledgeCategory enum or string)
             limit: Maximum results
 
         Returns:
             List of matching knowledge
         """
+        # Handle both enum and string category inputs
+        if isinstance(category, KnowledgeCategory):
+            category_value = category.value
+        elif isinstance(category, str):
+            category_value = category
+        else:
+            category_value = None
+
         return super().search(
             query=query,
             layer="semantic",
-            category=category.value if category else None,
+            category=category_value,
             limit=limit
         )
 

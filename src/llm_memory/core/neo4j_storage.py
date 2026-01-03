@@ -20,13 +20,14 @@ class Neo4jStorage(BaseStorage):
     Storage implementation using Neo4j for both structured data and vector embeddings.
     """
 
-    def __init__(self, uri: str = None, user: str = None, password: str = None):
+    def __init__(self, uri: str = None, user: str = None, password: str = None, embedding_fn=None):
         """Initialize Neo4j driver."""
         config = load_config()
         self.uri = uri or config.storage.neo4j_uri
         self.user = user or config.storage.neo4j_user
         self.password = password or config.storage.neo4j_password
-        
+        self._embedding_fn = embedding_fn
+
         try:
             self.driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password))
             self.verify_connectivity()
@@ -98,6 +99,14 @@ class Neo4jStorage(BaseStorage):
         embedding: List[float] = None
     ) -> str:
         """Store a memory node."""
+
+        # Generate embedding if not provided and embedding function is available
+        if embedding is None and self._embedding_fn is not None:
+            try:
+                embedding = self._embedding_fn(content)
+            except Exception as e:
+                logger.warning(f"Failed to generate embedding: {e}")
+                embedding = None
         memory_id = self._generate_id(content)
         tags = tags or []
         metadata = metadata or {}
@@ -171,25 +180,29 @@ class Neo4jStorage(BaseStorage):
 
     def search_memories(
         self,
-        query: str, # Note: This interface expects text, but Neo4j needs vector. 
-                    # Caller should ideally provide embedding, but here we assume 'storage' implies *just* storage.
-                    # HOWEVER, BaseStorage interface is leaky.
-                    # For now, we assume the caller handles embedding generation logic OR this class needs access to embedding_fn.
-                    # We will implement exact match or property match here, BUT for vector we need embedding.
-                    # Wait, LocalStorage takes embedding_fn. We should too or expect embedding passed in kwargs.
+        query: str,
         repo_id: str = None,
         layer: str = None,
         category: str = None,
         limit: int = 10,
         min_importance: float = 0.0,
-        **kwargs # embedding: List[float] should be here
+        **kwargs
     ) -> List[Dict[str, Any]]:
-        
+        """Search memories using vector similarity or text filtering."""
+
         embedding = kwargs.get("embedding")
+
+        # Generate embedding from query if not provided and embedding function is available
+        if not embedding and self._embedding_fn is not None:
+            try:
+                embedding = self._embedding_fn(query)
+            except Exception as e:
+                logger.warning(f"Failed to generate embedding for query: {e}")
+                embedding = None
+
         if not embedding:
-            # Fallback to simple text search or property filter if no embedding provided
-            # Or raise error / warn
-            logger.warning("No embedding provided for vector search. Falling back to property filter.")
+            # Fallback to simple text search or property filter if no embedding available
+            logger.warning("No embedding available for vector search. Falling back to property filter.")
             cypher = """
                 MATCH (m:Memory)
                 WHERE ($layer IS NULL OR m.layer = $layer)

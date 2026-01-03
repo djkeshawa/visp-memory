@@ -68,6 +68,17 @@ class Memory:
         else:
             self.config = MemoryConfig.find_and_load()
 
+        # Initialize embedding provider
+        embedding_fn = None
+        try:
+            from llm_memory.core.embeddings import get_embedding_provider
+            embedder = get_embedding_provider(self.config.embedding)
+            embedding_fn = embedder.embed
+        except Exception as e:
+            # Embedding provider initialization failed - will use fallback search
+            import logging
+            logging.warning(f"Failed to initialize embedding provider: {e}")
+
         # Initialize storage
         if self.config.storage.mode == "client":
             self._storage = RemoteStorage(
@@ -78,10 +89,11 @@ class Memory:
             self._storage = Neo4jStorage(
                 uri=self.config.storage.neo4j_uri,
                 user=self.config.storage.neo4j_user,
-                password=self.config.storage.neo4j_password
+                password=self.config.storage.neo4j_password,
+                embedding_fn=embedding_fn
             )
         else:
-            self._storage = LocalStorage(self.config.storage.data_dir)
+            self._storage = LocalStorage(self.config.storage.data_dir, embedding_fn=embedding_fn)
 
         # Initialize layers
         self.episodic = EpisodicMemory(self._storage)
@@ -145,7 +157,8 @@ class Memory:
         self,
         what: str,
         why: str,
-        alternatives: List[str] = None
+        alternatives: List[str] = None,
+        repo_id: str = None
     ) -> str:
         """
         Quick method to record a decision.
@@ -154,6 +167,7 @@ class Memory:
             what: What was decided
             why: Why this choice was made
             alternatives: What alternatives were considered
+            repo_id: Optional repository context (defaults to config.repo_id)
 
         Returns:
             Memory ID
@@ -162,7 +176,7 @@ class Memory:
             what,
             why,
             alternatives,
-            repo_id=self.config.repo_id
+            repo_id=repo_id or self.config.repo_id
         )
 
     def learn(
