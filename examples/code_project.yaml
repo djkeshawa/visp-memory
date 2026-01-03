@@ -1,0 +1,41 @@
+# Example configuration for a code project
+# Copy to your project root as llm-memory.yaml
+
+project_name: my-awesome-project
+project_type: code
+
+embedding:
+  # Local embeddings (free, no API needed)
+  provider: sentence-transformers
+  model: all-MiniLM-L6-v2
+
+  # Or use OpenAI (better quality, costs money)
+  # provider: openai
+  # model: text-embedding-3-small
+  # api_key: null  # Uses OPENAI_API_KEY env var
+
+  # Or use Ollama (local, free, good quality)
+  # provider: ollama
+  # model: nomic-embed-text
+
+storage:
+  data_dir: .llm-memory/data
+  vector_db: chroma
+
+compression:
+  # How many related episodes before compression kicks in
+  episodic_threshold: 10
+
+  # 0.0 = keep detail, 1.0 = maximum compression
+  compression_level: 0.5
+
+  # Optional: use LLM for smarter compression
+  # llm_provider: openai
+  # llm_model: gpt-4o-mini
+
+# Automatically compress old memories
+auto_compress: true
+
+# Let unused memories fade (like human memory)
+decay_enabled: true
+decay_halflife_days: 30

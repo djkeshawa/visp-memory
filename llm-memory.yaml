@@ -1,0 +1,18 @@
+auto_compress: true
+compression:
+  compression_level: 0.5
+  episodic_threshold: 10
+  llm_model: null
+  llm_provider: null
+decay_enabled: true
+decay_halflife_days: 30
+embedding:
+  api_base: null
+  api_key: null
+  model: all-MiniLM-L6-v2
+  provider: sentence-transformers
+project_name: llm-memory
+project_type: code
+storage:
+  data_dir: .llm-memory/data
+  vector_db: chroma
