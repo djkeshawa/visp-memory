@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0",
+  "benchmark": "memory_intelligence_local",
+  "mode": "deterministic_local_fixture",
+  "updated": "2026-06-07",
+  "stable_metric_keys": [
+    "recall_precision_at_3",
+    "evidence_path_coverage",
+    "duplicate_rate",
+    "token_budget_limit",
+    "token_budget_used",
+    "token_budget_use_ratio",
+    "stale_surfacing_rate"
+  ],
+  "metrics": {
+    "recall_precision_at_3": 1.0,
+    "evidence_path_coverage": 1.0,
+    "duplicate_rate": 0.0,
+    "token_budget_limit": 120,
+    "token_budget_used": 91,
+    "token_budget_use_ratio": 0.7583,
+    "stale_surfacing_rate": 1.0
+  },
+  "thresholds": {
+    "report_generation_ms_max": 250.0
+  }
+}

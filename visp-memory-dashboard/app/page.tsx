@@ -1,0 +1,135 @@
+"use client"
+
+import { Suspense, useCallback, useEffect, useState } from "react"
+import { motion } from "framer-motion"
+import { AlertTriangle, Database, Target, Brain, Share2 } from "lucide-react"
+import { AnimatedStatsCard } from "@/components/dashboard/animated-stats-card"
+import { RecentActivity } from "@/components/dashboard/recent-activity"
+import { QuickActions } from "@/components/dashboard/quick-actions"
+import { SystemStatus } from "@/components/dashboard/system-status"
+import { describeApiError, getStats, getRecentMemories } from "@/lib/api"
+import { pageTransition } from "@/lib/animations"
+import { useSelectedProjectId } from "@/lib/project-selection"
+import type { Memory, Stats, SystemStatus as SystemStatusType } from "@/lib/types"
+
+const fallbackSystemStatus: SystemStatusType = {
+  apiServer: "online",
+  vectorDatabase: "ready",
+  embeddings: "active",
+}
+
+function DashboardContent() {
+  const selectedRepoId = useSelectedProjectId()
+  const [stats, setStats] = useState<Stats | null>(null)
+  const [memories, setMemories] = useState<Memory[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  const fetchData = useCallback(async () => {
+    setIsLoading(true)
+    try {
+      const [statsData, memoriesData] = await Promise.all([
+        getStats(selectedRepoId),
+        getRecentMemories(8, selectedRepoId),
+      ])
+      setStats(statsData)
+      setMemories(memoriesData)
+      setLoadError(null)
+    } catch (error) {
+      console.error("Failed to fetch dashboard data:", error)
+      setLoadError(describeLoadError(error))
+    } finally {
+      setIsLoading(false)
+    }
+  }, [selectedRepoId])
+
+  useEffect(() => {
+    fetchData()
+  }, [fetchData])
+
+  const displayStats = stats || {
+    totalMemories: 0,
+    activeIntents: 0,
+    knowledgeNodes: 0,
+    connections: 0,
+  }
+
+  return (
+    <motion.div initial="initial" animate="animate" variants={pageTransition} className="space-y-8">
+      {/* Header */}
+      <div>
+        <h1 className="text-2xl font-semibold text-foreground">Welcome back</h1>
+        <p className="text-muted-foreground mt-1">
+          {selectedRepoId ? `Project: ${selectedRepoId}` : "Here's an overview of your memory system"}
+        </p>
+      </div>
+
+      {loadError ? (
+        <div className="glass rounded-lg border border-destructive/30 p-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 text-destructive" />
+            <div>
+              <p className="text-sm font-medium text-foreground">Dashboard is not connected</p>
+              <p className="mt-1 text-sm text-muted-foreground">{loadError}</p>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Stats Grid */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <AnimatedStatsCard
+          title="Total Memories"
+          value={displayStats.totalMemories}
+          icon={<Database className="h-5 w-5 text-white" />}
+          change={isLoading ? "Loading..." : "Total stored"}
+          gradient="bg-episodic"
+        />
+        <AnimatedStatsCard
+          title="Active Intents"
+          value={displayStats.activeIntents}
+          icon={<Target className="h-5 w-5 text-white" />}
+          change={isLoading ? "Loading..." : "In progress"}
+          gradient="bg-intent"
+        />
+        <AnimatedStatsCard
+          title="Knowledge Nodes"
+          value={displayStats.knowledgeNodes}
+          icon={<Brain className="h-5 w-5 text-white" />}
+          change={isLoading ? "Loading..." : "Semantic layer"}
+          gradient="bg-semantic"
+        />
+        <AnimatedStatsCard
+          title="Connections"
+          value={displayStats.connections}
+          icon={<Share2 className="h-5 w-5 text-white" />}
+          change={isLoading ? "Loading..." : "Graph edges"}
+          gradient="bg-success"
+        />
+      </div>
+
+      {/* Content Grid */}
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="lg:col-span-2">
+          <RecentActivity memories={memories} />
+        </div>
+        <div className="space-y-6">
+          <QuickActions onMemoryCreated={fetchData} />
+          <SystemStatus status={fallbackSystemStatus} />
+        </div>
+      </div>
+    </motion.div>
+  )
+}
+
+export default function DashboardPage() {
+  return (
+    <Suspense fallback={null}>
+      <DashboardContent />
+    </Suspense>
+  )
+}
+
+function describeLoadError(error: unknown): string {
+  return describeApiError(error)
+}

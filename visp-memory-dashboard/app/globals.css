@@ -1,0 +1,161 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  /* Visp Memory Dashboard - Light Mode */
+  --background: #f5f7f8;
+  --foreground: #182026;
+  --card: #ffffff;
+  --card-foreground: #182026;
+  --popover: #ffffff;
+  --popover-foreground: #182026;
+  --primary: #0f766e;
+  --primary-foreground: #ffffff;
+  --secondary: #edf1f2;
+  --secondary-foreground: #182026;
+  --muted: #edf1f2;
+  --muted-foreground: #66737c;
+  --accent: #e7f3f1;
+  --accent-foreground: #0f766e;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --border: #dbe1e4;
+  --input: #cfd7db;
+  --ring: #0f766e;
+  --radius: 0.5rem;
+
+  /* Semantic Colors */
+  --episodic: #2563eb;
+  --semantic: #7c3aed;
+  --intent: #b45309;
+  --success: #15803d;
+  --error: #dc2626;
+
+  /* Sidebar */
+  --sidebar: #ffffff;
+  --sidebar-foreground: #182026;
+  --sidebar-primary: #0f766e;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f1f5f9;
+  --sidebar-accent-foreground: #182026;
+  --sidebar-border: #dbe1e4;
+  --sidebar-ring: #0f766e;
+}
+
+.dark {
+  /* Visp Memory Dashboard - Dark Mode */
+  --background: #151718;
+  --foreground: #eef1f2;
+  --card: #202426;
+  --card-foreground: #eef1f2;
+  --popover: #202426;
+  --popover-foreground: #eef1f2;
+  --primary: #2dd4bf;
+  --primary-foreground: #ffffff;
+  --secondary: #2a3033;
+  --secondary-foreground: #eef1f2;
+  --muted: #2a3033;
+  --muted-foreground: #9ba6ab;
+  --accent: #183b38;
+  --accent-foreground: #5eead4;
+  --destructive: #f87171;
+  --destructive-foreground: #ffffff;
+  --border: #394145;
+  --input: #465055;
+  --ring: #2dd4bf;
+
+  /* Sidebar */
+  --sidebar: #202426;
+  --sidebar-foreground: #eef1f2;
+  --sidebar-primary: #2dd4bf;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #2a3033;
+  --sidebar-accent-foreground: #eef1f2;
+  --sidebar-border: #394145;
+  --sidebar-ring: #2dd4bf;
+}
+
+@theme inline {
+  --font-sans: "Geist", "Geist Fallback";
+  --font-mono: "Geist Mono", "Geist Mono Fallback";
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-episodic: var(--episodic);
+  --color-semantic: var(--semantic);
+  --color-intent: var(--intent);
+  --color-success: var(--success);
+  --color-error: var(--error);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    letter-spacing: 0;
+  }
+}
+
+.glass {
+  background: var(--card);
+  border: 1px solid var(--border);
+}
+
+/* Shimmer Animation for Skeletons */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.shimmer {
+  background: linear-gradient(90deg, var(--muted) 25%, var(--secondary) 50%, var(--muted) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
