@@ -145,24 +145,29 @@ export function MemoryGraph() {
   const simulate = useCallback(() => {
     setNodes((prevNodes) => {
       const newNodes = prevNodes.map((node) => ({ ...node }))
+      let totalEnergy = 0
 
       for (let i = 0; i < newNodes.length; i++) {
         const node = newNodes[i]
         if (node.id === draggedNode) continue
 
-        // Repulsion between nodes
+        // Repulsion between nodes (inverse square law)
         for (let j = 0; j < newNodes.length; j++) {
           if (i === j) continue
           const other = newNodes[j]
           const dx = node.x - other.x
           const dy = node.y - other.y
-          const dist = Math.sqrt(dx * dx + dy * dy) || 1
+          let dist = Math.sqrt(dx * dx + dy * dy)
+          if (dist < 1) dist = 1 // Prevent division by zero
+
           const force = 2000 / (dist * dist)
-          node.vx += (dx / dist) * force
-          node.vy += (dy / dist) * force
+          const cappedForce = Math.min(force, 2) // Cap to prevent explosions
+
+          node.vx += (dx / dist) * cappedForce
+          node.vy += (dy / dist) * cappedForce
         }
 
-        // Attraction along edges
+        // Attraction along edges (spring force)
         for (const edge of edges) {
           let other: GraphNode | undefined
           if (edge.source === node.id) {
@@ -174,33 +179,36 @@ export function MemoryGraph() {
             const dx = other.x - node.x
             const dy = other.y - node.y
             const dist = Math.sqrt(dx * dx + dy * dy) || 1
-            const force = (dist - 120) * 0.02
+            const force = (dist - 150) * 0.01
             node.vx += (dx / dist) * force
             node.vy += (dy / dist) * force
           }
         }
 
-        // Center gravity
+        // Center gravity - gentle pull to canvas center
         const centerX = dimensions.width / 2
         const centerY = dimensions.height / 2
-        node.vx += (centerX - node.x) * 0.001
-        node.vy += (centerY - node.y) * 0.001
+        node.vx += (centerX - node.x) * 0.0003
+        node.vy += (centerY - node.y) * 0.0003
 
-        // Apply velocity with damping
-        node.vx *= 0.9
-        node.vy *= 0.9
+        // Apply velocity with strong damping for quick settling
+        node.vx *= 0.85
+        node.vy *= 0.85
         node.x += node.vx
         node.y += node.vy
 
-        // Boundary constraints
-        const padding = 60
-        node.x = Math.max(padding, Math.min(dimensions.width - padding, node.x))
-        node.y = Math.max(padding, Math.min(dimensions.height - padding, node.y))
+        // Track total kinetic energy
+        totalEnergy += Math.abs(node.vx) + Math.abs(node.vy)
+      }
+
+      // Stop updating if energy is very low (system has settled)
+      if (totalEnergy < 0.5 && !draggedNode) {
+        return prevNodes
       }
 
       return newNodes
     })
-  }, [draggedNode, dimensions])
+  }, [draggedNode, dimensions, edges])
 
   const render = useCallback(() => {
     const canvas = canvasRef.current

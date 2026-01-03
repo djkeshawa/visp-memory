@@ -39,7 +39,13 @@ export function RecentActivity({ memories }: RecentActivityProps) {
         <p className="text-sm text-muted-foreground mt-1">Latest memories from your system</p>
       </div>
 
-      <motion.div className="divide-y divide-border" variants={staggerContainer} initial="hidden" animate="visible">
+      <motion.div
+        key={memories.length}
+        className="divide-y divide-border"
+        variants={staggerContainer}
+        initial="hidden"
+        animate="visible"
+      >
         {memories.map((memory) => {
           const config = layerConfig[memory.layer]
           const Icon = config.icon
