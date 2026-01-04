@@ -78,6 +78,26 @@ For detailed build and distribution instructions, see [PACKAGING.md](PACKAGING.m
 
 ---
 
+## ⚙️ Configuration
+
+The system defaults to using **Neo4j** as the storage backend.
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `NEO4J_URI` | Neo4j connection URI | `bolt://localhost:7687` |
+| `NEO4J_USER` | Neo4j username | `neo4j` |
+| `NEO4J_PASSWORD` | Neo4j password | *None* (Must be set!) |
+| `LLM_MEMORY_REPO_ID` | Default project scope | *None* |
+
+### Requirements
+
+- **Neo4j 5.15+**: Required for the graph backend (supports vector indexes).
+- **Python 3.10+**: If installing via pip.
+
+---
+
 ## ⚡ Quick Start
 
 ### 1. Initialize

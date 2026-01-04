@@ -41,7 +41,7 @@ class StorageConfig(BaseSettings):
     # Neo4j Configuration
     neo4j_uri: str = Field(default="bolt://localhost:7687", env="NEO4J_URI")
     neo4j_user: str = Field(default="neo4j", env="NEO4J_USER")
-    neo4j_password: str = Field(default="djk199108", env="NEO4J_PASSWORD")
+    neo4j_password: str = Field(default="", env="NEO4J_PASSWORD")
 
     class Config:
         env_prefix = "LLM_MEMORY_STORAGE_"
