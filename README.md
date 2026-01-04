@@ -4,6 +4,19 @@
 
 > **Vision**: A central, cross-functional memory that evolves with your team. Starting as a local tool for individuals, it will grow into a shared organizational brain that tracks context across multiple repositories.
 
+![LLM Memory Dashboard](https://raw.githubusercontent.com/yourusername/llm-memory/main/docs/dashboard-preview.png)
+
+---
+
+## 📚 Documentation & Resources
+
+| File | Description |
+|------|-------------|
+| [**PACKAGING.md**](PACKAGING.md) | Detailed distribution guide (Docker, Standalone, Pip) |
+| [**ROADMAP.md**](ROADMAP.md) | Project vision and future phases |
+| [**BUGFIXES-2.md**](BUGFIXES-2.md) | Latest bug fixes (Jan 4, 2026) |
+| [**BUGFIXES.md**](BUGFIXES.md) | Previous bug fixes (Jan 3, 2026) |
+
 ---
 
 ## The Problem
@@ -29,23 +42,45 @@ By injecting this pre-formed context, your LLM (Claude, ChatGPT, etc.) instantly
 | **CLI** | Command Line Tool | `llm-memory record`, `recall`, `decision`, `warn` |
 | **MCP Server** | Model Context Protocol | Exposes memory tools directly to Claude/IDE |
 | **Dashboard** | Web Interface | Graph visualization, intent management, stats |
+| **API** | REST API | Full programmatic access to memory graph |
 
 ---
 
 ## 📦 Installation
 
+Choose the method that fits your workflow.
+
+### Method 1: Python Package (Recommended)
+
+Install via pip. This includes the CLI, API server, and embedded dashboard.
+
 ```bash
-pip install llm-memory
+pip install llm-memory[all]
 ```
 
-To install all dependencies (API, MCP, Capture):
+### Method 2: Docker
+
+Run the full system in a container (ideal for servers/teams).
+
 ```bash
-pip install "llm-memory[all]"
+docker run -p 8000:8000 -v ~/.llm-memory:/data llm-memory:latest
 ```
+
+### Method 3: Standalone Executable
+
+Updates for non-Python users. Download the latest release for your platform (Linux/macOS/Windows).
+
+1.  Download from [Releases](https://github.com/yourusername/llm-memory/releases)
+2.  Extract the archive
+3.  Run `./llm-memory`
+
+For detailed build and distribution instructions, see [PACKAGING.md](PACKAGING.md).
 
 ---
 
-## ⚡ Quick Start (CLI)
+## ⚡ Quick Start
+
+### 1. Initialize
 
 Initialize LLM Memory in your project root:
 
@@ -53,7 +88,17 @@ Initialize LLM Memory in your project root:
 llm-memory init --type code
 ```
 
-### Core Commands
+### 2. Start the Server & Dashboard
+
+Launch the central server. The dashboard will be available at `http://localhost:8000/dashboard`.
+
+```bash
+llm-memory serve
+```
+
+### 3. Record & Recall
+
+Start building your project's memory:
 
 ```bash
 # Record a decision
@@ -96,142 +141,51 @@ Add to your `claude_desktop_config.json`:
 ### Available Tools
 - `memory_recall`: Search past events and knowledge.
 - `memory_record`: Save new findings or events.
-- `memory_decision`: document architectural choices.
+- `memory_decision`: Document architectural choices.
 - `memory_warn`: Flag fragile code areas.
 - `memory_goal`: Manage project intent.
 - `memory_file_context`: Get proactive context for specific files.
 
 ---
 
-## 📊 Web Dashboard
-
-Visualize your project's memory graph and manage intents visually.
-
-### 1. Start the Backend API
-```bash
-# Run from your project root
-python3 -m uvicorn llm_memory.server.app:app --port 8000
-```
-*Note: Ensure you have `pip install "llm-memory[api]"`*
-
-### 2. Start the Frontend
-The dashboard is located in `llm-memory-dashboard`.
-
-```bash
-cd llm-memory-dashboard
-npm install
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000) (or the port shown in terminal) to view the graph.
-
----
-
 ## 🌐 Workspace Scope & Multi-Project Usage
 
-LLM Memory is designed to **share knowledge across your entire workspace by default**, enabling cross-project learning and intelligent connections.
+LLM Memory is designed to **share knowledge across your entire workspace by default**, enabling cross-project learning.
 
-### Default Behavior: Unified Workspace Memory
+### Default: Unified Workspace
+All memories are stored in a shared graph. Memories created in Project A are accessible in Project B if relevant.
 
-By default, all memories are stored **without isolation**, creating a shared knowledge base across all your projects:
-
-```bash
-# These all share the same memory space
-cd ~/project-a
-llm-memory record "Implemented OAuth with JWT tokens"
-
-cd ~/project-b  
-llm-memory record "Frontend expects JWT in headers"
-
-# The LLM can now connect these across projects!
-llm-memory recall "authentication"
-# Returns both memories, showing the relationship
-```
-
-**Why this matters:**
-- 🔗 **Cross-project insights**: "I changed the auth system in service-a, which affects service-b"
-- 📚 **Pattern reuse**: "This approach I used in project-x solved a similar problem in project-y"
-- 🧠 **Unified knowledge**: Your LLM builds one coherent understanding of your entire codebase ecosystem
-
-### Optional: Project Isolation
-
-For **completely unrelated work** (client projects, experiments, etc.), use the `--repo` flag to create an isolated memory space:
+### Project Isolation
+For completely separate contexts (e.g., client work), use the `--repo` flag or configuration:
 
 ```bash
-# Isolated client work
-llm-memory record "Client XYZ specific logic" --repo client-xyz
-
-# Isolated experiment
-llm-memory record "Testing new framework" --repo experiment-temp
-
-# These won't appear in your main workspace recalls
-llm-memory recall "framework"  # Won't show experiment-temp memories
-```
-
-### Configuration
-
-#### Option 1: Persistent Project Scope (Recommended)
-Initialize your project with a repository ID. All subsequent commands will automatically act within this scope.
-
-```bash
+# Initialize with specific scope
 llm-memory init --repo client-xyz
-llm-memory record "Updates for client"  # Automatically scoped to client-xyz
-```
 
-#### Option 2: Per-Command Isolation
-```bash
-llm-memory record "..." --repo isolated-project
-llm-memory recall "..." --repo isolated-project
-```
-
-#### Option 3: Environment Variable
-```bash
-export LLM_MEMORY_REPO_ID=client-xyz
-```
-
-### Best Practices
-
-✅ **DO**: Use shared workspace memory for:
-- Related microservices
-- Frontend + Backend of same product
-- Internal tools and libraries
-- Any projects that should learn from each other
-
-❌ **DON'T**: Use isolation unless absolutely necessary:
-- Client confidential work
-- Throwaway experiments
-- Completely unrelated domains
-
-### Dashboard & API
-
-The web dashboard shows your **unified workspace** by default. All memories without a `repo_id` are visible, creating the full knowledge graph.
-
-To filter by project in API calls:
-```bash
-curl "http://localhost:8000/memories?repo_id=client-xyz"
+# Or per-command
+llm-memory record "Secret stuff" --repo secret-project
 ```
 
 ---
 
----
+## 🛠️ Development
 
-## How It Works
+If you want to contribute or modify the dashboard:
 
-### The Write Path (Capture & Learning)
-1.  **Capture**: You record an event via CLI (`llm-memory record`), or the system auto-captures a Git commit.
-2.  **Layering**: The event enters **Episodic Memory**.
-3.  **Synthesis**: Over time, repeated episodes are compressed into **Semantic Memory** (patterns/rules).
-4.  **Storage**: Metadata, relationships, and vector embeddings are stored in **Neo4j** (GraphRAG).
+```bash
+# Clone repository
+git clone https://github.com/yourusername/llm-memory.git
+cd llm-memory
 
-### The Read Path (Context Injection)
-1.  **Trigger**: You ask for context via CLI (`llm-memory context`) or an MCP-enabled IDE requests it.
-2.  **Recall**: The system fetches:
-    *   Active **Intents** (Goal: "Refactor API")
-    *   Relevant **Knowledge** (Rule: "Always use strict typing")
-    *   Recent **Episodes** (Event: "Fixed auth bug yesterday")
-    *   **Graph Traversals**: Related concepts via knowledge graph links.
-3.  **Synthesis**: Data is formatted into a concise Markdown prompt.
-4.  **Injection**: The prompt is fed to the LLM, giving it instant "memory" of the project.
+# Install in editable mode
+make install-dev
+
+# Build everything
+make build
+
+# Run tests
+make test
+```
 
 ---
 
@@ -255,7 +209,7 @@ graph TD
     end
 
     subgraph Storage
-        Neo4j[(Neo4j)]
+        Neo4j[(Neo4j / ChromaDB)]
     end
 
     User --> CLI
@@ -268,16 +222,6 @@ graph TD
     
     Memory Core --> Neo4j
 ```
-
-## Comparisons
-
-| Feature | LLM Memory | RAG | Vector DB |
-|---------|------------|-----|-----------|
-| **Structured Knowledge** | ✅ | ❌ | ❌ |
-| **Goal Tracking** | ✅ | ❌ | ❌ |
-| **Memory Graph** | ✅ | ❌ | ❌ |
-| **Proactive Warnings** | ✅ | ❌ | ❌ |
-| **Time-Awareness** | ✅ | ❌ | ❌ |
 
 ---
 

@@ -58,6 +58,20 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/llm_memory"]
+artifacts = [
+    "src/llm_memory/server/static/**/*",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/",
+    "tests/",
+    "llm-memory-dashboard/",
+    "build_frontend.py",
+    "pyproject.toml",
+    "README.md",
+    "LICENSE",
+]
 
 [tool.ruff]
 line-length = 100

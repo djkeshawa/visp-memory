@@ -5,6 +5,8 @@ FastAPI Server Entry Point
 try:
     from fastapi import FastAPI, Depends, HTTPException, Security
     from fastapi.security.api_key import APIKeyHeader
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.responses import FileResponse
 except ImportError:
     raise ImportError("FastAPI not installed. Run: pip install llm-memory[api]")
 
@@ -25,6 +27,8 @@ from llm_memory.core.storage import LocalStorage
 from llm_memory.core.neo4j_storage import Neo4jStorage
 from llm_memory.config import load_config
 import logging
+from pathlib import Path
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -245,3 +249,31 @@ async def create_relationship(rel: RelationshipCreate, api_key: str = Depends(ge
         strength=rel.strength
     )
     return {"id": rel_id, "status": "created"}
+
+
+# Mount static files for dashboard (if available)
+STATIC_DIR = Path(__file__).parent / "static"
+if STATIC_DIR.exists() and STATIC_DIR.is_dir():
+    # Mount static assets
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR / "_next" / "static")), name="static")
+    app.mount("/_next", StaticFiles(directory=str(STATIC_DIR / "_next")), name="next")
+
+    # Serve dashboard at /dashboard and root
+    @app.get("/dashboard/{full_path:path}")
+    async def serve_dashboard_path(full_path: str):
+        """Serve dashboard files."""
+        file_path = STATIC_DIR / full_path
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(file_path)
+        # Fallback to index.html for SPA routing
+        return FileResponse(STATIC_DIR / "index.html")
+
+    @app.get("/dashboard")
+    async def serve_dashboard():
+        """Serve dashboard index."""
+        return FileResponse(STATIC_DIR / "index.html")
+
+    logger.info(f"Dashboard mounted at /dashboard from {STATIC_DIR}")
+else:
+    logger.warning(f"Dashboard static files not found at {STATIC_DIR}. Dashboard will not be available.")
+    logger.info("To build the dashboard, run: python build_frontend.py")
