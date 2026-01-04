@@ -232,7 +232,7 @@ llm-memory context
 
 ## Storage Backend Migration
 
-The codebase is currently migrating from SQLite to Neo4j as the default backend:
+The codebase is currently migrating from SQLite to Neo4j as the default backend (now fully functional):
 - Neo4j provides graph relationships and vector search
 - Legacy LocalStorage (SQLite) still supported
 - All storage backends implement `BaseStorage` interface
@@ -243,6 +243,11 @@ When working with storage:
 - Don't assume specific backend features
 - Test against multiple backends when possible
 - Neo4j requires vector index support (Neo4j 5.15+)
+
+### Backend-Specific Behaviors
+- **Deduplication**: Full batch dedup only works with LocalStorage (ChromaDB). Neo4j dedup requires content parameter.
+- **DateTime Handling**: Neo4j returns timezone-aware datetimes. Always use `datetime.now(timezone.utc)` for comparisons.
+- **Field Initialization**: Ensure all required fields (`accessed_at`, `created_at`, etc.) are initialized in storage operations.
 
 ## Dashboard Development
 

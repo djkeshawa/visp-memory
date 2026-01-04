@@ -57,21 +57,25 @@ class Deduplicator:
         """
         if not self._check_deps():
             return []
-            
-        # Get collection
-        collection = self.storage._get_collection(layer)
-        if not collection:
-            return []
 
-        # If content/embedding provided, check against it
-        if content or embedding:
-            return self._find_similar_to_new(
-                collection, content, embedding, threshold, limit
-            )
-        
-        # Otherwise, check for duplicates within the collection (batch mode)
-        # This is expensive and should be run periodically
-        return self._find_internal_duplicates(collection, threshold, limit)
+        # Check if storage has ChromaDB collection interface
+        if hasattr(self.storage, '_get_collection'):
+            # LocalStorage with ChromaDB
+            collection = self.storage._get_collection(layer)
+            if not collection:
+                return []
+
+            # If content/embedding provided, check against it
+            if content or embedding:
+                return self._find_similar_to_new(
+                    collection, content, embedding, threshold, limit
+                )
+
+            # Otherwise, check for duplicates within the collection (batch mode)
+            return self._find_internal_duplicates(collection, threshold, limit)
+        else:
+            # Neo4jStorage or other backend - use search_memories interface
+            return self._find_duplicates_via_search(layer, content, embedding, threshold, limit)
 
     def _find_similar_to_new(
         self, 
@@ -215,6 +219,41 @@ class Deduplicator:
         self.storage.update_memory(primary_id, metadata={"merged_count": len(others)})
         
         return primary_id
+
+    def _find_duplicates_via_search(
+        self,
+        layer: str,
+        content: str,
+        embedding: List[float],
+        threshold: float,
+        limit: int
+    ) -> List[Dict[str, Any]]:
+        """
+        Find duplicates using storage search interface (for Neo4j and others).
+
+        This is simpler but less exhaustive than ChromaDB-based deduplication.
+        """
+        if not content:
+            # Without content, we can't do much with search-based approach
+            # For now, just return empty - full dedup requires collection access
+            logger.info("Full deduplication not supported for this storage backend. Provide content to check for duplicates.")
+            return []
+
+        # Search for similar memories
+        results = self.storage.search_memories(
+            query=content,
+            layer=layer,
+            limit=limit,
+            embedding=embedding
+        )
+
+        # Filter by threshold
+        duplicates = [
+            r for r in results
+            if r.get("similarity", 0) >= threshold
+        ]
+
+        return duplicates
 
     def _check_deps(self) -> bool:
         """Check if dependencies are available."""

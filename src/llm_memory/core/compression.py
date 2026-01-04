@@ -45,6 +45,17 @@ class MemoryCompressor:
         self.storage = storage
         self._llm_compress = llm_compress_fn
 
+    def _parse_datetime(self, dt_str: str) -> datetime:
+        """Parse datetime string, handling both timezone-aware and naive formats."""
+        from datetime import timezone
+        # Remove 'Z' suffix and parse
+        dt_str = dt_str.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(dt_str)
+        # If naive, make it UTC-aware
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+
     def compress_episodes_to_semantic(
         self,
         episodes: List[Dict[str, Any]],
@@ -257,11 +268,12 @@ class MemoryCompressor:
         )
 
         # Filter to old episodes not yet compressed
-        cutoff = datetime.now() - timedelta(days=age_days)
+        from datetime import timezone
+        cutoff = datetime.now(timezone.utc) - timedelta(days=age_days)
         old_episodes = [
             ep for ep in episodes
             if not ep.get("metadata", {}).get("compressed_to")
-            and datetime.fromisoformat(ep["created_at"].replace("Z", "")) < cutoff
+            and self._parse_datetime(ep["created_at"]) < cutoff
         ]
 
         if len(old_episodes) >= min_episodes:
@@ -331,10 +343,9 @@ class MemoryCompressor:
 
             for mem in memories:
                 # Calculate age since last access
-                accessed = datetime.fromisoformat(
-                    mem["accessed_at"].replace("Z", "")
-                )
-                age_days = (datetime.now() - accessed).days
+                accessed = self._parse_datetime(mem.get("accessed_at", mem.get("created_at")))
+                from datetime import timezone
+                age_days = (datetime.now(timezone.utc) - accessed).days
 
                 if age_days < 1:
                     continue

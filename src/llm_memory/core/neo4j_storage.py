@@ -131,6 +131,7 @@ class Neo4jStorage(BaseStorage):
                     source_ids: $source_ids,
                     created_at: coalesce(m.created_at, datetime()),
                     updated_at: datetime(),
+                    accessed_at: coalesce(m.accessed_at, datetime()),
                     access_count: coalesce(m.access_count, 0)
                 }
             """
