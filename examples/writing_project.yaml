@@ -1,0 +1,26 @@
+# Example configuration for a writing project (novel, documentation, etc.)
+# Copy to your project root as llm-memory.yaml
+
+project_name: my-novel
+project_type: writing
+
+embedding:
+  provider: sentence-transformers
+  model: all-MiniLM-L6-v2
+
+storage:
+  data_dir: .llm-memory/data
+  vector_db: chroma
+
+compression:
+  # Writers might want more episodes before compression
+  episodic_threshold: 15
+  compression_level: 0.3  # Keep more detail for creative work
+
+  # LLM compression is great for narrative
+  # llm_provider: anthropic
+  # llm_model: claude-3-haiku-20240307
+
+auto_compress: true
+decay_enabled: false  # Writers often need old memories
+decay_halflife_days: 90
