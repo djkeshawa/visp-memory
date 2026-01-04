@@ -1,0 +1,236 @@
+name: Release Package
+
+# Creates a GitHub Release with downloadable wheel file
+# Users can download and install directly from the release page
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on version tags like v0.1.0, v1.0.0, etc.
+  workflow_dispatch:
+
+jobs:
+  build-and-release:
+    name: Build Python Package and Create Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Required for creating releases
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Get all tags
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'llm-memory-dashboard/package-lock.json'
+
+      - name: Install frontend dependencies
+        run: |
+          cd llm-memory-dashboard
+          npm ci
+
+      - name: Build frontend
+        run: |
+          cd llm-memory-dashboard
+          npm run export
+
+      - name: Copy frontend to package
+        run: python3 build_frontend.py
+
+      - name: Install build tools
+        run: pip install build twine
+
+      - name: Build Python package
+        run: python3 -m build --wheel
+
+      - name: Verify package
+        run: |
+          pip install dist/*.whl
+          python3 -c "from llm_memory.server.app import app; print('✓ Package imports successfully')"
+          python3 -c "from pathlib import Path; import llm_memory.server.app as app_module; static_dir = Path(app_module.__file__).parent / 'static'; print(f'✓ Static files: {len(list(static_dir.rglob(\"*\")))} files')"
+
+      - name: Check package with twine
+        run: twine check dist/*
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          WHEEL_FILE=$(basename dist/*.whl)
+          VERSION=${{ github.ref_name }}
+
+          cat > changelog.md << 'CHANGELOG'
+          ## 📦 Download & Install
+
+          ### Option 1: Download from this release page
+
+          1. **Download the wheel file** (below in Assets section)
+          2. **Install it:**
+             ```bash
+             pip install llm_memory-0.1.0-py3-none-any.whl
+             ```
+
+          ### Option 2: Direct install from URL
+
+          ```bash
+          pip install https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/WHEEL_PLACEHOLDER
+          ```
+
+          ### Option 3: Install from PyPI (if published)
+
+          ```bash
+          pip install llm-memory
+          ```
+
+          ---
+
+          ## 🚀 Quick Start
+
+          After installation:
+
+          ```bash
+          # Initialize memory
+          llm-memory init --type code
+
+          # Start the server (includes web dashboard)
+          uvicorn llm_memory.server.app:app --port 8000
+          ```
+
+          Then open your browser to:
+          - **Dashboard**: http://localhost:8000/dashboard
+          - **API Docs**: http://localhost:8000/docs
+
+          ---
+
+          ## 📋 What's Included
+
+          This package includes everything you need:
+
+          - ✅ **CLI tool** (`llm-memory`) - Command-line interface
+          - ✅ **MCP server** (`llm-memory-mcp`) - Model Context Protocol integration
+          - ✅ **API server** (FastAPI) - REST API for memory operations
+          - ✅ **Web Dashboard** - Beautiful UI for managing memories (embedded)
+          - ✅ **SQLite & Neo4j support** - Choose your storage backend
+          - ✅ **Vector embeddings** - Semantic search built-in
+
+          Package size: ~600KB | Installed size: ~2.3MB
+
+          ---
+
+          ## 📖 Usage Examples
+
+          ### CLI Commands
+
+          ```bash
+          # Record a memory
+          llm-memory record "Fixed the authentication bug in login.py"
+
+          # Record a decision
+          llm-memory decision "Use Redis for caching" "Better performance than in-memory"
+
+          # Search memories
+          llm-memory recall "authentication"
+
+          # Get context for LLM
+          llm-memory context
+          ```
+
+          ### Python API
+
+          ```python
+          from llm_memory import Memory
+
+          memory = Memory()
+          memory.record("Implemented user signup flow")
+          results = memory.recall("signup")
+          ```
+
+          ---
+
+          ## 🔧 Requirements
+
+          - Python 3.10 or higher
+          - pip
+
+          ### Optional dependencies:
+
+          ```bash
+          # For Neo4j support
+          pip install llm-memory[neo4j]
+
+          # For OpenAI embeddings
+          pip install llm-memory[openai]
+
+          # Install everything
+          pip install llm-memory[all]
+          ```
+
+          ---
+
+          ## 📚 Documentation
+
+          - **Full Documentation**: See [README.md](../../blob/main/README.md)
+          - **Packaging Guide**: See [PACKAGING.md](../../blob/main/PACKAGING.md)
+          - **Project Instructions**: See [CLAUDE.md](../../blob/main/CLAUDE.md)
+
+          ---
+
+          ## 🐛 Issues & Support
+
+          Found a bug or need help? [Open an issue](../../issues/new)
+
+          CHANGELOG
+
+          # Replace placeholder with actual wheel filename
+          sed -i "s/WHEEL_PLACEHOLDER/${WHEEL_FILE}/g" changelog.md
+
+          # Add changelog if this is not the first release
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREVIOUS_TAG" ]; then
+            echo "" >> changelog.md
+            echo "---" >> changelog.md
+            echo "" >> changelog.md
+            echo "## 📝 Changelog (since $PREVIOUS_TAG)" >> changelog.md
+            echo "" >> changelog.md
+            git log $PREVIOUS_TAG..HEAD --pretty=format:"- %s (%h)" >> changelog.md
+            echo "" >> changelog.md
+          fi
+
+          cat changelog.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.whl
+          body_path: changelog.md
+          draft: false
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "## ✅ Release Created Successfully!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Package:** $(ls dist/*.whl | xargs basename)" >> $GITHUB_STEP_SUMMARY
+          echo "**Size:** $(ls -lh dist/*.whl | awk '{print $5}')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. Review the release: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "2. Publish to PyPI (optional):" >> $GITHUB_STEP_SUMMARY
+          echo "   \`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "   twine upload dist/*.whl" >> $GITHUB_STEP_SUMMARY
+          echo "   \`\`\`" >> $GITHUB_STEP_SUMMARY
