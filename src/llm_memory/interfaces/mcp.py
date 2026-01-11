@@ -305,6 +305,11 @@ def create_mcp_server() -> "Server":
                         "repo_id": {
                             "type": "string",
                             "description": "Repository/project ID (optional)"
+                        },
+                        "detect_conflicts": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Check for contradictions with existing knowledge"
                         }
                     },
                     "required": ["knowledge"]
@@ -868,7 +873,8 @@ def _handle_knowledge(name: str, args: dict[str, Any], memory: Memory) -> str:
             knowledge=args["knowledge"],
             category=args.get("category", "fact"),
             importance=args.get("importance", 0.6),
-            repo_id=args.get("repo_id")
+            repo_id=args.get("repo_id"),
+            detect_conflicts=args.get("detect_conflicts", False)
         )
         return f"Knowledge established (ID: {mem_id}): {args['knowledge']}"
 

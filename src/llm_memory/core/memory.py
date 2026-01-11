@@ -9,7 +9,7 @@ The unified interface for LLM memory, bringing together:
 """
 
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime
 import json
 
@@ -113,6 +113,17 @@ class Memory:
 
         self._compressor = MemoryCompressor(self._storage, compress_fn)
         self.deduplicator = Deduplicator(self._storage)
+        
+        # Initialize conflict detector
+        from llm_memory.quality.conflict import ConflictDetector
+        # Reuse compressor's LLM logic/keys for now as they are similar
+        # Ideally should use dedicated config but this adheres to current structures
+        self.conflict_detector = ConflictDetector(
+            self._storage, 
+            provider=self.config.compression.llm_provider,
+            model=self.config.compression.llm_model,
+            api_key=self.config.embedding.api_key
+        )
 
     # =========================================================================
     # Quick Access Methods
@@ -184,7 +195,8 @@ class Memory:
         knowledge: str,
         category: str = "fact",
         importance: float = 0.6,
-        repo_id: str = None
+        repo_id: str = None,
+        **kwargs
     ) -> str:
         """
         Quick method to establish semantic knowledge.
@@ -203,12 +215,45 @@ class Memory:
         except ValueError:
             cat = category
 
+        # Check for conflicts if enabled
+        if kwargs.get("detect_conflicts", False) or self.config.quality.conflict_detection:
+            conflict = self.check_conflict(knowledge, layer="semantic")
+            if conflict:
+                # Store conflict info in metadata
+                kwargs.setdefault("metadata", {})
+                kwargs["metadata"]["conflict"] = conflict
+                # Could assume we want to proceed but mark it, 
+                # or raise error. For now, we proceed and tag.
+
         return self.semantic.establish(
             knowledge=knowledge,
             category=cat,
             importance=importance,
-            repo_id=repo_id or self.config.repo_id
+            repo_id=repo_id or self.config.repo_id,
+            **kwargs
         )
+
+    def check_conflict(self, content: str, layer: str = "semantic") -> Optional[Dict[str, Any]]:
+        """
+        Check if content conflicts with existing memories.
+        
+        Args:
+            content: New content to check
+            layer: Layer to check against
+            
+        Returns:
+            Conflict details or None
+        """
+        # 1. Find relevant memories
+        relevant = self._storage.search_memories(
+            query=content,
+            layer=layer,
+            limit=5,
+            repo_id=self.config.repo_id
+        )
+        
+        # 2. Check for conflicts
+        return self.conflict_detector.detect_conflicts(content, relevant)
 
     def warn(self, area: str, warning: str, severity: float = 0.7, repo_id: str = None) -> str:
         """

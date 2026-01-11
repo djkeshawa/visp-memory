@@ -78,6 +78,8 @@ class CaptureConfig(BaseSettings):
 
     # Conversation capture settings
     conversation_enabled: bool = False  # Requires explicit opt-in
+    llm_provider: Optional[Literal["openai", "ollama", "anthropic"]] = None
+    llm_model: Optional[str] = None
 
     class Config:
         env_prefix = "LLM_MEMORY_CAPTURE_"

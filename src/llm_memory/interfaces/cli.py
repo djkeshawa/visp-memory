@@ -423,6 +423,37 @@ def dedup(
     # TODO: Interactive merge workflow could be added here
 
 
+# =============================================================================
+# Quality Commands
+# =============================================================================
+
+quality_app = typer.Typer(help="Memory quality management")
+app.add_typer(quality_app, name="quality")
+
+@quality_app.command("conflicts")
+def check_conflicts(
+    content: str = typer.Argument(..., help="Statement to check for conflicts"),
+    layer: str = typer.Option("semantic", "--layer", "-l", help="Layer to check against")
+):
+    """Check if a statement conflicts with existing knowledge."""
+    memory = get_memory()
+    
+    console.print(f"Checking for conflicts with: '{content}'")
+    
+    try:
+        conflict = memory.check_conflict(content, layer=layer)
+        
+        if conflict:
+            console.print(Panel(f"[bold red]Conflict Detected![/bold red]"))
+            console.print(f"Reason: {conflict.get('reason')}")
+            if conflict.get('conflicting_ids'):
+                console.print(f"Conflicting IDs: {conflict.get('conflicting_ids')}")
+        else:
+            console.print("[green]No conflicts detected.[/green]")
+    except Exception as e:
+        console.print(f"[red]Error checking conflicts:[/red] {e}")
+
+
 @app.command()
 def export(
     output: str = typer.Argument("memory-export.json", help="Output file path")
@@ -774,6 +805,50 @@ def capture_tests(
     except Exception as e:
         console.print(f"[red]Error parsing report:[/red] {e}")
         raise typer.Exit(1)
+
+
+@capture_app.command("conversation")
+def capture_conversation(
+    file: str = typer.Argument(..., help="Path to conversation log file (text, markdown, json)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Analyze without saving")
+):
+    """
+    Capture memories from a conversation log.
+    
+    Uses configured LLM to extract decisions, learnings, bugs, and tasks.
+    """
+    try:
+        from llm_memory.capture.conversation import ConversationCapture
+    except ImportError:
+        console.print("[red]Import Error: Could not load ConversationCapture[/red]")
+        raise typer.Exit(1)
+        
+    memory = get_memory()
+    
+    try:
+        capturer = ConversationCapture(memory)
+        console.print(f"Analyzing {file}...")
+        
+        result = capturer.parse_file(file, dry_run=dry_run)
+        
+        console.print(Panel(f"[bold]Extraction Results ({'Dry Run' if dry_run else 'Saved'})[/bold]"))
+        console.print(f"Decisions: {result['decisions']}")
+        console.print(f"Learnings: {result['learnings']}")
+        console.print(f"Bugs:      {result['bugs']}")
+        console.print(f"Tasks:     {result['tasks']}")
+        
+        if dry_run and result['raw']:
+            console.print("\n[dim]Raw Extraction:[/dim]")
+            console.print_json(data=result['raw'])
+            
+    except ValueError as e:
+        console.print(f"[red]Configuration Error:[/red] {e}")
+        console.print("Ensure LLM_MEMORY_CAPTURE_LLM_PROVIDER is set.")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
 
 
 # =============================================================================
