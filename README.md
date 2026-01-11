@@ -57,7 +57,11 @@ Choose the method that fits your workflow.
 Install via pip. This includes the CLI, API server, and embedded dashboard.
 
 ```bash
+# From PyPI (when published)
 pip install llm-memory[all]
+
+# From GitHub Release (direct download)
+pip install https://github.com/djkeshawa/llm-memory/releases/download/v0.1.0/llm_memory-0.1.0-py3-none-any.whl
 ```
 
 ### Method 2: Docker
