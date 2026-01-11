@@ -225,34 +225,34 @@ make test
 
 ```mermaid
 graph TD
-    User[User / IDE]
-    
+    User["User / IDE"]
+
     subgraph Interfaces
-        CLI[CLI Tool]
-        MCP[MCP Server]
-        API[FastAPI Server]
-        Dash[Web Dashboard]
+        CLI["CLI Tool"]
+        MCP["MCP Server"]
+        API["FastAPI Server"]
+        Dash["Web Dashboard"]
     end
 
-    subgraph Memory Core
-        Intent[Intent Layer]
-        Semantic[Semantic Layer]
-        Episodic[Episodic Layer]
+    subgraph MemoryCore["Memory Core"]
+        Intent["Intent Layer"]
+        Semantic["Semantic Layer"]
+        Episodic["Episodic Layer"]
     end
 
     subgraph Storage
-        Neo4j[(Neo4j / ChromaDB)]
+        Neo4j[("Neo4j / ChromaDB")]
     end
 
     User --> CLI
     User --> MCP
     Dash --> API
-    
-    CLI --> Memory Core
-    MCP --> Memory Core
-    API --> Memory Core
-    
-    Memory Core --> Neo4j
+
+    CLI --> MemoryCore
+    MCP --> MemoryCore
+    API --> MemoryCore
+
+    MemoryCore --> Neo4j
 ```
 
 ---
