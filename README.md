@@ -96,21 +96,54 @@ rm -rf ~/.llm-memory
 
 ## ⚙️ Configuration
 
-The system defaults to using **Neo4j** as the storage backend.
+### Prerequisites
+
+| Dependency | Version | Required | Installation |
+|------------|---------|----------|--------------|
+| **Python** | 3.10+ | Yes | [python.org](https://www.python.org/downloads/) |
+| **Neo4j** | 5.15+ | Yes | See below |
+| **Node.js** | 18+ | For dashboard dev | [nodejs.org](https://nodejs.org/) |
+
+### Neo4j Setup
+
+Neo4j is required for the graph storage backend. Choose one option:
+
+**Option 1: Docker (Recommended)**
+```bash
+docker run -d \
+  --name neo4j \
+  -p 7474:7474 -p 7687:7687 \
+  -e NEO4J_AUTH=neo4j/your-password \
+  -v neo4j-data:/data \
+  neo4j:5
+```
+
+**Option 2: Neo4j Desktop**
+1. Download from [neo4j.com/download](https://neo4j.com/download/)
+2. Create a new project and local DBMS
+3. Start the database
+
+**Option 3: Neo4j AuraDB (Cloud)**
+1. Sign up at [neo4j.com/cloud/aura](https://neo4j.com/cloud/aura/)
+2. Create a free instance
+3. Copy the connection URI
 
 ### Environment Variables
+
+Set these before running LLM Memory:
+
+```bash
+export NEO4J_URI="bolt://localhost:7687"
+export NEO4J_USER="neo4j"
+export NEO4J_PASSWORD="your-password"
+```
 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `NEO4J_URI` | Neo4j connection URI | `bolt://localhost:7687` |
 | `NEO4J_USER` | Neo4j username | `neo4j` |
-| `NEO4J_PASSWORD` | Neo4j password | *None* (Must be set!) |
+| `NEO4J_PASSWORD` | Neo4j password | **Required** |
 | `LLM_MEMORY_REPO_ID` | Default project scope | *None* |
-
-### Requirements
-
-- **Neo4j 5.15+**: Required for the graph backend (supports vector indexes).
-- **Python 3.10+**: If installing via pip.
 
 ---
 
