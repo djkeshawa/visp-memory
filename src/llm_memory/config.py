@@ -32,7 +32,7 @@ class StorageConfig(BaseSettings):
     data_dir: Path = Path(".llm-memory/data")
     vector_db: Literal["chroma", "memory"] = "chroma"
     backend: Literal["sqlite", "neo4j"] = "neo4j" # Default to neo4j for migration
-    
+
     # Client-Server Mode
     mode: Literal["local", "client"] = "local"
     server_url: str = "http://localhost:8000"

@@ -12,7 +12,7 @@ be compressed into semantic knowledge (patterns/rules).
 """
 
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from enum import Enum
 
 from llm_memory.core.storage import BaseStorage

@@ -13,7 +13,7 @@ Unlike episodic memories (events), semantic memories are:
 """
 
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from enum import Enum
 
 from llm_memory.core.storage import BaseStorage

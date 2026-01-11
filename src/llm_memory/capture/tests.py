@@ -6,8 +6,7 @@ Captures test results and failures as memories.
 
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import List, Dict, Any, Optional
-from datetime import datetime
+from typing import List
 
 class TestCapture:
     """
@@ -17,7 +16,7 @@ class TestCapture:
         capture = TestCapture(memory)
         capture.on_pytest_session("report.xml")
     """
-    
+
     def __init__(self, memory):
         self.memory = memory
 
@@ -34,7 +33,7 @@ class TestCapture:
         path = Path(report_path)
         if not path.exists():
             raise FileNotFoundError(f"Report not found: {report_path}")
-            
+
         try:
             tree = ET.parse(path)
             root = tree.getroot()
@@ -42,33 +41,33 @@ class TestCapture:
             raise ValueError(f"Invalid XML report: {e}")
 
         memory_ids = []
-        
+
         # Parse suites if multiple, or root as suite
         suites = root.findall(".//testsuite")
         if not suites:
             suites = [root]
-            
+
         for suite in suites:
             # Check for failures
             failures = int(suite.get("failures", 0))
             errors = int(suite.get("errors", 0))
-            
+
             if failures > 0 or errors > 0:
                 # Record specific failures
                 for case in suite.findall("testcase"):
                     failure = case.find("failure")
                     error = case.find("error")
-                    
+
                     if failure is not None or error is not None:
                         elem = failure if failure is not None else error
                         msg = elem.get("message", "Test failed")
                         details = elem.text
                         name = case.get("name", "Unknown test")
                         file = case.get("file", "Unknown file")
-                        
+
                         # Check if this is a known flaky test or recurring issue
                         # (Future enhancement: check deduplication here)
-                        
+
                         mem_id = self.memory.record(
                             event=f"Test Failed: {name} - {msg}",
                             category="bug_found",
@@ -82,7 +81,7 @@ class TestCapture:
                             tags=["test", "failure", "auto-captured"]
                         )
                         memory_ids.append(mem_id)
-                        
+
                         # Also potentially warn if it seems fragile
                         # self.memory.warn(file, f"Test {name} is failing: {msg}")
 

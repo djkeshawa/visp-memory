@@ -9,8 +9,7 @@ Automatically surfaces relevant memories based on context:
 
 import hashlib
 from pathlib import Path
-from typing import List, Dict, Any, Optional
-from collections import defaultdict
+from typing import List, Dict, Any
 
 
 class ProactiveRecall:

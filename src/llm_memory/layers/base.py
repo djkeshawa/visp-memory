@@ -4,7 +4,7 @@ Base Memory Layer
 Abstract base class for all memory layers.
 """
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from abc import ABC
 
 from llm_memory.core.storage import BaseStorage

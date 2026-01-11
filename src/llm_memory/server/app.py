@@ -11,10 +11,10 @@ except ImportError:
     raise ImportError("FastAPI not installed. Run: pip install llm-memory[api]")
 
 from llm_memory.server.schemas import (
-    MemoryCreate, 
-    MemoryResponse, 
-    SearchQuery, 
-    IntentCreate, 
+    MemoryCreate,
+    MemoryResponse,
+    SearchQuery,
+    IntentCreate,
     IntentResponse,
     MemoryUpdate,
     RelationshipCreate
@@ -28,7 +28,6 @@ from llm_memory.core.neo4j_storage import Neo4jStorage
 from llm_memory.config import load_config
 import logging
 from pathlib import Path
-import os
 
 logger = logging.getLogger(__name__)
 
@@ -140,12 +139,12 @@ async def recall(query: SearchQuery, api_key: str = Depends(get_api_key)):
 async def list_intents(repo_id: str = None, api_key: str = Depends(get_api_key)):
     # Use the dedicated storage method to fetch active intents
     intents = storage.get_active_intents(repo_id=repo_id or config.repo_id)
-    
+
     return [
         {
             "id": i["id"],
             "description": i["description"],
-            "priority": i["priority"],  
+            "priority": i["priority"],
             "context": i.get("context", {}),
             "status": i["status"],
             "created_at": i["created_at"]
@@ -158,7 +157,7 @@ async def get_graph(repo_id: str = None, api_key: str = Depends(get_api_key)):
     graph_repo_id = repo_id or config.repo_id
     memories = storage.list_memories(limit=200, repo_id=graph_repo_id)
     relationships = storage.get_all_relationships(repo_id=graph_repo_id)
-    
+
     return {
         "nodes": [
             {
@@ -188,7 +187,7 @@ async def create_intent(intent: IntentCreate, api_key: str = Depends(get_api_key
         priority=intent.priority if hasattr(intent, "priority") else 0,
         context=intent.context
     )
-    
+
     return {
         "id": intent_id,
         "description": intent.description,
@@ -204,7 +203,7 @@ async def get_memory(memory_id: str, api_key: str = Depends(get_api_key)):
     mem = storage.get_memory(memory_id)
     if not mem:
         raise HTTPException(status_code=404, detail="Memory not found")
-    
+
     return {
         "id": mem["id"],
         "content": mem["content"],
@@ -233,7 +232,7 @@ async def update_memory(memory_id: str, update: MemoryUpdate, api_key: str = Dep
     update_data = {k: v for k, v in update.model_dump().items() if v is not None}
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields to update")
-        
+
     success = storage.update_memory(memory_id, **update_data)
     if not success:
          raise HTTPException(status_code=404, detail="Memory not found")

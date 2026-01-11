@@ -231,8 +231,8 @@ class MemoryCompressor:
             },
             source_ids=source_ids
         )
-        
-        # Link source memories to this principle (don't mark as compressed/hidden, 
+
+        # Link source memories to this principle (don't mark as compressed/hidden,
         # as semantic memories are still valid on their own)
         for mem in memories:
             self.storage.add_relationship(
@@ -259,7 +259,7 @@ class MemoryCompressor:
         created = []
 
         # --- Level 1: Episodic -> Semantic ---
-        
+
         # Get uncompressed episodes
         episodes = self.storage.list_memories(
             layer="episodic",
@@ -293,21 +293,21 @@ class MemoryCompressor:
                         created.append(semantic_id)
 
         # --- Level 2: Semantic -> Principle ---
-        
+
         # Get all semantic memories (excluding principles)
         semantic = self.storage.list_memories(layer="semantic", limit=1000)
         facts = [
-            m for m in semantic 
-            if m.get("category") != "principle" 
+            m for m in semantic
+            if m.get("category") != "principle"
             and m.get("metadata", {}).get("level", 1) == 1
         ]
-        
+
         # Cluster them (naive approach: group by auto-extracted topics/tags would be better)
         # For now, we'll try to group by category/tags
         by_category = defaultdict(list)
         for m in facts:
             by_category[m.get("category", "general")].append(m)
-            
+
         for category, items in by_category.items():
             if len(items) >= 5:  # Need more evidence for a principle
                 # Only check items not already supporting a principle to avoid loops

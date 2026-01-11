@@ -151,7 +151,7 @@ def learn(
     # but we should update it or temporarily set config.
     # Actually I fixed Memory.learn to use config.repo_id. Ideally I should update Memory.learn to ACSEPT an override too.
     # For now, let's inject it via config if passed.
-    if repo: 
+    if repo:
         memory.config.repo_id = repo
     mem_id = memory.learn(knowledge, category=category, importance=importance)
     console.print(f"[green]Established:[/green] {knowledge[:60]}...")
@@ -281,11 +281,11 @@ def recall(
         content = r['content'].replace("\n", " ")
         if len(content) > 80:
             content = content[:77] + "..."
-            
+
         table.add_row(
-            r['layer'], 
-            r.get('category', '-'), 
-            content, 
+            r['layer'],
+            r.get('category', '-'),
+            content,
             score
         )
 
@@ -404,7 +404,6 @@ def dedup(
     threshold: float = typer.Option(0.9, "--threshold", "-t", help="Similarity threshold")
 ):
     """Find and merge duplicate memories."""
-    from llm_memory.core.memory import Memory
 
     memory = get_memory()
     duplicates = memory.deduplicate(layer=layer, threshold=threshold)
@@ -412,15 +411,15 @@ def dedup(
     if not duplicates:
         console.print("[green]No duplicates found.[/green]")
         return
-        
+
     console.print(f"[yellow]Found {len(duplicates)} potential duplicates[/yellow]")
-    
+
     # Simple listing for now
     for group in duplicates:
         console.print("--- Group ---")
         for mem in group:
             console.print(f"[{mem['id']}] {mem['content'][:50]}... ({mem.get('similarity', 0):.2f})")
-            
+
     # TODO: Interactive merge workflow could be added here
 
 
@@ -458,7 +457,7 @@ def list_memories(
     """List recent memories."""
     from rich.box import ROUNDED
     memory = get_memory()
-    
+
     # We need to access storage directly for list listing or expose it in Memory
     # Using private storage access for now as Memory doesn't have generic list
     memories = memory._storage.list_memories(
@@ -483,7 +482,7 @@ def list_memories(
         content = m['content'].replace("\n", " ")
         if not full and len(content) > 80:
             content = content[:77] + "..."
-            
+
         table.add_row(
             m['id'][:8],
             m['created_at'][:16].replace("T", " "),
@@ -734,7 +733,7 @@ def capture_git(
         memory_id = git_capture.on_commit(commit_ref)
 
         if memory_id:
-            console.print(f"[green]Captured commit[/green]")
+            console.print("[green]Captured commit[/green]")
             console.print(f"[dim]Memory ID: {memory_id}[/dim]")
         else:
             console.print("[yellow]Commit skipped[/yellow]")
@@ -745,7 +744,7 @@ def capture_git(
         memory_id = git_capture.on_merge()
 
         if memory_id:
-            console.print(f"[green]Captured merge[/green]")
+            console.print("[green]Captured merge[/green]")
             console.print(f"[dim]Memory ID: {memory_id}[/dim]")
         else:
             console.print("[yellow]Not a merge commit[/yellow]")
@@ -879,10 +878,10 @@ def hooks_update(
     success = adapter.update_context(files=files, task=task)
 
     if success:
-        console.print(f"[green]✓ Context updated[/green]")
+        console.print("[green]✓ Context updated[/green]")
         console.print(f"File: {adapter.get_context_file_path()}")
     else:
-        console.print(f"[red]✗ Failed to update context[/red]")
+        console.print("[red]✗ Failed to update context[/red]")
 
 
 @hooks_app.command("list")
@@ -925,7 +924,7 @@ def serve(
     # Once we switch to client-server, this will run the FastAPI server
     # For now, let's make it run the FastAPI skeleton if requested, or MCP by default?
     # Actually, let's keep it specific.
-    
+
     console.print(f"[green]Starting Central Memory Server at http://{host}:{port}[/green]")
     try:
         import uvicorn
@@ -944,14 +943,13 @@ def serve(
 @app.command()
 def status():
     """Show system status dashboard."""
-    from rich.layout import Layout
     from rich.align import Align
     from rich.box import ROUNDED
     from rich.text import Text
 
     memory = get_memory()
     stats = memory.stats()
-    
+
     # 1. System Info
     info_table = Table(box=None, show_header=False, padding=(0, 2))
     info_table.add_row("Active Config", memory.config.storage.data_dir.name)
@@ -963,7 +961,7 @@ def status():
     layer_table = Table(title="Memories by Layer", box=ROUNDED, show_header=True)
     layer_table.add_column("Layer", style="cyan")
     layer_table.add_column("Count", justify="right")
-    
+
     for layer, count in stats.get("memories_by_layer", {}).items():
         layer_table.add_row(layer.capitalize(), str(count))
 
@@ -977,16 +975,16 @@ def status():
     for m in recent:
         # Simple time format (just HH:MM or date if old)
         # For now just truncated string
-        time_str = m["created_at"][11:16] 
+        time_str = m["created_at"][11:16]
         activity_table.add_row(time_str, m["category"], m["content"][:60])
 
     # 4. Current Context (Intents/Warnings)
     intent_summary = memory.intent.summarize()
-    
+
     focus_text = "[italic dim]No current focus[/]"
     if intent_summary.get("focus"):
         focus_text = f"[bold cyan]{intent_summary['focus']['description']}[/bold cyan]"
-        
+
     task_text = "[italic dim]No active task[/]"
     if intent_summary.get("current_task"):
         task_text = f"[bold yellow]{intent_summary['current_task']['description']}[/bold yellow]"
@@ -1010,7 +1008,7 @@ def status():
         Layout(name="main", ratio=1),
         Layout(name="footer", size=3)
     )
-    
+
     layout["header"].update(
         Panel(
             Align.center(f"[bold blue]LLM Memory System[/bold blue] - {memory.config.storage.data_dir}"),
@@ -1018,22 +1016,22 @@ def status():
             style="white on black"
         )
     )
-    
+
     layout["main"].split_row(
         Layout(name="left", ratio=1),
         Layout(name="right", ratio=2)
     )
-    
+
     layout["left"].split_column(
         Layout(name="context", ratio=1),
         Layout(name="stats", ratio=1)
     )
-    
+
     layout["left"]["context"].update(context_panel)
     layout["left"]["stats"].update(layer_table)
-    
+
     layout["right"].update(activity_table)
-    
+
     layout["footer"].update(
         Align.center("[dim]Run 'llm-memory help' for commands | 'llm-memory recall' to search[/dim]")
     )

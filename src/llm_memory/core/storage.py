@@ -28,7 +28,7 @@ MemoryLayer = Literal["raw", "episodic", "semantic", "intent"]
 
 class BaseStorage(ABC):
     """Abstract interface for memory storage."""
-    
+
     @abstractmethod
     def store_memory(self, content: str, layer: MemoryLayer = "episodic", repo_id: str = None, **kwargs) -> str:
         """Store a memory."""
@@ -38,7 +38,7 @@ class BaseStorage(ABC):
     def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
         """Get a memory by ID."""
         pass
-        
+
     @abstractmethod
     def search_memories(self, query: str, repo_id: str = None, **kwargs) -> List[Dict[str, Any]]:
         """Search across memories."""
@@ -58,7 +58,7 @@ class BaseStorage(ABC):
     def delete_memory(self, memory_id: str) -> bool:
         """Delete a memory."""
         pass
-    
+
     @abstractmethod
     def get_collection(self, layer: str):
         """Get underlying vector collection (if applicable)."""
@@ -74,18 +74,18 @@ class BaseStorage(ABC):
     def get_active_intents(self) -> List[Dict[str, Any]]:
         """Get active intents."""
         pass
-    
+
     @abstractmethod
     def complete_intent(self, intent_id: str) -> bool:
         """Complete an intent."""
         pass
-        
+
     # Relationship Operations
     @abstractmethod
     def add_relationship(self, source_id: str, target_id: str, relationship: str, strength: float = 1.0) -> str:
         """Add a relationship."""
         pass
-        
+
     @abstractmethod
     def get_related_memories(self, memory_id: str, relationship: str = None) -> List[Dict[str, Any]]:
         """Get related memories."""
@@ -158,7 +158,7 @@ class LocalStorage(BaseStorage):
                     compressed_at TIMESTAMP DEFAULT NULL
                 )
             """)
-            
+
             # Migration: Check if repo_id column exists
             try:
                 conn.execute("SELECT repo_id FROM memories LIMIT 1")
@@ -347,7 +347,7 @@ class LocalStorage(BaseStorage):
             }
             if repo_id:
                 metadata_dict["repo_id"] = repo_id
-                
+
             add_kwargs = {
                 "ids": [memory_id],
                 "documents": [content],
@@ -442,7 +442,7 @@ class LocalStorage(BaseStorage):
                             memory["similarity"] = similarity
                             results.append(memory)
 
-            except Exception as e:
+            except Exception:
                 # Collection might be empty
                 pass
 
@@ -699,5 +699,5 @@ class LocalStorage(BaseStorage):
         for field in ["tags", "metadata", "source_ids", "memory_ids", "context"]:
             if field in d and d[field]:
                 d[field] = LocalStorage._json_deserialize(d[field])
-        
+
         return d

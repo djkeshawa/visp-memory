@@ -4,9 +4,8 @@ Deduplication Module
 Identifies and merges duplicate memories.
 """
 
-from typing import List, Dict, Any, Optional, Set
+from typing import List, Dict, Any
 import logging
-from collections import defaultdict
 
 try:
     from sklearn.metrics.pairwise import cosine_similarity
@@ -78,17 +77,17 @@ class Deduplicator:
             return self._find_duplicates_via_search(layer, content, embedding, threshold, limit)
 
     def _find_similar_to_new(
-        self, 
-        collection, 
-        content: str, 
-        embedding: List[float], 
+        self,
+        collection,
+        content: str,
+        embedding: List[float],
         threshold: float,
         limit: int
     ) -> List[Dict[str, Any]]:
         """Find memories similar to new content."""
         query_texts = [content] if content else None
         query_embeddings = [embedding] if embedding else None
-        
+
         try:
             results = collection.query(
                 query_texts=query_texts,
@@ -103,18 +102,18 @@ class Deduplicator:
             for i, mem_id in enumerate(results["ids"][0]):
                 distance = results["distances"][0][i] if results.get("distances") else 0
                 similarity = 1 - distance
-                
+
                 if similarity >= threshold:
                     mem = self.storage.get_memory(mem_id)
                     if mem:
                         mem["similarity"] = similarity
                         duplicates.append(mem)
-        
+
         return duplicates
 
     def _find_internal_duplicates(
-        self, 
-        collection, 
+        self,
+        collection,
         threshold: float,
         limit: int
     ) -> List[List[Dict[str, Any]]]:
@@ -135,7 +134,7 @@ class Deduplicator:
 
         embeddings = data["embeddings"]
         ids = data["ids"]
-        
+
         if SKLEARN_AVAILABLE:
             matrix = np.array(embeddings)
             sim_matrix = cosine_similarity(matrix)
@@ -153,25 +152,25 @@ class Deduplicator:
         for i in range(len(ids)):
             if i in visited:
                 continue
-                
+
             group = []
             for j in range(i + 1, len(ids)):
                 if j in visited:
                     continue
-                
+
                 if sim_matrix[i][j] >= threshold:
                     if not group:
                         group.append(self.storage.get_memory(ids[i]))
                         visited.add(i)
-                    
+
                     group.append(self.storage.get_memory(ids[j]))
                     visited.add(j)
-            
+
             if group:
                 duplicate_groups.append(group)
                 if len(duplicate_groups) >= limit:
                     break
-                    
+
         return duplicate_groups
 
     def merge_memories(self, memory_ids: List[str], target_content: str = None) -> str:
@@ -187,37 +186,37 @@ class Deduplicator:
         """
         if not memory_ids:
             return None
-            
+
         primary_id = memory_ids[0]
         others = memory_ids[1:]
-        
+
         primary_mem = self.storage.get_memory(primary_id)
         if not primary_mem:
             return None
-            
+
         # Update content if provided
         if target_content:
             self.storage.update_memory(primary_id, content=target_content)
-            
+
         # Merge metadata/stats from others
         merged_source_ids = primary_mem.get("source_ids", [])
-        
+
         for oid in others:
             mem = self.storage.get_memory(oid)
             if not mem:
                 continue
-                
+
             # Add as source
             merged_source_ids.append(oid)
             if mem.get("source_ids"):
                 merged_source_ids.extend(mem["source_ids"])
-                
+
             # Delete the duplicate
             self.storage.delete_memory(oid)
-            
+
         # Update primary with merged sources
         self.storage.update_memory(primary_id, metadata={"merged_count": len(others)})
-        
+
         return primary_id
 
     def _find_duplicates_via_search(

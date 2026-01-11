@@ -6,7 +6,7 @@ Defines the interface that all tool adapters must implement.
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict
 
 
 class LLMToolAdapter(ABC):

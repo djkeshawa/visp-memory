@@ -8,7 +8,7 @@ Supports two modes:
 """
 
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Dict
 
 
 from llm_memory.hooks.base import LLMToolAdapter

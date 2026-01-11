@@ -13,7 +13,6 @@ Supports:
 """
 
 import re
-import subprocess
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -461,7 +460,7 @@ class GitCapture:
 
     def _generate_post_commit_script(self) -> str:
         """Generate post-commit hook script."""
-        return f"""#!/bin/sh
+        return """#!/bin/sh
 # llm-memory auto-capture hook
 # Automatically records commits to memory
 
@@ -473,7 +472,7 @@ exit 0
 
     def _generate_post_merge_script(self) -> str:
         """Generate post-merge hook script."""
-        return f"""#!/bin/sh
+        return """#!/bin/sh
 # llm-memory auto-capture hook
 # Automatically records merges to memory
 

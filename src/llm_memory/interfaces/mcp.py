@@ -780,7 +780,7 @@ def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
                 output.append(f"  - {h['content']}")
 
         return "\n".join(output) if output else "No relevant memories found."
-    
+
     return f"Unknown search tool: {name}"
 
 
@@ -965,39 +965,39 @@ def _handle_maintenance(name: str, args: dict[str, Any], memory: Memory) -> str:
 
 async def handle_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
     """Route tool calls to specialized handlers."""
-    
+
     # Context
     if name == "memory_context":
         return _handle_context(args, memory)
-        
+
     # Search
     if name in ["memory_recall", "memory_relevant"]:
         return _handle_search(name, args, memory)
-        
+
     # Proactive
     if name in ["memory_file_context", "memory_find_error", "memory_directory_context"]:
         return _handle_proactive(name, args, memory)
-        
+
     # Recording
     if name in ["memory_record", "memory_decision"]:
         return _handle_recording(name, args, memory)
-        
+
     # Knowledge
     if name in ["memory_learn", "memory_warn", "memory_issue"]:
         return _handle_knowledge(name, args, memory)
-        
+
     # Intent
     if name in ["memory_goal", "memory_working_on", "memory_done"]:
         return _handle_intent(name, args, memory)
-        
+
     # Utility
     if name in ["memory_stats", "memory_list_warnings", "memory_list_intents"]:
         return _handle_utility(name, args, memory)
-        
+
     # Maintenance
     if name in ["memory_compress", "memory_decay", "memory_clear_goals"]:
         return _handle_maintenance(name, args, memory)
-        
+
     return f"Unknown tool: {name}"
 
 

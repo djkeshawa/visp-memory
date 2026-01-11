@@ -6,7 +6,6 @@ Connects to the Central Memory Server via HTTP.
 
 from typing import Optional, List, Dict, Any
 import logging
-from abc import ABC
 
 try:
     import requests
@@ -37,7 +36,7 @@ class RemoteStorage(BaseStorage):
         self.session = requests.Session()
         if api_key:
             self.session.headers.update({"X-API-Key": api_key})
-        
+
         # Test connection
         try:
             self.session.get(f"{self.server_url}/")

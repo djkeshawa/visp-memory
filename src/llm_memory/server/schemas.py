@@ -2,7 +2,7 @@
 Pydantic schemas for the Memory Server API.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -19,7 +19,7 @@ class MemoryResponse(MemoryCreate):
     id: str
     created_at: datetime
     accessed_at: datetime
-    
+
 class SearchQuery(BaseModel):
     query: str
     layers: Optional[List[str]] = None

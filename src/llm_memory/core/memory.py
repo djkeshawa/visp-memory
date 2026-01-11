@@ -9,7 +9,7 @@ The unified interface for LLM memory, bringing together:
 """
 
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from datetime import datetime
 import json
 
@@ -551,15 +551,15 @@ class Memory:
         """
         # Export filtered by repo_id if set
         repo_id = self.config.repo_id
-        
+
         episodic_memories = self._storage.list_memories(layer="episodic", limit=10000)
         semantic_memories = self._storage.list_memories(layer="semantic", limit=10000)
-        
+
         # Filter if repo_id is set (simple client-side filter since list_memories might be global until updated)
         # Better to update list_memories to accept repo_id, but assuming list_memories will be updated soon:
         # Actually I should pass repo_id to list_memories if I update it.
         # Let's assume I will update list_memories next.
-        
+
         export_data = {
             "version": "1.0",
             "exported_at": datetime.now().isoformat(),

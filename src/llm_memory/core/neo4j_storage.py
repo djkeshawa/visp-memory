@@ -2,13 +2,13 @@
 Neo4j Storage implementation for LLM Memory.
 """
 
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Any
 import json
 import hashlib
 from datetime import datetime
 import logging
 import re
-from neo4j import GraphDatabase, Driver
+from neo4j import GraphDatabase
 
 from llm_memory.core.storage import BaseStorage, MemoryLayer
 from llm_memory.config import load_config
@@ -52,7 +52,7 @@ class Neo4jStorage(BaseStorage):
             session.run("CREATE CONSTRAINT memory_id_unique IF NOT EXISTS FOR (m:Memory) REQUIRE m.id IS UNIQUE")
             session.run("CREATE CONSTRAINT intent_id_unique IF NOT EXISTS FOR (i:Intent) REQUIRE i.id IS UNIQUE")
             session.run("CREATE CONSTRAINT session_id_unique IF NOT EXISTS FOR (s:Session) REQUIRE s.id IS UNIQUE")
-            
+
             # Vector Index for embeddings (dim=384 for all-MiniLM-L6-v2)
             # Note: This assumes Neo4j 5.15+
             try:
@@ -135,7 +135,7 @@ class Neo4jStorage(BaseStorage):
                     access_count: coalesce(m.access_count, 0)
                 }
             """
-            
+
             # Conditionally add vector property
             if embedding:
                  query += """
@@ -143,7 +143,7 @@ class Neo4jStorage(BaseStorage):
                  CALL db.create.setNodeVectorProperty(m, 'embedding', $embedding)
                  """
 
-            session.run(query, 
+            session.run(query,
                 id=memory_id,
                 content=content,
                 layer=layer,
@@ -155,12 +155,12 @@ class Neo4jStorage(BaseStorage):
                 source_ids=source_ids,
                 embedding=embedding
             )
-            
+
             # 2. Add extra labels
             for label in labels:
                 if label != "Memory":
                      session.run(f"MATCH (m:Memory {{id: $id}}) SET m:{label}", id=memory_id)
-        
+
         return memory_id
 
     def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
@@ -172,7 +172,7 @@ class Neo4jStorage(BaseStorage):
                 RETURN m
             """, id=memory_id)
             record = result.single()
-            
+
             if record:
                 node = dict(record["m"])
                 # Clean up internal props if any
@@ -237,7 +237,7 @@ class Neo4jStorage(BaseStorage):
                 "min_importance": min_importance
             }
             result = session.run(cypher, params)
-            
+
             memories = []
             for record in result:
                 mem = self._node_to_dict(dict(record["m"]))
@@ -271,21 +271,21 @@ class Neo4jStorage(BaseStorage):
         """Update properties."""
         clauses = []
         params = {"id": memory_id}
-        
+
         for k, v in kwargs.items():
             if k == "metadata":
                 v = self._json_serialize(v)
             if k == "tags":
                 v = v # List is fine
-            
+
             clauses.append(f"SET m.{k} = ${k}")
             params[k] = v
-            
+
         if not clauses:
             return False
-            
-        query = f"MATCH (m:Memory {{id: $id}}) " + "\n".join(clauses) + " RETURN count(m) as c"
-        
+
+        query = "MATCH (m:Memory {id: $id}) " + "\n".join(clauses) + " RETURN count(m) as c"
+
         with self.driver.session() as session:
             result = session.run(query, **params)
             return result.single()["c"] > 0
@@ -304,7 +304,7 @@ class Neo4jStorage(BaseStorage):
     def set_intent(self, description: str, priority: int = 0, repo_id: str = None, context: Dict[str, Any] = None) -> str:
         intent_id = self._generate_id(description)
         context = context or {}
-        
+
         with self.driver.session() as session:
             session.run("""
                 MERGE (i:Intent {id: $id})
@@ -325,9 +325,9 @@ class Neo4jStorage(BaseStorage):
             if repo_id:
                 query += " WHERE i.repo_id = $repo_id"
                 params["repo_id"] = repo_id
-            
+
             query += " RETURN i ORDER BY i.priority DESC, i.created_at DESC"
-            
+
             result = session.run(query, params)
             return [self._node_to_dict(dict(rec["i"])) for rec in result]
 
@@ -352,7 +352,7 @@ class Neo4jStorage(BaseStorage):
         # Normalize relationship type (uppercase, no spaces)
         rel_type = relationship.upper().replace(" ", "_")
         rel_id = self._generate_id(f"{source_id}-{target_id}-{rel_type}")
-        
+
         with self.driver.session() as session:
             session.run(f"""
                 MATCH (a:Memory {{id: $source_id}}), (b:Memory {{id: $target_id}})
@@ -374,7 +374,7 @@ class Neo4jStorage(BaseStorage):
             MATCH (m:Memory {{id: $id}})-[r{rel_clause}]-(related:Memory)
             RETURN related, type(r) as rel_type, r.weight as strength
         """
-        
+
         with self.driver.session() as session:
             result = session.run(query, id=memory_id)
             items = []
@@ -396,9 +396,9 @@ class Neo4jStorage(BaseStorage):
             if repo_id:
                 query += " AND a.repo_id = $repo_id AND b.repo_id = $repo_id"
                 params["repo_id"] = repo_id
-            
+
             query += " RETURN a.id as source, b.id as target, type(r) as type, r.weight as weight, r.id as id"
-            
+
             result = session.run(query, params)
             return [{
                 "id": rec.get("id") or f"{rec['source']}-{rec['target']}",
@@ -427,39 +427,39 @@ class Neo4jStorage(BaseStorage):
     def get_stats(self, repo_id: str = None) -> Dict[str, Any]:
         with self.driver.session() as session:
             stats = {}
-            
+
             # Base match clause
             match_clause = "MATCH (m:Memory)"
             where_clause = ""
             params = {}
-            
+
             if repo_id:
                 where_clause = " WHERE m.repo_id = $repo_id"
                 params["repo_id"] = repo_id
-                
+
             # Count by layer
             query = f"{match_clause}{where_clause} RETURN m.layer as layer, count(m) as c"
             res = session.run(query, params)
             stats["memories_by_layer"] = {rec["layer"]: rec["c"] for rec in res}
-            
+
             # Total
             stats["total_memories"] = sum(stats["memories_by_layer"].values())
-            
-            # Intents (Intents might not have repo_id property on the node itself yet? 
+
+            # Intents (Intents might not have repo_id property on the node itself yet?
             # We implemented set_intent but need to check if it adds repo_id)
-            # Assuming we want to filter intents too if we add repo_id to them. 
-            # For now, let's keep intents global or update set_intent? 
+            # Assuming we want to filter intents too if we add repo_id to them.
+            # For now, let's keep intents global or update set_intent?
             # set_intent in Neo4jStorage doesn't seem to take repo_id in the signature shown earlier?
             # Let's check set_intent first. For now, leaving intents as is, or adding simple filter if properties exist.
-            
+
             # Count active intents
-            # If intents are shared, maybe we don't filter? 
+            # If intents are shared, maybe we don't filter?
             # But goals should probably be isolated too.
-            # Let's check if we can filter by repo_id on Intent nodes. 
+            # Let's check if we can filter by repo_id on Intent nodes.
             # Assuming set_intent adds it if passed.
-            
+
             # For now, just filtering Memories.
-            
+
             # Rels
             # Rels between filtered memories
             rel_query = """
@@ -468,27 +468,27 @@ class Neo4jStorage(BaseStorage):
             if repo_id:
                 rel_query += " WHERE a.repo_id = $repo_id AND b.repo_id = $repo_id"
             rel_query += " RETURN count(r) as c"
-            
+
             res = session.run(rel_query, params)
             stats["total_relationships"] = res.single()["c"]
-            
+
             # Active Intents count - if we want to isolate, we need to ensure Intent nodes have repo_id
             # Let's query active intents with repo_id if available
             intent_query = "MATCH (i:Intent {status: 'active'})"
-            # Note: We haven't verified if Intent nodes have repo_id. 
-            # If not, this might return 0 if we filter. 
+            # Note: We haven't verified if Intent nodes have repo_id.
+            # If not, this might return 0 if we filter.
             # Let's assume for this step we only filter Memories strictly.
             # But for consistency, valid project stats should include project goals.
-            
+
             # Let's assume global intents for now or filter if property exists
             if repo_id:
                  intent_query += " WHERE i.repo_id = $repo_id"
-                 
+
             intent_query += " RETURN count(i) as c"
-            
+
             res = session.run(intent_query, params)
-            stats["active_intents"] = res.single()["c"] 
-            
+            stats["active_intents"] = res.single()["c"]
+
             return stats
 
     def _node_to_dict(self, node: Dict[str, Any]) -> Dict[str, Any]:
