@@ -4,33 +4,33 @@
 
 ---
 
-## Phase 1: Foundation (Current Status)
+## Phase 1: Foundation ✅ Complete
 
-The current version works as a **single-user, local** tool. It provides the core memory architecture but stores data in a local SQLite database per project.
+The core memory system with all interfaces.
 
 - ✅ **Core Layers**: Episodic, Semantic, Intent
-- ✅ **Storage**: SQLite + VectorDB (Chroma)
-- ✅ **Interfaces**: CLI, Python API, MCP Server
+- ✅ **Storage**: Neo4j (primary), SQLite + ChromaDB (local)
+- ✅ **Interfaces**: CLI, Python API, MCP Server, REST API, Web Dashboard
 - ✅ **Basic Features**: Recording, Recall, Context Generation
 
-## Phase 2: Active Memory (Next Up)
+## Phase 2: Active Memory ✅ Mostly Complete
 
-Transform the system from passive note-taking to active participation.
+Active participation and automatic capture.
 
-### 2.1 Automatic Capture
-- **Git Integration**: Auto-record commits, detect breaking changes, and infer intent from diffs.
-- **Test Integration**: Record test failures as bugs; detect flaky tests.
-- **Conversation Capture**: Extract learnings and decisions from LLM conversations.
+### 2.1 Automatic Capture ✅
+- ✅ **Git Integration**: Auto-record commits, parse diffs, install hooks (`capture/git.py`)
+- ✅ **Test Integration**: Capture test activity (`capture/tests.py`)
+- ⏳ **Conversation Capture**: Extract learnings from LLM conversations (partial)
 
-### 2.2 Proactive Recall
-- **File Triggers**: Surface warnings, bugs, and patterns when files are opened.
-- **Error Matching**: Find similar past errors when exceptions occur.
-- **IDE Integrations**: Adapters for Claude Code, Cursor, and VS Code.
+### 2.2 Proactive Recall ✅
+- ✅ **File Triggers**: Surface warnings/bugs when files are opened (`recall/proactive.py`)
+- ✅ **Error Matching**: Find similar past errors (`ProactiveRecall.on_error`)
+- ✅ **IDE Integrations**: Claude Code, Cursor, Aider adapters (`hooks/`)
 
-### 2.3 Quality Management
-- **Deduplication**: Detect and merge duplicate memories.
-- **Conflict Resolution**: Identify contradictory information.
-- **Smart Compression**: Hierarchical summarization (events → patterns → principles).
+### 2.3 Quality Management ✅
+- ✅ **Deduplication**: Detect and merge duplicates (`quality/dedup.py`)
+- ⏳ **Conflict Resolution**: Identify contradictory information (partial)
+- ✅ **Smart Compression**: Hierarchical summarization (`core/compression.py`)
 
 ## Phase 3: Central Memory (Multi-Repo)
 
