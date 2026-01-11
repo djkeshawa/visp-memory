@@ -36,7 +36,8 @@ def build_frontend():
                 ["npm", "install"],
                 cwd=dashboard_dir,
                 check=True,
-                capture_output=False
+                capture_output=False,
+                shell=True
             )
         except subprocess.CalledProcessError as e:
             print(f"Warning: npm install failed: {e}")
@@ -54,7 +55,8 @@ def build_frontend():
             ["npm", "run", "export"],
             cwd=dashboard_dir,
             check=True,
-            capture_output=False
+            capture_output=False,
+            shell=True
         )
     except subprocess.CalledProcessError as e:
         print(f"Warning: Next.js build failed: {e}")
