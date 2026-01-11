@@ -1,28 +1,29 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working with code in this repository.
+
+---
 
 ## Project Overview
 
-LLM Memory is a human-inspired memory system for LLMs that provides persistent context across sessions. It implements three memory layers mimicking human cognition:
-- **Episodic Layer**: Event-based memories (what happened)
-- **Semantic Layer**: Extracted knowledge and patterns (what we know)
-- **Intent Layer**: Goals and current direction (where we're going)
+**LLM Memory** is a human-inspired memory system for LLMs that provides persistent context across sessions. It implements three memory layers:
+- **Episodic** - Event-based memories (what happened)
+- **Semantic** - Extracted knowledge and patterns (what we know)
+- **Intent** - Goals and current direction (where we're going)
 
 The system offers multiple interfaces: CLI tool, MCP server, FastAPI backend, and Next.js dashboard.
 
-## Development Commands
+---
+
+## Quick Commands
 
 ### Setup & Installation
 ```bash
 # Install development dependencies
 pip install -e ".[dev]"
 
-# Install all optional dependencies (recommended for development)
+# Install all optional dependencies
 pip install -e ".[all]"
-
-# Install Neo4j storage backend
-# Requires Neo4j running at bolt://localhost:7687
 ```
 
 ### Testing
@@ -30,19 +31,16 @@ pip install -e ".[all]"
 # Run all tests
 pytest
 
+# Run with verbose output and coverage
+pytest -v --cov=llm_memory
+
 # Run specific test file
 pytest tests/test_memory.py
-
-# Run with verbose output
-pytest -v
-
-# Run with asyncio support (for async tests)
-pytest --asyncio-mode=auto
 ```
 
-### Linting & Code Quality
+### Linting & Formatting
 ```bash
-# Run ruff linter
+# Check code
 ruff check .
 
 # Auto-fix issues
@@ -53,7 +51,6 @@ ruff format .
 ```
 
 ### Running the System
-
 ```bash
 # Initialize in a project
 llm-memory init --type code
@@ -65,233 +62,245 @@ llm-memory recall "search query"
 llm-memory context
 
 # Start API server
-python3 -m uvicorn llm_memory.server.app:app --port 8000
+uvicorn llm_memory.server.app:app --port 8000
 
 # Start dashboard (from llm-memory-dashboard directory)
-cd llm-memory-dashboard
-npm install
-npm run dev
+cd llm-memory-dashboard && npm install && npm run dev
 ```
 
-## Architecture
+---
 
-### Core Memory System (`src/llm_memory/core/`)
+## Architecture Overview
 
-**Memory (`memory.py`)**: The unified interface that coordinates all memory layers. This is the main entry point users interact with. It handles:
-- Automatic configuration discovery via `MemoryConfig.find_and_load()`
-- Storage backend selection (LocalStorage, RemoteStorage, or Neo4jStorage)
-- Routing operations to appropriate layers
-- Context generation for LLM injection
-- Memory compression and maintenance
+### Core Components
 
-**Storage Abstraction**: Three storage implementations all inherit from `BaseStorage`:
-- `LocalStorage` (`storage.py`): SQLite-based local storage
-- `Neo4jStorage` (`neo4j_storage.py`): Graph database with vector embeddings (default backend)
-- `RemoteStorage` (`remote_storage.py`): Client for API server mode
+**Memory System** (`src/llm_memory/core/`):
+- `memory.py` - Unified interface coordinating all layers
+- `storage.py` / `neo4j_storage.py` / `remote_storage.py` - Storage backends
+- `embeddings.py` - Vector embeddings for semantic search
+- `compression.py` - Compress episodics into semantic knowledge
 
-**Embeddings (`embeddings.py`)**: Handles vector embeddings via sentence-transformers, OpenAI, or Ollama. Used for semantic search across all memory layers.
+**Memory Layers** (`src/llm_memory/layers/`):
+- `episodic.py` - Time-bound events with categories
+- `semantic.py` - Timeless knowledge and patterns
+- `intent.py` - Current goals and constraints
 
-**Compression (`compression.py`)**: Compresses old episodic memories into semantic knowledge, optionally using LLMs for intelligent synthesis.
+**Interfaces** (`src/llm_memory/interfaces/`):
+- `cli.py` - Command-line interface (Typer + Rich)
+- `mcp.py` - Model Context Protocol server
 
-### Memory Layers (`src/llm_memory/layers/`)
+**Server** (`src/llm_memory/server/`):
+- `app.py` - FastAPI REST API
+- `static/` - Embedded Next.js dashboard
 
-Each layer inherits from `BaseMemoryLayer` and provides domain-specific methods:
+**Dashboard** (`llm-memory-dashboard/`):
+- Next.js app with TypeScript, Tailwind CSS, shadcn/ui
+- Graph visualization, intent management, memory stats
 
-**EpisodicMemory (`episodic.py`)**:
-- Stores time-bound events with categories (decisions, bugs, discoveries)
-- Helper methods: `record()`, `decision()`, `bug()`, `discovery()`
-- Events can be compressed into semantic knowledge over time
-
-**SemanticMemory (`semantic.py`)**:
-- Stores timeless knowledge extracted from experiences
-- Categories: invariants, patterns, warnings, conventions, known issues
-- Helper methods: `establish()`, `warn()`, `convention()`, `known_issue()`
-- Used for proactive context injection when working on specific areas
-
-**IntentMemory (`intent.py`)**:
-- Tracks current goals, focus areas, and constraints
-- Special intent types: `FOCUS:`, `CONSTRAINT:`, `WORKING ON:`
-- Highest priority memories - always included in context
-- Helper methods: `set_goal()`, `set_focus()`, `working_on()`, `add_constraint()`
-
-### Interfaces (`src/llm_memory/interfaces/`)
-
-**CLI (`cli.py`)**: Typer-based command-line interface with Rich formatting. Each command maps to Memory API methods.
-
-**MCP Server (`mcp.py`)**: Model Context Protocol server exposing memory tools to AI assistants. Tools include: `memory_recall`, `memory_record`, `memory_decision`, `memory_warn`, `memory_goal`, `memory_file_context`.
-
-### Configuration (`config.py`)
-
-Configuration uses Pydantic settings with environment variable support:
-- `MemoryConfig`: Top-level config with auto-discovery via `find_and_load()`
-- `StorageConfig`: Data directory, backend selection, Neo4j credentials
-- `EmbeddingConfig`: Embedding provider and model settings
-- `CompressionConfig`: Memory compression parameters
-- `CaptureConfig`: Automatic capture settings (git hooks, test results)
-
-Config discovery order:
-1. `llm-memory.yaml` in current directory
-2. `.llm-memory/config.yaml`
-3. Environment variables with `LLM_MEMORY_` prefix
-4. Default values
-
-### Repository Scoping
-
-**Default Behavior**: All memories are shared across workspace by default (no isolation). This enables cross-project learning and knowledge connections.
-
-**Optional Isolation**: Use `repo_id` parameter or `--repo` flag to isolate memories for specific projects. This should be rare - only for completely unrelated work.
-
-**Configuration**:
-- Per-command: `--repo client-xyz`
-- Persistent: `llm-memory init --repo client-xyz` (stored in config)
-- Environment: `export LLM_MEMORY_REPO_ID=client-xyz`
-
-When `repo_id` is set in config, it's automatically used for all operations unless overridden.
-
-### Web Dashboard (`llm-memory-dashboard/`)
-
-Next.js app with TypeScript:
-- Graph visualization of memory relationships
-- Intent management UI
-- Memory statistics and filtering
-- Connects to FastAPI backend at `http://localhost:8000`
-
-### Server/API (`src/llm_memory/server/`)
-
-FastAPI server (`app.py`) exposing REST endpoints:
-- `/memories`: List/search memories
-- `/memories/{id}`: Get specific memory
-- `/intents`: Manage goals and focus
-- `/stats`: Memory statistics
-- Schemas defined in `schemas.py`
+---
 
 ## Key Patterns & Conventions
 
 ### Memory IDs
-All memories have 16-character SHA256-based IDs generated from `content + timestamp`. This ensures uniqueness while being deterministic for the same content at the same time.
+All memories have 16-character SHA256-based IDs generated from `content + timestamp`. Ensures uniqueness while being deterministic.
 
 ### Importance Scoring
 - Range: 0.0 to 1.0
-- Decisions default to 0.7
-- Warnings default to 0.7-0.9
-- Regular events default to 0.5
+- Decisions: 0.7, Warnings: 0.7-0.9, Regular events: 0.5
 - Used for ranking and memory decay
 
-### Memory Decay
-Over time, unused memories decrease in importance via exponential decay (configurable halflife). This prevents context pollution with outdated information.
+### Repository Scoping
+**Default:** All memories shared across workspace (enables cross-project learning).
 
-### Compression Flow
-1. Episodic memories accumulate over time
-2. Compression process detects patterns (similar events, repeated issues)
-3. Multiple episodes compressed into single semantic memory
-4. Source episode IDs tracked via `source_ids` relationship
-5. Can use LLM-based compression for intelligent synthesis
+**Optional Isolation:** Use `repo_id` parameter or `--repo` flag for completely separate contexts:
+```bash
+llm-memory init --repo client-xyz
+llm-memory record "..." --repo project-name
+```
 
 ### Search & Recall
-- Uses vector embeddings for semantic search
-- Combines similarity scores with importance ratings
-- Results sorted by relevance: `similarity * 0.6 + importance * 0.4`
-- Cross-layer search supported via `Memory.recall()`
+- Vector embeddings for semantic search
+- Combines similarity (60%) + importance (40%)
+- Cross-layer search via `Memory.recall()`
 
 ### Context Generation
-`Memory.context()` generates markdown-formatted context for LLM injection:
-1. Current intent (focus, task, constraints) - always shown first
+`Memory.context()` generates markdown for LLM injection:
+1. Current intent (focus, task, constraints) - highest priority
 2. Semantic knowledge (warnings, conventions, known issues)
-3. Recent episodic history (last 5-10 events)
+3. Recent episodic history
 4. Metadata and statistics
 
-This format is optimized for system prompts or context windows.
+---
 
-## Testing Practices
+## Storage Backends
 
-- Fixtures use `tempfile.TemporaryDirectory()` for isolated test storage
-- Each test creates fresh `MemoryConfig` with temporary `data_dir`
-- Use `pytest.fixture` for shared `memory` instances
-- Test files follow pattern: `test_<module>.py`
-- Async tests supported via `pytest-asyncio`
+### Neo4j (Default)
+- Graph database with vector embeddings
+- Requires Neo4j 5.15+ with vector index support
+- Best for production, multi-repo, teams
 
-### Manual CLI Testing
-Test the system with real commands:
-```bash
-# Initialize and add memories
-llm-memory init --type code
-llm-memory decision "Architecture choice" "Reasoning here"
-llm-memory warn "file.py" "Watch out for race conditions"
-llm-memory record "Fixed bug X"
-
-# Search and retrieve
-llm-memory recall "bug fix"
-llm-memory inject --file "src/module.py"
-llm-memory find-error "AttributeError"
-
-# View state
-llm-memory status
-llm-memory list --limit 10
-llm-memory context
-```
-
-## Storage Backend Migration
-
-The codebase is currently migrating from SQLite to Neo4j as the default backend (now fully functional):
-- Neo4j provides graph relationships and vector search
-- Legacy LocalStorage (SQLite) still supported
-- All storage backends implement `BaseStorage` interface
-- Neo4j connection configured via environment variables or config
-
-When working with storage:
-- Always use the `BaseStorage` abstraction
-- Don't assume specific backend features
-- Test against multiple backends when possible
-- Neo4j requires vector index support (Neo4j 5.15+)
-
-### Backend-Specific Behaviors
-- **Deduplication**: Full batch dedup only works with LocalStorage (ChromaDB). Neo4j dedup requires content parameter.
-- **DateTime Handling**: Neo4j returns timezone-aware datetimes. Always use `datetime.now(timezone.utc)` for comparisons.
-- **Field Initialization**: Ensure all required fields (`accessed_at`, `created_at`, etc.) are initialized in storage operations.
-
-## Dashboard Development
-
-The Next.js dashboard is in `llm-memory-dashboard/`:
-- Uses TypeScript, React, and Tailwind CSS
-- shadcn/ui components in `components/ui/`
-- API integration via fetch to FastAPI backend
-- Graph visualization using D3.js or similar (check `components/`)
-
-When modifying dashboard:
-```bash
-cd llm-memory-dashboard
-npm install
-npm run dev  # Development server
-npm run build  # Production build
-npm run lint  # ESLint
-```
-
-## Important Notes
-
-### Neo4j Configuration
-Default Neo4j password is hardcoded in `config.py` (line 44). This should be changed for production use or configured via environment variables:
+**Configuration:**
 ```bash
 export NEO4J_URI=bolt://localhost:7687
 export NEO4J_USER=neo4j
 export NEO4J_PASSWORD=your_password
 ```
 
+### LocalStorage (Legacy)
+- SQLite + ChromaDB
+- No external dependencies
+- Best for local single-user development
+
+### RemoteStorage
+- HTTP client for FastAPI server
+- Best for shared team memory
+
+**See:** [Storage Backends Documentation](docs/development/STORAGE.md)
+
+---
+
+## Important Notes
+
+### Neo4j Configuration
+Default Neo4j password is hardcoded in `config.py:44`. **Change for production:**
+```bash
+export NEO4J_PASSWORD=secure_password
+```
+
 ### Vector Embeddings
-The system uses sentence-transformers by default for vector embeddings. Neo4jStorage and LocalStorage both accept an `embedding_fn` parameter which is automatically initialized from the embedding config. If embedding generation fails, the system falls back to property-based text filtering.
+- Uses sentence-transformers by default
+- Neo4jStorage and LocalStorage accept `embedding_fn` parameter
+- Auto-initialized from embedding config
+- Graceful fallback to text filtering if embeddings fail
 
 ### Memory Persistence
-- CLI operations persist immediately to storage backend
-- No in-memory caching by default - each operation hits storage
-- For batch operations, consider using API mode with remote server
+- CLI operations persist immediately to storage
+- No in-memory caching by default
+- Each operation hits storage backend
+- For batch operations, consider API mode with remote server
 
-### MCP Server Usage
-When Claude Desktop or other MCP clients use the server:
+### MCP Server
 - Tools execute in isolated contexts (new Memory instance per call)
 - Configuration auto-discovered each time
 - Heavy operations (compression, large recalls) may be slow
 
-### Proactive Recall
-The system supports proactive context injection:
-- `memory.relevant_for(task="...", files=["..."])` returns targeted context
-- File-triggered recall surfaces warnings and patterns for specific files
-- Used by MCP `memory_file_context` tool
+### Storage Backend Behaviors
+- **Deduplication**: Full batch dedup only works with LocalStorage (ChromaDB). Neo4j requires content parameter.
+- **DateTime**: Neo4j returns timezone-aware datetimes. Always use `datetime.now(timezone.utc)`.
+- **Field Initialization**: Ensure `accessed_at`, `created_at` are initialized in storage operations.
+
+---
+
+## Development Resources
+
+### Detailed Documentation
+- [Architecture Details](docs/development/ARCHITECTURE.md) - Core system, layers, interfaces
+- [Testing Guide](docs/development/TESTING.md) - Testing practices, fixtures, manual testing
+- [Storage Backends](docs/development/STORAGE.md) - Backend comparison, migration, configuration
+
+### Deployment Documentation
+- [Packaging & Distribution](docs/deployment/PACKAGING.md) - Build wheels, Docker, standalone executables
+- [Release Process](docs/deployment/RELEASING.md) - How to create releases
+- [Workflow Troubleshooting](docs/deployment/WORKFLOW-TROUBLESHOOTING.md) - GitHub Actions issues
+
+### Project Planning
+- [Roadmap](docs/ROADMAP.md) - Future phases and vision
+
+---
+
+## Testing Practices
+
+### Test Isolation
+- Use `tempfile.TemporaryDirectory()` for isolated storage
+- Each test creates fresh `MemoryConfig` with temporary `data_dir`
+- No shared state between tests
+
+### Running Tests
+```bash
+# All tests
+pytest
+
+# Specific backend
+export LLM_MEMORY_STORAGE_BACKEND=neo4j
+pytest tests/test_neo4j_storage.py
+
+# With coverage
+pytest --cov=llm_memory --cov-report=html
+```
+
+### Manual CLI Testing
+```bash
+llm-memory init --type code
+llm-memory decision "Use PostgreSQL" "Need ACID"
+llm-memory warn "file.py" "Watch for race conditions"
+llm-memory recall "bug fix"
+llm-memory inject --file "src/module.py"
+llm-memory status
+```
+
+**See:** [Testing Guide](docs/development/TESTING.md) for comprehensive testing documentation.
+
+---
+
+## Dashboard Development
+
+The Next.js dashboard is in `llm-memory-dashboard/`:
+
+```bash
+cd llm-memory-dashboard
+npm install
+npm run dev      # Development server
+npm run export   # Static export for embedding
+npm run build    # Production build
+npm run lint     # ESLint
+```
+
+**Tech Stack:** Next.js, TypeScript, Tailwind CSS, shadcn/ui, D3.js
+
+**Integration:** API calls to FastAPI backend at `http://localhost:8000`
+
+---
+
+## Common Issues
+
+### "python: command not found"
+Use `python3` instead of `python` in scripts and commands.
+
+### Vector embeddings not working
+Ensure `embedding_fn` is initialized before passing to storage backends. Check `config.embedding` (not `config.embeddings`).
+
+### Compression/decay failures
+- Use timezone-aware datetimes: `datetime.now(timezone.utc)`
+- Ensure `accessed_at` field exists on all memories
+
+### Dedup errors with Neo4j
+Neo4j dedup requires `--content` parameter. For full batch dedup, use LocalStorage backend.
+
+---
+
+## File References
+
+When referencing code, use the pattern `file_path:line_number`:
+- `compression.py:260` - DateTime comparison
+- `neo4j_storage.py:134` - Field initialization
+- `config.py:44` - Default Neo4j password
+
+---
+
+## Development Workflow
+
+1. **Read files first** - Never propose changes without reading the file
+2. **Use TodoWrite** - Track progress on complex tasks
+3. **Test thoroughly** - Run pytest before committing
+4. **Lint code** - Run ruff check and format
+5. **Avoid over-engineering** - Only make necessary changes
+6. **Document decisions** - Use commit messages or memory system
+
+---
+
+## Additional Context
+
+- Configuration discovery: `llm-memory.yaml` → `.llm-memory/config.yaml` → env vars → defaults
+- Proactive recall: `memory.relevant_for(task="...", files=["..."])` returns targeted context
+- File-triggered recall: Surfaces warnings/patterns when files are opened
+- Compression flow: Episodics → patterns → semantic memories (tracks `source_ids`)
