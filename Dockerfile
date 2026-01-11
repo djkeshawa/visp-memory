@@ -39,7 +39,7 @@ WORKDIR /app
 COPY --from=python-builder /app/dist/*.whl ./
 
 # Install the package with all dependencies
-RUN pip install --no-cache-dir *.whl[all] && \
+RUN pip install --no-cache-dir "$(ls *.whl)[all]" && \
     rm *.whl
 
 # Switch to non-root user
