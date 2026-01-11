@@ -4,7 +4,7 @@
 
 > **Vision**: A central, cross-functional memory that evolves with your team. Starting as a local tool for individuals, it will grow into a shared organizational brain that tracks context across multiple repositories.
 
-![LLM Memory Dashboard](https://raw.githubusercontent.com/yourusername/llm-memory/main/docs/dashboard-preview.png)
+![LLM Memory Dashboard](https://raw.githubusercontent.com/djkeshawa/llm-memory/main/docs/dashboard-preview.png)
 
 ---
 
@@ -12,10 +12,12 @@
 
 | File | Description |
 |------|-------------|
-| [**PACKAGING.md**](PACKAGING.md) | Detailed distribution guide (Docker, Standalone, Pip) |
-| [**ROADMAP.md**](ROADMAP.md) | Project vision and future phases |
-| [**BUGFIXES-2.md**](BUGFIXES-2.md) | Latest bug fixes (Jan 4, 2026) |
-| [**BUGFIXES.md**](BUGFIXES.md) | Previous bug fixes (Jan 3, 2026) |
+| [**docs/ROADMAP.md**](docs/ROADMAP.md) | Project vision and future phases |
+| [**docs/deployment/PACKAGING.md**](docs/deployment/PACKAGING.md) | Detailed distribution guide (Docker, Standalone, Pip) |
+| [**docs/deployment/RELEASING.md**](docs/deployment/RELEASING.md) | How to create releases |
+| [**docs/development/ARCHITECTURE.md**](docs/development/ARCHITECTURE.md) | System architecture and core components |
+| [**docs/development/TESTING.md**](docs/development/TESTING.md) | Testing practices and guidelines |
+| [**docs/development/STORAGE.md**](docs/development/STORAGE.md) | Storage backends comparison and configuration |
 
 ---
 
@@ -63,18 +65,28 @@ pip install llm-memory[all]
 Run the full system in a container (ideal for servers/teams).
 
 ```bash
-docker run -p 8000:8000 -v ~/.llm-memory:/data llm-memory:latest
+docker run -p 8000:8000 -v ~/.llm-memory:/data ghcr.io/djkeshawa/llm-memory:latest
 ```
 
 ### Method 3: Standalone Executable
 
 Updates for non-Python users. Download the latest release for your platform (Linux/macOS/Windows).
 
-1.  Download from [Releases](https://github.com/yourusername/llm-memory/releases)
+1.  Download from [Releases](https://github.com/djkeshawa/llm-memory/releases)
 2.  Extract the archive
 3.  Run `./llm-memory`
 
-For detailed build and distribution instructions, see [PACKAGING.md](PACKAGING.md).
+For detailed build and distribution instructions, see [docs/deployment/PACKAGING.md](docs/deployment/PACKAGING.md).
+
+### Uninstall
+
+```bash
+# Remove the package
+pip uninstall llm-memory
+
+# Optionally remove data directory
+rm -rf ~/.llm-memory
+```
 
 ---
 
@@ -194,7 +206,7 @@ If you want to contribute or modify the dashboard:
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/llm-memory.git
+git clone https://github.com/djkeshawa/llm-memory.git
 cd llm-memory
 
 # Install in editable mode
