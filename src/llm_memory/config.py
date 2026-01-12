@@ -8,7 +8,7 @@ Supports:
 """
 
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal, Optional, List, Dict, Any
 from pydantic import Field
 from pydantic_settings import BaseSettings
 import json
@@ -34,7 +34,7 @@ class StorageConfig(BaseSettings):
     backend: Literal["sqlite", "neo4j"] = "neo4j" # Default to neo4j for migration
 
     # Client-Server Mode
-    mode: Literal["local", "client"] = "local"
+    mode: Literal["local", "client", "server"] = "local"
     server_url: str = "http://localhost:8000"
     api_key: Optional[str] = Field(default=None, env="LLM_MEMORY_API_KEY")
 
@@ -129,6 +129,29 @@ class FeedbackConfig(BaseSettings):
         env_prefix = "LLM_MEMORY_FEEDBACK_"
 
 
+class ServerConfig(BaseSettings):
+    """Server configuration for shared mode."""
+
+    host: str = "0.0.0.0"
+    port: int = 8000
+
+    # Authentication
+    auth_enabled: bool = True
+    jwt_secret: str = Field(default="", env="LLM_MEMORY_JWT_SECRET")
+    jwt_algorithm: str = "HS256"
+    jwt_expiry_hours: int = 24
+
+    # API Key fallback (backward compatible)
+    api_keys: List[str] = Field(default_factory=list)
+
+    # Multi-tenancy
+    allow_anonymous: bool = False
+    default_team: Optional[str] = None
+
+    class Config:
+        env_prefix = "LLM_MEMORY_SERVER_"
+
+
 class MemoryConfig(BaseSettings):
     """Main configuration for LLM Memory system."""
 
@@ -140,6 +163,7 @@ class MemoryConfig(BaseSettings):
     # Sub-configurations
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
+    server: ServerConfig = Field(default_factory=ServerConfig)
     compression: CompressionConfig = Field(default_factory=CompressionConfig)
     capture: CaptureConfig = Field(default_factory=CaptureConfig)
     recall: RecallConfig = Field(default_factory=RecallConfig)

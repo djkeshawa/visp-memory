@@ -71,7 +71,7 @@ class BaseStorage(ABC):
         pass
 
     @abstractmethod
-    def get_active_intents(self) -> List[Dict[str, Any]]:
+    def get_active_intents(self, repo_id: str = None) -> List[Dict[str, Any]]:
         """Get active intents."""
         pass
 
@@ -565,14 +565,19 @@ class LocalStorage(BaseStorage):
 
         return intent_id
 
-    def get_active_intents(self) -> List[Dict[str, Any]]:
+    def get_active_intents(self, repo_id: str = None) -> List[Dict[str, Any]]:
         """Get all active intents, ordered by priority."""
+        query = "SELECT * FROM intents WHERE status = 'active'"
+        params = []
+        
+        if repo_id:
+            query += " AND repo_id = ?"
+            params.append(repo_id)
+            
+        query += " ORDER BY priority DESC, created_at DESC"
+        
         with self._get_db() as conn:
-            cursor = conn.execute("""
-                SELECT * FROM intents
-                WHERE status = 'active'
-                ORDER BY priority DESC, created_at DESC
-            """)
+            cursor = conn.execute(query, params)
             return [self._row_to_dict(row) for row in cursor.fetchall()]
 
     def complete_intent(self, intent_id: str) -> bool:

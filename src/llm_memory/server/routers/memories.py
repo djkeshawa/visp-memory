@@ -1,0 +1,197 @@
+from fastapi import APIRouter, Depends, HTTPException, Request
+from typing import List
+from datetime import datetime
+
+from llm_memory.server.schemas import MemoryCreate, MemoryResponse, MemoryUpdate, SearchQuery, RelationshipCreate
+from llm_memory.server.auth import get_current_user, UserContext
+from llm_memory.config import load_config
+
+# No prefix to maintain backward compatibility for /recall and /relationships
+router = APIRouter(tags=["memories"])
+
+@router.get("/memories", response_model=List[MemoryResponse])
+async def list_memories(
+    request: Request,
+    repo_id: str = None, 
+    user: UserContext = Depends(get_current_user)
+):
+    storage = request.app.state.storage
+    config = load_config()
+    memories = storage.list_memories(limit=50, repo_id=repo_id or config.repo_id)
+    return [
+        {
+            "id": m["id"],
+            "content": m["content"],
+            "layer": m["layer"],
+            "category": m["category"],
+            "repo_id": m.get("repo_id"),
+            "importance": m.get("importance", 0.5),
+            "tags": m.get("tags", []),
+            "metadata": m.get("metadata", {}),
+            "created_at": datetime.fromisoformat(m["created_at"]) if isinstance(m["created_at"], str) else m["created_at"],
+            "accessed_at": datetime.now()
+        } for m in memories
+    ]
+
+@router.post("/memories", response_model=MemoryResponse)
+async def create_memory(
+    request: Request,
+    memory: MemoryCreate, 
+    user: UserContext = Depends(get_current_user)
+):
+    storage = request.app.state.storage
+    config = load_config()
+    
+    # Add author attribution to metadata
+    metadata = memory.metadata or {}
+    metadata["author_id"] = user.user_id
+    if user.team_id:
+        metadata["team_id"] = user.team_id
+        
+    mem_id = storage.store_memory(
+        content=memory.content,
+        layer=memory.layer,
+        category=memory.category,
+        importance=memory.importance,
+        repo_id=memory.repo_id or config.repo_id,
+        tags=memory.tags,
+        metadata=metadata
+    )
+    return {
+        "id": mem_id,
+        **memory.model_dump(),
+        "created_at": datetime.now(),
+        "accessed_at": datetime.now()
+    }
+
+@router.get("/memories/{memory_id}", response_model=MemoryResponse)
+async def get_memory(
+    request: Request,
+    memory_id: str, 
+    user: UserContext = Depends(get_current_user)
+):
+    storage = request.app.state.storage
+    mem = storage.get_memory(memory_id)
+    if not mem:
+        raise HTTPException(status_code=404, detail="Memory not found")
+
+    return {
+        "id": mem["id"],
+        "content": mem["content"],
+        "layer": mem["layer"],
+        "category": mem["category"],
+        "repo_id": mem.get("repo_id"),
+        "importance": mem.get("importance", 0.5),
+        "tags": mem.get("tags", []),
+        "metadata": mem.get("metadata", {}),
+        "created_at": datetime.fromisoformat(mem["created_at"]) if isinstance(mem["created_at"], str) else mem["created_at"],
+        "accessed_at": datetime.now()
+    }
+
+@router.delete("/memories/{memory_id}")
+async def delete_memory(
+    request: Request,
+    memory_id: str, 
+    user: UserContext = Depends(get_current_user)
+):
+    storage = request.app.state.storage
+    success = storage.delete_memory(memory_id)
+    if not success:
+         raise HTTPException(status_code=404, detail="Memory not found")
+    return {"status": "deleted", "id": memory_id}
+
+@router.patch("/memories/{memory_id}")
+async def update_memory(
+    request: Request,
+    memory_id: str, 
+    update: MemoryUpdate, 
+    user: UserContext = Depends(get_current_user)
+):
+    storage = request.app.state.storage
+    
+    # Filter out None values
+    update_data = {k: v for k, v in update.model_dump().items() if v is not None}
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    success = storage.update_memory(memory_id, **update_data)
+    if not success:
+         raise HTTPException(status_code=404, detail="Memory not found")
+    return {"status": "updated", "id": memory_id}
+
+@router.post("/recall", response_model=List[MemoryResponse])
+async def recall(
+    request: Request,
+    query: SearchQuery, 
+    user: UserContext = Depends(get_current_user)
+):
+    storage = request.app.state.storage
+    config = load_config()
+    results = storage.search_memories(
+        query=query.query,
+        limit=query.limit,
+        repo_id=query.repo_id or config.repo_id
+    )
+    return [
+        {
+            "id": r["id"],
+            "content": r["content"],
+            "layer": r["layer"],
+            "category": r["category"],
+            "repo_id": r.get("repo_id"),
+            "importance": r.get("importance", 0.5),
+            "tags": r.get("tags", []),
+            "metadata": r.get("metadata", {}),
+            "created_at": datetime.fromisoformat(r["created_at"]) if isinstance(r["created_at"], str) else r["created_at"],
+            "accessed_at": datetime.now()
+        } for r in results
+    ]
+
+@router.get("/graph")
+async def get_graph_data(
+    request: Request,
+    repo_id: str = None, 
+    user: UserContext = Depends(get_current_user)
+):
+    """Get memory graph (nodes and edges)."""
+    storage = request.app.state.storage
+    config = load_config()
+    graph_repo_id = repo_id or config.repo_id
+    memories = storage.list_memories(limit=200, repo_id=graph_repo_id)
+    relationships = storage.get_all_relationships(repo_id=graph_repo_id)
+
+    return {
+        "nodes": [
+            {
+                "id": m["id"],
+                "group": m["layer"],
+                "label": m["content"][:30] + "..." if len(m["content"]) > 30 else m["content"],
+                "full_label": m["content"],
+                "radius": 5 + (m.get("importance", 0.5) * 5),
+                "layer": m["layer"]
+            } for m in memories
+        ],
+        "links": [
+            {
+                "source": r["source_id"],
+                "target": r["target_id"],
+                "value": r["strength"],
+                "label": r["relationship"]
+            } for r in relationships
+        ]
+    }
+
+@router.post("/relationships")
+async def create_relationship(
+    request: Request,
+    rel: RelationshipCreate, 
+    user: UserContext = Depends(get_current_user)
+):
+    storage = request.app.state.storage
+    rel_id = storage.add_relationship(
+        source_id=rel.source_id,
+        target_id=rel.target_id,
+        relationship=rel.relationship,
+        strength=rel.strength
+    )
+    return {"id": rel_id, "status": "created"}

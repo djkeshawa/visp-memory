@@ -32,7 +32,7 @@ dependencies = [
 [project.optional-dependencies]
 openai = ["openai>=1.0.0"]
 ollama = ["ollama>=0.1.0"]
-api = ["fastapi>=0.100.0", "uvicorn>=0.23.0"]
+api = ["fastapi>=0.100.0", "uvicorn>=0.23.0", "python-jose[cryptography]>=3.3.0", "passlib[bcrypt]>=1.7.4"]
 mcp = ["mcp>=0.1.0"]
 capture = [
     "gitpython>=3.1.0",
