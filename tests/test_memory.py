@@ -6,8 +6,6 @@ from pathlib import Path
 import pytest
 
 from llm_memory import Memory, MemoryConfig
-from llm_memory.layers.episodic import EpisodeCategory
-from llm_memory.layers.semantic import KnowledgeCategory
 
 
 @pytest.fixture
@@ -16,6 +14,7 @@ def memory():
     with tempfile.TemporaryDirectory() as tmpdir:
         config = MemoryConfig()
         config.storage.data_dir = Path(tmpdir)
+        config.embedding.provider = "noop"
         yield Memory(config=config)
 
 
@@ -186,6 +185,5 @@ class TestStats:
         stats = memory.stats()
         assert stats["total_memories"] >= 3
         assert "memories_by_layer" in stats
-
 
 

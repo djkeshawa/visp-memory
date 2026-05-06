@@ -1,10 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
-from typing import List
 from datetime import datetime
+from typing import List
 
-from llm_memory.server.schemas import MemoryCreate, MemoryResponse, MemoryUpdate, SearchQuery, RelationshipCreate
-from llm_memory.server.auth import get_current_user, UserContext
+from fastapi import APIRouter, Depends, HTTPException, Request
+
 from llm_memory.config import load_config
+from llm_memory.server.auth import UserContext, get_current_user
+from llm_memory.server.schemas import (
+    MemoryCreate,
+    MemoryResponse,
+    MemoryUpdate,
+    RelationshipCreate,
+    SearchQuery,
+)
 
 # No prefix to maintain backward compatibility for /recall and /relationships
 router = APIRouter(tags=["memories"])
@@ -12,12 +19,14 @@ router = APIRouter(tags=["memories"])
 @router.get("/memories", response_model=List[MemoryResponse])
 async def list_memories(
     request: Request,
-    repo_id: str = None, 
+    repo_id: str = None,
+    limit: int = 50,
     user: UserContext = Depends(get_current_user)
 ):
     storage = request.app.state.storage
     config = load_config()
-    memories = storage.list_memories(limit=50, repo_id=repo_id or config.repo_id)
+    limit = max(1, min(limit, 200))
+    memories = storage.list_memories(limit=limit, repo_id=repo_id or config.repo_id)
     return [
         {
             "id": m["id"],
@@ -29,25 +38,26 @@ async def list_memories(
             "tags": m.get("tags", []),
             "metadata": m.get("metadata", {}),
             "created_at": datetime.fromisoformat(m["created_at"]) if isinstance(m["created_at"], str) else m["created_at"],
-            "accessed_at": datetime.now()
+            "accessed_at": datetime.now(),
+            "similarity": m.get("similarity")
         } for m in memories
     ]
 
 @router.post("/memories", response_model=MemoryResponse)
 async def create_memory(
     request: Request,
-    memory: MemoryCreate, 
+    memory: MemoryCreate,
     user: UserContext = Depends(get_current_user)
 ):
     storage = request.app.state.storage
     config = load_config()
-    
+
     # Add author attribution to metadata
     metadata = memory.metadata or {}
     metadata["author_id"] = user.user_id
     if user.team_id:
         metadata["team_id"] = user.team_id
-        
+
     mem_id = storage.store_memory(
         content=memory.content,
         layer=memory.layer,
@@ -60,6 +70,8 @@ async def create_memory(
     return {
         "id": mem_id,
         **memory.model_dump(),
+        "metadata": metadata,
+        "repo_id": memory.repo_id or config.repo_id,
         "created_at": datetime.now(),
         "accessed_at": datetime.now()
     }
@@ -67,7 +79,7 @@ async def create_memory(
 @router.get("/memories/{memory_id}", response_model=MemoryResponse)
 async def get_memory(
     request: Request,
-    memory_id: str, 
+    memory_id: str,
     user: UserContext = Depends(get_current_user)
 ):
     storage = request.app.state.storage
@@ -85,13 +97,14 @@ async def get_memory(
         "tags": mem.get("tags", []),
         "metadata": mem.get("metadata", {}),
         "created_at": datetime.fromisoformat(mem["created_at"]) if isinstance(mem["created_at"], str) else mem["created_at"],
-        "accessed_at": datetime.now()
+        "accessed_at": datetime.now(),
+        "similarity": mem.get("similarity")
     }
 
 @router.delete("/memories/{memory_id}")
 async def delete_memory(
     request: Request,
-    memory_id: str, 
+    memory_id: str,
     user: UserContext = Depends(get_current_user)
 ):
     storage = request.app.state.storage
@@ -103,12 +116,12 @@ async def delete_memory(
 @router.patch("/memories/{memory_id}")
 async def update_memory(
     request: Request,
-    memory_id: str, 
-    update: MemoryUpdate, 
+    memory_id: str,
+    update: MemoryUpdate,
     user: UserContext = Depends(get_current_user)
 ):
     storage = request.app.state.storage
-    
+
     # Filter out None values
     update_data = {k: v for k, v in update.model_dump().items() if v is not None}
     if not update_data:
@@ -122,16 +135,24 @@ async def update_memory(
 @router.post("/recall", response_model=List[MemoryResponse])
 async def recall(
     request: Request,
-    query: SearchQuery, 
+    query: SearchQuery,
     user: UserContext = Depends(get_current_user)
 ):
     storage = request.app.state.storage
     config = load_config()
-    results = storage.search_memories(
-        query=query.query,
-        limit=query.limit,
-        repo_id=query.repo_id or config.repo_id
-    )
+    layers = query.layers or [None]
+    results = []
+    for layer in layers:
+        results.extend(
+            storage.search_memories(
+                query=query.query,
+                layer=layer,
+                limit=query.limit,
+                repo_id=query.repo_id or config.repo_id,
+            )
+        )
+    results.sort(key=lambda item: item.get("similarity", 0), reverse=True)
+    results = results[:query.limit]
     return [
         {
             "id": r["id"],
@@ -143,14 +164,15 @@ async def recall(
             "tags": r.get("tags", []),
             "metadata": r.get("metadata", {}),
             "created_at": datetime.fromisoformat(r["created_at"]) if isinstance(r["created_at"], str) else r["created_at"],
-            "accessed_at": datetime.now()
+            "accessed_at": datetime.now(),
+            "similarity": r.get("similarity")
         } for r in results
     ]
 
 @router.get("/graph")
 async def get_graph_data(
     request: Request,
-    repo_id: str = None, 
+    repo_id: str = None,
     user: UserContext = Depends(get_current_user)
 ):
     """Get memory graph (nodes and edges)."""
@@ -184,7 +206,7 @@ async def get_graph_data(
 @router.post("/relationships")
 async def create_relationship(
     request: Request,
-    rel: RelationshipCreate, 
+    rel: RelationshipCreate,
     user: UserContext = Depends(get_current_user)
 ):
     storage = request.app.state.storage

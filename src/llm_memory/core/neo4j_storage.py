@@ -2,16 +2,19 @@
 Neo4j Storage implementation for LLM Memory.
 """
 
-from typing import Optional, List, Dict, Any
-import json
 import hashlib
-from datetime import datetime
+import json
 import logging
-import re
-from neo4j import GraphDatabase
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
-from llm_memory.core.storage import BaseStorage, MemoryLayer
+try:
+    from neo4j import GraphDatabase
+except ImportError:  # pragma: no cover - exercised only when optional extra is absent
+    GraphDatabase = None
+
 from llm_memory.config import load_config
+from llm_memory.core.storage import BaseStorage, MemoryLayer
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +25,9 @@ class Neo4jStorage(BaseStorage):
 
     def __init__(self, uri: str = None, user: str = None, password: str = None, embedding_fn=None):
         """Initialize Neo4j driver."""
+        if GraphDatabase is None:
+            raise ImportError("neo4j is required for Neo4j storage: pip install llm-memory[neo4j]")
+
         config = load_config()
         self.uri = uri or config.storage.neo4j_uri
         self.user = user or config.storage.neo4j_user
@@ -88,6 +94,34 @@ class Neo4jStorage(BaseStorage):
             return json.loads(data)
         except (json.JSONDecodeError, TypeError):
             return data
+
+    @classmethod
+    def _node_to_dict(cls, node: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize Neo4j node properties to the storage dict contract."""
+        data = dict(node)
+        data.pop("embedding", None)
+
+        for field in ("metadata", "context"):
+            if field in data and isinstance(data[field], str):
+                data[field] = cls._json_deserialize(data[field])
+
+        for field in ("tags", "source_ids", "tech_stack", "memory_ids"):
+            if field in data and isinstance(data[field], str):
+                data[field] = cls._json_deserialize(data[field])
+            elif field in data and data[field] is None:
+                data[field] = []
+
+        for field in ("created_at", "updated_at", "accessed_at", "last_active"):
+            value = data.get(field)
+            if hasattr(value, "iso_format"):
+                data[field] = value.iso_format()
+            elif hasattr(value, "isoformat"):
+                data[field] = value.isoformat()
+
+        data.setdefault("tags", [])
+        data.setdefault("metadata", {})
+        data.setdefault("source_ids", [])
+        return data
 
     def store_memory(
         self,
@@ -497,7 +531,7 @@ class Neo4jStorage(BaseStorage):
     # Repository operations
     def store_repository(self, repo: Dict[str, Any]) -> str:
         repo_id = repo.get("id") or self._generate_id(repo["name"])
-        
+
         with self.driver.session() as session:
             session.run("""
                 MERGE (r:Repository {id: $id})
@@ -533,7 +567,7 @@ class Neo4jStorage(BaseStorage):
         if team_id:
             query += " WHERE r.team_id = $team_id"
             params["team_id"] = team_id
-        
+
         query += " RETURN r"
         with self.driver.session() as session:
             result = session.run(query, params)
@@ -542,7 +576,7 @@ class Neo4jStorage(BaseStorage):
     def add_repo_dependency(self, source_id: str, target_id: str, dep_type: str, version: str = None, notes: str = None) -> str:
         rel_type = dep_type.upper()
         rel_id = self._generate_id(f"{source_id}-{target_id}-{rel_type}")
-        
+
         with self.driver.session() as session:
             session.run(f"""
                 MATCH (a:Repository {{id: $source_id}}), (b:Repository {{id: $target_id}})

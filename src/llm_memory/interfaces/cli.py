@@ -147,13 +147,7 @@ def learn(
 ):
     """Establish semantic knowledge (something learned)."""
     memory = get_memory()
-    # Note: Memory.learn does not currently accept repo_id override in its signature (it uses config),
-    # but we should update it or temporarily set config.
-    # Actually I fixed Memory.learn to use config.repo_id. Ideally I should update Memory.learn to ACSEPT an override too.
-    # For now, let's inject it via config if passed.
-    if repo:
-        memory.config.repo_id = repo
-    mem_id = memory.learn(knowledge, category=category, importance=importance)
+    mem_id = memory.learn(knowledge, category=category, importance=importance, repo_id=repo)
     console.print(f"[green]Established:[/green] {knowledge[:60]}...")
 
 
@@ -166,8 +160,7 @@ def warn(
 ):
     """Add a warning about a fragile area."""
     memory = get_memory()
-    if repo: memory.config.repo_id = repo
-    mem_id = memory.warn(area, warning, severity)
+    mem_id = memory.warn(area, warning, severity, repo_id=repo)
     console.print(f"[yellow]Warning added for {area}:[/yellow] {warning}")
 
 
@@ -209,8 +202,7 @@ def goal(
 ):
     """Set a goal/intent."""
     memory = get_memory()
-    if repo: memory.config.repo_id = repo
-    intent_id = memory.goal(description, priority=priority, constraints=constraint)
+    intent_id = memory.goal(description, priority=priority, constraints=constraint, repo_id=repo)
     console.print(f"[green]Goal set:[/green] {description}")
 
 
@@ -235,8 +227,7 @@ def working(
 ):
     """Set current task."""
     memory = get_memory()
-    if repo: memory.config.repo_id = repo
-    intent_id = memory.working_on(task, files)
+    intent_id = memory.working_on(task, files, repo_id=repo)
     console.print(f"[green]Working on:[/green] {task}")
 
 

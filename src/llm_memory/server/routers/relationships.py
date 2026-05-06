@@ -1,8 +1,9 @@
 from typing import List
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
-from llm_memory.server.auth import get_current_user, UserContext
+from llm_memory.server.auth import UserContext, get_current_user
 
 router = APIRouter(prefix="/relationships", tags=["relationships"])
 
@@ -17,6 +18,7 @@ class RelationshipCreate(BaseModel):
 @router.get("", response_model=List[dict])
 async def list_relationships(
     request: Request,
+    repo_id: str = None,
     user: UserContext = Depends(get_current_user),
 ):
     """Get all relationships."""
@@ -26,7 +28,7 @@ async def list_relationships(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Storage backend does not support relationship listing",
         )
-    return storage.get_all_relationships()
+    return storage.get_all_relationships(repo_id=repo_id)
 
 
 @router.post("", response_model=dict)

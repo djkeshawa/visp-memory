@@ -3,10 +3,11 @@ Authentication and Authorization for LLM Memory Server.
 """
 
 from datetime import datetime, timedelta
-from typing import Optional, List
+from typing import Optional
+
+from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
-from fastapi import Depends, HTTPException, status, Request
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
 from llm_memory.config import load_config
@@ -29,11 +30,11 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
         expire = datetime.utcnow() + expires_delta
     else:
         expire = datetime.utcnow() + timedelta(hours=config.server.jwt_expiry_hours)
-    
+
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(
-        to_encode, 
-        config.server.jwt_secret, 
+        to_encode,
+        config.server.jwt_secret,
         algorithm=config.server.jwt_algorithm
     )
     return encoded_jwt
@@ -47,7 +48,15 @@ async def get_current_user(
     Supports both JWT and API key authentication.
     """
     config = load_config()
-    
+
+    if not config.server.auth_enabled:
+        return UserContext(
+            user_id="local",
+            username="local",
+            team_id=config.server.default_team,
+            is_admin=True,
+        )
+
     # 1. Check for API key in header (backward compatibility)
     api_key = request.headers.get("X-API-KEY")
     if api_key:
@@ -64,14 +73,14 @@ async def get_current_user(
                 username="admin",
                 is_admin=True
             )
-    
+
     # 2. Check for JWT in Bearer token
     if auth:
         token = auth.credentials
         try:
             payload = jwt.decode(
-                token, 
-                config.server.jwt_secret, 
+                token,
+                config.server.jwt_secret,
                 algorithms=[config.server.jwt_algorithm]
             )
             user_id: str = payload.get("sub")
@@ -80,7 +89,7 @@ async def get_current_user(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Invalid authentication token",
                 )
-            
+
             return UserContext(
                 user_id=user_id,
                 username=payload.get("username", user_id),
@@ -92,7 +101,7 @@ async def get_current_user(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Could not validate credentials",
             )
-    
+
     # 3. Allow anonymous if configured
     if config.server.allow_anonymous:
         return UserContext(
@@ -100,7 +109,7 @@ async def get_current_user(
             username="anonymous",
             team_id=config.server.default_team
         )
-    
+
     # 4. Fail if no auth
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,

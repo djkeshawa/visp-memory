@@ -6,14 +6,14 @@ Combines:
 - ChromaDB for vector embeddings (semantic search)
 """
 
-import sqlite3
-import json
 import hashlib
+import json
+import sqlite3
+from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Literal
-from contextlib import contextmanager
-from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Literal, Optional
 
 try:
     import chromadb
@@ -103,7 +103,7 @@ class BaseStorage(ABC):
         pass
 
     @abstractmethod
-    def get_all_relationships(self) -> List[Dict[str, Any]]:
+    def get_all_relationships(self, repo_id: str = None) -> List[Dict[str, Any]]:
         """Get all relationships."""
         pass
 
@@ -450,6 +450,12 @@ class LocalStorage(BaseStorage):
         metadata = metadata or {}
         source_ids = source_ids or []
 
+        if embedding is None and self._embedding_fn is not None:
+            try:
+                embedding = self._embedding_fn(content)
+            except Exception:
+                embedding = None
+
         # Store in SQLite
         with self._get_db() as conn:
             conn.execute("""
@@ -538,6 +544,7 @@ class LocalStorage(BaseStorage):
             List of matching memories with similarity scores
         """
         results = []
+        seen_ids = set()
 
         # Search each relevant layer's vector collection
         layers_to_search = [layer] if layer else ["episodic", "semantic", "intent"]
@@ -557,10 +564,17 @@ class LocalStorage(BaseStorage):
                 where["importance"] = {"$gte": min_importance}
 
             try:
+                query_kwargs = {
+                    "n_results": limit,
+                    "where": where if where else None,
+                }
+                if self._embedding_fn is not None:
+                    query_kwargs["query_embeddings"] = [self._embedding_fn(query)]
+                else:
+                    query_kwargs["query_texts"] = [query]
+
                 search_results = collection.query(
-                    query_texts=[query],
-                    n_results=limit,
-                    where=where if where else None
+                    **query_kwargs
                 )
 
                 if search_results["ids"] and search_results["ids"][0]:
@@ -570,6 +584,7 @@ class LocalStorage(BaseStorage):
 
                         memory = self.get_memory(mem_id)
                         if memory:
+                            seen_ids.add(mem_id)
                             memory["similarity"] = similarity
                             results.append(memory)
 
@@ -577,9 +592,83 @@ class LocalStorage(BaseStorage):
                 # Collection might be empty
                 pass
 
+        if len(results) < limit:
+            results.extend(
+                self._text_search_memories(
+                    query=query,
+                    layers=layers_to_search,
+                    repo_id=repo_id,
+                    category=category,
+                    limit=limit - len(results),
+                    min_importance=min_importance,
+                    exclude_ids=seen_ids,
+                )
+            )
+
         # Sort by similarity and limit
         results.sort(key=lambda x: x.get("similarity", 0), reverse=True)
         return results[:limit]
+
+    def _text_search_memories(
+        self,
+        query: str,
+        layers: List[str],
+        repo_id: str = None,
+        category: str = None,
+        limit: int = 10,
+        min_importance: float = 0.0,
+        exclude_ids: set[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Fallback SQLite search used when vector search is unavailable or incomplete."""
+        exclude_ids = exclude_ids or set()
+        terms = [term.lower() for term in query.split() if term.strip()]
+        sql = "SELECT * FROM memories WHERE importance >= ?"
+        params: list[Any] = [min_importance]
+
+        if layers:
+            placeholders = ", ".join("?" for _ in layers)
+            sql += f" AND layer IN ({placeholders})"
+            params.extend(layers)
+
+        if repo_id:
+            sql += " AND repo_id = ?"
+            params.append(repo_id)
+
+        if category:
+            sql += " AND category = ?"
+            params.append(category)
+
+        if terms:
+            sql += " AND ("
+            sql += " OR ".join("lower(content) LIKE ?" for _ in terms)
+            sql += ")"
+            params.extend(f"%{term}%" for term in terms)
+
+        sql += " ORDER BY importance DESC, created_at DESC LIMIT ?"
+        params.append(limit + len(exclude_ids))
+
+        with self._get_db() as conn:
+            cursor = conn.execute(sql, params)
+            rows = [self._row_to_dict(row) for row in cursor.fetchall()]
+
+        results = []
+        for row in rows:
+            if row["id"] in exclude_ids:
+                continue
+            row["similarity"] = self._text_similarity(query, row["content"])
+            results.append(row)
+            if len(results) >= limit:
+                break
+
+        return results
+
+    @staticmethod
+    def _text_similarity(query: str, content: str) -> float:
+        query_terms = {term.lower() for term in query.split() if term.strip()}
+        content_terms = {term.lower() for term in content.split() if term.strip()}
+        if not query_terms:
+            return 0.0
+        return len(query_terms & content_terms) / len(query_terms)
 
     def list_memories(
         self,
@@ -604,6 +693,17 @@ class LocalStorage(BaseStorage):
         if category:
             query += " AND category = ?"
             params.append(category)
+
+        allowed_order_by = {
+            "created_at DESC",
+            "created_at ASC",
+            "importance DESC",
+            "importance ASC",
+            "accessed_at DESC",
+            "accessed_at ASC",
+        }
+        if order_by not in allowed_order_by:
+            order_by = "created_at DESC"
 
         query += f" ORDER BY {order_by} LIMIT ?"
         params.append(limit)
@@ -651,7 +751,30 @@ class LocalStorage(BaseStorage):
                 params
             )
             conn.commit()
-            return cursor.rowcount > 0
+            updated = cursor.rowcount > 0
+
+        if updated and content is not None:
+            memory = self.get_memory(memory_id)
+            if memory:
+                collection = self._get_collection(memory["layer"])
+                if collection is not None:
+                    try:
+                        metadata_dict = {
+                            "category": memory.get("category", "general"),
+                            "importance": memory.get("importance", 0.5),
+                            "tags": self._json_serialize(memory.get("tags", [])),
+                        }
+                        if memory.get("repo_id"):
+                            metadata_dict["repo_id"] = memory["repo_id"]
+                        collection.update(
+                            ids=[memory_id],
+                            documents=[content],
+                            metadatas=[metadata_dict],
+                        )
+                    except Exception:
+                        pass
+
+        return updated
 
     def delete_memory(self, memory_id: str) -> bool:
         """Delete a memory from both stores."""
@@ -701,13 +824,13 @@ class LocalStorage(BaseStorage):
         """Get all active intents, ordered by priority."""
         query = "SELECT * FROM intents WHERE status = 'active'"
         params = []
-        
+
         if repo_id:
             query += " AND repo_id = ?"
             params.append(repo_id)
-            
+
         query += " ORDER BY priority DESC, created_at DESC"
-        
+
         with self._get_db() as conn:
             cursor = conn.execute(query, params)
             return [self._row_to_dict(row) for row in cursor.fetchall()]
@@ -765,10 +888,20 @@ class LocalStorage(BaseStorage):
             cursor = conn.execute(query, params)
             return [self._row_to_dict(row) for row in cursor.fetchall()]
 
-    def get_all_relationships(self) -> List[Dict[str, Any]]:
+    def get_all_relationships(self, repo_id: str = None) -> List[Dict[str, Any]]:
         """Get all relationships."""
+        query = "SELECT r.* FROM relationships r"
+        params = []
+        if repo_id:
+            query += """
+                JOIN memories source ON source.id = r.source_id
+                JOIN memories target ON target.id = r.target_id
+                WHERE source.repo_id = ? AND target.repo_id = ?
+            """
+            params.extend([repo_id, repo_id])
+
         with self._get_db() as conn:
-            cursor = conn.execute("SELECT * FROM relationships")
+            cursor = conn.execute(query, params)
             return [self._row_to_dict(row) for row in cursor.fetchall()]
 
     def start_session(self) -> str:
@@ -828,21 +961,29 @@ class LocalStorage(BaseStorage):
             cursor = conn.execute(f"SELECT COUNT(*) FROM memories{repo_filter}", repo_params)
             stats["total_memories"] = cursor.fetchone()[0]
 
-            # Intents - need to check if intents table has repo_id column
-            # For now, keep simple query as intents table doesn't have repo_id yet
-            cursor = conn.execute("SELECT COUNT(*) FROM intents WHERE status = 'active'")
+            intent_query = "SELECT COUNT(*) FROM intents WHERE status = 'active'"
+            intent_params = []
+            if repo_id:
+                intent_query += " AND repo_id = ?"
+                intent_params.append(repo_id)
+
+            cursor = conn.execute(intent_query, intent_params)
             stats["active_intents"] = cursor.fetchone()[0]
 
-            cursor = conn.execute("SELECT COUNT(*) FROM relationships")
+            rel_query = "SELECT COUNT(*) FROM relationships r"
+            rel_params = []
+            if repo_id:
+                rel_query += """
+                    JOIN memories source ON source.id = r.source_id
+                    JOIN memories target ON target.id = r.target_id
+                    WHERE source.repo_id = ? AND target.repo_id = ?
+                """
+                rel_params.extend([repo_id, repo_id])
+
+            cursor = conn.execute(rel_query, rel_params)
             stats["total_relationships"] = cursor.fetchone()[0]
 
             return stats
-
-    def get_all_relationships(self) -> List[Dict[str, Any]]:
-        """Get all relationships for graph visualization."""
-        with self._get_db() as conn:
-            cursor = conn.execute("SELECT * FROM relationships")
-            return [dict(row) for row in cursor.fetchall()]
 
     @staticmethod
     def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
@@ -859,7 +1000,7 @@ class LocalStorage(BaseStorage):
     # Repository operations
     def store_repository(self, repo: Dict[str, Any]) -> str:
         repo_id = repo.get("id") or self._generate_id(repo["name"])
-        
+
         with self._get_db() as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO repositories (id, name, url, description, tech_stack, team_id, metadata)
@@ -888,14 +1029,14 @@ class LocalStorage(BaseStorage):
         if team_id:
             query += " WHERE team_id = ?"
             params.append(team_id)
-        
+
         with self._get_db() as conn:
             cursor = conn.execute(query, params)
             return [self._row_to_dict(row) for row in cursor.fetchall()]
 
     def add_repo_dependency(self, source_id: str, target_id: str, dep_type: str, version: str = None, notes: str = None) -> str:
         dep_id = self._generate_id(f"{source_id}-{target_id}-{dep_type}")
-        
+
         with self._get_db() as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO repository_dependencies (id, source_repo_id, target_repo_id, dependency_type, version, notes)

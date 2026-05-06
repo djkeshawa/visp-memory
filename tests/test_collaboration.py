@@ -14,6 +14,7 @@ def client():
         app.state.storage = storage
         
         config = MemoryConfig()
+        config.embedding.provider = "noop"
         config.server = ServerConfig(api_keys=["test_key"], auth_enabled=True)
         config.storage.api_key = "test_key"
         

@@ -15,9 +15,9 @@ except ImportError:
     raise ImportError("FastAPI not installed. Run: pip install llm-memory[api]")
 
 from llm_memory.config import load_config
-from llm_memory.core.storage import LocalStorage
 from llm_memory.core.neo4j_storage import Neo4jStorage
-from llm_memory.server.routers import memories, intents, repositories, teams, relationships
+from llm_memory.core.storage import LocalStorage
+from llm_memory.server.routers import intents, memories, relationships, repositories, teams
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -78,14 +78,16 @@ async def root():
     except Exception as e:
         logger.error(f"Failed to get stats: {e}")
         stats = {}
-        
-    return {
+
+    response = {
         "status": "online",
         "version": "0.2.0",
         "timestamp": datetime.now().isoformat(),
         "storage_backend": config.storage.backend,
         "stats": stats
     }
+    response.update(stats)
+    return response
 
 # Mount static files for dashboard (if available)
 STATIC_DIR = Path(__file__).parent / "static"

@@ -2,9 +2,11 @@
 Pydantic schemas for the Memory Server API.
 """
 
-from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
 from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, Field
+
 
 class MemoryCreate(BaseModel):
     content: str
@@ -12,13 +14,14 @@ class MemoryCreate(BaseModel):
     category: str = "note"
     importance: float = 0.5
     repo_id: Optional[str] = None
-    tags: List[str] = []
-    metadata: Dict[str, Any] = {}
+    tags: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 class MemoryResponse(MemoryCreate):
     id: str
     created_at: datetime
     accessed_at: datetime
+    similarity: Optional[float] = None
 
 class SearchQuery(BaseModel):
     query: str
@@ -29,7 +32,8 @@ class SearchQuery(BaseModel):
 class IntentCreate(BaseModel):
     description: str
     priority: int = 1
-    context: Dict[str, Any] = {}
+    repo_id: Optional[str] = None
+    context: Dict[str, Any] = Field(default_factory=dict)
 
 class IntentResponse(IntentCreate):
     id: str
@@ -53,8 +57,8 @@ class RepositoryCreate(BaseModel):
     id: Optional[str] = None
     url: Optional[str] = None
     description: Optional[str] = None
-    tech_stack: List[str] = []
-    metadata: Dict[str, Any] = {}
+    tech_stack: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 class RepositoryResponse(RepositoryCreate):
     id: str
@@ -71,7 +75,7 @@ class UserCreate(BaseModel):
     id: Optional[str] = None
     email: Optional[str] = None
     display_name: Optional[str] = None
-    metadata: Dict[str, Any] = {}
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 class UserResponse(UserCreate):
     id: str
@@ -82,7 +86,7 @@ class TeamCreate(BaseModel):
     name: str
     id: Optional[str] = None
     description: Optional[str] = None
-    metadata: Dict[str, Any] = {}
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 class TeamResponse(TeamCreate):
     id: str

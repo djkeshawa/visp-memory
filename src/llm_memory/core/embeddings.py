@@ -160,10 +160,10 @@ class NoOpProvider(EmbeddingProvider):
         self._dimension = dimension
 
     def embed(self, text: str) -> List[float]:
-        return [0.0] * self._dimension
+        return [1.0] + ([0.0] * (self._dimension - 1))
 
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        return [[0.0] * self._dimension for _ in texts]
+        return [self.embed(text) for text in texts]
 
     @property
     def dimension(self) -> int:

@@ -7,11 +7,10 @@ that unit tests might miss (e.g., parameter mismatches between layers).
 
 import tempfile
 from pathlib import Path
-from typer.testing import CliRunner
 
 import pytest
+from typer.testing import CliRunner
 
-from llm_memory import MemoryConfig
 from llm_memory.interfaces.cli import app
 
 runner = CliRunner()
@@ -34,6 +33,7 @@ def cli_env(temp_dir):
 
     # Set backend to sqlite to avoid Neo4j dependency
     os.environ["LLM_MEMORY_STORAGE_BACKEND"] = "sqlite"
+    os.environ["LLM_MEMORY_EMBEDDING_PROVIDER"] = "noop"
 
     # Reset the global _memory instance in CLI module to avoid caching issues between tests
     import llm_memory.interfaces.cli as cli_module
@@ -46,6 +46,8 @@ def cli_env(temp_dir):
     os.chdir(old_cwd)
     if "LLM_MEMORY_STORAGE_BACKEND" in os.environ:
         del os.environ["LLM_MEMORY_STORAGE_BACKEND"]
+    if "LLM_MEMORY_EMBEDDING_PROVIDER" in os.environ:
+        del os.environ["LLM_MEMORY_EMBEDDING_PROVIDER"]
 
 
 class TestCLIBasicCommands:
@@ -108,6 +110,26 @@ class TestCLIBasicCommands:
         ])
         assert result.exit_code == 0
         assert "Established" in result.output
+
+    def test_repo_option_does_not_leak_between_commands(self, cli_env):
+        """A --repo override should apply only to the command that supplied it."""
+        runner.invoke(app, ["init", "--type", "code", "--repo", "default-repo"])
+
+        result_a = runner.invoke(app, ["learn", "Repo specific fact", "--repo", "repo-a"])
+        result_b = runner.invoke(app, ["learn", "Default repo fact"])
+
+        assert result_a.exit_code == 0
+        assert result_b.exit_code == 0
+
+        from llm_memory import Memory
+
+        memory = Memory()
+        repo_a = memory._storage.list_memories(repo_id="repo-a", layer="semantic")
+        default_repo = memory._storage.list_memories(repo_id="default-repo", layer="semantic")
+
+        assert any("Repo specific fact" in m["content"] for m in repo_a)
+        assert not any("Default repo fact" in m["content"] for m in repo_a)
+        assert any("Default repo fact" in m["content"] for m in default_repo)
 
     def test_stats_command(self, cli_env):
         """Test stats command (was broken with repo_id parameter)."""

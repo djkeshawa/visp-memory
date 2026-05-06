@@ -4,8 +4,8 @@ Remote Storage implementation (Client).
 Connects to the Central Memory Server via HTTP.
 """
 
-from typing import Optional, List, Dict, Any
 import logging
+from typing import Any, Dict, List, Optional
 
 try:
     import requests
@@ -36,7 +36,7 @@ class RemoteStorage(BaseStorage):
         self.api_key = api_key
         self.jwt_token = jwt_token
         self.session = requests.Session()
-        
+
         # Set authentication headers
         if jwt_token:
             self.session.headers.update({"Authorization": f"Bearer {jwt_token}"})
@@ -119,12 +119,19 @@ class RemoteStorage(BaseStorage):
         return None  # Remote storage doesn't expose vector collections directly
 
     # Intent Operations
-    def set_intent(self, description: str, priority: int = 0, context: Dict[str, Any] = None) -> str:
+    def set_intent(
+        self,
+        description: str,
+        priority: int = 0,
+        context: Dict[str, Any] = None,
+        repo_id: str = None,
+    ) -> str:
         try:
             payload = {
                 "description": description,
                 "priority": priority,
-                "context": context or {}
+                "context": context or {},
+                "repo_id": repo_id,
             }
             response = self.session.post(f"{self.server_url}/intents", json=payload)
             response.raise_for_status()
@@ -132,10 +139,13 @@ class RemoteStorage(BaseStorage):
         except requests.RequestException:
             return "error"
 
-    def get_active_intents(self) -> List[Dict[str, Any]]:
+    def get_active_intents(self, repo_id: str = None) -> List[Dict[str, Any]]:
         """Get active intents."""
         try:
-            response = self.session.get(f"{self.server_url}/intents")
+            params = {}
+            if repo_id:
+                params["repo_id"] = repo_id
+            response = self.session.get(f"{self.server_url}/intents", params=params)
             response.raise_for_status()
             # Filter for active ones client-side if needed, but endpoint returns list
             return [i for i in response.json() if i.get("status") == "active"]
@@ -167,10 +177,13 @@ class RemoteStorage(BaseStorage):
         # Not currently exposed via API explicitly
         return []
 
-    def get_all_relationships(self) -> List[Dict[str, Any]]:
+    def get_all_relationships(self, repo_id: str = None) -> List[Dict[str, Any]]:
         """Get all relationships."""
         try:
-            response = self.session.get(f"{self.server_url}/relationships")
+            params = {}
+            if repo_id:
+                params["repo_id"] = repo_id
+            response = self.session.get(f"{self.server_url}/relationships", params=params)
             if response.status_code == 404:
                 return []
             response.raise_for_status()
@@ -191,7 +204,8 @@ class RemoteStorage(BaseStorage):
         try:
             response = self.session.get(f"{self.server_url}/")
             if response.status_code == 200:
-                return response.json()
+                data = response.json()
+                return data.get("stats", data)
             return {}
         except requests.RequestException:
             return {}

@@ -7,11 +7,13 @@ Supports:
 - Programmatic configuration
 """
 
+import json
+import os
 from pathlib import Path
-from typing import Literal, Optional, List, Dict, Any
+from typing import List, Literal, Optional
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-import json
 
 
 class EmbeddingConfig(BaseSettings):
@@ -19,7 +21,14 @@ class EmbeddingConfig(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="LLM_MEMORY_EMBEDDING_", populate_by_name=True)
 
-    provider: Literal["sentence-transformers", "openai", "ollama", "custom"] = "sentence-transformers"
+    provider: Literal[
+        "sentence-transformers",
+        "openai",
+        "ollama",
+        "custom",
+        "none",
+        "noop",
+    ] = "sentence-transformers"
     model: str = "all-MiniLM-L6-v2"
     api_key: Optional[str] = Field(default=None, validation_alias="EMBEDDING_API_KEY")
     api_base: Optional[str] = Field(default=None, validation_alias="EMBEDDING_API_BASE")
@@ -187,7 +196,9 @@ class MemoryConfig(BaseSettings):
         else:
             data = json.loads(content)
 
-        return cls(**data)
+        config = cls(**data)
+        config.apply_env_overrides()
+        return config
 
     @classmethod
     def find_and_load(cls, start_dir: Path = None) -> "MemoryConfig":
@@ -205,6 +216,34 @@ class MemoryConfig(BaseSettings):
                     return config
 
         return cls()
+
+    def apply_env_overrides(self):
+        """Apply deployment environment overrides after file-based config loading."""
+        env_overrides = {
+            "LLM_MEMORY_REPO_ID": ("repo_id",),
+            "LLM_MEMORY_STORAGE_BACKEND": ("storage", "backend"),
+            "LLM_MEMORY_STORAGE_MODE": ("storage", "mode"),
+            "LLM_MEMORY_STORAGE_SERVER_URL": ("storage", "server_url"),
+            "LLM_MEMORY_API_KEY": ("storage", "api_key"),
+            "LLM_MEMORY_JWT_TOKEN": ("storage", "jwt_token"),
+            "NEO4J_URI": ("storage", "neo4j_uri"),
+            "NEO4J_USER": ("storage", "neo4j_user"),
+            "NEO4J_PASSWORD": ("storage", "neo4j_password"),
+            "LLM_MEMORY_EMBEDDING_PROVIDER": ("embedding", "provider"),
+            "LLM_MEMORY_EMBEDDING_MODEL": ("embedding", "model"),
+            "EMBEDDING_API_KEY": ("embedding", "api_key"),
+            "EMBEDDING_API_BASE": ("embedding", "api_base"),
+            "LLM_MEMORY_JWT_SECRET": ("server", "jwt_secret"),
+        }
+
+        for env_name, path in env_overrides.items():
+            if env_name not in os.environ:
+                continue
+
+            target = self
+            for attr in path[:-1]:
+                target = getattr(target, attr)
+            setattr(target, path[-1], os.environ[env_name])
 
     def save(self, path: Path):
         """Save configuration to file."""

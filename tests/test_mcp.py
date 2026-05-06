@@ -31,6 +31,7 @@ class TestMCPServer:
             with tempfile.TemporaryDirectory() as tmpdir:
                 config = MemoryConfig()
                 config.storage.data_dir = Path(tmpdir)
+                config.embedding.provider = "noop"
                 memory = Memory(config=config)
 
                 # Test memory_stats tool
@@ -51,6 +52,7 @@ class TestMCPServer:
             with tempfile.TemporaryDirectory() as tmpdir:
                 config = MemoryConfig()
                 config.storage.data_dir = Path(tmpdir)
+                config.embedding.provider = "noop"
                 memory = Memory(config=config)
 
                 result = await handle_tool(
