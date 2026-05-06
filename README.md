@@ -44,7 +44,16 @@ By injecting this pre-formed context, your LLM (Claude, ChatGPT, etc.) instantly
 | **CLI** | Command Line Tool | `llm-memory record`, `recall`, `decision`, `warn` |
 | **MCP Server** | Model Context Protocol | Exposes memory tools directly to Claude/IDE |
 | **Dashboard** | Web Interface | Graph visualization, intent management, stats |
-| **API** | REST API | Full programmatic access to memory graph |
+| **API** | REST API | Full programmatic access with JWT/API key auth |
+
+### 🆕 Phase 3 Features
+
+| Feature | Description |
+|---------|-------------|
+| **Multi-Repo Support** | Isolate memories by project, track dependencies |
+| **Team Collaboration** | User/team management, shared context |
+| **Cross-Repo Context** | Aggregate knowledge from dependent projects |
+| **JWT Authentication** | Secure API access with tokens |
 
 ---
 
@@ -144,6 +153,9 @@ export NEO4J_PASSWORD="your-password"
 | `NEO4J_USER` | Neo4j username | `neo4j` |
 | `NEO4J_PASSWORD` | Neo4j password | **Required** |
 | `LLM_MEMORY_REPO_ID` | Default project scope | *None* |
+| `LLM_MEMORY_API_KEY` | API key for server auth | *None* |
+| `LLM_MEMORY_JWT_TOKEN` | JWT token for client mode | *None* |
+| `LLM_MEMORY_JWT_SECRET` | Secret for JWT signing (server) | *None* |
 
 ---
 
@@ -235,6 +247,54 @@ llm-memory init --repo client-xyz
 llm-memory record "Secret stuff" --repo secret-project
 ```
 
+### Multi-Project Dependencies
+
+Track how projects relate to each other. Use either the CLI or the REST API.
+
+**Via CLI:**
+
+```bash
+# Register repositories
+llm-memory repos register my-app --desc "Main application"
+llm-memory repos register shared-lib --desc "Internal utilities"
+
+# Declare a dependency
+llm-memory repos dependency my-app shared-lib --type depends_on
+
+# List repositories (optionally scoped to a team)
+llm-memory repos list
+
+# Get cross-repo context (warnings + breaking changes pulled from dependencies)
+llm-memory repos context my-app
+```
+
+**Via REST API:**
+
+```bash
+# Register repositories
+curl -X POST http://localhost:8000/repos -d '{"name": "my-app", "id": "app"}' -H "X-API-Key: key"
+curl -X POST http://localhost:8000/repos -d '{"name": "shared-lib", "id": "lib"}' -H "X-API-Key: key"
+
+# Add dependency
+curl -X POST http://localhost:8000/repos/app/dependencies -d '{"target_repo_id": "lib"}' -H "X-API-Key: key"
+
+# Get cross-repo context (includes warnings from lib)
+curl http://localhost:8000/repos/app/context -H "X-API-Key: key"
+```
+
+### Teams
+
+Group users and attribute memories to a team. Useful for shared-server deployments.
+
+```bash
+# Create a team and a user, then add the user to the team
+llm-memory teams create "Platform"
+llm-memory teams user alice --email alice@example.com
+llm-memory teams add-member platform alice
+```
+
+The same operations are exposed under `/teams/*` on the REST API.
+
 ---
 
 ## 🛠️ Development
@@ -275,6 +335,8 @@ graph TD
         Intent["Intent Layer"]
         Semantic["Semantic Layer"]
         Episodic["Episodic Layer"]
+        Repo["Repository Manager"]
+        Team["Team Manager"]
     end
 
     subgraph Storage

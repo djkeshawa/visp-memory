@@ -52,6 +52,9 @@ class Neo4jStorage(BaseStorage):
             session.run("CREATE CONSTRAINT memory_id_unique IF NOT EXISTS FOR (m:Memory) REQUIRE m.id IS UNIQUE")
             session.run("CREATE CONSTRAINT intent_id_unique IF NOT EXISTS FOR (i:Intent) REQUIRE i.id IS UNIQUE")
             session.run("CREATE CONSTRAINT session_id_unique IF NOT EXISTS FOR (s:Session) REQUIRE s.id IS UNIQUE")
+            session.run("CREATE CONSTRAINT repo_id_unique IF NOT EXISTS FOR (r:Repository) REQUIRE r.id IS UNIQUE")
+            session.run("CREATE CONSTRAINT user_id_unique IF NOT EXISTS FOR (u:User) REQUIRE u.id IS UNIQUE")
+            session.run("CREATE CONSTRAINT team_id_unique IF NOT EXISTS FOR (t:Team) REQUIRE t.id IS UNIQUE")
 
             # Vector Index for embeddings (dim=384 for all-MiniLM-L6-v2)
             # Note: This assumes Neo4j 5.15+
@@ -491,18 +494,140 @@ class Neo4jStorage(BaseStorage):
 
             return stats
 
-    def _node_to_dict(self, node: Dict[str, Any]) -> Dict[str, Any]:
-        """Convert Neo4j node props to dict, deserializing JSON."""
-        d = dict(node)
-        for k in ["metadata", "context"]:
-            if k in d and isinstance(d[k], str):
-                d[k] = self._json_deserialize(d[k])
-        # Convert Neo4j DateTime to str compatible with Python
-        for k, v in d.items():
-            if hasattr(v, "isoformat"):
-                s = v.isoformat()
-                # Truncate nanoseconds (9 digits) to microseconds (6 digits)
-                # Matches .123456... and keeps .123456
-                s = re.sub(r'(\.\d{6})\d+', r'\1', s)
-                d[k] = s
-        return d
+    # Repository operations
+    def store_repository(self, repo: Dict[str, Any]) -> str:
+        repo_id = repo.get("id") or self._generate_id(repo["name"])
+        
+        with self.driver.session() as session:
+            session.run("""
+                MERGE (r:Repository {id: $id})
+                SET r += {
+                    name: $name,
+                    url: $url,
+                    description: $description,
+                    tech_stack: $tech_stack,
+                    team_id: $team_id,
+                    metadata: $metadata,
+                    created_at: coalesce(r.created_at, datetime())
+                }
+            """,
+                id=repo_id,
+                name=repo["name"],
+                url=repo.get("url"),
+                description=repo.get("description"),
+                tech_stack=repo.get("tech_stack", []),
+                team_id=repo.get("team_id"),
+                metadata=self._json_serialize(repo.get("metadata", {}))
+            )
+        return repo_id
+
+    def get_repository(self, repo_id: str) -> Optional[Dict[str, Any]]:
+        with self.driver.session() as session:
+            result = session.run("MATCH (r:Repository {id: $id}) RETURN r", id=repo_id)
+            record = result.single()
+            return self._node_to_dict(dict(record["r"])) if record else None
+
+    def list_repositories(self, team_id: str = None) -> List[Dict[str, Any]]:
+        query = "MATCH (r:Repository)"
+        params = {}
+        if team_id:
+            query += " WHERE r.team_id = $team_id"
+            params["team_id"] = team_id
+        
+        query += " RETURN r"
+        with self.driver.session() as session:
+            result = session.run(query, params)
+            return [self._node_to_dict(dict(rec["r"])) for rec in result]
+
+    def add_repo_dependency(self, source_id: str, target_id: str, dep_type: str, version: str = None, notes: str = None) -> str:
+        rel_type = dep_type.upper()
+        rel_id = self._generate_id(f"{source_id}-{target_id}-{rel_type}")
+        
+        with self.driver.session() as session:
+            session.run(f"""
+                MATCH (a:Repository {{id: $source_id}}), (b:Repository {{id: $target_id}})
+                MERGE (a)-[r:{rel_type}]->(b)
+                SET r.id = $rel_id, 
+                    r.version = $version, 
+                    r.notes = $notes,
+                    r.created_at = datetime()
+            """, source_id=source_id, target_id=target_id, rel_id=rel_id, version=version, notes=notes)
+        return rel_id
+
+    def get_repo_dependencies(self, repo_id: str) -> List[Dict[str, Any]]:
+        with self.driver.session() as session:
+            result = session.run("""
+                MATCH (a:Repository {id: $id})-[r]->(b:Repository)
+                RETURN b.id as target_id, type(r) as type, r.version as version, r.notes as notes
+            """, id=repo_id)
+            return [dict(rec) for rec in result]
+
+    # Team and User operations
+    def store_user(self, user: Dict[str, Any]) -> str:
+        user_id = user["id"]
+        with self.driver.session() as session:
+            session.run("""
+                MERGE (u:User {id: $id})
+                SET u += {
+                    username: $username,
+                    email: $email,
+                    display_name: $display_name,
+                    metadata: $metadata,
+                    created_at: coalesce(u.created_at, datetime()),
+                    last_active: datetime()
+                }
+            """,
+                id=user_id,
+                username=user["username"],
+                email=user.get("email"),
+                display_name=user.get("display_name"),
+                metadata=self._json_serialize(user.get("metadata", {}))
+            )
+        return user_id
+
+    def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
+        with self.driver.session() as session:
+            result = session.run("MATCH (u:User {id: $id}) RETURN u", id=user_id)
+            record = result.single()
+            return self._node_to_dict(dict(record["u"])) if record else None
+
+    def store_team(self, team: Dict[str, Any]) -> str:
+        team_id = team["id"]
+        with self.driver.session() as session:
+            session.run("""
+                MERGE (t:Team {id: $id})
+                SET t += {
+                    name: $name,
+                    description: $description,
+                    metadata: $metadata,
+                    created_at: coalesce(t.created_at, datetime())
+                }
+            """,
+                id=team_id,
+                name=team["name"],
+                description=team.get("description"),
+                metadata=self._json_serialize(team.get("metadata", {}))
+            )
+        return team_id
+
+    def get_team(self, team_id: str) -> Optional[Dict[str, Any]]:
+        with self.driver.session() as session:
+            result = session.run("MATCH (t:Team {id: $id}) RETURN t", id=team_id)
+            record = result.single()
+            return self._node_to_dict(dict(record["t"])) if record else None
+
+    def add_team_member(self, team_id: str, user_id: str) -> bool:
+        with self.driver.session() as session:
+            session.run("""
+                MATCH (t:Team {id: $team_id}), (u:User {id: $user_id})
+                MERGE (u)-[:MEMBER_OF]->(t)
+            """, team_id=team_id, user_id=user_id)
+        return True
+
+    def get_user_teams(self, user_id: str) -> List[Dict[str, Any]]:
+        with self.driver.session() as session:
+            result = session.run("""
+                MATCH (u:User {id: $id})-[:MEMBER_OF]->(t:Team)
+                RETURN t
+            """, id=user_id)
+            return [self._node_to_dict(dict(rec["t"])) for rec in result]

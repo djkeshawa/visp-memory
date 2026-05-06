@@ -22,6 +22,8 @@ from llm_memory.layers.episodic import EpisodicMemory, EpisodeCategory
 from llm_memory.layers.semantic import SemanticMemory, KnowledgeCategory
 from llm_memory.layers.intent import IntentMemory, IntentPriority
 from llm_memory.quality.dedup import Deduplicator
+from llm_memory.core.repository import RepositoryManager
+from llm_memory.core.team import TeamManager
 
 
 class Memory:
@@ -83,7 +85,8 @@ class Memory:
         if self.config.storage.mode == "client":
             self._storage = RemoteStorage(
                 server_url=self.config.storage.server_url,
-                api_key=self.config.storage.api_key
+                api_key=self.config.storage.api_key,
+                jwt_token=self.config.storage.jwt_token
             )
         elif self.config.storage.backend == "neo4j":
             self._storage = Neo4jStorage(
@@ -99,6 +102,10 @@ class Memory:
         self.episodic = EpisodicMemory(self._storage)
         self.semantic = SemanticMemory(self._storage)
         self.intent = IntentMemory(self._storage)
+        
+        # Initialize managers (Phase 3)
+        self.repos = RepositoryManager(self._storage)
+        self.teams = TeamManager(self._storage)
 
         # Initialize compressor
         compress_fn = None

@@ -17,7 +17,7 @@ except ImportError:
 from llm_memory.config import load_config
 from llm_memory.core.storage import LocalStorage
 from llm_memory.core.neo4j_storage import Neo4jStorage
-from llm_memory.server.routers import memories, intents
+from llm_memory.server.routers import memories, intents, repositories, teams, relationships
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -58,17 +58,16 @@ app.state.storage = storage
 # Include Routers
 app.include_router(memories.router)
 app.include_router(intents.router)
+app.include_router(repositories.router)
+app.include_router(teams.router)
+app.include_router(relationships.router)
 
-# Optional routers for Phase 3.2/3.3 (will be implemented in later steps)
+# Optional routers for Phase 3.4+ (to be implemented)
 try:
-    from llm_memory.server.routers import repositories, teams, analysis
-    if hasattr(repositories, "router"):
-        app.include_router(repositories.router)
-    if hasattr(teams, "router"):
-        app.include_router(teams.router)
+    from llm_memory.server.routers import analysis
     if hasattr(analysis, "router"):
         app.include_router(analysis.router)
-except (ImportError, AttributeError):
+except ImportError:
     pass
 
 @app.get("/", tags=["system"])

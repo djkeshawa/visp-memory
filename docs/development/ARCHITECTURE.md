@@ -318,9 +318,101 @@ REST API exposing memory operations.
 - `GET /intents` - Manage goals and focus
 - `GET /stats` - Memory statistics
 - `GET /dashboard` - Web dashboard (static files)
+- `GET /repos` - List repositories
+- `POST /repos` - Register repository
+- `GET /repos/{id}/context` - Cross-repo context
+- `POST /teams` - Create team
+- `GET /teams/{id}` - Get team
+- `POST /teams/users` - Create user
 
 **Schemas:**
 Defined in `schemas.py` using Pydantic models.
+
+---
+
+## Authentication (`server/auth.py`)
+
+Secure access control for the API.
+
+**Supported Methods:**
+- **JWT Tokens**: Bearer token authentication via `Authorization` header
+- **API Keys**: Legacy support via `X-API-Key` header
+
+**Configuration:**
+```yaml
+server:
+  auth_enabled: true
+  jwt_secret: your_secret_key
+  jwt_algorithm: HS256
+  jwt_expiry_hours: 24
+  api_keys:
+    - your_api_key_1
+    - your_api_key_2
+```
+
+**User Context:**
+Every authenticated request has a `UserContext` containing:
+- `user_id`: Unique identifier
+- `username`: Display name
+- `team_id`: Optional team affiliation
+
+---
+
+## Repository Management (`core/repository.py`)
+
+Repositories are first-class entities enabling project isolation and dependency tracking.
+
+**Core Models:**
+- `Repository`: Project metadata (name, URL, tech stack, team)
+- `RepositoryDependency`: Relationship between repos
+- `DependencyType`: Enum for dependency kinds (depends_on, imports, extends)
+
+**RepositoryManager:**
+- `register()`: Add a new repository
+- `get()`: Retrieve repository details
+- `list()`: List all repositories (optionally by team)
+- `add_dependency()`: Create repo-to-repo relationships
+- `get_dependencies()`: Get direct dependencies
+
+**Storage:**
+All storage backends support:
+- `store_repository()`, `get_repository()`, `list_repositories()`
+- `add_repo_dependency()`, `get_repo_dependencies()`
+
+---
+
+## Team Collaboration (`core/team.py`)
+
+User identity and team management for multi-user deployments.
+
+**Core Models:**
+- `User`: Identity with username, email, display name
+- `Team`: Group of users with shared access
+
+**TeamManager:**
+- `create_user()`, `get_user()`
+- `create_team()`, `get_team()`
+- `add_member()`: Add user to team
+- `get_user_teams()`: Get teams for a user
+
+**Storage:**
+All storage backends support:
+- `store_user()`, `get_user()`
+- `store_team()`, `get_team()`
+- `add_team_member()`, `get_user_teams()`
+
+---
+
+## Cross-Repo Context (`core/cross_repo.py`)
+
+Aggregates knowledge across related repositories.
+
+**CrossRepoContext:**
+- `get_context_for_repo()`: Returns warnings, breaking changes, and knowledge from a repo and its dependencies.
+- `search_across_repos()`: Unified search across multiple repos.
+
+**Use Case:**
+When working on Service A that depends on Library B, automatically surface warnings and breaking changes from Library B.
 
 ---
 
@@ -495,3 +587,35 @@ Current FastAPI server has no authentication. **Add authentication for productio
 - All memories stored locally by default
 - Remote mode shares data with server
 - Consider encryption for sensitive data
+
+---
+
+## New in Phase 3
+
+### Files Added
+- `core/repository.py` - Repository models and manager
+- `core/team.py` - User and team models
+- `core/cross_repo.py` - Cross-repository context aggregation
+- `server/auth.py` - JWT and API key authentication
+- `server/routers/repositories.py` - Repository API
+- `server/routers/teams.py` - Team and user API
+
+### Storage Extensions
+All storage backends now support:
+- Repository CRUD and dependency tracking
+- User and team management
+- Team membership relationships
+
+### Configuration Additions
+```yaml
+# llm-memory.yaml
+server:
+  auth_enabled: true
+  jwt_secret: your_secret
+  api_keys:
+    - key1
+    - key2
+
+storage:
+  jwt_token: your_jwt_token  # For client mode
+```

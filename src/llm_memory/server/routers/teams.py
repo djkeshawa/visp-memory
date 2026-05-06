@@ -1,0 +1,150 @@
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from typing import List
+from datetime import datetime
+
+from llm_memory.server.schemas import (
+    UserCreate,
+    UserResponse,
+    TeamCreate,
+    TeamResponse,
+    MemberAdd,
+)
+from llm_memory.server.auth import get_current_user, UserContext
+from llm_memory.core.team import User, Team, TeamManager
+
+router = APIRouter(prefix="/teams", tags=["teams"])
+
+
+# User Endpoints
+@router.post("/users", response_model=UserResponse)
+async def create_user(
+    request: Request,
+    user: UserCreate,
+    current_user: UserContext = Depends(get_current_user),
+):
+    """Create a new user."""
+    team_mgr = TeamManager(request.app.state.storage)
+
+    user_obj = User(
+        id=user.id or user.username.lower(),
+        username=user.username,
+        email=user.email,
+        display_name=user.display_name,
+        metadata=user.metadata or {},
+    )
+
+    try:
+        user_id = team_mgr.create_user(user_obj)
+    except NotImplementedError as e:
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(e))
+
+    return {
+        **user_obj.__dict__,
+        "id": user_id,
+        "created_at": datetime.now(),
+        "last_active": datetime.now(),
+    }
+
+
+@router.get("/users/{user_id}", response_model=UserResponse)
+async def get_user(
+    request: Request,
+    user_id: str,
+    current_user: UserContext = Depends(get_current_user),
+):
+    """Get user details."""
+    team_mgr = TeamManager(request.app.state.storage)
+    user = team_mgr.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    return {
+        **user.__dict__,
+        "created_at": user.created_at or datetime.now(),
+        "last_active": user.last_active or datetime.now(),
+    }
+
+
+# Team Endpoints
+@router.post("", response_model=TeamResponse)
+async def create_team(
+    request: Request,
+    team: TeamCreate,
+    current_user: UserContext = Depends(get_current_user),
+):
+    """Create a new team."""
+    team_mgr = TeamManager(request.app.state.storage)
+
+    team_obj = Team(
+        id=team.id or team.name.lower().replace(" ", "-"),
+        name=team.name,
+        description=team.description,
+        metadata=team.metadata or {},
+    )
+
+    try:
+        team_id = team_mgr.create_team(team_obj)
+    except NotImplementedError as e:
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(e))
+
+    return {
+        **team_obj.__dict__,
+        "id": team_id,
+        "created_at": datetime.now(),
+    }
+
+
+@router.get("/{team_id}", response_model=TeamResponse)
+async def get_team(
+    request: Request,
+    team_id: str,
+    current_user: UserContext = Depends(get_current_user),
+):
+    """Get team details."""
+    team_mgr = TeamManager(request.app.state.storage)
+    team = team_mgr.get_team(team_id)
+    if not team:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+
+    return {
+        **team.__dict__,
+        "created_at": team.created_at or datetime.now(),
+    }
+
+
+@router.post("/{team_id}/members")
+async def add_member(
+    request: Request,
+    team_id: str,
+    member: MemberAdd,
+    current_user: UserContext = Depends(get_current_user),
+):
+    """Add a member to a team."""
+    team_mgr = TeamManager(request.app.state.storage)
+    success = team_mgr.add_member(team_id, member.user_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Storage backend does not support team membership",
+        )
+
+    return {"status": "success"}
+
+
+@router.get("/users/{user_id}/teams", response_model=List[TeamResponse])
+async def get_user_teams(
+    request: Request,
+    user_id: str,
+    current_user: UserContext = Depends(get_current_user),
+):
+    """Get all teams for a user."""
+    team_mgr = TeamManager(request.app.state.storage)
+    teams = team_mgr.get_user_teams(user_id)
+
+    return [
+        {
+            **t.__dict__,
+            "created_at": t.created_at or datetime.now(),
+        }
+        for t in teams
+    ]

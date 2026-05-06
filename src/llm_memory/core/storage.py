@@ -66,7 +66,7 @@ class BaseStorage(ABC):
 
     # Intent Operations
     @abstractmethod
-    def set_intent(self, description: str, priority: int = 0, context: Dict[str, Any] = None) -> str:
+    def set_intent(self, description: str, priority: int = 0, context: Dict[str, Any] = None, repo_id: str = None) -> str:
         """Set a new intent."""
         pass
 
@@ -109,8 +109,65 @@ class BaseStorage(ABC):
 
     # Stats
     @abstractmethod
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self, repo_id: str = None) -> Dict[str, Any]:
         """Get statistics."""
+        pass
+
+    # Repository operations (Phase 3.2)
+    @abstractmethod
+    def store_repository(self, repo: Dict[str, Any]) -> str:
+        """Store a repository."""
+        pass
+
+    @abstractmethod
+    def get_repository(self, repo_id: str) -> Optional[Dict[str, Any]]:
+        """Get repository by ID."""
+        pass
+
+    @abstractmethod
+    def list_repositories(self, team_id: str = None) -> List[Dict[str, Any]]:
+        """List all repositories."""
+        pass
+
+    @abstractmethod
+    def add_repo_dependency(self, source_id: str, target_id: str, dep_type: str, version: str = None, notes: str = None) -> str:
+        """Add dependency between repos."""
+        pass
+
+    @abstractmethod
+    def get_repo_dependencies(self, repo_id: str) -> List[Dict[str, Any]]:
+        """Get repository dependencies."""
+        pass
+
+    # Team and User operations (Phase 3.3)
+    @abstractmethod
+    def store_user(self, user: Dict[str, Any]) -> str:
+        """Store a user."""
+        pass
+
+    @abstractmethod
+    def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get user by ID."""
+        pass
+
+    @abstractmethod
+    def store_team(self, team: Dict[str, Any]) -> str:
+        """Store a team."""
+        pass
+
+    @abstractmethod
+    def get_team(self, team_id: str) -> Optional[Dict[str, Any]]:
+        """Get team by ID."""
+        pass
+
+    @abstractmethod
+    def add_team_member(self, team_id: str, user_id: str) -> bool:
+        """Add member to team."""
+        pass
+
+    @abstractmethod
+    def get_user_teams(self, user_id: str) -> List[Dict[str, Any]]:
+        """Get all teams for a user."""
         pass
 
 
@@ -159,7 +216,7 @@ class LocalStorage(BaseStorage):
                 )
             """)
 
-            # Migration: Check if repo_id column exists
+            # Migration: Check if repo_id column exists in memories
             try:
                 conn.execute("SELECT repo_id FROM memories LIMIT 1")
             except sqlite3.OperationalError:
@@ -179,6 +236,14 @@ class LocalStorage(BaseStorage):
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+
+            # Migration: Check if repo_id column exists in intents
+            try:
+                conn.execute("SELECT repo_id FROM intents LIMIT 1")
+            except sqlite3.OperationalError:
+                # Column doesn't exist, add it
+                conn.execute("ALTER TABLE intents ADD COLUMN repo_id TEXT DEFAULT NULL")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_intents_repo ON intents(repo_id)")
 
             # Knowledge graph (relationships between memories)
             conn.execute("""
@@ -205,6 +270,68 @@ class LocalStorage(BaseStorage):
                 )
             """)
 
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS repositories (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    url TEXT,
+                    description TEXT,
+                    tech_stack TEXT DEFAULT '[]',
+                    team_id TEXT,
+                    metadata TEXT DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Team management (Phase 3.3)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id TEXT PRIMARY KEY,
+                    username TEXT NOT NULL UNIQUE,
+                    email TEXT,
+                    display_name TEXT,
+                    metadata TEXT DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS teams (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    metadata TEXT DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS team_members (
+                    team_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    role TEXT DEFAULT 'member',
+                    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (team_id, user_id),
+                    FOREIGN KEY (team_id) REFERENCES teams(id),
+                    FOREIGN KEY (user_id) REFERENCES users(id)
+                )
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS repository_dependencies (
+                    id TEXT PRIMARY KEY,
+                    source_repo_id TEXT NOT NULL,
+                    target_repo_id TEXT NOT NULL,
+                    dependency_type TEXT NOT NULL,
+                    version TEXT,
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (source_repo_id) REFERENCES repositories(id),
+                    FOREIGN KEY (target_repo_id) REFERENCES repositories(id)
+                )
+            """)
+
             # Indexes
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_layer ON memories(layer)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category)")
@@ -213,6 +340,8 @@ class LocalStorage(BaseStorage):
             conn.execute("CREATE INDEX IF NOT EXISTS idx_intents_status ON intents(status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_relationships_source ON relationships(source_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_relationships_target ON relationships(target_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_repos_team ON repositories(team_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_repo_deps_source ON repository_dependencies(source_repo_id)")
 
             conn.commit()
 
@@ -257,9 +386,11 @@ class LocalStorage(BaseStorage):
             try:
                 self._collections[layer] = client.get_collection(f"memories_{layer}")
             except Exception:
+                # Create collection with cosine distance for proper similarity scores
+                # ChromaDB uses "hnsw:space" parameter - "cosine", "l2", or "ip" (inner product)
                 self._collections[layer] = client.create_collection(
                     name=f"memories_{layer}",
-                    metadata={"description": f"Memory embeddings for {layer} layer"}
+                    metadata={"description": f"Memory embeddings for {layer} layer", "hnsw:space": "cosine"}
                 )
 
         return self._collections[layer]
@@ -550,7 +681,8 @@ class LocalStorage(BaseStorage):
         self,
         description: str,
         priority: int = 0,
-        context: Dict[str, Any] = None
+        context: Dict[str, Any] = None,
+        repo_id: str = None
     ) -> str:
         """Set a new intent (goal/direction)."""
         intent_id = self._generate_id(description)
@@ -558,9 +690,9 @@ class LocalStorage(BaseStorage):
 
         with self._get_db() as conn:
             conn.execute("""
-                INSERT INTO intents (id, description, priority, context)
-                VALUES (?, ?, ?, ?)
-            """, (intent_id, description, priority, self._json_serialize(context)))
+                INSERT INTO intents (id, description, priority, context, repo_id)
+                VALUES (?, ?, ?, ?, ?)
+            """, (intent_id, description, priority, self._json_serialize(context), repo_id))
             conn.commit()
 
         return intent_id
@@ -633,6 +765,12 @@ class LocalStorage(BaseStorage):
             cursor = conn.execute(query, params)
             return [self._row_to_dict(row) for row in cursor.fetchall()]
 
+    def get_all_relationships(self) -> List[Dict[str, Any]]:
+        """Get all relationships."""
+        with self._get_db() as conn:
+            cursor = conn.execute("SELECT * FROM relationships")
+            return [self._row_to_dict(row) for row in cursor.fetchall()]
+
     def start_session(self) -> str:
         """Start a new session for tracking."""
         session_id = self._generate_id("session")
@@ -656,31 +794,42 @@ class LocalStorage(BaseStorage):
             """, (summary, self._json_serialize(memory_ids), session_id))
             conn.commit()
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self, repo_id: str = None) -> Dict[str, Any]:
         """Get storage statistics."""
         with self._get_db() as conn:
             stats = {}
 
+            # Build WHERE clause for repo filtering
+            repo_filter = ""
+            repo_params = []
+            if repo_id:
+                repo_filter = " WHERE repo_id = ?"
+                repo_params = [repo_id]
+
             # Memory counts by layer
-            cursor = conn.execute("""
+            cursor = conn.execute(f"""
                 SELECT layer, COUNT(*) as count
                 FROM memories
+                {repo_filter}
                 GROUP BY layer
-            """)
+            """, repo_params)
             stats["memories_by_layer"] = dict(cursor.fetchall())
 
             # Memory counts by category
-            cursor = conn.execute("""
+            cursor = conn.execute(f"""
                 SELECT category, COUNT(*) as count
                 FROM memories
+                {repo_filter}
                 GROUP BY category
-            """)
+            """, repo_params)
             stats["memories_by_category"] = dict(cursor.fetchall())
 
             # Total counts
-            cursor = conn.execute("SELECT COUNT(*) FROM memories")
+            cursor = conn.execute(f"SELECT COUNT(*) FROM memories{repo_filter}", repo_params)
             stats["total_memories"] = cursor.fetchone()[0]
 
+            # Intents - need to check if intents table has repo_id column
+            # For now, keep simple query as intents table doesn't have repo_id yet
             cursor = conn.execute("SELECT COUNT(*) FROM intents WHERE status = 'active'")
             stats["active_intents"] = cursor.fetchone()[0]
 
@@ -701,8 +850,127 @@ class LocalStorage(BaseStorage):
         d = dict(row)
 
         # Parse JSON fields
-        for field in ["tags", "metadata", "source_ids", "memory_ids", "context"]:
+        for field in ["tags", "metadata", "source_ids", "memory_ids", "context", "tech_stack"]:
             if field in d and d[field]:
                 d[field] = LocalStorage._json_deserialize(d[field])
 
         return d
+
+    # Repository operations
+    def store_repository(self, repo: Dict[str, Any]) -> str:
+        repo_id = repo.get("id") or self._generate_id(repo["name"])
+        
+        with self._get_db() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO repositories (id, name, url, description, tech_stack, team_id, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                repo_id,
+                repo["name"],
+                repo.get("url"),
+                repo.get("description"),
+                self._json_serialize(repo.get("tech_stack", [])),
+                repo.get("team_id"),
+                self._json_serialize(repo.get("metadata", {}))
+            ))
+            conn.commit()
+        return repo_id
+
+    def get_repository(self, repo_id: str) -> Optional[Dict[str, Any]]:
+        with self._get_db() as conn:
+            cursor = conn.execute("SELECT * FROM repositories WHERE id = ?", (repo_id,))
+            row = cursor.fetchone()
+            return self._row_to_dict(row) if row else None
+
+    def list_repositories(self, team_id: str = None) -> List[Dict[str, Any]]:
+        query = "SELECT * FROM repositories"
+        params = []
+        if team_id:
+            query += " WHERE team_id = ?"
+            params.append(team_id)
+        
+        with self._get_db() as conn:
+            cursor = conn.execute(query, params)
+            return [self._row_to_dict(row) for row in cursor.fetchall()]
+
+    def add_repo_dependency(self, source_id: str, target_id: str, dep_type: str, version: str = None, notes: str = None) -> str:
+        dep_id = self._generate_id(f"{source_id}-{target_id}-{dep_type}")
+        
+        with self._get_db() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO repository_dependencies (id, source_repo_id, target_repo_id, dependency_type, version, notes)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (dep_id, source_id, target_id, dep_type, version, notes))
+            conn.commit()
+        return dep_id
+
+    def get_repo_dependencies(self, repo_id: str) -> List[Dict[str, Any]]:
+        with self._get_db() as conn:
+            cursor = conn.execute("""
+                SELECT target_repo_id as target_id, dependency_type as type, version, notes
+                FROM repository_dependencies
+                WHERE source_repo_id = ?
+            """, (repo_id,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    # Team and User operations
+    def store_user(self, user: Dict[str, Any]) -> str:
+        user_id = user["id"]
+        with self._get_db() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO users (id, username, email, display_name, metadata)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                user_id,
+                user["username"],
+                user.get("email"),
+                user.get("display_name"),
+                self._json_serialize(user.get("metadata", {}))
+            ))
+            conn.commit()
+        return user_id
+
+    def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
+        with self._get_db() as conn:
+            cursor = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+            row = cursor.fetchone()
+            return self._row_to_dict(row) if row else None
+
+    def store_team(self, team: Dict[str, Any]) -> str:
+        team_id = team["id"]
+        with self._get_db() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO teams (id, name, description, metadata)
+                VALUES (?, ?, ?, ?)
+            """, (
+                team_id,
+                team["name"],
+                team.get("description"),
+                self._json_serialize(team.get("metadata", {}))
+            ))
+            conn.commit()
+        return team_id
+
+    def get_team(self, team_id: str) -> Optional[Dict[str, Any]]:
+        with self._get_db() as conn:
+            cursor = conn.execute("SELECT * FROM teams WHERE id = ?", (team_id,))
+            row = cursor.fetchone()
+            return self._row_to_dict(row) if row else None
+
+    def add_team_member(self, team_id: str, user_id: str) -> bool:
+        with self._get_db() as conn:
+            conn.execute("""
+                INSERT OR IGNORE INTO team_members (team_id, user_id)
+                VALUES (?, ?)
+            """, (team_id, user_id))
+            conn.commit()
+        return True
+
+    def get_user_teams(self, user_id: str) -> List[Dict[str, Any]]:
+        with self._get_db() as conn:
+            cursor = conn.execute("""
+                SELECT t.* FROM teams t
+                JOIN team_members tm ON t.id = tm.team_id
+                WHERE tm.user_id = ?
+            """, (user_id,))
+            return [self._row_to_dict(row) for row in cursor.fetchall()]

@@ -20,21 +20,27 @@ logger = logging.getLogger(__name__)
 class RemoteStorage(BaseStorage):
     """Storage client that connects to a remote Central Memory Server."""
 
-    def __init__(self, server_url: str, api_key: str = None):
+    def __init__(self, server_url: str, api_key: str = None, jwt_token: str = None):
         """
         Initialize remote storage client.
 
         Args:
             server_url: Base URL of the server (e.g., http://localhost:8000)
             api_key: Optional API key for authentication
+            jwt_token: Optional JWT token for Bearer authentication (takes precedence)
         """
         if not REQUESTS_AVAILABLE:
             raise ImportError("requests is required for RemoteStorage. Install with: pip install requests")
 
         self.server_url = server_url.rstrip("/")
         self.api_key = api_key
+        self.jwt_token = jwt_token
         self.session = requests.Session()
-        if api_key:
+        
+        # Set authentication headers
+        if jwt_token:
+            self.session.headers.update({"Authorization": f"Bearer {jwt_token}"})
+        elif api_key:
             self.session.headers.update({"X-API-Key": api_key})
 
         # Test connection
@@ -42,6 +48,7 @@ class RemoteStorage(BaseStorage):
             self.session.get(f"{self.server_url}/")
         except requests.RequestException as e:
             logger.warning(f"Could not connect to memory server at {server_url}: {e}")
+
 
     def store_memory(self, content: str, layer: MemoryLayer = "episodic", repo_id: str = None, **kwargs) -> str:
         """Store a memory remotely."""
@@ -160,6 +167,17 @@ class RemoteStorage(BaseStorage):
         # Not currently exposed via API explicitly
         return []
 
+    def get_all_relationships(self) -> List[Dict[str, Any]]:
+        """Get all relationships."""
+        try:
+            response = self.session.get(f"{self.server_url}/relationships")
+            if response.status_code == 404:
+                return []
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException:
+            return []
+
     # Session Operations
     def start_session(self) -> str:
         return "session_remote"
@@ -177,3 +195,108 @@ class RemoteStorage(BaseStorage):
             return {}
         except requests.RequestException:
             return {}
+
+    # Repository Operations
+    def store_repository(self, repo: Dict[str, Any]) -> str:
+        try:
+            response = self.session.post(f"{self.server_url}/repos", json=repo)
+            response.raise_for_status()
+            return response.json()["id"]
+        except requests.RequestException:
+            return "error"
+
+    def get_repository(self, repo_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            response = self.session.get(f"{self.server_url}/repos/{repo_id}")
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException:
+            return None
+
+    def list_repositories(self, team_id: str = None) -> List[Dict[str, Any]]:
+        try:
+            params = {}
+            if team_id:
+                params["team_id"] = team_id
+            response = self.session.get(f"{self.server_url}/repos", params=params)
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException:
+            return []
+
+    def add_repo_dependency(self, source_id: str, target_id: str, dep_type: str, version: str = None, notes: str = None) -> str:
+        try:
+            payload = {
+                "target_repo_id": target_id,
+                "dependency_type": dep_type,
+                "version": version,
+                "notes": notes
+            }
+            response = self.session.post(f"{self.server_url}/repos/{source_id}/dependencies", json=payload)
+            response.raise_for_status()
+            return response.json().get("id", "ok")
+        except requests.RequestException:
+            return "error"
+
+    def get_repo_dependencies(self, repo_id: str) -> List[Dict[str, Any]]:
+        try:
+            response = self.session.get(f"{self.server_url}/repos/{repo_id}/dependencies")
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException:
+            return []
+
+    # Team and User Operations
+    def store_user(self, user: Dict[str, Any]) -> str:
+        try:
+            response = self.session.post(f"{self.server_url}/teams/users", json=user)
+            response.raise_for_status()
+            return response.json()["id"]
+        except requests.RequestException:
+            return "error"
+
+    def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            response = self.session.get(f"{self.server_url}/teams/users/{user_id}")
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException:
+            return None
+
+    def store_team(self, team: Dict[str, Any]) -> str:
+        try:
+            response = self.session.post(f"{self.server_url}/teams", json=team)
+            response.raise_for_status()
+            return response.json()["id"]
+        except requests.RequestException:
+            return "error"
+
+    def get_team(self, team_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            response = self.session.get(f"{self.server_url}/teams/{team_id}")
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException:
+            return None
+
+    def add_team_member(self, team_id: str, user_id: str) -> bool:
+        try:
+            payload = {"user_id": user_id}
+            response = self.session.post(f"{self.server_url}/teams/{team_id}/members", json=payload)
+            return response.status_code == 200
+        except requests.RequestException:
+            return False
+
+    def get_user_teams(self, user_id: str) -> List[Dict[str, Any]]:
+        try:
+            response = self.session.get(f"{self.server_url}/teams/users/{user_id}/teams")
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException:
+            return []

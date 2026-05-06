@@ -47,3 +47,46 @@ class RelationshipCreate(BaseModel):
     target_id: str
     relationship: str
     strength: float = 1.0
+
+class RepositoryCreate(BaseModel):
+    name: str
+    id: Optional[str] = None
+    url: Optional[str] = None
+    description: Optional[str] = None
+    tech_stack: List[str] = []
+    metadata: Dict[str, Any] = {}
+
+class RepositoryResponse(RepositoryCreate):
+    id: str
+    created_at: datetime
+
+class DependencyCreate(BaseModel):
+    target_repo_id: str
+    dependency_type: str = "depends_on"
+    version: Optional[str] = None
+    notes: Optional[str] = None
+
+class UserCreate(BaseModel):
+    username: str
+    id: Optional[str] = None
+    email: Optional[str] = None
+    display_name: Optional[str] = None
+    metadata: Dict[str, Any] = {}
+
+class UserResponse(UserCreate):
+    id: str
+    created_at: datetime
+    last_active: datetime
+
+class TeamCreate(BaseModel):
+    name: str
+    id: Optional[str] = None
+    description: Optional[str] = None
+    metadata: Dict[str, Any] = {}
+
+class TeamResponse(TeamCreate):
+    id: str
+    created_at: datetime
+
+class MemberAdd(BaseModel):
+    user_id: str

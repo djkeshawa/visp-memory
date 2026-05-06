@@ -10,45 +10,46 @@ Supports:
 from pathlib import Path
 from typing import Literal, Optional, List, Dict, Any
 from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 import json
 
 
 class EmbeddingConfig(BaseSettings):
     """Embedding provider configuration."""
 
+    model_config = SettingsConfigDict(env_prefix="LLM_MEMORY_EMBEDDING_", populate_by_name=True)
+
     provider: Literal["sentence-transformers", "openai", "ollama", "custom"] = "sentence-transformers"
     model: str = "all-MiniLM-L6-v2"
-    api_key: Optional[str] = Field(default=None, env="EMBEDDING_API_KEY")
-    api_base: Optional[str] = Field(default=None, env="EMBEDDING_API_BASE")
-
-    class Config:
-        env_prefix = "LLM_MEMORY_EMBEDDING_"
+    api_key: Optional[str] = Field(default=None, validation_alias="EMBEDDING_API_KEY")
+    api_base: Optional[str] = Field(default=None, validation_alias="EMBEDDING_API_BASE")
 
 
 class StorageConfig(BaseSettings):
     """Storage configuration."""
 
+    model_config = SettingsConfigDict(env_prefix="LLM_MEMORY_STORAGE_", populate_by_name=True)
+
     data_dir: Path = Path(".llm-memory/data")
     vector_db: Literal["chroma", "memory"] = "chroma"
-    backend: Literal["sqlite", "neo4j"] = "neo4j" # Default to neo4j for migration
+    backend: Literal["sqlite", "neo4j"] = "sqlite"  # Default to sqlite for ease of use
 
     # Client-Server Mode
     mode: Literal["local", "client", "server"] = "local"
     server_url: str = "http://localhost:8000"
-    api_key: Optional[str] = Field(default=None, env="LLM_MEMORY_API_KEY")
+    api_key: Optional[str] = Field(default=None, validation_alias="LLM_MEMORY_API_KEY")
+    jwt_token: Optional[str] = Field(default=None, validation_alias="LLM_MEMORY_JWT_TOKEN")
 
     # Neo4j Configuration
-    neo4j_uri: str = Field(default="bolt://localhost:7687", env="NEO4J_URI")
-    neo4j_user: str = Field(default="neo4j", env="NEO4J_USER")
-    neo4j_password: str = Field(default="", env="NEO4J_PASSWORD")
-
-    class Config:
-        env_prefix = "LLM_MEMORY_STORAGE_"
+    neo4j_uri: str = Field(default="bolt://localhost:7687", validation_alias="NEO4J_URI")
+    neo4j_user: str = Field(default="neo4j", validation_alias="NEO4J_USER")
+    neo4j_password: str = Field(default="", validation_alias="NEO4J_PASSWORD")
 
 
 class CompressionConfig(BaseSettings):
     """Memory compression configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="LLM_MEMORY_COMPRESSION_", populate_by_name=True)
 
     # When to compress episodic memories to semantic
     episodic_threshold: int = 10  # After N related episodes
@@ -60,12 +61,11 @@ class CompressionConfig(BaseSettings):
     llm_provider: Optional[Literal["openai", "ollama", "anthropic"]] = None
     llm_model: Optional[str] = None
 
-    class Config:
-        env_prefix = "LLM_MEMORY_COMPRESSION_"
-
 
 class CaptureConfig(BaseSettings):
     """Automatic capture configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="LLM_MEMORY_CAPTURE_", populate_by_name=True)
 
     # Git capture settings
     git_enabled: bool = True
@@ -81,63 +81,58 @@ class CaptureConfig(BaseSettings):
     llm_provider: Optional[Literal["openai", "ollama", "anthropic"]] = None
     llm_model: Optional[str] = None
 
-    class Config:
-        env_prefix = "LLM_MEMORY_CAPTURE_"
-
 
 class RecallConfig(BaseSettings):
     """Proactive recall configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="LLM_MEMORY_RECALL_", populate_by_name=True)
 
     proactive: bool = True
     file_triggered: bool = True
     error_matching: bool = True
 
-    class Config:
-        env_prefix = "LLM_MEMORY_RECALL_"
-
 
 class AnalysisConfig(BaseSettings):
     """Pattern detection and analysis configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="LLM_MEMORY_ANALYSIS_", populate_by_name=True)
 
     pattern_detection: bool = True
     auto_extract: bool = True
     run_interval_hours: int = 24
 
-    class Config:
-        env_prefix = "LLM_MEMORY_ANALYSIS_"
-
 
 class QualityConfig(BaseSettings):
     """Memory quality management configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="LLM_MEMORY_QUALITY_", populate_by_name=True)
 
     deduplication: bool = True
     similarity_threshold: float = 0.9
     conflict_detection: bool = True
 
-    class Config:
-        env_prefix = "LLM_MEMORY_QUALITY_"
-
 
 class FeedbackConfig(BaseSettings):
     """Feedback and validation configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="LLM_MEMORY_FEEDBACK_", populate_by_name=True)
 
     collection: bool = True
     auto_validate: bool = True
     validate_interval_hours: int = 168  # Weekly
 
-    class Config:
-        env_prefix = "LLM_MEMORY_FEEDBACK_"
-
 
 class ServerConfig(BaseSettings):
     """Server configuration for shared mode."""
+
+    model_config = SettingsConfigDict(env_prefix="LLM_MEMORY_SERVER_", populate_by_name=True)
 
     host: str = "0.0.0.0"
     port: int = 8000
 
     # Authentication
     auth_enabled: bool = True
-    jwt_secret: str = Field(default="", env="LLM_MEMORY_JWT_SECRET")
+    jwt_secret: str = Field(default="", validation_alias="LLM_MEMORY_JWT_SECRET")
     jwt_algorithm: str = "HS256"
     jwt_expiry_hours: int = 24
 
@@ -148,17 +143,16 @@ class ServerConfig(BaseSettings):
     allow_anonymous: bool = False
     default_team: Optional[str] = None
 
-    class Config:
-        env_prefix = "LLM_MEMORY_SERVER_"
-
 
 class MemoryConfig(BaseSettings):
     """Main configuration for LLM Memory system."""
 
+    model_config = SettingsConfigDict(env_prefix="LLM_MEMORY_", populate_by_name=True)
+
     # Project identification
     project_name: str = "default"
     project_type: Literal["code", "writing", "research", "general"] = "general"
-    repo_id: Optional[str] = Field(default=None, env="LLM_MEMORY_REPO_ID")
+    repo_id: Optional[str] = Field(default=None, validation_alias="LLM_MEMORY_REPO_ID")
 
     # Sub-configurations
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
@@ -175,9 +169,6 @@ class MemoryConfig(BaseSettings):
     auto_compress: bool = True  # Automatically compress old memories
     decay_enabled: bool = True  # Let unused memories fade
     decay_halflife_days: int = 30  # How quickly memories fade
-
-    class Config:
-        env_prefix = "LLM_MEMORY_"
 
     @classmethod
     def from_file(cls, path: Path) -> "MemoryConfig":

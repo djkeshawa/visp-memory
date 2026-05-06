@@ -331,9 +331,16 @@ HTTP client for remote LLM Memory server.
 
 ```yaml
 storage:
-  backend: remote
+  mode: client
   server_url: http://localhost:8000
-  api_key: your_api_key  # Optional
+  api_key: your_api_key       # Optional - API key auth
+  jwt_token: your_jwt_token   # Optional - JWT auth (takes precedence)
+```
+
+**Environment Variables:**
+```bash
+export LLM_MEMORY_API_KEY=your_api_key
+export LLM_MEMORY_JWT_TOKEN=your_jwt_token
 ```
 
 ### Server Setup
@@ -353,8 +360,9 @@ from llm_memory.core.config import MemoryConfig, StorageConfig
 
 config = MemoryConfig(
     storage=StorageConfig(
-        backend="remote",
-        server_url="http://localhost:8000"
+        mode="client",
+        server_url="http://localhost:8000",
+        jwt_token="your_jwt_token"  # or api_key="your_key"
     )
 )
 
@@ -458,7 +466,63 @@ class BaseStorage(ABC):
     def get_all_memories(self, layer: str = None, repo_id: str = None) -> dict:
         """Get all memories, optionally filtered by layer/repo."""
         pass
-```
+
+    # Repository Operations (Phase 3.2)
+    @abstractmethod
+    def store_repository(self, repo: dict) -> str:
+        """Store a repository."""
+        pass
+
+    @abstractmethod
+    def get_repository(self, repo_id: str) -> dict:
+        """Get repository by ID."""
+        pass
+
+    @abstractmethod
+    def list_repositories(self, team_id: str = None) -> list:
+        """List repositories, optionally filtered by team."""
+        pass
+
+    @abstractmethod
+    def add_repo_dependency(self, source_id: str, target_id: str, dep_type: str) -> str:
+        """Add dependency between repositories."""
+        pass
+
+    @abstractmethod
+    def get_repo_dependencies(self, repo_id: str) -> list:
+        """Get dependencies for a repository."""
+        pass
+
+    # Team Operations (Phase 3.3)
+    @abstractmethod
+    def store_user(self, user: dict) -> str:
+        """Store a user."""
+        pass
+
+    @abstractmethod
+    def get_user(self, user_id: str) -> dict:
+        """Get user by ID."""
+        pass
+
+    @abstractmethod
+    def store_team(self, team: dict) -> str:
+        """Store a team."""
+        pass
+
+    @abstractmethod
+    def get_team(self, team_id: str) -> dict:
+        """Get team by ID."""
+        pass
+
+    @abstractmethod
+    def add_team_member(self, team_id: str, user_id: str) -> bool:
+        """Add user to team."""
+        pass
+
+    @abstractmethod
+    def get_user_teams(self, user_id: str) -> list:
+        """Get teams for a user."""
+        pass
 
 ---
 

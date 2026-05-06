@@ -807,6 +807,218 @@ def capture_tests(
         raise typer.Exit(1)
 
 
+# =============================================================================
+# Repository Commands (Phase 3.2)
+# =============================================================================
+
+repo_app = typer.Typer(help="Repository management")
+app.add_typer(repo_app, name="repos")
+
+
+@repo_app.command("register")
+def register_repo(
+    name: str = typer.Argument(..., help="Repository name"),
+    url: str = typer.Option(None, "--url", "-u", help="Repository URL"),
+    description: str = typer.Option(None, "--desc", "-d", help="Description"),
+    team_id: str = typer.Option(None, "--team", "-t", help="Owning team ID")
+):
+    """Register a new repository."""
+    memory = get_memory()
+    from llm_memory.core.repository import Repository
+    
+    repo = Repository(
+        id=name,  # Use name as ID for simplicity in CLI
+        name=name,
+        url=url,
+        description=description,
+        team_id=team_id
+    )
+    
+    repo_id = memory.repos.register(repo)
+    console.print(f"[green]Registered repository:[/green] {name}")
+    console.print(f"[dim]ID: {repo_id}[/dim]")
+
+
+@repo_app.command("list")
+def list_repos(
+    team: str = typer.Option(None, "--team", "-t", help="Filter by team ID")
+):
+    """List registered repositories."""
+    memory = get_memory()
+    from rich.table import Table
+    
+    repos = memory.repos.list_all(team_id=team)
+    
+    if not repos:
+        console.print("[yellow]No repositories found[/yellow]")
+        return
+        
+    table = Table(title="Repositories")
+    table.add_column("ID", style="cyan")
+    table.add_column("Name", style="green")
+    table.add_column("Team", style="magenta")
+    table.add_column("Description")
+    
+    for r in repos:
+        table.add_row(
+            r.id,
+            r.name,
+            r.team_id or "-",
+            r.description or ""
+        )
+        
+    console.print(table)
+
+
+@repo_app.command("dependency")
+def add_dependency(
+    source: str = typer.Argument(..., help="Source repository ID"),
+    target: str = typer.Argument(..., help="Target repository ID"),
+    type: str = typer.Option("depends_on", "--type", "-t", help="Dependency type")
+):
+    """Add a dependency between repositories."""
+    memory = get_memory()
+    from llm_memory.core.repository import DependencyType, RepositoryDependency
+
+    try:
+        dep = RepositoryDependency(
+            source_repo_id=source,
+            target_repo_id=target,
+            dependency_type=DependencyType(type),
+        )
+        memory.repos.add_dependency(dep)
+        console.print(f"[green]Added dependency:[/green] {source} -> {target} ({type})")
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+
+
+@repo_app.command("context")
+def repo_context(
+    repo: str = typer.Argument(..., help="Repository ID"),
+    format: str = typer.Option("text", "--format", "-f", help="Output format (text/json)")
+):
+    """Get cross-repository context (warnings from dependencies)."""
+    memory = get_memory()
+    from llm_memory.core.cross_repo import CrossRepoContext
+    
+    ctx_manager = CrossRepoContext(memory.repos.storage, memory.repos)
+    context = ctx_manager.get_context_for_repo(repo)
+
+    if "error" in context:
+        console.print(f"[red]{context['error']}[/red]")
+        return
+
+    if format == "json":
+        console.print_json(json.dumps(context, default=str))
+        return
+
+    console.print(Panel(f"[bold]Cross-Repo Context for {repo}[/bold]"))
+
+    if context["warnings"]:
+        console.print("\n[yellow]Warnings from dependencies:[/yellow]")
+        for w in context["warnings"]:
+            console.print(f"  - [{w.get('repo_id', '?')}] {w['content']}")
+
+    if context["breaking_changes"]:
+        console.print("\n[red]Breaking Changes:[/red]")
+        for b in context["breaking_changes"]:
+            console.print(f"  - [{b.get('repo_id', '?')}] {b['content']}")
+            
+    if not context["warnings"] and not context["breaking_changes"]:
+        console.print("[green]No warnings or breaking changes found in dependencies.[/green]")
+
+
+# =============================================================================
+# Team Commands (Phase 3.3)
+# =============================================================================
+
+team_app = typer.Typer(help="Team and user management")
+app.add_typer(team_app, name="teams")
+
+
+@team_app.command("create")
+def create_team(
+    name: str = typer.Argument(..., help="Team name"),
+    description: str = typer.Option(None, "--desc", "-d", help="Description")
+):
+    """Create a new team."""
+    memory = get_memory()
+    from llm_memory.core.team import Team
+    
+    team = Team(
+        id=name.lower().replace(" ", "-"),
+        name=name,
+        description=description
+    )
+    
+    team_id = memory.teams.create_team(team)
+    console.print(f"[green]Created team:[/green] {name}")
+    console.print(f"[dim]ID: {team_id}[/dim]")
+
+
+@team_app.command("user")
+def create_user(
+    username: str = typer.Argument(..., help="Username"),
+    email: str = typer.Option(None, "--email", "-e", help="Email address"),
+    name: str = typer.Option(None, "--name", "-n", help="Display name")
+):
+    """Create or update a user."""
+    memory = get_memory()
+    from llm_memory.core.team import User
+    
+    user = User(
+        id=username,
+        username=username,
+        email=email,
+        display_name=name or username
+    )
+    
+    user_id = memory.teams.create_user(user)
+    console.print(f"[green]User saved:[/green] {username}")
+
+
+@team_app.command("add-member")
+def add_team_member(
+    team: str = typer.Argument(..., help="Team ID"),
+    user: str = typer.Argument(..., help="User ID/Username")
+):
+    """Add a user to a team."""
+    memory = get_memory()
+    
+    if memory.teams.add_member(team, user):
+        console.print(f"[green]Added {user} to team {team}[/green]")
+    else:
+        console.print(f"[red]Failed to add member (check IDs)[/red]")
+
+
+@team_app.command("list")
+def list_user_teams(
+    user: str = typer.Argument("current", help="User ID (defaults to current if authenticated)")
+):
+    """List teams for a user."""
+    memory = get_memory()
+    
+    if user == "current":
+        # Check if we have a config user (only in authenticated contexts)
+        # For local, this might be ambiguous. Let's warn.
+        console.print("[yellow]Please provide specific user ID for local mode[/yellow]")
+        return
+
+    teams = memory.teams.get_user_teams(user)
+    
+    if not teams:
+        console.print(f"[yellow]No teams found for user {user}[/yellow]")
+        return
+        
+    console.print(f"[bold]Teams for {user}:[/bold]")
+    for t in teams:
+        console.print(f"  - {t.name} ({t.id})")
+
+
+# =============================================================================
+# Conversation Capture
+# =============================================================================
+
 @capture_app.command("conversation")
 def capture_conversation(
     file: str = typer.Argument(..., help="Path to conversation log file (text, markdown, json)"),

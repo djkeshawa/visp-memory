@@ -129,7 +129,8 @@ class Deduplicator:
         except Exception:
             return []
 
-        if not data or not data["embeddings"]:
+        # Check if data is valid and has embeddings
+        if not data or data.get("embeddings") is None or len(data.get("embeddings", [])) == 0:
             return []
 
         embeddings = data["embeddings"]
@@ -158,7 +159,9 @@ class Deduplicator:
                 if j in visited:
                     continue
 
-                if sim_matrix[i][j] >= threshold:
+                # Use proper 2D indexing for numpy arrays
+                similarity = float(sim_matrix[i, j]) if hasattr(sim_matrix[i, j], '__float__') else sim_matrix[i, j]
+                if similarity >= threshold:
                     if not group:
                         group.append(self.storage.get_memory(ids[i]))
                         visited.add(i)
