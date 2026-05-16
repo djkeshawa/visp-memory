@@ -569,6 +569,25 @@ memory.storage = CustomStorage(config.storage)
 
 ## Performance Tuning
 
+### Benchmark Before Tuning
+
+Run the benchmark utility before and after storage changes so tuning claims have
+repeatable numbers:
+
+```bash
+python scripts/benchmark_memory.py --items 1000
+python scripts/benchmark_memory.py --items 1000 --json
+```
+
+For Neo4j:
+
+```bash
+export NEO4J_URI=bolt://localhost:7687
+export NEO4J_USER=neo4j
+export NEO4J_PASSWORD=your_secure_password
+python scripts/benchmark_memory.py --backend neo4j --items 1000
+```
+
 ### Neo4j Optimization
 
 #### Memory Settings

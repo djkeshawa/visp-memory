@@ -9,21 +9,21 @@ The unified interface for LLM memory, bringing together:
 """
 
 from pathlib import Path
-from typing import List, Dict, Any, Optional
-from datetime import datetime
-import json
+from typing import Any, Dict, List, Optional
 
 from llm_memory.config import MemoryConfig
-from llm_memory.core.storage import LocalStorage
-from llm_memory.core.remote_storage import RemoteStorage
-from llm_memory.core.neo4j_storage import Neo4jStorage
 from llm_memory.core.compression import MemoryCompressor, create_llm_compressor
-from llm_memory.layers.episodic import EpisodicMemory, EpisodeCategory
-from llm_memory.layers.semantic import SemanticMemory, KnowledgeCategory
-from llm_memory.layers.intent import IntentMemory, IntentPriority
-from llm_memory.quality.dedup import Deduplicator
+from llm_memory.core.memory_context import build_context, format_context_text
+from llm_memory.core.memory_import_export import export_memory, import_memories
+from llm_memory.core.neo4j_storage import Neo4jStorage
+from llm_memory.core.remote_storage import RemoteStorage
 from llm_memory.core.repository import RepositoryManager
+from llm_memory.core.storage import LocalStorage
 from llm_memory.core.team import TeamManager
+from llm_memory.layers.episodic import EpisodeCategory, EpisodicMemory
+from llm_memory.layers.intent import IntentMemory, IntentPriority
+from llm_memory.layers.semantic import KnowledgeCategory, SemanticMemory
+from llm_memory.quality.dedup import Deduplicator
 
 
 class Memory:
@@ -102,7 +102,7 @@ class Memory:
         self.episodic = EpisodicMemory(self._storage)
         self.semantic = SemanticMemory(self._storage)
         self.intent = IntentMemory(self._storage)
-        
+
         # Initialize managers (Phase 3)
         self.repos = RepositoryManager(self._storage)
         self.teams = TeamManager(self._storage)
@@ -120,13 +120,13 @@ class Memory:
 
         self._compressor = MemoryCompressor(self._storage, compress_fn)
         self.deduplicator = Deduplicator(self._storage)
-        
+
         # Initialize conflict detector
         from llm_memory.quality.conflict import ConflictDetector
         # Reuse compressor's LLM logic/keys for now as they are similar
         # Ideally should use dedicated config but this adheres to current structures
         self.conflict_detector = ConflictDetector(
-            self._storage, 
+            self._storage,
             provider=self.config.compression.llm_provider,
             model=self.config.compression.llm_model,
             api_key=self.config.embedding.api_key
@@ -229,7 +229,7 @@ class Memory:
                 # Store conflict info in metadata
                 kwargs.setdefault("metadata", {})
                 kwargs["metadata"]["conflict"] = conflict
-                # Could assume we want to proceed but mark it, 
+                # Could assume we want to proceed but mark it,
                 # or raise error. For now, we proceed and tag.
 
         return self.semantic.establish(
@@ -243,11 +243,11 @@ class Memory:
     def check_conflict(self, content: str, layer: str = "semantic") -> Optional[Dict[str, Any]]:
         """
         Check if content conflicts with existing memories.
-        
+
         Args:
             content: New content to check
             layer: Layer to check against
-            
+
         Returns:
             Conflict details or None
         """
@@ -258,7 +258,7 @@ class Memory:
             limit=5,
             repo_id=self.config.repo_id
         )
-        
+
         # 2. Check for conflicts
         return self.conflict_detector.detect_conflicts(content, relevant)
 
@@ -431,49 +431,12 @@ class Memory:
         Returns:
             Context string or dict depending on format
         """
-        context = {}
-
-        # Intent (current direction)
-        if include_intent:
-            intent_summary = self.intent.summarize(repo_id=self.config.repo_id)
-            context["intent"] = {
-                "current_focus": intent_summary["focus"]["description"] if intent_summary["focus"] else None,
-                "current_task": intent_summary["current_task"]["description"] if intent_summary["current_task"] else None,
-                "constraints": intent_summary["constraints"],
-                "goals": [g["description"] for g in intent_summary["all_goals"][:5]]
-            }
-
-        # Semantic knowledge (what we know)
-        if include_knowledge:
-            warnings = self.semantic.get_warnings()[:10]
-            conventions = self.semantic.get_conventions()[:10]
-            known_issues = self.semantic.get_known_issues()[:5]
-
-            context["knowledge"] = {
-                "warnings": [w["content"] for w in warnings],
-                "conventions": [c["content"] for c in conventions],
-                "known_issues": [i["content"] for i in known_issues]
-            }
-
-        # Recent history (what happened)
-        if include_history:
-            recent = self.episodic.recent(limit=10)
-            context["history"] = {
-                "recent_events": [
-                    {
-                        "event": e["content"],
-                        "category": e["category"],
-                        "when": e["created_at"]
-                    }
-                    for e in recent
-                ]
-            }
-
-        # Stats
-        context["meta"] = {
-            "generated_at": datetime.now().isoformat(),
-            "stats": self._storage.get_stats()
-        }
+        context = build_context(
+            self,
+            include_history=include_history,
+            include_knowledge=include_knowledge,
+            include_intent=include_intent,
+        )
 
         if format == "json":
             return context
@@ -483,62 +446,7 @@ class Memory:
 
     def _format_context_text(self, context: Dict[str, Any]) -> str:
         """Format context as human/LLM readable text."""
-        lines = ["# Project Memory Context", ""]
-
-        # Intent
-        if "intent" in context:
-            intent = context["intent"]
-            lines.append("## Current Direction")
-
-            if intent["current_focus"]:
-                lines.append(f"**Focus:** {intent['current_focus']}")
-
-            if intent["current_task"]:
-                lines.append(f"**Working on:** {intent['current_task']}")
-
-            if intent["constraints"]:
-                lines.append("\n**Constraints:**")
-                for c in intent["constraints"]:
-                    lines.append(f"- {c}")
-
-            if intent["goals"]:
-                lines.append("\n**Active Goals:**")
-                for g in intent["goals"]:
-                    if not g.startswith("WORKING ON:") and not g.startswith("CONSTRAINT:"):
-                        lines.append(f"- {g}")
-
-            lines.append("")
-
-        # Knowledge
-        if "knowledge" in context:
-            knowledge = context["knowledge"]
-
-            if knowledge["warnings"]:
-                lines.append("## Warnings")
-                for w in knowledge["warnings"]:
-                    lines.append(f"- {w}")
-                lines.append("")
-
-            if knowledge["conventions"]:
-                lines.append("## Conventions")
-                for c in knowledge["conventions"]:
-                    lines.append(f"- {c}")
-                lines.append("")
-
-            if knowledge["known_issues"]:
-                lines.append("## Known Issues")
-                for i in knowledge["known_issues"]:
-                    lines.append(f"- {i}")
-                lines.append("")
-
-        # History
-        if "history" in context and context["history"]["recent_events"]:
-            lines.append("## Recent Activity")
-            for event in context["history"]["recent_events"][:5]:
-                lines.append(f"- [{event['category']}] {event['event']}")
-            lines.append("")
-
-        return "\n".join(lines)
+        return format_context_text(context)
 
     # =========================================================================
     # Maintenance
@@ -601,34 +509,7 @@ class Memory:
         Returns:
             Complete memory export
         """
-        # Export filtered by repo_id if set
-        repo_id = self.config.repo_id
-
-        episodic_memories = self._storage.list_memories(layer="episodic", limit=10000)
-        semantic_memories = self._storage.list_memories(layer="semantic", limit=10000)
-
-        # Filter if repo_id is set (simple client-side filter since list_memories might be global until updated)
-        # Better to update list_memories to accept repo_id, but assuming list_memories will be updated soon:
-        # Actually I should pass repo_id to list_memories if I update it.
-        # Let's assume I will update list_memories next.
-
-        export_data = {
-            "version": "1.0",
-            "exported_at": datetime.now().isoformat(),
-            "config": self.config.model_dump(),
-            "memories": {
-                "episodic": self._storage.list_memories(layer="episodic", limit=10000, repo_id=repo_id),
-                "semantic": self._storage.list_memories(layer="semantic", limit=10000, repo_id=repo_id),
-            },
-            "intents": self._storage.get_active_intents(repo_id=repo_id),
-            "stats": self.stats()
-        }
-
-        if path:
-            path = Path(path)
-            path.write_text(json.dumps(export_data, indent=2, default=str))
-
-        return export_data
+        return export_memory(self, path)
 
     def import_memories(self, path: Path):
         """
@@ -637,37 +518,4 @@ class Memory:
         Args:
             path: Path to import file
         """
-        data = json.loads(Path(path).read_text())
-
-        # Import episodic memories
-        for mem in data.get("memories", {}).get("episodic", []):
-            self._storage.store_memory(
-                content=mem["content"],
-                layer="episodic",
-                category=mem.get("category", "note"),
-                importance=mem.get("importance", 0.5),
-                tags=mem.get("tags", []),
-                metadata=mem.get("metadata", {}),
-                repo_id=mem.get("repo_id") or self.config.repo_id
-            )
-
-        # Import semantic memories
-        for mem in data.get("memories", {}).get("semantic", []):
-            self._storage.store_memory(
-                content=mem["content"],
-                layer="semantic",
-                category=mem.get("category", "fact"),
-                importance=mem.get("importance", 0.5),
-                tags=mem.get("tags", []),
-                metadata=mem.get("metadata", {}),
-                repo_id=mem.get("repo_id") or self.config.repo_id
-            )
-
-        # Import intents
-        for intent in data.get("intents", []):
-            self._storage.set_intent(
-                description=intent["description"],
-                priority=intent.get("priority", 1),
-                context=intent.get("context", {}),
-                repo_id=intent.get("repo_id") or self.config.repo_id
-            )
+        import_memories(self, path)

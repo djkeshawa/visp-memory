@@ -25,6 +25,19 @@ logger = logging.getLogger(__name__)
 
 config = load_config()
 
+
+def get_cors_options(config):
+    """Build CORS options from config, avoiding wildcard credentials."""
+    origins = config.server.cors_origins
+    allow_credentials = config.server.cors_allow_credentials and "*" not in origins
+    return {
+        "allow_origins": origins,
+        "allow_credentials": allow_credentials,
+    }
+
+
+cors_options = get_cors_options(config)
+
 # Initialize App
 app = FastAPI(
     title="LLM Central Memory Server",
@@ -35,8 +48,8 @@ app = FastAPI(
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=cors_options["allow_origins"],
+    allow_credentials=cors_options["allow_credentials"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -94,7 +107,11 @@ STATIC_DIR = Path(__file__).parent / "static"
 if STATIC_DIR.exists() and STATIC_DIR.is_dir():
     # Mount static assets
     if (STATIC_DIR / "_next" / "static").exists():
-        app.mount("/static", StaticFiles(directory=str(STATIC_DIR / "_next" / "static")), name="static")
+        app.mount(
+            "/static",
+            StaticFiles(directory=str(STATIC_DIR / "_next" / "static")),
+            name="static",
+        )
     if (STATIC_DIR / "_next").exists():
         app.mount("/_next", StaticFiles(directory=str(STATIC_DIR / "_next")), name="next")
 
@@ -115,5 +132,7 @@ if STATIC_DIR.exists() and STATIC_DIR.is_dir():
 
     logger.info(f"Dashboard mounted at /dashboard from {STATIC_DIR}")
 else:
-    logger.warning(f"Dashboard static files not found at {STATIC_DIR}. Dashboard will not be available.")
+    logger.warning(
+        f"Dashboard static files not found at {STATIC_DIR}. Dashboard will not be available."
+    )
     logger.info("To build the dashboard, run: python build_frontend.py")

@@ -10,9 +10,9 @@ Supports:
 import json
 import os
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -138,6 +138,15 @@ class ServerConfig(BaseSettings):
 
     host: str = "0.0.0.0"
     port: int = 8000
+    cors_origins: List[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+        ]
+    )
+    cors_allow_credentials: bool = True
 
     # Authentication
     auth_enabled: bool = True
@@ -151,6 +160,14 @@ class ServerConfig(BaseSettings):
     # Multi-tenancy
     allow_anonymous: bool = False
     default_team: Optional[str] = None
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, value: Any) -> List[str]:
+        """Accept JSON-style lists or comma-separated env/config values."""
+        if isinstance(value, str):
+            return [origin.strip() for origin in value.split(",") if origin.strip()]
+        return value
 
 
 class MemoryConfig(BaseSettings):
@@ -234,6 +251,7 @@ class MemoryConfig(BaseSettings):
             "EMBEDDING_API_KEY": ("embedding", "api_key"),
             "EMBEDDING_API_BASE": ("embedding", "api_base"),
             "LLM_MEMORY_JWT_SECRET": ("server", "jwt_secret"),
+            "LLM_MEMORY_SERVER_CORS_ORIGINS": ("server", "cors_origins"),
         }
 
         for env_name, path in env_overrides.items():
@@ -243,7 +261,10 @@ class MemoryConfig(BaseSettings):
             target = self
             for attr in path[:-1]:
                 target = getattr(target, attr)
-            setattr(target, path[-1], os.environ[env_name])
+            value = os.environ[env_name]
+            if path == ("server", "cors_origins"):
+                value = ServerConfig.parse_cors_origins(value)
+            setattr(target, path[-1], value)
 
     def save(self, path: Path):
         """Save configuration to file."""

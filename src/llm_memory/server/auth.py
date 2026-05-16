@@ -25,6 +25,9 @@ class UserContext(BaseModel):
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     """Create a new JWT access token."""
     config = load_config()
+    if not config.server.jwt_secret:
+        raise ValueError("LLM_MEMORY_JWT_SECRET must be configured to create JWT tokens")
+
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
@@ -76,6 +79,12 @@ async def get_current_user(
 
     # 2. Check for JWT in Bearer token
     if auth:
+        if not config.server.jwt_secret:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="JWT authentication is not configured",
+            )
+
         token = auth.credentials
         try:
             payload = jwt.decode(

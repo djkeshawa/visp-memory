@@ -13,7 +13,7 @@ This document covers testing practices, patterns, and procedures for LLM Memory.
 pytest
 
 # Run specific test file
-pytest tests/test_memory.py
+pytest tests/core/test_memory.py
 
 # Run with verbose output
 pytest -v
@@ -33,17 +33,13 @@ pytest --cov=llm_memory --cov-report=html
 
 ```
 tests/
-├── test_memory.py           # Core memory tests
-├── test_episodic.py         # Episodic layer tests
-├── test_semantic.py         # Semantic layer tests
-├── test_intent.py           # Intent layer tests
-├── test_storage.py          # Storage backend tests
-├── test_neo4j_storage.py    # Neo4j-specific tests
-├── test_compression.py      # Compression tests
-├── test_cli.py              # CLI interface tests
-├── test_mcp.py              # MCP server tests
-├── conftest.py              # Shared fixtures
-└── fixtures/                # Test data
+├── capture/                 # Conversation and source capture tests
+├── cli/                     # CLI integration tests
+├── core/                    # Memory, storage, conflict, and LLM core tests
+├── interfaces/              # MCP and other protocol interface tests
+├── scripts/                 # Utility script smoke tests
+├── server/                  # API, auth, config, collaboration tests
+└── conftest.py              # Shared fixtures
 ```
 
 ---
@@ -278,7 +274,7 @@ llm-memory inject --task "Refactoring database layer"
 
 ```bash
 export LLM_MEMORY_STORAGE_BACKEND=local
-pytest tests/test_storage.py
+pytest tests/core
 ```
 
 ### Neo4j Storage
@@ -289,7 +285,7 @@ docker run -p 7687:7687 -e NEO4J_AUTH=neo4j/testpass neo4j:5.15
 
 export LLM_MEMORY_STORAGE_BACKEND=neo4j
 export NEO4J_PASSWORD=testpass
-pytest tests/test_neo4j_storage.py
+pytest tests/core
 ```
 
 ### Remote Storage
@@ -300,7 +296,7 @@ llm-memory serve --port 8000 &
 
 export LLM_MEMORY_STORAGE_BACKEND=remote
 export LLM_MEMORY_SERVER_URL=http://localhost:8000
-pytest tests/test_remote_storage.py
+pytest tests/server
 ```
 
 ---
@@ -378,13 +374,13 @@ SAMPLE_SEMANTIC = [
 ### Verbose Output
 
 ```bash
-pytest -v -s tests/test_memory.py
+pytest -v -s tests/core/test_memory.py
 ```
 
 ### Specific Test
 
 ```bash
-pytest tests/test_memory.py::test_record_and_recall -v
+pytest tests/core/test_memory.py::TestSearch::test_recall_finds_memories -v
 ```
 
 ### Failed Tests Only
@@ -474,37 +470,23 @@ jobs:
 
 ## Performance Testing
 
-### Load Testing
+Use the supported benchmark script for performance checks instead of embedding
+timing assertions in unit tests:
 
-```python
-def test_bulk_insert_performance(memory):
-    import time
-
-    start = time.time()
-    for i in range(1000):
-        memory.record(f"Event {i}")
-    duration = time.time() - start
-
-    # Should handle 1000 inserts in reasonable time
-    assert duration < 10.0  # 10 seconds
+```bash
+python scripts/benchmark_memory.py --items 100 --json
+python scripts/benchmark_memory.py --items 1000
 ```
 
-### Search Performance
+The benchmark defaults to SQLite storage and noop embeddings so it runs without
+network downloads or model initialization. To benchmark Neo4j, start Neo4j first
+and provide credentials:
 
-```python
-def test_search_performance(memory):
-    # Seed with many memories
-    for i in range(10000):
-        memory.record(f"Memory {i}: content varies")
-
-    import time
-    start = time.time()
-    results = memory.recall("content", limit=10)
-    duration = time.time() - start
-
-    # Search should be fast even with large dataset
-    assert duration < 1.0  # 1 second
-    assert len(results) == 10
+```bash
+export NEO4J_URI=bolt://localhost:7687
+export NEO4J_USER=neo4j
+export NEO4J_PASSWORD=testpass
+python scripts/benchmark_memory.py --backend neo4j --items 1000
 ```
 
 ---
