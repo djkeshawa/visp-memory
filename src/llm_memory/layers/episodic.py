@@ -12,8 +12,8 @@ be compressed into semantic knowledge (patterns/rules).
 """
 
 from datetime import datetime
-from typing import List, Dict, Any
 from enum import Enum
+from typing import Any, Dict, List
 
 from llm_memory.core.storage import BaseStorage
 from llm_memory.layers.base import BaseMemoryLayer
@@ -62,7 +62,7 @@ class EpisodicMemory(BaseMemoryLayer):
         importance: float = 0.5,
         repo_id: str = None,
         context: Dict[str, Any] = None,
-        tags: List[str] = None
+        tags: List[str] = None,
     ) -> str:
         """
         Record an episodic memory (something that happened).
@@ -85,10 +85,7 @@ class EpisodicMemory(BaseMemoryLayer):
                 context={"files": ["auth/token.py"], "issue": "#142"}
             )
         """
-        metadata = {
-            "recorded_at": datetime.now().isoformat(),
-            **(context or {})
-        }
+        metadata = {"recorded_at": datetime.now().isoformat(), **(context or {})}
 
         return self.storage.store_memory(
             content=content,
@@ -97,7 +94,7 @@ class EpisodicMemory(BaseMemoryLayer):
             category=category.value if isinstance(category, EpisodeCategory) else category,
             importance=importance,
             tags=tags or [],
-            metadata=metadata
+            metadata=metadata,
         )
 
     def decision(
@@ -107,7 +104,7 @@ class EpisodicMemory(BaseMemoryLayer):
         alternatives: List[str] = None,
         importance: float = 0.7,
         repo_id: str = None,
-        tags: List[str] = None
+        tags: List[str] = None,
     ) -> str:
         """
         Record an architecture/design decision.
@@ -139,7 +136,7 @@ class EpisodicMemory(BaseMemoryLayer):
             importance=importance,
             repo_id=repo_id,
             context={"alternatives": alternatives or []},
-            tags=tags
+            tags=tags,
         )
 
     def bug(
@@ -149,7 +146,7 @@ class EpisodicMemory(BaseMemoryLayer):
         fix: str = None,
         files: List[str] = None,
         importance: float = 0.6,
-        repo_id: str = None
+        repo_id: str = None,
     ) -> str:
         """
         Record a bug discovery or fix.
@@ -178,15 +175,11 @@ class EpisodicMemory(BaseMemoryLayer):
             importance=importance,
             repo_id=repo_id,
             context={"files": files or []},
-            tags=["bug"]
+            tags=["bug"],
         )
 
     def discovery(
-        self,
-        insight: str,
-        context: str = None,
-        importance: float = 0.5,
-        repo_id: str = None
+        self, insight: str, context: str = None, importance: float = 0.5, repo_id: str = None
     ) -> str:
         """
         Record a discovery or learning.
@@ -207,14 +200,11 @@ class EpisodicMemory(BaseMemoryLayer):
             content=content,
             category=EpisodeCategory.DISCOVERY,
             importance=importance,
-            repo_id=repo_id
+            repo_id=repo_id,
         )
 
     def search(
-        self,
-        query: str,
-        category: EpisodeCategory = None,
-        limit: int = 10
+        self, query: str, category: EpisodeCategory = None, limit: int = 10
     ) -> List[Dict[str, Any]]:
         """
         Search episodic memories.
@@ -235,30 +225,17 @@ class EpisodicMemory(BaseMemoryLayer):
         else:
             category_value = None
 
-        return super().search(
-            query=query,
-            layer="episodic",
-            category=category_value,
-            limit=limit
-        )
+        return super().search(query=query, layer="episodic", category=category_value, limit=limit)
 
-    def recent(
-        self,
-        limit: int = 20,
-        category: EpisodeCategory = None
-    ) -> List[Dict[str, Any]]:
+    def recent(self, limit: int = 20, category: EpisodeCategory = None) -> List[Dict[str, Any]]:
         """Get recent episodic memories."""
         return self.list_items(
             layer="episodic",
             category=category.value if category else None,
             limit=limit,
-            order_by="created_at DESC"
+            order_by="created_at DESC",
         )
 
     def get_uncompressed(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Get episodic memories that haven't been compressed yet."""
-        return self.list_items(
-            layer="episodic",
-            limit=limit,
-            order_by="created_at ASC"
-        )
+        return self.list_items(layer="episodic", limit=limit, order_by="created_at ASC")

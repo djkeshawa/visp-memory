@@ -30,7 +30,7 @@ class CursorAdapter(GenericAdapter):
             project_root=project_root,
             context_file=".cursorrules",
             injection_marker="# LLM-MEMORY",
-            append_mode=True
+            append_mode=True,
         )
 
     def install(self) -> Dict[str, bool]:
@@ -63,11 +63,7 @@ Memory context is automatically injected below:
 
         return results
 
-    def update_context(
-        self,
-        files: list[str] = None,
-        task: str = None
-    ) -> bool:
+    def update_context(self, files: list[str] = None, task: str = None) -> bool:
         """
         Update memory context in .cursorrules.
 
@@ -102,11 +98,7 @@ Last updated: {self._get_timestamp()}
             before = content.split(start_marker)[0]
             after = content.split(end_marker)[1]
 
-            new_content = (
-                f"{before}{start_marker}\n\n"
-                f"{formatted_context}\n"
-                f"{end_marker}{after}"
-            )
+            new_content = f"{before}{start_marker}\n\n{formatted_context}\n{end_marker}{after}"
 
             self.context_file.write_text(new_content)
             return True
@@ -116,4 +108,5 @@ Last updated: {self._get_timestamp()}
     def _get_timestamp(self) -> str:
         """Get current timestamp."""
         from datetime import datetime
+
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")

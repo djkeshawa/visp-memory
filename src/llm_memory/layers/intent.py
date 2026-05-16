@@ -20,6 +20,7 @@ from llm_memory.layers.base import BaseMemoryLayer
 
 class IntentPriority(int, Enum):
     """Priority levels for intents."""
+
     LOW = 0
     NORMAL = 1
     HIGH = 2
@@ -45,7 +46,7 @@ class IntentMemory(BaseMemoryLayer):
         priority: IntentPriority = IntentPriority.NORMAL,
         constraints: List[str] = None,
         repo_id: str = None,
-        context: Dict[str, Any] = None
+        context: Dict[str, Any] = None,
     ) -> str:
         """
         Set a current goal/intent.
@@ -72,21 +73,18 @@ class IntentMemory(BaseMemoryLayer):
         ctx = {
             "constraints": constraints or [],
             "set_at": datetime.now().isoformat(),
-            **(context or {})
+            **(context or {}),
         }
 
         return self.storage.set_intent(
             description=goal,
             priority=priority.value if isinstance(priority, IntentPriority) else priority,
             repo_id=repo_id,
-            context=ctx
+            context=ctx,
         )
 
     def set_focus(
-        self,
-        focus: str,
-        avoid: List[str] = None,
-        priority: IntentPriority = IntentPriority.HIGH
+        self, focus: str, avoid: List[str] = None, priority: IntentPriority = IntentPriority.HIGH
     ) -> str:
         """
         Set current focus area with things to avoid.
@@ -108,14 +106,11 @@ class IntentMemory(BaseMemoryLayer):
         return self.set_goal(
             goal=f"FOCUS: {focus}",
             priority=priority,
-            constraints=[f"AVOID: {item}" for item in (avoid or [])]
+            constraints=[f"AVOID: {item}" for item in (avoid or [])],
         )
 
     def add_constraint(
-        self,
-        constraint: str,
-        reason: str = None,
-        priority: IntentPriority = IntentPriority.NORMAL
+        self, constraint: str, reason: str = None, priority: IntentPriority = IntentPriority.NORMAL
     ) -> str:
         """
         Add a constraint/rule that should be respected.
@@ -138,17 +133,10 @@ class IntentMemory(BaseMemoryLayer):
         if reason:
             description += f" (Reason: {reason})"
 
-        return self.set_goal(
-            goal=description,
-            priority=priority
-        )
+        return self.set_goal(goal=description, priority=priority)
 
     def working_on(
-        self,
-        task: str,
-        files: List[str] = None,
-        notes: str = None,
-        repo_id: str = None
+        self, task: str, files: List[str] = None, notes: str = None, repo_id: str = None
     ) -> str:
         """
         Record what is currently being worked on.
@@ -172,10 +160,7 @@ class IntentMemory(BaseMemoryLayer):
             goal=f"WORKING ON: {task}",
             priority=IntentPriority.HIGH,
             repo_id=repo_id,
-            context={
-                "files": files or [],
-                "notes": notes
-            }
+            context={"files": files or [], "notes": notes},
         )
 
     def complete(self, intent_id: str) -> bool:
@@ -278,5 +263,5 @@ class IntentMemory(BaseMemoryLayer):
             "constraints": self.get_constraints(),
             "current_task": self.get_working_on(),
             "all_goals": intents,
-            "total_active": len(intents)
+            "total_active": len(intents),
         }

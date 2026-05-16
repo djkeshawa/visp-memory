@@ -9,11 +9,10 @@ from llm_memory.server.schemas import IntentCreate, IntentResponse
 
 router = APIRouter(prefix="/intents", tags=["intents"])
 
+
 @router.get("", response_model=List[IntentResponse])
 async def list_intents(
-    request: Request,
-    repo_id: str = None,
-    user: UserContext = Depends(get_current_user)
+    request: Request, repo_id: str = None, user: UserContext = Depends(get_current_user)
 ):
     storage = request.app.state.storage
     config = load_config()
@@ -26,15 +25,15 @@ async def list_intents(
             "priority": i["priority"],
             "context": i.get("context", {}),
             "status": i["status"],
-            "created_at": i["created_at"]
-        } for i in intents
+            "created_at": i["created_at"],
+        }
+        for i in intents
     ]
+
 
 @router.post("", response_model=IntentResponse)
 async def create_intent(
-    request: Request,
-    intent: IntentCreate,
-    user: UserContext = Depends(get_current_user)
+    request: Request, intent: IntentCreate, user: UserContext = Depends(get_current_user)
 ):
     storage = request.app.state.storage
     config = load_config()
@@ -49,7 +48,7 @@ async def create_intent(
         description=intent.description,
         priority=intent.priority if hasattr(intent, "priority") else 0,
         repo_id=intent.repo_id or config.repo_id,
-        context=context
+        context=context,
     )
 
     return {
@@ -59,5 +58,5 @@ async def create_intent(
         "repo_id": intent.repo_id or config.repo_id,
         "status": "active",
         "context": context,
-        "created_at": datetime.now()
+        "created_at": datetime.now(),
     }

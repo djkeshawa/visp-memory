@@ -7,7 +7,7 @@ Memory layers inspired by human cognitive architecture.
 """
 
 from llm_memory.layers.episodic import EpisodicMemory
-from llm_memory.layers.semantic import SemanticMemory
 from llm_memory.layers.intent import IntentMemory
+from llm_memory.layers.semantic import SemanticMemory
 
 __all__ = ["EpisodicMemory", "SemanticMemory", "IntentMemory"]

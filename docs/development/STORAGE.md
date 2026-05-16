@@ -8,8 +8,8 @@ This document covers storage backend implementation, configuration, and migratio
 
 LLM Memory supports multiple storage backends through a unified `BaseStorage` interface:
 
-- **LocalStorage** - SQLite + ChromaDB (legacy, single-user)
-- **Neo4jStorage** - Graph database with vector search (default, recommended)
+- **LocalStorage** - SQLite + ChromaDB/local vector storage (default, single-user)
+- **Neo4jStorage** - Graph database with vector search (recommended for teams)
 - **RemoteStorage** - Client for remote API server
 
 All backends implement the same interface, allowing transparent switching.
@@ -26,15 +26,17 @@ All backends implement the same interface, allowing transparent switching.
 | **Multi-user** | No | Yes | Yes |
 | **Requires Server** | No | Yes (Neo4j) | Yes (FastAPI) |
 | **Best For** | Local dev | Production, teams | Remote access |
-| **Status** | Legacy | **Default** | Experimental |
+| **Status** | **Default** | Production target | Experimental |
 
 ---
 
-## Neo4jStorage (Default)
+## Neo4jStorage (Team/Production Target)
 
 ### Overview
 
 Graph-based storage with native relationship support and vector embeddings.
+The code defaults to SQLite for zero-dependency local use; choose Neo4j when
+you need shared/team memory, stronger graph traversal, or larger deployments.
 
 **Advantages:**
 - Native graph relationships between memories

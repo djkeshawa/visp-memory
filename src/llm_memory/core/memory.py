@@ -16,6 +16,7 @@ from llm_memory.core.compression import MemoryCompressor, create_llm_compressor
 from llm_memory.core.memory_context import build_context, format_context_text
 from llm_memory.core.memory_import_export import export_memory, import_memories
 from llm_memory.core.neo4j_storage import Neo4jStorage
+from llm_memory.core.ranking import rank_memory_results
 from llm_memory.core.remote_storage import RemoteStorage
 from llm_memory.core.repository import RepositoryManager
 from llm_memory.core.storage import LocalStorage
@@ -50,11 +51,7 @@ class Memory:
         memory.context()     - Get full context for LLM
     """
 
-    def __init__(
-        self,
-        config: MemoryConfig = None,
-        data_dir: Path = None
-    ):
+    def __init__(self, config: MemoryConfig = None, data_dir: Path = None):
         """
         Initialize memory system.
 
@@ -74,11 +71,13 @@ class Memory:
         embedding_fn = None
         try:
             from llm_memory.core.embeddings import get_embedding_provider
+
             embedder = get_embedding_provider(self.config.embedding)
             embedding_fn = embedder.embed
         except Exception as e:
             # Embedding provider initialization failed - will use fallback search
             import logging
+
             logging.warning(f"Failed to initialize embedding provider: {e}")
 
         # Initialize storage
@@ -86,14 +85,14 @@ class Memory:
             self._storage = RemoteStorage(
                 server_url=self.config.storage.server_url,
                 api_key=self.config.storage.api_key,
-                jwt_token=self.config.storage.jwt_token
+                jwt_token=self.config.storage.jwt_token,
             )
         elif self.config.storage.backend == "neo4j":
             self._storage = Neo4jStorage(
                 uri=self.config.storage.neo4j_uri,
                 user=self.config.storage.neo4j_user,
                 password=self.config.storage.neo4j_password,
-                embedding_fn=embedding_fn
+                embedding_fn=embedding_fn,
             )
         else:
             self._storage = LocalStorage(self.config.storage.data_dir, embedding_fn=embedding_fn)
@@ -113,7 +112,7 @@ class Memory:
             try:
                 compress_fn = create_llm_compressor(
                     provider=self.config.compression.llm_provider,
-                    model=self.config.compression.llm_model
+                    model=self.config.compression.llm_model,
                 )
             except Exception:
                 pass  # Fall back to heuristic compression
@@ -123,26 +122,21 @@ class Memory:
 
         # Initialize conflict detector
         from llm_memory.quality.conflict import ConflictDetector
+
         # Reuse compressor's LLM logic/keys for now as they are similar
         # Ideally should use dedicated config but this adheres to current structures
         self.conflict_detector = ConflictDetector(
             self._storage,
             provider=self.config.compression.llm_provider,
             model=self.config.compression.llm_model,
-            api_key=self.config.embedding.api_key
+            api_key=self.config.embedding.api_key,
         )
 
     # =========================================================================
     # Quick Access Methods
     # =========================================================================
 
-    def record(
-        self,
-        event: str,
-        category: str = "note",
-        importance: float = 0.5,
-        **kwargs
-    ) -> str:
+    def record(self, event: str, category: str = "note", importance: float = 0.5, **kwargs) -> str:
         """
         Quick method to record an episodic memory.
 
@@ -164,19 +158,10 @@ class Memory:
         if kwargs.get("repo_id") is None and self.config.repo_id:
             kwargs["repo_id"] = self.config.repo_id
 
-        return self.episodic.record(
-            content=event,
-            category=cat,
-            importance=importance,
-            **kwargs
-        )
+        return self.episodic.record(content=event, category=cat, importance=importance, **kwargs)
 
     def decision(
-        self,
-        what: str,
-        why: str,
-        alternatives: List[str] = None,
-        repo_id: str = None
+        self, what: str, why: str, alternatives: List[str] = None, repo_id: str = None
     ) -> str:
         """
         Quick method to record a decision.
@@ -191,10 +176,7 @@ class Memory:
             Memory ID
         """
         return self.episodic.decision(
-            what,
-            why,
-            alternatives,
-            repo_id=repo_id or self.config.repo_id
+            what, why, alternatives, repo_id=repo_id or self.config.repo_id
         )
 
     def learn(
@@ -203,7 +185,7 @@ class Memory:
         category: str = "fact",
         importance: float = 0.6,
         repo_id: str = None,
-        **kwargs
+        **kwargs,
     ) -> str:
         """
         Quick method to establish semantic knowledge.
@@ -237,7 +219,7 @@ class Memory:
             category=cat,
             importance=importance,
             repo_id=repo_id or self.config.repo_id,
-            **kwargs
+            **kwargs,
         )
 
     def check_conflict(self, content: str, layer: str = "semantic") -> Optional[Dict[str, Any]]:
@@ -253,10 +235,7 @@ class Memory:
         """
         # 1. Find relevant memories
         relevant = self._storage.search_memories(
-            query=content,
-            layer=layer,
-            limit=5,
-            repo_id=self.config.repo_id
+            query=content, layer=layer, limit=5, repo_id=self.config.repo_id
         )
 
         # 2. Check for conflicts
@@ -278,11 +257,7 @@ class Memory:
         return self.semantic.warn(area, warning, severity, repo_id=repo_id or self.config.repo_id)
 
     def goal(
-        self,
-        goal: str,
-        priority: int = 1,
-        constraints: List[str] = None,
-        repo_id: str = None
+        self, goal: str, priority: int = 1, constraints: List[str] = None, repo_id: str = None
     ) -> str:
         """
         Quick method to set a goal.
@@ -300,7 +275,7 @@ class Memory:
             goal=goal,
             priority=IntentPriority(priority),
             constraints=constraints,
-            repo_id=repo_id or self.config.repo_id
+            repo_id=repo_id or self.config.repo_id,
         )
 
     def working_on(self, task: str, files: List[str] = None, repo_id: str = None) -> str:
@@ -326,11 +301,7 @@ class Memory:
     # =========================================================================
 
     def recall(
-        self,
-        query: str,
-        layers: List[str] = None,
-        repo_id: str = None,
-        limit: int = 10
+        self, query: str, layers: List[str] = None, repo_id: str = None, limit: int = 10
     ) -> List[Dict[str, Any]]:
         """
         Search across all memory layers.
@@ -352,21 +323,16 @@ class Memory:
         for layer in layers:
             layer_results = self._storage.search_memories(
                 query=query,
-                layer=layer if layer != "intent" else None,
+                layer=layer,
                 repo_id=search_repo_id,
-                limit=limit
+                limit=limit,
             )
             results.extend(layer_results)
 
-        # Sort by similarity
-        results.sort(key=lambda x: x.get("similarity", 0), reverse=True)
-        return results[:limit]
+        return rank_memory_results(results, query=query, limit=limit)
 
     def relevant_for(
-        self,
-        task: str = None,
-        files: List[str] = None,
-        limit: int = 15
+        self, task: str = None, files: List[str] = None, limit: int = 15
     ) -> Dict[str, List[Dict[str, Any]]]:
         """
         Get memories relevant to a task or set of files.
@@ -379,19 +345,11 @@ class Memory:
         Returns:
             Dict with 'knowledge', 'warnings', 'history' keys
         """
-        results = {
-            "knowledge": [],
-            "warnings": [],
-            "history": []
-        }
+        results = {"knowledge": [], "warnings": [], "history": []}
 
         # Get relevant semantic knowledge
         if task or files:
-            results["knowledge"] = self.semantic.relevant_for(
-                files=files,
-                query=task,
-                limit=limit
-            )
+            results["knowledge"] = self.semantic.relevant_for(files=files, query=task, limit=limit)
 
         # Get warnings for files
         if files:
@@ -414,7 +372,7 @@ class Memory:
         include_history: bool = True,
         include_knowledge: bool = True,
         include_intent: bool = True,
-        format: str = "text"
+        format: str = "text",
     ) -> Any:
         """
         Generate full context for an LLM.
@@ -475,9 +433,7 @@ class Memory:
         if not self.config.decay_enabled:
             return 0
 
-        return self._compressor.decay_old_memories(
-            halflife_days=self.config.decay_halflife_days
-        )
+        return self._compressor.decay_old_memories(halflife_days=self.config.decay_halflife_days)
 
     # =========================================================================
     # Quality Management

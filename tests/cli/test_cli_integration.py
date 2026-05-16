@@ -28,6 +28,7 @@ def cli_env(temp_dir):
     """Set up environment for CLI tests."""
     # Change to temp directory
     import os
+
     old_cwd = os.getcwd()
     os.chdir(temp_dir)
 
@@ -37,6 +38,7 @@ def cli_env(temp_dir):
 
     # Reset the global _memory instance in CLI module to avoid caching issues between tests
     import llm_memory.interfaces.cli as cli_module
+
     cli_module._memory = None
 
     yield temp_dir
@@ -53,6 +55,12 @@ def cli_env(temp_dir):
 class TestCLIBasicCommands:
     """Test basic CLI commands that were previously broken."""
 
+    def test_version_command(self, cli_env):
+        """CLI exposes the package version for release verification."""
+        result = runner.invoke(app, ["--version"])
+        assert result.exit_code == 0
+        assert "llm-memory" in result.output
+
     def test_init_command(self, cli_env):
         """Test that init command works without Neo4j."""
         result = runner.invoke(app, ["init", "--type", "code"])
@@ -66,12 +74,17 @@ class TestCLIBasicCommands:
         runner.invoke(app, ["init", "--type", "code"])
 
         # Record
-        result = runner.invoke(app, [
-            "record",
-            "Fixed authentication bug",
-            "--category", "bug_fixed",
-            "--importance", "0.8"
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "record",
+                "Fixed authentication bug",
+                "--category",
+                "bug_fixed",
+                "--importance",
+                "0.8",
+            ],
+        )
         assert result.exit_code == 0
         assert "Recorded" in result.output
 
@@ -79,11 +92,7 @@ class TestCLIBasicCommands:
         """Test recording a decision."""
         runner.invoke(app, ["init", "--type", "code"])
 
-        result = runner.invoke(app, [
-            "decision",
-            "Use PostgreSQL",
-            "Need ACID compliance"
-        ])
+        result = runner.invoke(app, ["decision", "Use PostgreSQL", "Need ACID compliance"])
         assert result.exit_code == 0
         assert "Decision recorded" in result.output
 
@@ -91,11 +100,7 @@ class TestCLIBasicCommands:
         """Test adding a warning."""
         runner.invoke(app, ["init", "--type", "code"])
 
-        result = runner.invoke(app, [
-            "warn",
-            "auth/token.py",
-            "Race condition possible"
-        ])
+        result = runner.invoke(app, ["warn", "auth/token.py", "Race condition possible"])
         assert result.exit_code == 0
         assert "Warning added" in result.output
 
@@ -103,11 +108,9 @@ class TestCLIBasicCommands:
         """Test establishing semantic knowledge."""
         runner.invoke(app, ["init", "--type", "code"])
 
-        result = runner.invoke(app, [
-            "learn",
-            "Always use prepared statements",
-            "--category", "invariant"
-        ])
+        result = runner.invoke(
+            app, ["learn", "Always use prepared statements", "--category", "invariant"]
+        )
         assert result.exit_code == 0
         assert "Established" in result.output
 
@@ -145,11 +148,7 @@ class TestCLIBasicCommands:
         """Test setting a goal (was broken with repo_id parameter)."""
         runner.invoke(app, ["init", "--type", "code"])
 
-        result = runner.invoke(app, [
-            "goal",
-            "Implement OAuth2",
-            "--priority", "2"
-        ])
+        result = runner.invoke(app, ["goal", "Implement OAuth2", "--priority", "2"])
         assert result.exit_code == 0
         assert "Goal set" in result.output
 
@@ -165,6 +164,7 @@ class TestCLIBasicCommands:
 
         # Verify it's valid JSON
         import json
+
         data = json.loads(export_path.read_text())
         assert "version" in data
         assert "memories" in data

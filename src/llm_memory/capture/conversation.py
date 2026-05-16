@@ -5,15 +5,16 @@ Parses LLM conversation logs (e.g. from Claude Desktop, ChatGPT exports)
 to extract structured memories.
 """
 
-import logging
 import json
-from typing import List, Dict, Any, Optional
+import logging
 from pathlib import Path
+from typing import Any, Dict, Optional
 
+from llm_memory.core.llm import LLMClient, create_llm_client
 from llm_memory.core.memory import Memory
-from llm_memory.core.llm import create_llm_client, LLMClient
 
 logger = logging.getLogger(__name__)
+
 
 class ConversationCapture:
     """Captures memories from conversation logs."""
@@ -26,19 +27,23 @@ class ConversationCapture:
     def _get_client(self) -> LLMClient:
         if self._client:
             return self._client
-        
+
         provider = self.config.llm_provider
         # Fallback to compression provider if not set in capture
         if not provider:
             provider = self.memory.config.compression.llm_provider
-            
+
         if not provider:
-            raise ValueError("No LLM provider configured for conversation capture. Set LLM_MEMORY_CAPTURE_LLM_PROVIDER.")
-            
+            raise ValueError(
+                "No LLM provider configured for conversation capture. "
+                "Set LLM_MEMORY_CAPTURE_LLM_PROVIDER."
+            )
+
         self._client = create_llm_client(
             provider=provider,
             model=self.config.llm_model or self.memory.config.compression.llm_model,
-            api_key=self.memory.config.embedding.api_key # Reuse generic key if applicable, or rely on env
+            # Reuse generic key if applicable, or rely on env.
+            api_key=self.memory.config.embedding.api_key,
         )
         return self._client
 
@@ -47,15 +52,17 @@ class ConversationCapture:
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"File not found: {path}")
-            
+
         content = path.read_text(encoding="utf-8")
         return self.parse_text(content, source=path.name, dry_run=dry_run)
 
-    def parse_text(self, text: str, source: str = "conversation", dry_run: bool = False) -> Dict[str, Any]:
+    def parse_text(
+        self, text: str, source: str = "conversation", dry_run: bool = False
+    ) -> Dict[str, Any]:
         """Parse conversation text and record memories."""
         client = self._get_client()
-        
-        system_prompt = """You are a Memory Extraction System. 
+
+        system_prompt = """You are a Memory Extraction System.
 Your goal is to analyze the user's conversation with an AI and extract structured memories.
 
 Extract these categories:
@@ -73,26 +80,31 @@ Output strictly valid JSON with this schema:
 }
 If nothing relevant is found for a category, return an empty list.
 """
-        
-        prompt = f"Analyze this conversation log and extract memories:\n\n{text[:20000]}" # Limit context
-        
+
+        prompt = (
+            "Analyze this conversation log and extract memories:\n\n"
+            f"{text[:20000]}"
+        )
+
         try:
             response = client.completion(
-                prompt=prompt, 
+                prompt=prompt,
                 system_prompt=system_prompt,
-                response_format={"type": "json_object"} if hasattr(client, 'client') and hasattr(client.client, 'chat') else None # Hint for OpenAI
+                response_format={"type": "json_object"}
+                if hasattr(client, "client") and hasattr(client.client, "chat")
+                else None,  # Hint for OpenAI
             )
-            
+
             # Clean response if markdown code block
             clean_resp = response.replace("```json", "").replace("```", "").strip()
             data = json.loads(clean_resp)
-            
+
             summary = {
                 "decisions": len(data.get("decisions", [])),
                 "learnings": len(data.get("learnings", [])),
                 "bugs": len(data.get("bugs", [])),
                 "tasks": len(data.get("tasks", [])),
-                "raw": data
+                "raw": data,
             }
 
             if dry_run:
@@ -106,15 +118,15 @@ If nothing relevant is found for a category, return an empty list.
                     what=d["what"],
                     why=d.get("why", "Unknown"),
                     alternatives=d.get("alternatives"),
-                    repo_id=repo_id
+                    repo_id=repo_id,
                 )
 
-            for l in data.get("learnings", []):
+            for learning in data.get("learnings", []):
                 self.memory.learn(
-                    knowledge=l["knowledge"],
-                    category=l.get("category", "fact"),
-                    importance=l.get("importance", 0.5),
-                    repo_id=repo_id
+                    knowledge=learning["knowledge"],
+                    category=learning.get("category", "fact"),
+                    importance=learning.get("importance", 0.5),
+                    repo_id=repo_id,
                 )
 
             for b in data.get("bugs", []):
@@ -122,7 +134,7 @@ If nothing relevant is found for a category, return an empty list.
                     event=f"Bug: {b['description']}",
                     category="bug",
                     metadata={"cause": b.get("cause"), "fix": b.get("fix")},
-                    repo_id=repo_id
+                    repo_id=repo_id,
                 )
 
             return summary

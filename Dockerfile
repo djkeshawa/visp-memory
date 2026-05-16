@@ -30,26 +30,28 @@ RUN apt-get update && \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
-RUN useradd -m -u 1000 llmuser
+# Create non-root user and writable data directory
+RUN useradd -m -u 1000 llmuser && \
+    mkdir -p /data && \
+    chown -R llmuser:llmuser /data
 
 WORKDIR /app
 
 # Copy built wheel from builder
 COPY --from=python-builder /app/dist/*.whl ./
 
-# Install the package with all dependencies
-RUN pip install --no-cache-dir "$(ls *.whl)[all]" && \
+# Install the runtime server profile. Avoid the broad [all] extra here: it pulls
+# development tools and large local embedding stacks that are not required to
+# run the API/dashboard container.
+RUN pip install --no-cache-dir "$(ls *.whl)[api,mcp]" && \
     rm *.whl
 
 # Switch to non-root user
 USER llmuser
 
-# Create data directory
-RUN mkdir -p /home/llmuser/.llm-memory
-
 # Set environment variables
-ENV LLM_MEMORY_DATA_DIR=/home/llmuser/.llm-memory
+ENV LLM_MEMORY_STORAGE_DATA_DIR=/data
+ENV LLM_MEMORY_EMBEDDING_PROVIDER=noop
 ENV PYTHONUNBUFFERED=1
 
 # Expose API port

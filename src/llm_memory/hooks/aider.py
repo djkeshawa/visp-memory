@@ -30,7 +30,7 @@ class AiderAdapter(GenericAdapter):
             project_root=project_root,
             context_file=".aider",
             injection_marker=None,  # Aider uses standalone file
-            append_mode=False
+            append_mode=False,
         )
 
     def install(self) -> Dict[str, bool]:
@@ -58,11 +58,7 @@ Context is automatically updated below.
 
         return results
 
-    def update_context(
-        self,
-        files: list[str] = None,
-        task: str = None
-    ) -> bool:
+    def update_context(self, files: list[str] = None, task: str = None) -> bool:
         """
         Update memory context in .aider file.
 
@@ -112,4 +108,5 @@ llm-memory hooks update aider
     def _get_timestamp(self) -> str:
         """Get current timestamp."""
         from datetime import datetime
+
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")

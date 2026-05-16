@@ -15,12 +15,15 @@ from llm_memory.config import load_config
 # Security schemes
 security = HTTPBearer(auto_error=False)
 
+
 class UserContext(BaseModel):
     """Authenticated user context."""
+
     user_id: str
     username: str
     team_id: Optional[str] = None
     is_admin: bool = False
+
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     """Create a new JWT access token."""
@@ -36,15 +39,13 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
 
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(
-        to_encode,
-        config.server.jwt_secret,
-        algorithm=config.server.jwt_algorithm
+        to_encode, config.server.jwt_secret, algorithm=config.server.jwt_algorithm
     )
     return encoded_jwt
 
+
 async def get_current_user(
-    request: Request,
-    auth: Optional[HTTPAuthorizationCredentials] = Depends(security)
+    request: Request, auth: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ) -> UserContext:
     """
     FastAPI dependency to get the current authenticated user.
@@ -64,18 +65,10 @@ async def get_current_user(
     api_key = request.headers.get("X-API-KEY")
     if api_key:
         if api_key in config.server.api_keys:
-            return UserContext(
-                user_id="api_key_user",
-                username="api_key",
-                is_admin=True
-            )
+            return UserContext(user_id="api_key_user", username="api_key", is_admin=True)
         # Also check storage config api key
         if config.storage.api_key and api_key == config.storage.api_key:
-            return UserContext(
-                user_id="default_admin",
-                username="admin",
-                is_admin=True
-            )
+            return UserContext(user_id="default_admin", username="admin", is_admin=True)
 
     # 2. Check for JWT in Bearer token
     if auth:
@@ -88,9 +81,7 @@ async def get_current_user(
         token = auth.credentials
         try:
             payload = jwt.decode(
-                token,
-                config.server.jwt_secret,
-                algorithms=[config.server.jwt_algorithm]
+                token, config.server.jwt_secret, algorithms=[config.server.jwt_algorithm]
             )
             user_id: str = payload.get("sub")
             if user_id is None:
@@ -103,7 +94,7 @@ async def get_current_user(
                 user_id=user_id,
                 username=payload.get("username", user_id),
                 team_id=payload.get("team_id"),
-                is_admin=payload.get("is_admin", False)
+                is_admin=payload.get("is_admin", False),
             )
         except JWTError:
             raise HTTPException(
@@ -114,9 +105,7 @@ async def get_current_user(
     # 3. Allow anonymous if configured
     if config.server.allow_anonymous:
         return UserContext(
-            user_id="anonymous",
-            username="anonymous",
-            team_id=config.server.default_team
+            user_id="anonymous", username="anonymous", team_id=config.server.default_team
         )
 
     # 4. Fail if no auth

@@ -4,18 +4,20 @@ Deduplication Module
 Identifies and merges duplicate memories.
 """
 
-from typing import List, Dict, Any
 import logging
+from typing import Any, Dict, List
 
 try:
-    from sklearn.metrics.pairwise import cosine_similarity
     import numpy as np
+    from sklearn.metrics.pairwise import cosine_similarity
+
     SKLEARN_AVAILABLE = True
 except ImportError:
     SKLEARN_AVAILABLE = False
     # Fallback to simple numpy if available, or just error
     try:
         import numpy as np
+
         NUMPY_AVAILABLE = True
     except ImportError:
         NUMPY_AVAILABLE = False
@@ -39,7 +41,7 @@ class Deduplicator:
         content: str = None,
         embedding: List[float] = None,
         threshold: float = 0.9,
-        limit: int = 5
+        limit: int = 5,
     ) -> List[Dict[str, Any]]:
         """
         Find duplicates for a given content or existing memories.
@@ -58,7 +60,7 @@ class Deduplicator:
             return []
 
         # Check if storage has ChromaDB collection interface
-        if hasattr(self.storage, '_get_collection'):
+        if hasattr(self.storage, "_get_collection"):
             # LocalStorage with ChromaDB
             collection = self.storage._get_collection(layer)
             if not collection:
@@ -66,9 +68,7 @@ class Deduplicator:
 
             # If content/embedding provided, check against it
             if content or embedding:
-                return self._find_similar_to_new(
-                    collection, content, embedding, threshold, limit
-                )
+                return self._find_similar_to_new(collection, content, embedding, threshold, limit)
 
             # Otherwise, check for duplicates within the collection (batch mode)
             return self._find_internal_duplicates(collection, threshold, limit)
@@ -77,12 +77,7 @@ class Deduplicator:
             return self._find_duplicates_via_search(layer, content, embedding, threshold, limit)
 
     def _find_similar_to_new(
-        self,
-        collection,
-        content: str,
-        embedding: List[float],
-        threshold: float,
-        limit: int
+        self, collection, content: str, embedding: List[float], threshold: float, limit: int
     ) -> List[Dict[str, Any]]:
         """Find memories similar to new content."""
         query_texts = [content] if content else None
@@ -90,9 +85,7 @@ class Deduplicator:
 
         try:
             results = collection.query(
-                query_texts=query_texts,
-                query_embeddings=query_embeddings,
-                n_results=limit
+                query_texts=query_texts, query_embeddings=query_embeddings, n_results=limit
             )
         except Exception:
             return []
@@ -112,14 +105,11 @@ class Deduplicator:
         return duplicates
 
     def _find_internal_duplicates(
-        self,
-        collection,
-        threshold: float,
-        limit: int
+        self, collection, threshold: float, limit: int
     ) -> List[List[Dict[str, Any]]]:
         """
         Find duplicates within existing memories.
-        
+
         Returns groups of duplicates.
         """
         # Fetch all embeddings
@@ -140,10 +130,10 @@ class Deduplicator:
             matrix = np.array(embeddings)
             sim_matrix = cosine_similarity(matrix)
         elif NUMPY_AVAILABLE:
-             # Basic cosine similarity manually
-             matrix = np.array(embeddings)
-             norm = np.linalg.norm(matrix, axis=1, keepdims=True)
-             sim_matrix = np.dot(matrix, matrix.T) / (np.dot(norm, norm.T) + 1e-9)
+            # Basic cosine similarity manually
+            matrix = np.array(embeddings)
+            norm = np.linalg.norm(matrix, axis=1, keepdims=True)
+            sim_matrix = np.dot(matrix, matrix.T) / (np.dot(norm, norm.T) + 1e-9)
         else:
             return []
 
@@ -160,7 +150,11 @@ class Deduplicator:
                     continue
 
                 # Use proper 2D indexing for numpy arrays
-                similarity = float(sim_matrix[i, j]) if hasattr(sim_matrix[i, j], '__float__') else sim_matrix[i, j]
+                similarity = (
+                    float(sim_matrix[i, j])
+                    if hasattr(sim_matrix[i, j], "__float__")
+                    else sim_matrix[i, j]
+                )
                 if similarity >= threshold:
                     if not group:
                         group.append(self.storage.get_memory(ids[i]))
@@ -179,11 +173,11 @@ class Deduplicator:
     def merge_memories(self, memory_ids: List[str], target_content: str = None) -> str:
         """
         Merge multiple memories into one.
-        
+
         Args:
             memory_ids: IDs of memories to merge
             target_content: Content for the merged memory (optional, defaults to first)
-            
+
         Returns:
             ID of the preserved memory
         """
@@ -223,12 +217,7 @@ class Deduplicator:
         return primary_id
 
     def _find_duplicates_via_search(
-        self,
-        layer: str,
-        content: str,
-        embedding: List[float],
-        threshold: float,
-        limit: int
+        self, layer: str, content: str, embedding: List[float], threshold: float, limit: int
     ) -> List[Dict[str, Any]]:
         """
         Find duplicates using storage search interface (for Neo4j and others).
@@ -238,28 +227,28 @@ class Deduplicator:
         if not content:
             # Without content, we can't do much with search-based approach
             # For now, just return empty - full dedup requires collection access
-            logger.info("Full deduplication not supported for this storage backend. Provide content to check for duplicates.")
+            logger.info(
+                "Full deduplication is not supported for this storage backend. "
+                "Provide content to check for duplicates."
+            )
             return []
 
         # Search for similar memories
         results = self.storage.search_memories(
-            query=content,
-            layer=layer,
-            limit=limit,
-            embedding=embedding
+            query=content, layer=layer, limit=limit, embedding=embedding
         )
 
         # Filter by threshold
-        duplicates = [
-            r for r in results
-            if r.get("similarity", 0) >= threshold
-        ]
+        duplicates = [r for r in results if r.get("similarity", 0) >= threshold]
 
         return duplicates
 
     def _check_deps(self) -> bool:
         """Check if dependencies are available."""
         if not (SKLEARN_AVAILABLE or NUMPY_AVAILABLE):
-            logger.warning("Deduplication requires scikit-learn or numpy. Install with: pip install llm-memory[analysis]")
+            logger.warning(
+                "Deduplication requires scikit-learn or numpy. "
+                "Install with: pip install llm-memory[analysis]"
+            )
             return False
         return True

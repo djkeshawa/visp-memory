@@ -2,11 +2,11 @@
 
 import { useState, Suspense } from "react"
 import { motion } from "framer-motion"
-import { Search } from "lucide-react"
+import { AlertTriangle, Search } from "lucide-react"
 import { SearchBar } from "@/components/recall/search-bar"
 import { SearchSuggestions } from "@/components/recall/search-suggestions"
 import { SearchResults } from "@/components/recall/search-results"
-import { searchMemories } from "@/lib/api"
+import { describeApiError, searchMemories } from "@/lib/api"
 import { pageTransition } from "@/lib/animations"
 import type { Memory } from "@/lib/types"
 
@@ -14,6 +14,7 @@ function RecallContent() {
   const [query, setQuery] = useState("")
   const [results, setResults] = useState<Memory[] | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const handleSearch = async (searchQuery: string) => {
     setQuery(searchQuery)
@@ -22,8 +23,10 @@ function RecallContent() {
     try {
       const searchResults = await searchMemories(searchQuery)
       setResults(searchResults)
+      setErrorMessage(null)
     } catch (error) {
       console.error("Search failed:", error)
+      setErrorMessage(describeApiError(error))
       setResults([])
     } finally {
       setIsLoading(false)
@@ -48,6 +51,15 @@ function RecallContent() {
 
       {/* Search Bar */}
       <SearchBar onSearch={handleSearch} isLoading={isLoading} />
+
+      {errorMessage ? (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-muted-foreground">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 text-destructive" />
+            <span>{errorMessage}</span>
+          </div>
+        </div>
+      ) : null}
 
       {/* Results or Suggestions */}
       {results !== null ? (

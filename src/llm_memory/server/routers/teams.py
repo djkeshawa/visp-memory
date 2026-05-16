@@ -1,16 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from typing import List
 from datetime import datetime
+from typing import List
 
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+
+from llm_memory.core.team import Team, TeamManager, User
+from llm_memory.server.auth import UserContext, get_current_user
 from llm_memory.server.schemas import (
-    UserCreate,
-    UserResponse,
+    MemberAdd,
     TeamCreate,
     TeamResponse,
-    MemberAdd,
+    UserCreate,
+    UserResponse,
 )
-from llm_memory.server.auth import get_current_user, UserContext
-from llm_memory.core.team import User, Team, TeamManager
 
 router = APIRouter(prefix="/teams", tags=["teams"])
 

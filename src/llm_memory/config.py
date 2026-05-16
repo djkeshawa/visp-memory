@@ -207,6 +207,7 @@ class MemoryConfig(BaseSettings):
         if path.suffix in (".yaml", ".yml"):
             try:
                 import yaml
+
                 data = yaml.safe_load(content)
             except ImportError:
                 raise ImportError("PyYAML required for YAML config: pip install pyyaml")
@@ -238,6 +239,7 @@ class MemoryConfig(BaseSettings):
         """Apply deployment environment overrides after file-based config loading."""
         env_overrides = {
             "LLM_MEMORY_REPO_ID": ("repo_id",),
+            "LLM_MEMORY_STORAGE_DATA_DIR": ("storage", "data_dir"),
             "LLM_MEMORY_STORAGE_BACKEND": ("storage", "backend"),
             "LLM_MEMORY_STORAGE_MODE": ("storage", "mode"),
             "LLM_MEMORY_STORAGE_SERVER_URL": ("storage", "server_url"),
@@ -250,8 +252,17 @@ class MemoryConfig(BaseSettings):
             "LLM_MEMORY_EMBEDDING_MODEL": ("embedding", "model"),
             "EMBEDDING_API_KEY": ("embedding", "api_key"),
             "EMBEDDING_API_BASE": ("embedding", "api_base"),
+            "LLM_MEMORY_SERVER_AUTH_ENABLED": ("server", "auth_enabled"),
             "LLM_MEMORY_JWT_SECRET": ("server", "jwt_secret"),
             "LLM_MEMORY_SERVER_CORS_ORIGINS": ("server", "cors_origins"),
+            "LLM_MEMORY_SERVER_CORS_ALLOW_CREDENTIALS": (
+                "server",
+                "cors_allow_credentials",
+            ),
+            "LLM_MEMORY_SERVER_API_KEYS": ("server", "api_keys"),
+            "LLM_MEMORY_SERVER_ALLOW_ANONYMOUS": ("server", "allow_anonymous"),
+            "LLM_MEMORY_SERVER_DEFAULT_TEAM": ("server", "default_team"),
+            "LLM_MEMORY_SERVER_JWT_EXPIRY_HOURS": ("server", "jwt_expiry_hours"),
         }
 
         for env_name, path in env_overrides.items():
@@ -262,7 +273,19 @@ class MemoryConfig(BaseSettings):
             for attr in path[:-1]:
                 target = getattr(target, attr)
             value = os.environ[env_name]
-            if path == ("server", "cors_origins"):
+            if path == ("storage", "data_dir"):
+                value = Path(value)
+            elif path in {
+                ("server", "auth_enabled"),
+                ("server", "cors_allow_credentials"),
+                ("server", "allow_anonymous"),
+            }:
+                value = value.lower() in {"1", "true", "yes", "on"}
+            elif path == ("server", "jwt_expiry_hours"):
+                value = int(value)
+            elif path == ("server", "cors_origins"):
+                value = ServerConfig.parse_cors_origins(value)
+            elif path == ("server", "api_keys"):
                 value = ServerConfig.parse_cors_origins(value)
             setattr(target, path[-1], value)
 
@@ -287,6 +310,7 @@ class MemoryConfig(BaseSettings):
         if path.suffix in (".yaml", ".yml"):
             try:
                 import yaml
+
                 content = yaml.dump(data, default_flow_style=False)
             except ImportError:
                 raise ImportError("PyYAML required for YAML config: pip install pyyaml")

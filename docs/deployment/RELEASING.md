@@ -132,20 +132,17 @@ Always test the build locally first:
 # Clean previous builds
 make clean
 
-# Build everything
-make build
+# Run the local release gate
+make release-check
 
-# Test the wheel
-pip install --force-reinstall dist/*.whl
-llm-memory --version
-
-# Test server and dashboard
-python -c "from llm_memory.server.app import app; print('✓ OK')"
-
-# Start server and check dashboard
-uvicorn llm_memory.server.app:app --port 8000
-# Visit http://localhost:8000/dashboard
+# Start server and check dashboard manually
+LLM_MEMORY_EMBEDDING_PROVIDER=noop \
+LLM_MEMORY_SERVER_AUTH_ENABLED=false \
+llm-memory serve
+# Visit http://127.0.0.1:8000/dashboard
 ```
+
+For the full manual checklist, see [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
 
 ## GitHub Actions Workflow
 
@@ -161,9 +158,10 @@ The release workflow (`.github/workflows/release-simple.yml`) runs automatically
    - Setup Node.js 20
 
 2. **Build Frontend** (2 min)
+   - Run `python3 build_frontend.py`
    - Install npm dependencies
-   - Run Next.js export
-   - Copy to package directory
+   - Build the static dashboard
+   - Copy static files to the package directory
 
 3. **Build Python Package** (1 min)
    - Install build tools
@@ -186,9 +184,7 @@ The release workflow (`.github/workflows/release-simple.yml`) runs automatically
 **Solution:**
 ```bash
 # Test locally
-cd llm-memory-dashboard
-npm ci
-npm run export
+python3 build_frontend.py
 ```
 
 Fix any errors, commit, and push again.
@@ -273,24 +269,7 @@ pip install llm-memory
 
 ## Release Checklist
 
-Before creating a release:
-
-- [ ] All tests pass (`pytest`)
-- [ ] Code is linted (`ruff check .`)
-- [ ] Documentation is updated
-- [ ] CHANGELOG.md is updated (if you maintain one)
-- [ ] Version number is bumped in `pyproject.toml`
-- [ ] Frontend builds successfully (`cd llm-memory-dashboard && npm run export`)
-- [ ] Package builds successfully (`python3 -m build --wheel`)
-- [ ] Wheel installs and runs (`pip install dist/*.whl && llm-memory --version`)
-- [ ] Dashboard is accessible (`uvicorn llm_memory.server.app:app`)
-
-After release is published:
-
-- [ ] Verify release appears on GitHub
-- [ ] Download and test the wheel file
-- [ ] Update documentation with new version number
-- [ ] Announce release (social media, forums, etc.)
+Use [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) as the source of truth.
 
 ## Alternative: Manual GitHub Release
 

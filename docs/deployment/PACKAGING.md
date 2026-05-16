@@ -29,7 +29,7 @@ This method bundles the Next.js dashboard as static files within the Python pack
 
 ```bash
 # Step 1: Build the frontend
-python build_frontend.py
+python3 build_frontend.py
 
 # Step 2: Build the Python package
 make build-python
@@ -47,6 +47,9 @@ This creates:
 ```bash
 # Install from local wheel
 pip install dist/llm_memory-0.1.0-py3-none-any.whl[all]
+
+# Lean server install without local sentence-transformer model dependencies
+pip install dist/llm_memory-0.1.0-py3-none-any.whl[api,mcp]
 
 # Or install directly from source
 pip install -e ".[all]"
@@ -73,7 +76,7 @@ llm-memory init --type code
 llm-memory record "test memory"
 
 # Start server with dashboard
-uvicorn llm_memory.server.app:app --port 8000
+llm-memory serve
 # Dashboard: http://localhost:8000/dashboard
 # API docs: http://localhost:8000/docs
 ```
@@ -202,7 +205,7 @@ pip install pyinstaller
 ./build_standalone.sh
 
 # Manual build
-python build_frontend.py
+python3 build_frontend.py
 pyinstaller llm-memory.spec
 ```
 
@@ -293,13 +296,10 @@ For development and testing:
 pip install -e ".[all]"
 
 # Build frontend only
-cd llm-memory-dashboard
-npm run export
-cd ..
-python build_frontend.py
+python3 build_frontend.py
 
 # Test server
-uvicorn llm_memory.server.app:app --reload --port 8000
+llm-memory serve --reload
 ```
 
 ### Using Makefile
@@ -396,15 +396,13 @@ This works both in development (`http://localhost:3000` → `http://localhost:80
 
 ### Frontend Build Fails
 
-**Problem**: `npm run export` fails
+**Problem**: dashboard build fails
 
 **Solutions**:
 ```bash
 # Clean and rebuild
-cd llm-memory-dashboard
-rm -rf .next node_modules
-npm install
-npm run export
+rm -rf llm-memory-dashboard/.next llm-memory-dashboard/node_modules
+python3 build_frontend.py
 ```
 
 ### Static Files Not Found
@@ -419,7 +417,7 @@ npm run export
 
 2. Rebuild frontend:
    ```bash
-   python build_frontend.py
+   python3 build_frontend.py
    ```
 
 3. Check FastAPI logs for STATIC_DIR path

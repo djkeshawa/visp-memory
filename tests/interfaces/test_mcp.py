@@ -14,6 +14,7 @@ class TestMCPServer:
         """MCP server can be created."""
         try:
             from llm_memory.interfaces.mcp import MCP_AVAILABLE, create_mcp_server
+
             if not MCP_AVAILABLE:
                 pytest.skip("MCP not installed")
 
@@ -36,11 +37,13 @@ class TestMCPServer:
         """MCP tool handler works."""
         try:
             from llm_memory.interfaces.mcp import MCP_AVAILABLE, handle_tool
+
             if not MCP_AVAILABLE:
                 pytest.skip("MCP not installed")
 
             # Create a temp memory for testing
             import tempfile
+
             with tempfile.TemporaryDirectory() as tmpdir:
                 config = MemoryConfig()
                 config.storage.data_dir = Path(tmpdir)
@@ -58,10 +61,12 @@ class TestMCPServer:
         """MCP record tool works."""
         try:
             from llm_memory.interfaces.mcp import MCP_AVAILABLE, handle_tool
+
             if not MCP_AVAILABLE:
                 pytest.skip("MCP not installed")
 
             import tempfile
+
             with tempfile.TemporaryDirectory() as tmpdir:
                 config = MemoryConfig()
                 config.storage.data_dir = Path(tmpdir)
@@ -69,9 +74,7 @@ class TestMCPServer:
                 memory = Memory(config=config)
 
                 result = await handle_tool(
-                    "memory_record",
-                    {"event": "Test event", "category": "note"},
-                    memory
+                    "memory_record", {"event": "Test event", "category": "note"}, memory
                 )
                 assert "Recorded" in result
         except ImportError:

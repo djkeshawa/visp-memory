@@ -1,4 +1,4 @@
-from . import memories
-from . import intents
-from . import repositories
-from . import teams
+from . import intents as intents
+from . import memories as memories
+from . import repositories as repositories
+from . import teams as teams

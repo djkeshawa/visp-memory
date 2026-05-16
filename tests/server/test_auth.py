@@ -12,20 +12,21 @@ class MockRequest:
     def __init__(self, headers=None):
         self.headers = headers or {}
 
+
 class MockAuth:
     def __init__(self, credentials):
         self.credentials = credentials
+
 
 @pytest.fixture
 def mock_config():
     config = MemoryConfig()
     config.server = ServerConfig(
-        jwt_secret="test_secret",
-        api_keys=["test_key"],
-        jwt_expiry_hours=24
+        jwt_secret="test_secret", api_keys=["test_key"], jwt_expiry_hours=24
     )
     with mock.patch("llm_memory.server.auth.load_config", return_value=config):
         yield config
+
 
 def test_create_access_token(mock_config):
     data = {"sub": "user123", "username": "testuser"}
@@ -37,11 +38,13 @@ def test_create_access_token(mock_config):
     assert payload["username"] == "testuser"
     assert "exp" in payload
 
+
 def test_create_access_token_requires_jwt_secret(mock_config):
     mock_config.server.jwt_secret = ""
 
     with pytest.raises(ValueError, match="LLM_MEMORY_JWT_SECRET"):
         create_access_token({"sub": "user123"})
+
 
 @pytest.mark.asyncio
 async def test_get_current_user_api_key(mock_config):
@@ -49,6 +52,7 @@ async def test_get_current_user_api_key(mock_config):
     user = await get_current_user(request, auth=None)
     assert user.username == "api_key"
     assert user.is_admin is True
+
 
 @pytest.mark.asyncio
 async def test_get_current_user_jwt(mock_config):
@@ -59,6 +63,7 @@ async def test_get_current_user_jwt(mock_config):
     user = await get_current_user(request, auth=auth)
     assert user.user_id == "user456"
     assert user.username == "jwtuser"
+
 
 @pytest.mark.asyncio
 async def test_get_current_user_jwt_requires_configured_secret(mock_config):
@@ -71,6 +76,7 @@ async def test_get_current_user_jwt_requires_configured_secret(mock_config):
     assert exc.value.status_code == 401
     assert exc.value.detail == "JWT authentication is not configured"
 
+
 @pytest.mark.asyncio
 async def test_get_current_user_api_key_without_jwt_secret(mock_config):
     mock_config.server.jwt_secret = ""
@@ -81,6 +87,7 @@ async def test_get_current_user_api_key_without_jwt_secret(mock_config):
     assert user.username == "api_key"
     assert user.is_admin is True
 
+
 @pytest.mark.asyncio
 async def test_get_current_user_invalid_jwt(mock_config):
     auth = MockAuth(credentials="invalid.token.here")
@@ -90,6 +97,7 @@ async def test_get_current_user_invalid_jwt(mock_config):
         await get_current_user(request, auth=auth)
     assert exc.value.status_code == 401
 
+
 @pytest.mark.asyncio
 async def test_get_current_user_no_auth(mock_config):
     request = MockRequest()
@@ -98,6 +106,7 @@ async def test_get_current_user_no_auth(mock_config):
     with pytest.raises(HTTPException) as exc:
         await get_current_user(request, auth=None)
     assert exc.value.status_code == 401
+
 
 @pytest.mark.asyncio
 async def test_get_current_user_auth_disabled(mock_config):

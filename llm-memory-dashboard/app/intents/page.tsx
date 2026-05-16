@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { motion } from "framer-motion"
-import { Plus } from "lucide-react"
+import { AlertTriangle, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -17,7 +17,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
 import { IntentsColumn } from "@/components/intents/intents-column"
-import { getActiveIntents, createIntent } from "@/lib/api"
+import { createIntent, describeApiError, getActiveIntents } from "@/lib/api"
 import { pageTransition } from "@/lib/animations"
 import type { Intent } from "@/lib/types"
 
@@ -27,6 +27,7 @@ export default function IntentsPage() {
   const [newDescription, setNewDescription] = useState("")
   const [newPriority, setNewPriority] = useState([5])
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   useEffect(() => {
     fetchIntents()
@@ -34,8 +35,14 @@ export default function IntentsPage() {
 
   const fetchIntents = () => {
     getActiveIntents()
-      .then(setIntents)
-      .catch(console.error)
+      .then((data) => {
+        setIntents(data)
+        setErrorMessage(null)
+      })
+      .catch((error) => {
+        console.error(error)
+        setErrorMessage(describeApiError(error))
+      })
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -45,12 +52,14 @@ export default function IntentsPage() {
     setIsSubmitting(true)
     try {
       await createIntent(newDescription, newPriority[0])
+      setErrorMessage(null)
       setNewDescription("")
       setNewPriority([5])
       setIsDialogOpen(false)
       fetchIntents()
     } catch (error) {
       console.error("Failed to create intent", error)
+      setErrorMessage(describeApiError(error))
     } finally {
       setIsSubmitting(false)
     }
@@ -120,6 +129,15 @@ export default function IntentsPage() {
           </DialogContent>
         </Dialog>
       </div>
+
+      {errorMessage ? (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-muted-foreground">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 text-destructive" />
+            <span>{errorMessage}</span>
+          </div>
+        </div>
+      ) : null}
 
       {/* Two Column Layout */}
       <div className="grid gap-8 md:grid-cols-2">

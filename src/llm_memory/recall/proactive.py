@@ -9,7 +9,7 @@ Automatically surfaces relevant memories based on context:
 
 import hashlib
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
 
 class ProactiveRecall:
@@ -39,9 +39,7 @@ class ProactiveRecall:
         self.memory = memory
 
     def on_file_open(
-        self,
-        file_path: str,
-        include_related: bool = True
+        self, file_path: str, include_related: bool = True
     ) -> Dict[str, List[Dict[str, Any]]]:
         """
         Get relevant memories when opening a file.
@@ -63,7 +61,7 @@ class ProactiveRecall:
             "bugs": [],
             "decisions": [],
             "knowledge": [],
-            "recent_changes": []
+            "recent_changes": [],
         }
 
         # Get file-specific warnings
@@ -72,45 +70,30 @@ class ProactiveRecall:
 
         # Search for bugs in this file
         bug_results = self.memory.episodic.search(
-            query=f"file:{file_path} bug",
-            category="bug_fixed",
-            limit=5
+            query=f"file:{file_path} bug", category="bug_fixed", limit=5
         )
         results["bugs"] = bug_results
 
         # Search for decisions affecting this file
         decision_results = self.memory.episodic.search(
-            query=file_path,
-            category="architecture_decision",
-            limit=3
+            query=file_path, category="architecture_decision", limit=3
         )
         results["decisions"] = decision_results
 
         # Get general knowledge about this file/module
-        knowledge_results = self.memory.semantic.relevant_for(
-            files=[file_path],
-            limit=5
-        )
+        knowledge_results = self.memory.semantic.relevant_for(files=[file_path], limit=5)
         results["knowledge"] = knowledge_results
 
         # Get recent changes to this file (from git capture)
-        recent = self.memory.episodic.search(
-            query=file_path,
-            limit=3
-        )
+        recent = self.memory.episodic.search(query=file_path, limit=3)
         results["recent_changes"] = [
-            r for r in recent
-            if file_path.lower() in r.get("content", "").lower()
+            r for r in recent if file_path.lower() in r.get("content", "").lower()
         ]
 
         return results
 
     def on_error(
-        self,
-        error_message: str,
-        error_type: str = None,
-        file_path: str = None,
-        limit: int = 5
+        self, error_message: str, error_type: str = None, file_path: str = None, limit: int = 5
     ) -> List[Dict[str, Any]]:
         """
         Find similar errors that occurred in the past.
@@ -137,16 +120,10 @@ class ProactiveRecall:
         query = " ".join(query_parts)
 
         # Search for similar bugs and known issues
-        similar_bugs = self.memory.episodic.search(
-            query=query,
-            category="bug_fixed",
-            limit=limit
-        )
+        similar_bugs = self.memory.episodic.search(query=query, category="bug_fixed", limit=limit)
 
         similar_issues = self.memory.semantic.search(
-            query=query,
-            category="known_issue",
-            limit=limit
+            query=query, category="known_issue", limit=limit
         )
 
         # Combine and deduplicate
@@ -158,9 +135,7 @@ class ProactiveRecall:
         return all_results[:limit]
 
     def on_directory(
-        self,
-        dir_path: str,
-        recursive: bool = False
+        self, dir_path: str, recursive: bool = False
     ) -> Dict[str, List[Dict[str, Any]]]:
         """
         Aggregate knowledge for an entire directory.
@@ -177,17 +152,13 @@ class ProactiveRecall:
         """
         dir_path = self._normalize_path(dir_path)
 
-        results = {
-            "warnings": [],
-            "conventions": [],
-            "patterns": [],
-            "recent_activity": []
-        }
+        results = {"warnings": [], "conventions": [], "patterns": [], "recent_activity": []}
 
         # Get all warnings mentioning this directory
         all_warnings = self.memory.semantic.get_warnings()
         dir_warnings = [
-            w for w in all_warnings
+            w
+            for w in all_warnings
             if dir_path in w.get("content", "").lower()
             or dir_path in str(w.get("metadata", {}).get("applies_to", []))
         ]
@@ -195,26 +166,16 @@ class ProactiveRecall:
 
         # Get conventions for this directory
         all_conventions = self.memory.semantic.get_conventions()
-        dir_conventions = [
-            c for c in all_conventions
-            if dir_path in c.get("content", "").lower()
-        ]
+        dir_conventions = [c for c in all_conventions if dir_path in c.get("content", "").lower()]
         results["conventions"] = dir_conventions
 
         # Search for patterns in this directory
-        pattern_results = self.memory.semantic.search(
-            query=dir_path,
-            category="pattern",
-            limit=10
-        )
+        pattern_results = self.memory.semantic.search(query=dir_path, category="pattern", limit=10)
         results["patterns"] = pattern_results
 
         # Get recent activity in this directory
         recent = self.memory.episodic.recent(limit=20)
-        dir_recent = [
-            r for r in recent
-            if dir_path in r.get("content", "").lower()
-        ]
+        dir_recent = [r for r in recent if dir_path in r.get("content", "").lower()]
         results["recent_activity"] = dir_recent[:5]
 
         return results
@@ -223,7 +184,7 @@ class ProactiveRecall:
         self,
         memories: Dict[str, List[Dict[str, Any]]],
         format: str = "markdown",
-        max_length: int = 2000
+        max_length: int = 2000,
     ) -> str:
         """
         Format memories for LLM context injection.
@@ -238,6 +199,7 @@ class ProactiveRecall:
         """
         if format == "json":
             import json
+
             return json.dumps(memories, indent=2, default=str)[:max_length]
 
         lines = []
@@ -262,7 +224,7 @@ class ProactiveRecall:
         if memories.get("decisions"):
             lines.append("📋 **Architectural Decisions**")
             for d in memories["decisions"][:2]:
-                content = d["content"].split('\n')[0][:150]
+                content = d["content"].split("\n")[0][:150]
                 lines.append(f"  • {content}")
             lines.append("")
 
@@ -294,15 +256,12 @@ class ProactiveRecall:
 
         # Truncate if too long
         if len(output) > max_length:
-            output = output[:max_length - 100] + "\n\n... (truncated for length)"
+            output = output[: max_length - 100] + "\n\n... (truncated for length)"
 
         return output
 
     def find_relevant_for_task(
-        self,
-        task_description: str,
-        files: List[str] = None,
-        limit: int = 10
+        self, task_description: str, files: List[str] = None, limit: int = 10
     ) -> Dict[str, List[Dict[str, Any]]]:
         """
         Find all relevant memories for a specific task.
@@ -318,12 +277,7 @@ class ProactiveRecall:
         Returns:
             Comprehensive context for task
         """
-        results = {
-            "warnings": [],
-            "knowledge": [],
-            "history": [],
-            "patterns": []
-        }
+        results = {"warnings": [], "knowledge": [], "history": [], "patterns": []}
 
         # Get file-specific context if files provided
         if files:
@@ -333,10 +287,7 @@ class ProactiveRecall:
                 results["knowledge"].extend(file_context["knowledge"])
 
         # Semantic search for task
-        task_results = self.memory.recall(
-            query=task_description,
-            limit=limit
-        )
+        task_results = self.memory.recall(query=task_description, limit=limit)
 
         # Categorize results
         for result in task_results:
@@ -352,9 +303,7 @@ class ProactiveRecall:
 
         # Search for patterns
         pattern_results = self.memory.semantic.search(
-            query=task_description,
-            category="pattern",
-            limit=5
+            query=task_description, category="pattern", limit=5
         )
         results["patterns"] = pattern_results
 
@@ -388,16 +337,16 @@ class ProactiveRecall:
         normalized = error_message.lower()
 
         # Remove file paths
-        normalized = re.sub(r'[/\\][^\s]+', '<path>', normalized)
+        normalized = re.sub(r"[/\\][^\s]+", "<path>", normalized)
 
         # Remove line numbers
-        normalized = re.sub(r'line \d+', 'line <n>', normalized)
+        normalized = re.sub(r"line \d+", "line <n>", normalized)
 
         # Remove specific values in quotes
-        normalized = re.sub(r'["\']([^"\']+)["\']', '<value>', normalized)
+        normalized = re.sub(r'["\']([^"\']+)["\']', "<value>", normalized)
 
         # Remove numbers
-        normalized = re.sub(r'\b\d+\b', '<n>', normalized)
+        normalized = re.sub(r"\b\d+\b", "<n>", normalized)
 
         # Generate hash
         return hashlib.md5(normalized.encode()).hexdigest()[:8]

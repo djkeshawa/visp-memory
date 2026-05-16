@@ -15,9 +15,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
+from llm_memory.core.ranking import normalize_distance_score, rank_memory_results, text_similarity
+
 try:
     import chromadb
     from chromadb.config import Settings
+
     CHROMADB_AVAILABLE = True
 except ImportError:
     CHROMADB_AVAILABLE = False
@@ -30,7 +33,9 @@ class BaseStorage(ABC):
     """Abstract interface for memory storage."""
 
     @abstractmethod
-    def store_memory(self, content: str, layer: MemoryLayer = "episodic", repo_id: str = None, **kwargs) -> str:
+    def store_memory(
+        self, content: str, layer: MemoryLayer = "episodic", repo_id: str = None, **kwargs
+    ) -> str:
         """Store a memory."""
         pass
 
@@ -66,7 +71,13 @@ class BaseStorage(ABC):
 
     # Intent Operations
     @abstractmethod
-    def set_intent(self, description: str, priority: int = 0, context: Dict[str, Any] = None, repo_id: str = None) -> str:
+    def set_intent(
+        self,
+        description: str,
+        priority: int = 0,
+        context: Dict[str, Any] = None,
+        repo_id: str = None,
+    ) -> str:
         """Set a new intent."""
         pass
 
@@ -82,12 +93,16 @@ class BaseStorage(ABC):
 
     # Relationship Operations
     @abstractmethod
-    def add_relationship(self, source_id: str, target_id: str, relationship: str, strength: float = 1.0) -> str:
+    def add_relationship(
+        self, source_id: str, target_id: str, relationship: str, strength: float = 1.0
+    ) -> str:
         """Add a relationship."""
         pass
 
     @abstractmethod
-    def get_related_memories(self, memory_id: str, relationship: str = None) -> List[Dict[str, Any]]:
+    def get_related_memories(
+        self, memory_id: str, relationship: str = None
+    ) -> List[Dict[str, Any]]:
         """Get related memories."""
         pass
 
@@ -130,7 +145,9 @@ class BaseStorage(ABC):
         pass
 
     @abstractmethod
-    def add_repo_dependency(self, source_id: str, target_id: str, dep_type: str, version: str = None, notes: str = None) -> str:
+    def add_repo_dependency(
+        self, source_id: str, target_id: str, dep_type: str, version: str = None, notes: str = None
+    ) -> str:
         """Add dependency between repos."""
         pass
 
@@ -173,6 +190,7 @@ class BaseStorage(ABC):
 
 class LocalStorage(BaseStorage):
     """Unified storage for structured data and vector embeddings (Local SQLite + Chroma)."""
+
     def __init__(self, data_dir: Path, embedding_fn=None):
         """
         Initialize storage.
@@ -189,6 +207,9 @@ class LocalStorage(BaseStorage):
         self.chroma_path = self.data_dir / "vectors"
 
         self._embedding_fn = embedding_fn
+        embedding_owner = getattr(embedding_fn, "__self__", None)
+        embedding_owner_name = embedding_owner.__class__.__name__.lower() if embedding_owner else ""
+        self._uses_noop_embeddings = embedding_owner_name == "noopprovider"
         self._chroma_client = None
         self._collections = {}
 
@@ -336,12 +357,21 @@ class LocalStorage(BaseStorage):
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_layer ON memories(layer)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_repo ON memories(repo_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance)"
+            )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_intents_status ON intents(status)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_relationships_source ON relationships(source_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_relationships_target ON relationships(target_id)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_relationships_source ON relationships(source_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_relationships_target ON relationships(target_id)"
+            )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_repos_team ON repositories(team_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_repo_deps_source ON repository_dependencies(source_repo_id)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_repo_deps_source "
+                "ON repository_dependencies(source_repo_id)"
+            )
 
             conn.commit()
 
@@ -364,10 +394,7 @@ class LocalStorage(BaseStorage):
             self.chroma_path.mkdir(parents=True, exist_ok=True)
             self._chroma_client = chromadb.PersistentClient(
                 path=str(self.chroma_path),
-                settings=Settings(
-                    anonymized_telemetry=False,
-                    allow_reset=True
-                )
+                settings=Settings(anonymized_telemetry=False, allow_reset=True),
             )
 
         return self._chroma_client
@@ -390,7 +417,10 @@ class LocalStorage(BaseStorage):
                 # ChromaDB uses "hnsw:space" parameter - "cosine", "l2", or "ip" (inner product)
                 self._collections[layer] = client.create_collection(
                     name=f"memories_{layer}",
-                    metadata={"description": f"Memory embeddings for {layer} layer", "hnsw:space": "cosine"}
+                    metadata={
+                        "description": f"Memory embeddings for {layer} layer",
+                        "hnsw:space": "cosine",
+                    },
                 )
 
         return self._collections[layer]
@@ -426,7 +456,7 @@ class LocalStorage(BaseStorage):
         tags: List[str] = None,
         metadata: Dict[str, Any] = None,
         source_ids: List[str] = None,
-        embedding: List[float] = None
+        embedding: List[float] = None,
     ) -> str:
         """
         Store a memory in both SQLite and vector DB.
@@ -458,20 +488,25 @@ class LocalStorage(BaseStorage):
 
         # Store in SQLite
         with self._get_db() as conn:
-            conn.execute("""
-                INSERT INTO memories (id, content, layer, repo_id, category, importance, tags, metadata, source_ids)
+            conn.execute(
+                """
+                INSERT INTO memories (
+                    id, content, layer, repo_id, category, importance, tags, metadata, source_ids
+                )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                memory_id,
-                content,
-                layer,
-                repo_id,
-                category,
-                importance,
-                self._json_serialize(tags),
-                self._json_serialize(metadata),
-                self._json_serialize(source_ids)
-            ))
+            """,
+                (
+                    memory_id,
+                    content,
+                    layer,
+                    repo_id,
+                    category,
+                    importance,
+                    self._json_serialize(tags),
+                    self._json_serialize(metadata),
+                    self._json_serialize(source_ids),
+                ),
+            )
             conn.commit()
 
         # Store in vector DB
@@ -480,16 +515,12 @@ class LocalStorage(BaseStorage):
             metadata_dict = {
                 "category": category,
                 "importance": importance,
-                "tags": self._json_serialize(tags)
+                "tags": self._json_serialize(tags),
             }
             if repo_id:
                 metadata_dict["repo_id"] = repo_id
 
-            add_kwargs = {
-                "ids": [memory_id],
-                "documents": [content],
-                "metadatas": [metadata_dict]
-            }
+            add_kwargs = {"ids": [memory_id], "documents": [content], "metadatas": [metadata_dict]}
 
             if embedding is not None:
                 add_kwargs["embeddings"] = [embedding]
@@ -498,27 +529,31 @@ class LocalStorage(BaseStorage):
 
         return memory_id
 
-    def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
-        """Get a memory by ID."""
+    def _get_memory_row(self, memory_id: str, *, track_access: bool) -> Optional[Dict[str, Any]]:
+        """Get a memory by ID, optionally updating explicit access metrics."""
         with self._get_db() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM memories WHERE id = ?",
-                (memory_id,)
-            )
+            cursor = conn.execute("SELECT * FROM memories WHERE id = ?", (memory_id,))
             row = cursor.fetchone()
 
             if row is None:
                 return None
 
-            # Update access tracking
-            conn.execute("""
-                UPDATE memories
-                SET access_count = access_count + 1, accessed_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-            """, (memory_id,))
-            conn.commit()
+            if track_access:
+                conn.execute(
+                    """
+                    UPDATE memories
+                    SET access_count = access_count + 1, accessed_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """,
+                    (memory_id,),
+                )
+                conn.commit()
 
             return self._row_to_dict(row)
+
+    def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
+        """Get a memory by ID and record an explicit access."""
+        return self._get_memory_row(memory_id, track_access=True)
 
     def search_memories(
         self,
@@ -527,7 +562,7 @@ class LocalStorage(BaseStorage):
         repo_id: str = None,
         category: str = None,
         limit: int = 10,
-        min_importance: float = 0.0
+        min_importance: float = 0.0,
     ) -> List[Dict[str, Any]]:
         """
         Semantic search across memories.
@@ -550,6 +585,9 @@ class LocalStorage(BaseStorage):
         layers_to_search = [layer] if layer else ["episodic", "semantic", "intent"]
 
         for search_layer in layers_to_search:
+            if self._uses_noop_embeddings:
+                continue
+
             collection = self._get_collection(search_layer)
             if collection is None:
                 continue
@@ -573,16 +611,18 @@ class LocalStorage(BaseStorage):
                 else:
                     query_kwargs["query_texts"] = [query]
 
-                search_results = collection.query(
-                    **query_kwargs
-                )
+                search_results = collection.query(**query_kwargs)
 
                 if search_results["ids"] and search_results["ids"][0]:
                     for i, mem_id in enumerate(search_results["ids"][0]):
-                        distance = search_results["distances"][0][i] if search_results.get("distances") else 0
-                        similarity = 1 - distance
+                        distance = (
+                            search_results["distances"][0][i]
+                            if search_results.get("distances")
+                            else 0
+                        )
+                        similarity = normalize_distance_score(distance)
 
-                        memory = self.get_memory(mem_id)
+                        memory = self._get_memory_row(mem_id, track_access=False)
                         if memory:
                             seen_ids.add(mem_id)
                             memory["similarity"] = similarity
@@ -605,9 +645,7 @@ class LocalStorage(BaseStorage):
                 )
             )
 
-        # Sort by similarity and limit
-        results.sort(key=lambda x: x.get("similarity", 0), reverse=True)
-        return results[:limit]
+        return rank_memory_results(results, query=query, limit=limit)
 
     def _text_search_memories(
         self,
@@ -655,7 +693,7 @@ class LocalStorage(BaseStorage):
         for row in rows:
             if row["id"] in exclude_ids:
                 continue
-            row["similarity"] = self._text_similarity(query, row["content"])
+            row["similarity"] = text_similarity(query, row["content"])
             results.append(row)
             if len(results) >= limit:
                 break
@@ -664,11 +702,7 @@ class LocalStorage(BaseStorage):
 
     @staticmethod
     def _text_similarity(query: str, content: str) -> float:
-        query_terms = {term.lower() for term in query.split() if term.strip()}
-        content_terms = {term.lower() for term in content.split() if term.strip()}
-        if not query_terms:
-            return 0.0
-        return len(query_terms & content_terms) / len(query_terms)
+        return text_similarity(query, content)
 
     def list_memories(
         self,
@@ -676,7 +710,7 @@ class LocalStorage(BaseStorage):
         repo_id: str = None,
         category: str = None,
         limit: int = 50,
-        order_by: str = "created_at DESC"
+        order_by: str = "created_at DESC",
     ) -> List[Dict[str, Any]]:
         """List memories with optional filtering."""
         query = "SELECT * FROM memories WHERE 1=1"
@@ -718,7 +752,7 @@ class LocalStorage(BaseStorage):
         content: str = None,
         importance: float = None,
         tags: List[str] = None,
-        metadata: Dict[str, Any] = None
+        metadata: Dict[str, Any] = None,
     ) -> bool:
         """Update an existing memory."""
         updates = []
@@ -746,15 +780,12 @@ class LocalStorage(BaseStorage):
         params.append(memory_id)
 
         with self._get_db() as conn:
-            cursor = conn.execute(
-                f"UPDATE memories SET {', '.join(updates)} WHERE id = ?",
-                params
-            )
+            cursor = conn.execute(f"UPDATE memories SET {', '.join(updates)} WHERE id = ?", params)
             conn.commit()
             updated = cursor.rowcount > 0
 
         if updated and content is not None:
-            memory = self.get_memory(memory_id)
+            memory = self._get_memory_row(memory_id, track_access=False)
             if memory:
                 collection = self._get_collection(memory["layer"])
                 if collection is not None:
@@ -779,15 +810,17 @@ class LocalStorage(BaseStorage):
     def delete_memory(self, memory_id: str) -> bool:
         """Delete a memory from both stores."""
         # Get layer first for vector DB cleanup
-        memory = self.get_memory(memory_id)
+        memory = self._get_memory_row(memory_id, track_access=False)
         if not memory:
             return False
 
         # Delete from SQLite
         with self._get_db() as conn:
             conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
-            conn.execute("DELETE FROM relationships WHERE source_id = ? OR target_id = ?",
-                        (memory_id, memory_id))
+            conn.execute(
+                "DELETE FROM relationships WHERE source_id = ? OR target_id = ?",
+                (memory_id, memory_id),
+            )
             conn.commit()
 
         # Delete from vector DB
@@ -805,17 +838,20 @@ class LocalStorage(BaseStorage):
         description: str,
         priority: int = 0,
         context: Dict[str, Any] = None,
-        repo_id: str = None
+        repo_id: str = None,
     ) -> str:
         """Set a new intent (goal/direction)."""
         intent_id = self._generate_id(description)
         context = context or {}
 
         with self._get_db() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO intents (id, description, priority, context, repo_id)
                 VALUES (?, ?, ?, ?, ?)
-            """, (intent_id, description, priority, self._json_serialize(context), repo_id))
+            """,
+                (intent_id, description, priority, self._json_serialize(context), repo_id),
+            )
             conn.commit()
 
         return intent_id
@@ -838,37 +874,46 @@ class LocalStorage(BaseStorage):
     def complete_intent(self, intent_id: str) -> bool:
         """Mark an intent as completed."""
         with self._get_db() as conn:
-            cursor = conn.execute("""
+            cursor = conn.execute(
+                """
                 UPDATE intents
                 SET status = 'completed', updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
-            """, (intent_id,))
+            """,
+                (intent_id,),
+            )
             conn.commit()
             return cursor.rowcount > 0
 
     def add_relationship(
-        self,
-        source_id: str,
-        target_id: str,
-        relationship: str,
-        strength: float = 1.0
+        self, source_id: str, target_id: str, relationship: str, strength: float = 1.0
     ) -> str:
         """Add a relationship between memories."""
+        source = self._get_memory_row(source_id, track_access=False)
+        target = self._get_memory_row(target_id, track_access=False)
+        if source is None or target is None:
+            raise ValueError("Relationship source and target memories must both exist")
+        if source.get("repo_id") != target.get("repo_id"):
+            raise ValueError("Memory relationships cannot cross repository boundaries")
+
         rel_id = self._generate_id(f"{source_id}-{target_id}-{relationship}")
 
         with self._get_db() as conn:
-            conn.execute("""
-                INSERT OR REPLACE INTO relationships (id, source_id, target_id, relationship, strength)
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO relationships (
+                    id, source_id, target_id, relationship, strength
+                )
                 VALUES (?, ?, ?, ?, ?)
-            """, (rel_id, source_id, target_id, relationship, strength))
+            """,
+                (rel_id, source_id, target_id, relationship, strength),
+            )
             conn.commit()
 
         return rel_id
 
     def get_related_memories(
-        self,
-        memory_id: str,
-        relationship: str = None
+        self, memory_id: str, relationship: str = None
     ) -> List[Dict[str, Any]]:
         """Get memories related to a given memory."""
         query = """
@@ -883,6 +928,15 @@ class LocalStorage(BaseStorage):
         if relationship:
             query += " AND r.relationship = ?"
             params.append(relationship)
+
+        source = self._get_memory_row(memory_id, track_access=False)
+        if source is None:
+            return []
+        if source.get("repo_id") is None:
+            query += " AND m.repo_id IS NULL"
+        else:
+            query += " AND m.repo_id = ?"
+            params.append(source["repo_id"])
 
         with self._get_db() as conn:
             cursor = conn.execute(query, params)
@@ -909,10 +963,7 @@ class LocalStorage(BaseStorage):
         session_id = self._generate_id("session")
 
         with self._get_db() as conn:
-            conn.execute(
-                "INSERT INTO sessions (id) VALUES (?)",
-                (session_id,)
-            )
+            conn.execute("INSERT INTO sessions (id) VALUES (?)", (session_id,))
             conn.commit()
 
         return session_id
@@ -920,11 +971,14 @@ class LocalStorage(BaseStorage):
     def end_session(self, session_id: str, summary: str, memory_ids: List[str]):
         """End a session with summary."""
         with self._get_db() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 UPDATE sessions
                 SET summary = ?, memory_ids = ?, ended_at = CURRENT_TIMESTAMP
                 WHERE id = ?
-            """, (summary, self._json_serialize(memory_ids), session_id))
+            """,
+                (summary, self._json_serialize(memory_ids), session_id),
+            )
             conn.commit()
 
     def get_stats(self, repo_id: str = None) -> Dict[str, Any]:
@@ -940,21 +994,27 @@ class LocalStorage(BaseStorage):
                 repo_params = [repo_id]
 
             # Memory counts by layer
-            cursor = conn.execute(f"""
+            cursor = conn.execute(
+                f"""
                 SELECT layer, COUNT(*) as count
                 FROM memories
                 {repo_filter}
                 GROUP BY layer
-            """, repo_params)
+            """,
+                repo_params,
+            )
             stats["memories_by_layer"] = dict(cursor.fetchall())
 
             # Memory counts by category
-            cursor = conn.execute(f"""
+            cursor = conn.execute(
+                f"""
                 SELECT category, COUNT(*) as count
                 FROM memories
                 {repo_filter}
                 GROUP BY category
-            """, repo_params)
+            """,
+                repo_params,
+            )
             stats["memories_by_category"] = dict(cursor.fetchall())
 
             # Total counts
@@ -1002,18 +1062,23 @@ class LocalStorage(BaseStorage):
         repo_id = repo.get("id") or self._generate_id(repo["name"])
 
         with self._get_db() as conn:
-            conn.execute("""
-                INSERT OR REPLACE INTO repositories (id, name, url, description, tech_stack, team_id, metadata)
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO repositories (
+                    id, name, url, description, tech_stack, team_id, metadata
+                )
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (
-                repo_id,
-                repo["name"],
-                repo.get("url"),
-                repo.get("description"),
-                self._json_serialize(repo.get("tech_stack", [])),
-                repo.get("team_id"),
-                self._json_serialize(repo.get("metadata", {}))
-            ))
+            """,
+                (
+                    repo_id,
+                    repo["name"],
+                    repo.get("url"),
+                    repo.get("description"),
+                    self._json_serialize(repo.get("tech_stack", [])),
+                    repo.get("team_id"),
+                    self._json_serialize(repo.get("metadata", {})),
+                ),
+            )
             conn.commit()
         return repo_id
 
@@ -1034,40 +1099,58 @@ class LocalStorage(BaseStorage):
             cursor = conn.execute(query, params)
             return [self._row_to_dict(row) for row in cursor.fetchall()]
 
-    def add_repo_dependency(self, source_id: str, target_id: str, dep_type: str, version: str = None, notes: str = None) -> str:
+    def add_repo_dependency(
+        self,
+        source_id: str,
+        target_id: str,
+        dep_type: str,
+        version: str = None,
+        notes: str = None,
+    ) -> str:
         dep_id = self._generate_id(f"{source_id}-{target_id}-{dep_type}")
 
         with self._get_db() as conn:
-            conn.execute("""
-                INSERT OR REPLACE INTO repository_dependencies (id, source_repo_id, target_repo_id, dependency_type, version, notes)
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO repository_dependencies (
+                    id, source_repo_id, target_repo_id, dependency_type, version, notes
+                )
                 VALUES (?, ?, ?, ?, ?, ?)
-            """, (dep_id, source_id, target_id, dep_type, version, notes))
+            """,
+                (dep_id, source_id, target_id, dep_type, version, notes),
+            )
             conn.commit()
         return dep_id
 
     def get_repo_dependencies(self, repo_id: str) -> List[Dict[str, Any]]:
         with self._get_db() as conn:
-            cursor = conn.execute("""
+            cursor = conn.execute(
+                """
                 SELECT target_repo_id as target_id, dependency_type as type, version, notes
                 FROM repository_dependencies
                 WHERE source_repo_id = ?
-            """, (repo_id,))
+            """,
+                (repo_id,),
+            )
             return [dict(row) for row in cursor.fetchall()]
 
     # Team and User operations
     def store_user(self, user: Dict[str, Any]) -> str:
         user_id = user["id"]
         with self._get_db() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT OR REPLACE INTO users (id, username, email, display_name, metadata)
                 VALUES (?, ?, ?, ?, ?)
-            """, (
-                user_id,
-                user["username"],
-                user.get("email"),
-                user.get("display_name"),
-                self._json_serialize(user.get("metadata", {}))
-            ))
+            """,
+                (
+                    user_id,
+                    user["username"],
+                    user.get("email"),
+                    user.get("display_name"),
+                    self._json_serialize(user.get("metadata", {})),
+                ),
+            )
             conn.commit()
         return user_id
 
@@ -1080,15 +1163,18 @@ class LocalStorage(BaseStorage):
     def store_team(self, team: Dict[str, Any]) -> str:
         team_id = team["id"]
         with self._get_db() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT OR REPLACE INTO teams (id, name, description, metadata)
                 VALUES (?, ?, ?, ?)
-            """, (
-                team_id,
-                team["name"],
-                team.get("description"),
-                self._json_serialize(team.get("metadata", {}))
-            ))
+            """,
+                (
+                    team_id,
+                    team["name"],
+                    team.get("description"),
+                    self._json_serialize(team.get("metadata", {})),
+                ),
+            )
             conn.commit()
         return team_id
 
@@ -1100,18 +1186,24 @@ class LocalStorage(BaseStorage):
 
     def add_team_member(self, team_id: str, user_id: str) -> bool:
         with self._get_db() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT OR IGNORE INTO team_members (team_id, user_id)
                 VALUES (?, ?)
-            """, (team_id, user_id))
+            """,
+                (team_id, user_id),
+            )
             conn.commit()
         return True
 
     def get_user_teams(self, user_id: str) -> List[Dict[str, Any]]:
         with self._get_db() as conn:
-            cursor = conn.execute("""
+            cursor = conn.execute(
+                """
                 SELECT t.* FROM teams t
                 JOIN team_members tm ON t.id = tm.team_id
                 WHERE tm.user_id = ?
-            """, (user_id,))
+            """,
+                (user_id,),
+            )
             return [self._row_to_dict(row) for row in cursor.fetchall()]

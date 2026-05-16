@@ -9,11 +9,12 @@ from pathlib import Path
 try:
     from fastapi import FastAPI
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import FileResponse
+    from fastapi.responses import FileResponse, JSONResponse, Response
     from fastapi.staticfiles import StaticFiles
 except ImportError:
     raise ImportError("FastAPI not installed. Run: pip install llm-memory[api]")
 
+from llm_memory import __version__
 from llm_memory.config import load_config
 from llm_memory.core.neo4j_storage import Neo4jStorage
 from llm_memory.core.storage import LocalStorage
@@ -37,12 +38,37 @@ def get_cors_options(config):
 
 
 cors_options = get_cors_options(config)
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+def dashboard_file_path(full_path: str) -> Path:
+    """Resolve a dashboard route to an exported static file."""
+    normalized_path = full_path.strip("/")
+    candidates = []
+
+    if normalized_path:
+        candidates.extend(
+            [
+                STATIC_DIR / normalized_path,
+                STATIC_DIR / f"{normalized_path}.html",
+                STATIC_DIR / normalized_path / "index.html",
+            ]
+        )
+    else:
+        candidates.append(STATIC_DIR / "index.html")
+
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate
+
+    return STATIC_DIR / "index.html"
+
 
 # Initialize App
 app = FastAPI(
     title="LLM Central Memory Server",
     description="Shared memory server for multi-repo context",
-    version="0.2.0"
+    version=__version__,
 )
 
 # CORS configuration
@@ -78,10 +104,12 @@ app.include_router(relationships.router)
 # Optional routers for Phase 3.4+ (to be implemented)
 try:
     from llm_memory.server.routers import analysis
+
     if hasattr(analysis, "router"):
         app.include_router(analysis.router)
 except ImportError:
     pass
+
 
 @app.get("/", tags=["system"])
 async def root():
@@ -94,16 +122,72 @@ async def root():
 
     response = {
         "status": "online",
-        "version": "0.2.0",
+        "version": __version__,
         "timestamp": datetime.now().isoformat(),
         "storage_backend": config.storage.backend,
-        "stats": stats
+        "stats": stats,
     }
     response.update(stats)
     return response
 
-# Mount static files for dashboard (if available)
-STATIC_DIR = Path(__file__).parent / "static"
+
+@app.get("/healthz", tags=["system"])
+async def healthz():
+    """Unauthenticated liveness probe."""
+    return {
+        "status": "ok",
+        "version": __version__,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@app.get("/readyz", tags=["system"])
+async def readyz():
+    """Unauthenticated readiness probe for release and first-run checks."""
+    storage_ready = True
+    storage_error = None
+
+    try:
+        app.state.storage.get_stats()
+    except Exception as e:
+        storage_ready = False
+        storage_error = e.__class__.__name__
+        logger.error("Storage readiness check failed: %s", e)
+
+    dashboard_static_available = STATIC_DIR.exists() and STATIC_DIR.is_dir()
+    ready = storage_ready and dashboard_static_available
+    payload = {
+        "status": "ready" if ready else "not_ready",
+        "version": __version__,
+        "storage_backend": config.storage.backend,
+        "storage_ready": storage_ready,
+        "auth_enabled": config.server.auth_enabled,
+        "dashboard_static_available": dashboard_static_available,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+    if storage_error:
+        payload["storage_error"] = storage_error
+
+    return JSONResponse(status_code=200 if ready else 503, content=payload)
+
+
+@app.head("/favicon.ico", include_in_schema=False)
+async def favicon_head():
+    """Allow favicon existence checks."""
+    return Response(status_code=200)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    """Serve the bundled dashboard icon when static assets are available."""
+    for name in ("icon-light-32x32.png", "icon.svg"):
+        icon_path = STATIC_DIR / name
+        if icon_path.exists():
+            return FileResponse(icon_path)
+    return Response(status_code=204)
+
+
 if STATIC_DIR.exists() and STATIC_DIR.is_dir():
     # Mount static assets
     if (STATIC_DIR / "_next" / "static").exists():
@@ -116,19 +200,25 @@ if STATIC_DIR.exists() and STATIC_DIR.is_dir():
         app.mount("/_next", StaticFiles(directory=str(STATIC_DIR / "_next")), name="next")
 
     # Serve dashboard at /dashboard and root
+    @app.head("/dashboard/{full_path:path}")
+    async def serve_dashboard_path_head(full_path: str):
+        """Allow Next.js link prefetch checks for dashboard routes."""
+        return Response(status_code=200)
+
+    @app.head("/dashboard")
+    async def serve_dashboard_head():
+        """Allow Next.js link prefetch checks for the dashboard index."""
+        return Response(status_code=200)
+
     @app.get("/dashboard/{full_path:path}")
     async def serve_dashboard_path(full_path: str):
         """Serve dashboard files."""
-        file_path = STATIC_DIR / full_path
-        if file_path.exists() and file_path.is_file():
-            return FileResponse(file_path)
-        # Fallback to index.html for SPA routing
-        return FileResponse(STATIC_DIR / "index.html")
+        return FileResponse(dashboard_file_path(full_path))
 
     @app.get("/dashboard")
     async def serve_dashboard():
         """Serve dashboard index."""
-        return FileResponse(STATIC_DIR / "index.html")
+        return FileResponse(dashboard_file_path(""))
 
     logger.info(f"Dashboard mounted at /dashboard from {STATIC_DIR}")
 else:

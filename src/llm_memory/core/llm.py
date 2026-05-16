@@ -5,12 +5,14 @@ Centralizes the creation of LLM clients (OpenAI, Anthropic, Ollama)
 to be used across the system (compression, capture, conflict detection).
 """
 
-from typing import Optional, Protocol, Any, List, Dict
+from typing import Protocol
+
 
 class LLMClient(Protocol):
     """Protocol for LLM interactions."""
-    def completion(self, prompt: str, system_prompt: str = None, **kwargs) -> str:
-        ...
+
+    def completion(self, prompt: str, system_prompt: str = None, **kwargs) -> str: ...
+
 
 class OpenAIClient:
     def __init__(self, api_key: str = None, model: str = "gpt-4o-mini", base_url: str = None):
@@ -28,11 +30,10 @@ class OpenAIClient:
         messages.append({"role": "user", "content": prompt})
 
         response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            **kwargs
+            model=self.model, messages=messages, **kwargs
         )
         return response.choices[0].message.content.strip()
+
 
 class AnthropicClient:
     def __init__(self, api_key: str = None, model: str = "claude-3-haiku-20240307"):
@@ -45,14 +46,12 @@ class AnthropicClient:
 
     def completion(self, prompt: str, system_prompt: str = None, **kwargs) -> str:
         messages = [{"role": "user", "content": prompt}]
-        
+
         response = self.client.messages.create(
-            model=self.model,
-            system=system_prompt,
-            messages=messages,
-            **kwargs
+            model=self.model, system=system_prompt, messages=messages, **kwargs
         )
         return response.content[0].text.strip()
+
 
 class OllamaClient:
     def __init__(self, model: str = "llama3.2"):
@@ -69,14 +68,13 @@ class OllamaClient:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        response = self.client.chat(
-            model=self.model,
-            messages=messages,
-            **kwargs
-        )
+        response = self.client.chat(model=self.model, messages=messages, **kwargs)
         return response["message"]["content"].strip()
 
-def create_llm_client(provider: str, model: str = None, api_key: str = None, base_url: str = None) -> LLMClient:
+
+def create_llm_client(
+    provider: str, model: str = None, api_key: str = None, base_url: str = None
+) -> LLMClient:
     """Factory to create an LLM client."""
     if provider == "openai":
         return OpenAIClient(api_key=api_key, model=model or "gpt-4o-mini", base_url=base_url)

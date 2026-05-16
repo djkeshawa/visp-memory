@@ -13,13 +13,14 @@ Supports:
 """
 
 import re
-from pathlib import Path
-from typing import List, Dict, Any, Optional
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 try:
     import git
+
     GIT_AVAILABLE = True
 except ImportError:
     GIT_AVAILABLE = False
@@ -27,6 +28,7 @@ except ImportError:
 
 class CommitType(str, Enum):
     """Conventional commit types mapped to episode categories."""
+
     FEAT = "feature_added"
     FIX = "bug_fixed"
     REFACTOR = "refactor"
@@ -67,8 +69,7 @@ class GitCapture:
         """
         if not GIT_AVAILABLE:
             raise ImportError(
-                "GitPython required for git capture. "
-                "Install with: pip install llm-memory[capture]"
+                "GitPython required for git capture. Install with: pip install llm-memory[capture]"
             )
 
         self.memory = memory
@@ -103,7 +104,7 @@ class GitCapture:
             message=clean_message,
             author=commit.author.name,
             date=commit.committed_datetime,
-            diff_summary=diff_summary
+            diff_summary=diff_summary,
         )
 
         # Calculate importance based on size and type
@@ -120,9 +121,9 @@ class GitCapture:
                 "date": commit.committed_datetime.isoformat(),
                 "files_changed": len(commit.stats.files),
                 "insertions": commit.stats.total["insertions"],
-                "deletions": commit.stats.total["deletions"]
+                "deletions": commit.stats.total["deletions"],
             },
-            tags=["git", "auto-captured"]
+            tags=["git", "auto-captured"],
         )
 
         return memory_id
@@ -164,19 +165,14 @@ class GitCapture:
             context={
                 "merge_commit": merge_commit.hexsha,
                 "branch": branch,
-                "commits_merged": len(commits)
+                "commits_merged": len(commits),
             },
-            tags=["git", "merge", "auto-captured"]
+            tags=["git", "merge", "auto-captured"],
         )
 
         return memory_id
 
-    def sync_history(
-        self,
-        since: str = None,
-        until: str = None,
-        limit: int = 100
-    ) -> List[str]:
+    def sync_history(self, since: str = None, until: str = None, limit: int = 100) -> List[str]:
         """
         Sync memories from git history.
 
@@ -235,16 +231,12 @@ class GitCapture:
         # Post-commit hook
         post_commit = hooks_dir / "post-commit"
         results["post-commit"] = self._install_hook(
-            post_commit,
-            self._generate_post_commit_script()
+            post_commit, self._generate_post_commit_script()
         )
 
         # Post-merge hook
         post_merge = hooks_dir / "post-merge"
-        results["post-merge"] = self._install_hook(
-            post_merge,
-            self._generate_post_merge_script()
-        )
+        results["post-merge"] = self._install_hook(post_merge, self._generate_post_merge_script())
 
         return results
 
@@ -288,20 +280,17 @@ class GitCapture:
             (category, clean_message)
         """
         # Try conventional commit format
-        match = re.match(r'^(\w+)(?:\([^)]+\))?: (.+)', message)
+        match = re.match(r"^(\w+)(?:\([^)]+\))?: (.+)", message)
 
         if match:
             commit_type = match.group(1).upper()
             clean_message = match.group(2)
 
             # Map to episode category
-            category = CommitType.__members__.get(
-                commit_type,
-                CommitType.FEAT
-            ).value
+            category = CommitType.__members__.get(commit_type, CommitType.FEAT).value
         else:
             # No conventional format, infer from keywords
-            clean_message = message.split('\n')[0]  # First line
+            clean_message = message.split("\n")[0]  # First line
             category = self._infer_category(clean_message)
 
         return category, clean_message
@@ -331,12 +320,7 @@ class GitCapture:
         files = list(stats.files.keys())
 
         # Categorize files
-        categorized = {
-            "code": [],
-            "tests": [],
-            "docs": [],
-            "config": []
-        }
+        categorized = {"code": [], "tests": [], "docs": [], "config": []}
 
         for file in files:
             if "test" in file.lower():
@@ -352,15 +336,11 @@ class GitCapture:
             "files_changed": len(files),
             "insertions": stats.total["insertions"],
             "deletions": stats.total["deletions"],
-            "categorized_files": categorized
+            "categorized_files": categorized,
         }
 
     def _format_commit_memory(
-        self,
-        message: str,
-        author: str,
-        date: datetime,
-        diff_summary: Dict[str, Any]
+        self, message: str, author: str, date: datetime, diff_summary: Dict[str, Any]
     ) -> str:
         """Format commit info as memory content."""
         parts = [f"Commit: {message}"]
@@ -380,7 +360,7 @@ class GitCapture:
             "bug_fixed": 0.7,
             "feature_added": 0.6,
             "refactor": 0.4,
-            "note": 0.3
+            "note": 0.3,
         }.get(category, 0.5)
 
         # Boost for larger commits
@@ -408,7 +388,7 @@ class GitCapture:
             return "No commits"
 
         # Collect commit messages
-        messages = [c.message.split('\n')[0] for c in commits]
+        messages = [c.message.split("\n")[0] for c in commits]
 
         # Simple summary: count by type
         types = {"features": 0, "fixes": 0, "refactors": 0, "other": 0}

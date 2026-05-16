@@ -14,8 +14,12 @@
 |------|-------------|
 | [**docs/ROADMAP.md**](docs/ROADMAP.md) | Project vision and future phases |
 | [**docs/deployment/PACKAGING.md**](docs/deployment/PACKAGING.md) | Detailed distribution guide (Docker, Standalone, Pip) |
+| [**docs/deployment/AUTH.md**](docs/deployment/AUTH.md) | Server auth modes, env vars, and deployment notes |
+| [**docs/deployment/RELEASE_CHECKLIST.md**](docs/deployment/RELEASE_CHECKLIST.md) | Repeatable pre-release and post-release checks |
 | [**docs/deployment/RELEASING.md**](docs/deployment/RELEASING.md) | How to create releases |
 | [**docs/development/ARCHITECTURE.md**](docs/development/ARCHITECTURE.md) | System architecture and core components |
+| [**docs/development/MATURITY_PLAN.md**](docs/development/MATURITY_PLAN.md) | Path from developer preview to production candidate |
+| [**docs/development/MCP.md**](docs/development/MCP.md) | MCP setup, tools, examples, and verification |
 | [**docs/development/TESTING.md**](docs/development/TESTING.md) | Testing practices and guidelines |
 | [**docs/development/STORAGE.md**](docs/development/STORAGE.md) | Storage backends comparison and configuration |
 
@@ -63,11 +67,16 @@ Choose the method that fits your workflow.
 
 ### Method 1: Python Package (Recommended)
 
-Install via pip. This includes the CLI, API server, and embedded dashboard.
+Install via pip. This includes the CLI, API server, and embedded dashboard. Add
+`local-embeddings` when you want local sentence-transformer embeddings instead
+of API/noop/fallback search.
 
 ```bash
 # From PyPI (when published)
 pip install llm-memory[all]
+
+# Lean local install without local embedding model dependencies
+pip install llm-memory[api,mcp]
 
 # From GitHub Release (direct download)
 pip install https://github.com/djkeshawa/llm-memory/releases/download/v0.1.0/llm_memory-0.1.0-py3-none-any.whl
@@ -110,12 +119,14 @@ rm -rf ~/.llm-memory
 | Dependency | Version | Required | Installation |
 |------------|---------|----------|--------------|
 | **Python** | 3.10+ | Yes | [python.org](https://www.python.org/downloads/) |
-| **Neo4j** | 5.15+ | Yes | See below |
+| **Neo4j** | 5.15+ | For team/graph deployments | See below |
 | **Node.js** | 18+ | For dashboard dev | [nodejs.org](https://nodejs.org/) |
 
 ### Neo4j Setup
 
-Neo4j is required for the graph storage backend. Choose one option:
+LLM Memory defaults to local SQLite storage so you can start without external
+services. Neo4j is required only when you choose the graph storage backend for
+team/shared deployments. Choose one option:
 
 **Option 1: Docker (Recommended)**
 ```bash
@@ -153,6 +164,7 @@ export NEO4J_PASSWORD="your-password"
 | `NEO4J_USER` | Neo4j username | `neo4j` |
 | `NEO4J_PASSWORD` | Neo4j password | **Required** |
 | `LLM_MEMORY_REPO_ID` | Default project scope | *None* |
+| `LLM_MEMORY_EMBEDDING_PROVIDER` | Embedding provider: `sentence-transformers`, `openai`, `ollama`, `noop` | `sentence-transformers` |
 | `LLM_MEMORY_API_KEY` | API key for server auth | *None* |
 | `LLM_MEMORY_JWT_TOKEN` | JWT token for client mode | *None* |
 | `LLM_MEMORY_JWT_SECRET` | Secret for JWT signing (server) | *None* |
@@ -169,15 +181,7 @@ Initialize LLM Memory in your project root:
 llm-memory init --type code
 ```
 
-### 2. Start the Server & Dashboard
-
-Launch the central server. The dashboard will be available at `http://localhost:8000/dashboard`.
-
-```bash
-llm-memory serve
-```
-
-### 3. Record & Recall
+### 2. Record Useful Memory
 
 Start building your project's memory:
 
@@ -193,9 +197,23 @@ llm-memory goal "Refactor Database Layer" --priority 2
 
 # Search memories
 llm-memory recall "authentication"
+```
 
-# Get full context for your LLM (copy to clipboard)
-llm-memory context | xclip -sel clip
+### 3. Start the Server & Dashboard
+
+Launch the local server. The dashboard will be available at
+`http://localhost:8000/dashboard`.
+
+```bash
+llm-memory serve
+```
+
+### 4. Give Context To An LLM
+
+Generate a compact project context for pasting into an assistant:
+
+```bash
+llm-memory context
 ```
 
 ---

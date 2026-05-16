@@ -46,6 +46,10 @@ export function RecentActivity({ memories }: RecentActivityProps) {
         initial="hidden"
         animate="visible"
       >
+        {memories.length === 0 ? (
+          <div className="p-6 text-sm text-muted-foreground">No recent memories yet.</div>
+        ) : null}
+
         {memories.map((memory) => {
           const config = layerConfig[memory.layer]
           const Icon = config.icon

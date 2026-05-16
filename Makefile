@@ -1,4 +1,4 @@
-.PHONY: help build build-frontend build-python clean install install-dev test lint format docker-build docker-run
+.PHONY: help build build-frontend build-python clean install install-dev test lint format release-check docker-build docker-run
 
 help:
 	@echo "LLM Memory - Build Commands"
@@ -12,6 +12,7 @@ help:
 	@echo "  make test            - Run tests"
 	@echo "  make lint            - Run linter"
 	@echo "  make format          - Format code"
+	@echo "  make release-check   - Run local release readiness checks"
 	@echo "  make docker-build    - Build Docker image"
 	@echo "  make docker-run      - Run Docker container"
 
@@ -19,8 +20,6 @@ build: build-frontend build-python
 
 build-frontend:
 	@echo "Building Next.js dashboard..."
-	cd llm-memory-dashboard && npm install && npm run export
-	@echo "Copying to package directory..."
 	python3 build_frontend.py
 
 build-python:
@@ -55,6 +54,10 @@ lint:
 format:
 	@echo "Formatting code..."
 	ruff format .
+
+release-check:
+	@echo "Running release readiness checks..."
+	python3 scripts/release_check.py
 
 docker-build:
 	@echo "Building Docker image..."

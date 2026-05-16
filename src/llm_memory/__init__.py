@@ -9,9 +9,18 @@ A cognitive memory architecture that mimics how humans remember:
 Designed to give LLMs persistent context without re-analyzing everything.
 """
 
-__version__ = "0.1.0"
+try:
+    from importlib.metadata import PackageNotFoundError, version
+except ImportError:  # pragma: no cover - Python 3.10+ includes importlib.metadata
+    PackageNotFoundError = Exception
+    version = None
 
-from llm_memory.core.memory import Memory
+try:
+    __version__ = version("llm-memory") if version else "0.2.0"
+except PackageNotFoundError:
+    __version__ = "0.2.0"
+
 from llm_memory.config import MemoryConfig
+from llm_memory.core.memory import Memory
 
 __all__ = ["Memory", "MemoryConfig", "__version__"]

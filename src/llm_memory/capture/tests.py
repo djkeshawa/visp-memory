@@ -8,10 +8,11 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import List
 
+
 class TestCapture:
     """
     Capture memories from test execution.
-    
+
     Usage:
         capture = TestCapture(memory)
         capture.on_pytest_session("report.xml")
@@ -23,10 +24,10 @@ class TestCapture:
     def on_pytest_session(self, report_path: str = "report.xml") -> List[str]:
         """
         Parse pytest JUnit XML report and record significant events.
-        
+
         Args:
             report_path: Path to JUnit XML report
-            
+
         Returns:
             List of memory IDs created
         """
@@ -76,9 +77,11 @@ class TestCapture:
                                 "file": file,
                                 "test_name": name,
                                 "error": msg,
-                                "details": details[:500] if details else None  # Truncate stack trace
+                                "details": details[:500]
+                                if details
+                                else None,  # Truncate stack trace
                             },
-                            tags=["test", "failure", "auto-captured"]
+                            tags=["test", "failure", "auto-captured"],
                         )
                         memory_ids.append(mem_id)
 

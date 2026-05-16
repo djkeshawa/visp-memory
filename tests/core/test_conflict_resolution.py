@@ -10,10 +10,7 @@ def test_conflict_detection():
     detector = ConflictDetector(storage, llm_client=client)
 
     # Mock relevant memories
-    relevant = [
-        {"id": "1", "content": "Sky is blue"},
-        {"id": "2", "content": "Water is wet"}
-    ]
+    relevant = [{"id": "1", "content": "Sky is blue"}, {"id": "2", "content": "Water is wet"}]
 
     # Mock LLM response for conflict
     client.completion.return_value = """
@@ -36,6 +33,7 @@ def test_conflict_detection():
     assert "Sky is blue" in prompt
     assert "Sky is green" in prompt
 
+
 def test_no_conflict():
     storage = Mock()
     client = Mock()
@@ -45,6 +43,7 @@ def test_no_conflict():
 
     result = detector.detect_conflicts("Grass is green", [{"id": "1", "content": "Sky is blue"}])
     assert result is None
+
 
 def test_conflict_json_error():
     """Test handling of invalid JSON from LLM."""
@@ -57,6 +56,7 @@ def test_conflict_json_error():
     result = detector.detect_conflicts("Sky is green", [{"id": "1", "content": "Sky is blue"}])
     assert result is None
 
+
 def test_conflict_exception():
     """Test handling of client exceptions."""
     storage = Mock()
@@ -67,6 +67,7 @@ def test_conflict_exception():
 
     result = detector.detect_conflicts("Sky is green", [{"id": "1", "content": "Sky is blue"}])
     assert result is None
+
 
 def test_no_relevant_memories():
     """Test short-circuit when no memories provided."""

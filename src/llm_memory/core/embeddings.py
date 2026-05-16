@@ -10,6 +10,7 @@ Supports:
 
 from abc import ABC, abstractmethod
 from typing import List, Optional
+
 import numpy as np
 
 from llm_memory.config import EmbeddingConfig
@@ -42,9 +43,7 @@ class SentenceTransformerProvider(EmbeddingProvider):
         try:
             from sentence_transformers import SentenceTransformer
         except ImportError:
-            raise ImportError(
-                "sentence-transformers required: pip install sentence-transformers"
-            )
+            raise ImportError("sentence-transformers required: pip install sentence-transformers")
 
         self.model = SentenceTransformer(model_name)
         self._dimension = self.model.get_sentence_embedding_dimension()
@@ -69,7 +68,7 @@ class OpenAIProvider(EmbeddingProvider):
         self,
         model: str = "text-embedding-3-small",
         api_key: Optional[str] = None,
-        api_base: Optional[str] = None
+        api_base: Optional[str] = None,
     ):
         try:
             from openai import OpenAI
@@ -94,17 +93,11 @@ class OpenAIProvider(EmbeddingProvider):
         self._dimension = self._dimensions.get(model, 1536)
 
     def embed(self, text: str) -> List[float]:
-        response = self.client.embeddings.create(
-            input=text,
-            model=self.model
-        )
+        response = self.client.embeddings.create(input=text, model=self.model)
         return response.data[0].embedding
 
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        response = self.client.embeddings.create(
-            input=texts,
-            model=self.model
-        )
+        response = self.client.embeddings.create(input=texts, model=self.model)
         return [item.embedding for item in response.data]
 
     @property
@@ -115,11 +108,7 @@ class OpenAIProvider(EmbeddingProvider):
 class OllamaProvider(EmbeddingProvider):
     """Local embeddings via Ollama."""
 
-    def __init__(
-        self,
-        model: str = "nomic-embed-text",
-        host: Optional[str] = None
-    ):
+    def __init__(self, model: str = "nomic-embed-text", host: Optional[str] = None):
         try:
             import ollama
         except ImportError:
@@ -186,17 +175,10 @@ def get_embedding_provider(config: EmbeddingConfig) -> EmbeddingProvider:
         return SentenceTransformerProvider(model_name=config.model)
 
     elif provider == "openai":
-        return OpenAIProvider(
-            model=config.model,
-            api_key=config.api_key,
-            api_base=config.api_base
-        )
+        return OpenAIProvider(model=config.model, api_key=config.api_key, api_base=config.api_base)
 
     elif provider == "ollama":
-        return OllamaProvider(
-            model=config.model,
-            host=config.api_base
-        )
+        return OllamaProvider(model=config.model, host=config.api_base)
 
     elif provider == "none" or provider == "noop":
         return NoOpProvider()

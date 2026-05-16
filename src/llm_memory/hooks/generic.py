@@ -10,7 +10,6 @@ Supports two modes:
 from pathlib import Path
 from typing import Dict
 
-
 from llm_memory.hooks.base import LLMToolAdapter
 
 
@@ -43,7 +42,7 @@ class GenericAdapter(LLMToolAdapter):
         project_root: Path = None,
         context_file: str = ".llm-context.md",
         injection_marker: str = None,
-        append_mode: bool = False
+        append_mode: bool = False,
     ):
         """
         Initialize generic adapter.
@@ -75,8 +74,7 @@ class GenericAdapter(LLMToolAdapter):
                 # Create it with markers
                 self._ensure_directory(self.context_file)
                 self.context_file.write_text(
-                    f"{self.injection_marker} START\n\n"
-                    f"{self.injection_marker} END\n"
+                    f"{self.injection_marker} START\n\n{self.injection_marker} END\n"
                 )
                 results["injection_markers"] = True
             else:
@@ -151,11 +149,7 @@ class GenericAdapter(LLMToolAdapter):
 
         return results
 
-    def update_context(
-        self,
-        files: list[str] = None,
-        task: str = None
-    ) -> bool:
+    def update_context(self, files: list[str] = None, task: str = None) -> bool:
         """
         Update context in the file.
 
@@ -191,11 +185,7 @@ class GenericAdapter(LLMToolAdapter):
                 before = content.split(start_marker)[0]
                 after = content.split(end_marker)[1]
 
-                new_content = (
-                    f"{before}{start_marker}\n\n"
-                    f"{full_context}\n"
-                    f"{end_marker}{after}"
-                )
+                new_content = f"{before}{start_marker}\n\n{full_context}\n{end_marker}{after}"
 
                 self.context_file.write_text(new_content)
                 return True

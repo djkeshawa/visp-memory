@@ -3,14 +3,15 @@
 Build script for bundling the Next.js frontend with the Python package.
 This script is called during package build to create a static export of the dashboard.
 """
-import os
+
+import argparse
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 
-def build_frontend():
+def build_frontend(required: bool = True) -> bool:
     """Build the Next.js dashboard and copy to package directory."""
     root_dir = Path(__file__).parent
     dashboard_dir = root_dir / "llm-memory-dashboard"
@@ -23,9 +24,11 @@ def build_frontend():
 
     # Check if dashboard directory exists
     if not dashboard_dir.exists():
-        print(f"Warning: Dashboard directory not found at {dashboard_dir}")
-        print("Skipping frontend build. Package will work without dashboard.")
-        return
+        print(f"Error: Dashboard directory not found at {dashboard_dir}")
+        if required:
+            return False
+        print("Skipping optional frontend build. Package will work without dashboard.")
+        return True
 
     # Check if node_modules exists
     node_modules = dashboard_dir / "node_modules"
@@ -37,16 +40,13 @@ def build_frontend():
                 cwd=dashboard_dir,
                 check=True,
                 capture_output=False,
-                shell=True
             )
         except subprocess.CalledProcessError as e:
-            print(f"Warning: npm install failed: {e}")
-            print("Skipping frontend build.")
-            return
+            print(f"Error: npm install failed: {e}")
+            return not required
         except FileNotFoundError:
-            print("Warning: npm not found. Please install Node.js to build the dashboard.")
-            print("Skipping frontend build. Package will work without dashboard.")
-            return
+            print("Error: npm not found. Please install Node.js to build the dashboard.")
+            return not required
 
     # Build the Next.js app
     print("\nBuilding Next.js dashboard...")
@@ -56,12 +56,10 @@ def build_frontend():
             cwd=dashboard_dir,
             check=True,
             capture_output=False,
-            shell=True
         )
     except subprocess.CalledProcessError as e:
-        print(f"Warning: Next.js build failed: {e}")
-        print("Skipping frontend build.")
-        return
+        print(f"Error: Next.js build failed: {e}")
+        return not required
 
     # Copy built files to package
     if out_dir.exists():
@@ -71,13 +69,21 @@ def build_frontend():
         shutil.copytree(out_dir, target_dir)
         print(f"Successfully copied {len(list(target_dir.glob('**/*')))} files")
     else:
-        print(f"Warning: Build output not found at {out_dir}")
-        return
+        print(f"Error: Build output not found at {out_dir}")
+        return not required
 
     print("\n" + "=" * 60)
     print("Frontend build complete!")
     print("=" * 60)
+    return True
 
 
 if __name__ == "__main__":
-    build_frontend()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--optional",
+        action="store_true",
+        help="Do not fail if the dashboard cannot be built.",
+    )
+    args = parser.parse_args()
+    sys.exit(0 if build_frontend(required=not args.optional) else 1)

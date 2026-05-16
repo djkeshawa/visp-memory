@@ -1,5 +1,8 @@
 import pytest
 
+from llm_memory.server import app as server_app
+from llm_memory.server.app import app
+
 
 @pytest.mark.asyncio
 async def test_root_endpoint(client):
@@ -10,6 +13,72 @@ async def test_root_endpoint(client):
     assert "version" in data
     assert "stats" in data
     assert "total_memories" in data
+
+
+@pytest.mark.asyncio
+async def test_healthz_is_unauthenticated(client):
+    response = await client.get("/healthz")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ok"
+    assert "version" in data
+
+
+@pytest.mark.asyncio
+async def test_readyz_reports_runtime_readiness(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(server_app, "STATIC_DIR", tmp_path)
+
+    response = await client.get("/readyz")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ready"
+    assert data["storage_ready"] is True
+    assert "storage_backend" in data
+    assert "auth_enabled" in data
+    assert "dashboard_static_available" in data
+
+
+@pytest.mark.asyncio
+async def test_readyz_returns_503_when_dashboard_static_is_missing(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(server_app, "STATIC_DIR", tmp_path / "missing")
+
+    response = await client.get("/readyz")
+
+    assert response.status_code == 503
+    data = response.json()
+    assert data["status"] == "not_ready"
+    assert data["storage_ready"] is True
+    assert data["dashboard_static_available"] is False
+
+
+@pytest.mark.asyncio
+async def test_readyz_returns_503_when_storage_check_fails(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(server_app, "STATIC_DIR", tmp_path)
+
+    class FailingStorage:
+        def get_stats(self):
+            raise RuntimeError("database unavailable")
+
+    previous_storage = app.state.storage
+    app.state.storage = FailingStorage()
+    try:
+        response = await client.get("/readyz")
+    finally:
+        app.state.storage = previous_storage
+
+    assert response.status_code == 503
+    data = response.json()
+    assert data["status"] == "not_ready"
+    assert data["storage_ready"] is False
+    assert data["storage_error"] == "RuntimeError"
+    assert "database unavailable" not in str(data)
+
+
+@pytest.mark.asyncio
+async def test_favicon_head_does_not_error(client):
+    response = await client.head("/favicon.ico")
+    assert response.status_code == 200
+
 
 @pytest.mark.asyncio
 async def test_memories_endpoint_protected(client):
@@ -70,6 +139,7 @@ async def test_recall_endpoint(client):
     assert len(response.json()) > 0
     assert response.json()[0]["content"] == "Recall target"
     assert "similarity" in response.json()[0]
+    assert "relevance_score" in response.json()[0]
 
 
 @pytest.mark.asyncio
@@ -97,11 +167,12 @@ async def test_graph_endpoint_filters_relationships_by_repo(client):
         )
     ).json()["id"]
 
-    await client.post(
+    cross_response = await client.post(
         "/relationships",
         json={"source_id": mem_a, "target_id": mem_b, "relationship": "cross"},
         headers=headers,
     )
+    assert cross_response.status_code == 400
     await client.post(
         "/relationships",
         json={"source_id": mem_b, "target_id": mem_b2, "relationship": "same"},

@@ -6,7 +6,7 @@ Defines the interface that all tool adapters must implement.
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Dict, Optional
 
 
 class LLMToolAdapter(ABC):
@@ -51,11 +51,7 @@ class LLMToolAdapter(ABC):
         pass
 
     @abstractmethod
-    def update_context(
-        self,
-        files: list[str] = None,
-        task: str = None
-    ) -> bool:
+    def update_context(self, files: list[str] = None, task: str = None) -> bool:
         """
         Update the tool's context with current memory.
 
@@ -89,10 +85,7 @@ class LLMToolAdapter(ABC):
         return context_file.exists()
 
     def get_memory_context(
-        self,
-        files: list[str] = None,
-        task: str = None,
-        format: str = "markdown"
+        self, files: list[str] = None, task: str = None, format: str = "markdown"
     ) -> str:
         """
         Get formatted memory context using ProactiveRecall.
@@ -116,12 +109,7 @@ class LLMToolAdapter(ABC):
                 context = recall.on_file_open(files[0])
             else:
                 # Aggregate multiple files
-                context = {
-                    "warnings": [],
-                    "bugs": [],
-                    "decisions": [],
-                    "knowledge": []
-                }
+                context = {"warnings": [], "bugs": [], "decisions": [], "knowledge": []}
                 for file in files:
                     file_context = recall.on_file_open(file)
                     for key in context:
@@ -143,6 +131,7 @@ class LLMToolAdapter(ABC):
         if path.exists():
             backup = path.with_suffix(path.suffix + ".backup")
             import shutil
+
             shutil.copy2(path, backup)
             return backup
         return None

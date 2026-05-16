@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { motion } from "framer-motion"
-import { Plus, Search } from "lucide-react"
+import { AlertTriangle, Plus, Search } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -16,7 +16,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { createMemory } from "@/lib/api"
+import { createMemory, describeApiError } from "@/lib/api"
 import { useRouter } from "next/navigation"
 
 export function QuickActions() {
@@ -25,6 +25,7 @@ export function QuickActions() {
   const [content, setContent] = useState("")
   const [category, setCategory] = useState("note")
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const handleCreateMemory = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -33,12 +34,14 @@ export function QuickActions() {
     setIsSubmitting(true)
     try {
       await createMemory(content, category, [])
+      setErrorMessage(null)
       setContent("")
       setCategory("note")
       setIsDialogOpen(false)
       window.location.reload() // Simple reload to refresh lists
     } catch (error) {
       console.error("Failed to create memory", error)
+      setErrorMessage(describeApiError(error))
     } finally {
       setIsSubmitting(false)
     }
@@ -66,6 +69,14 @@ export function QuickActions() {
                 </DialogDescription>
               </DialogHeader>
               <div className="grid gap-4 py-4">
+                {errorMessage ? (
+                  <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-muted-foreground">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="mt-0.5 h-4 w-4 text-destructive" />
+                      <span>{errorMessage}</span>
+                    </div>
+                  </div>
+                ) : null}
                 <div className="grid gap-2">
                   <Label htmlFor="category">Category</Label>
                   <Input

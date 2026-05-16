@@ -13,9 +13,10 @@ Unlike episodic memories (events), semantic memories are:
 """
 
 from datetime import datetime
-from typing import List, Dict, Any
 from enum import Enum
+from typing import Any, Dict, List
 
+from llm_memory.core.ranking import rank_memory_results
 from llm_memory.core.storage import BaseStorage
 from llm_memory.layers.base import BaseMemoryLayer
 
@@ -66,7 +67,7 @@ class SemanticMemory(BaseMemoryLayer):
         applies_to: List[str] = None,
         source_episodes: List[str] = None,
         repo_id: str = None,
-        tags: List[str] = None
+        tags: List[str] = None,
     ) -> str:
         """
         Establish a piece of knowledge.
@@ -90,10 +91,7 @@ class SemanticMemory(BaseMemoryLayer):
                 importance=0.9
             )
         """
-        metadata = {
-            "established_at": datetime.now().isoformat(),
-            "applies_to": applies_to or []
-        }
+        metadata = {"established_at": datetime.now().isoformat(), "applies_to": applies_to or []}
 
         return self.storage.store_memory(
             content=knowledge,
@@ -103,7 +101,7 @@ class SemanticMemory(BaseMemoryLayer):
             repo_id=repo_id,
             tags=tags or [],
             metadata=metadata,
-            source_ids=source_episodes or []
+            source_ids=source_episodes or [],
         )
 
     def warn(
@@ -112,7 +110,7 @@ class SemanticMemory(BaseMemoryLayer):
         warning: str,
         severity: float = 0.7,
         repo_id: str = None,
-        tags: List[str] = None
+        tags: List[str] = None,
     ) -> str:
         """
         Establish a warning about a fragile area.
@@ -141,7 +139,7 @@ class SemanticMemory(BaseMemoryLayer):
             importance=severity,
             applies_to=[area],
             repo_id=repo_id,
-            tags=["warning"] + (tags or [])
+            tags=["warning"] + (tags or []),
         )
 
     def convention(
@@ -150,7 +148,7 @@ class SemanticMemory(BaseMemoryLayer):
         rationale: str = None,
         importance: float = 0.5,
         repo_id: str = None,
-        tags: List[str] = None
+        tags: List[str] = None,
     ) -> str:
         """
         Establish a convention or best practice.
@@ -179,7 +177,7 @@ class SemanticMemory(BaseMemoryLayer):
             category=KnowledgeCategory.CONVENTION,
             importance=importance,
             repo_id=repo_id,
-            tags=tags
+            tags=tags,
         )
 
     def known_issue(
@@ -188,7 +186,7 @@ class SemanticMemory(BaseMemoryLayer):
         workaround: str = None,
         priority: float = 0.5,
         repo_id: str = None,
-        tags: List[str] = None
+        tags: List[str] = None,
     ) -> str:
         """
         Document a known issue.
@@ -218,14 +216,11 @@ class SemanticMemory(BaseMemoryLayer):
             category=KnowledgeCategory.KNOWN_ISSUE,
             importance=priority,
             repo_id=repo_id,
-            tags=["known_issue"] + (tags or [])
+            tags=["known_issue"] + (tags or []),
         )
 
     def search(
-        self,
-        query: str,
-        category: KnowledgeCategory = None,
-        limit: int = 10
+        self, query: str, category: KnowledgeCategory = None, limit: int = 10
     ) -> List[Dict[str, Any]]:
         """
         Search semantic knowledge.
@@ -246,24 +241,18 @@ class SemanticMemory(BaseMemoryLayer):
         else:
             category_value = None
 
-        return super().search(
-            query=query,
-            layer="semantic",
-            category=category_value,
-            limit=limit
-        )
+        return super().search(query=query, layer="semantic", category=category_value, limit=limit)
 
     def get_warnings(self, area: str = None) -> List[Dict[str, Any]]:
         """Get warnings, optionally filtered by area."""
         results = self.list_items(
-            layer="semantic",
-            category=KnowledgeCategory.FRAGILE_AREA.value,
-            limit=100
+            layer="semantic", category=KnowledgeCategory.FRAGILE_AREA.value, limit=100
         )
 
         if area:
             results = [
-                r for r in results
+                r
+                for r in results
                 if area in r.get("metadata", {}).get("applies_to", [])
                 or area.lower() in r["content"].lower()
             ]
@@ -276,7 +265,7 @@ class SemanticMemory(BaseMemoryLayer):
             layer="semantic",
             category=KnowledgeCategory.CONVENTION.value,
             limit=100,
-            order_by="importance DESC"
+            order_by="importance DESC",
         )
 
     def get_known_issues(self) -> List[Dict[str, Any]]:
@@ -285,14 +274,11 @@ class SemanticMemory(BaseMemoryLayer):
             layer="semantic",
             category=KnowledgeCategory.KNOWN_ISSUE.value,
             limit=100,
-            order_by="importance DESC"
+            order_by="importance DESC",
         )
 
     def relevant_for(
-        self,
-        files: List[str] = None,
-        query: str = None,
-        limit: int = 10
+        self, files: List[str] = None, query: str = None, limit: int = 10
     ) -> List[Dict[str, Any]]:
         """
         Get knowledge relevant to specific files or a query.
@@ -318,18 +304,7 @@ class SemanticMemory(BaseMemoryLayer):
             query_results = self.search(query, limit=limit)
             results.extend(query_results)
 
-        # Deduplicate and sort by similarity/importance
-        seen_ids = set()
-        unique_results = []
-        for r in results:
-            if r["id"] not in seen_ids:
-                seen_ids.add(r["id"])
-                # Combined score of similarity and importance
-                r["relevance"] = (
-                    r.get("similarity", 0.5) * 0.6 +
-                    r.get("importance", 0.5) * 0.4
-                )
-                unique_results.append(r)
-
-        unique_results.sort(key=lambda x: x["relevance"], reverse=True)
-        return unique_results[:limit]
+        ranked = rank_memory_results(results, query=query or " ".join(files or []), limit=limit)
+        for result in ranked:
+            result["relevance"] = result["relevance_score"]
+        return ranked

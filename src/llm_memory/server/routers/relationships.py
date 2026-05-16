@@ -44,10 +44,13 @@ async def add_relationship(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Storage backend does not support relationships",
         )
-    rel_id = storage.add_relationship(
-        source_id=rel.source_id,
-        target_id=rel.target_id,
-        relationship=rel.relationship,
-        strength=rel.strength,
-    )
+    try:
+        rel_id = storage.add_relationship(
+            source_id=rel.source_id,
+            target_id=rel.target_id,
+            relationship=rel.relationship,
+            strength=rel.strength,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     return {"id": rel_id}

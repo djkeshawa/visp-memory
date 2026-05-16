@@ -198,12 +198,9 @@ GitHub Actions → Click failed run → Click failed step → Read error
 Before pushing:
 ```bash
 # Test frontend build
-cd llm-memory-dashboard
-npm ci
-npm run export
+python3 build_frontend.py
 
 # Test Python build
-python3 build_frontend.py
 python3 -m build --wheel
 
 # Verify
@@ -284,12 +281,7 @@ jobs:
           node-version: '20'
 
       - name: Build Frontend
-        run: |
-          cd llm-memory-dashboard
-          npm install
-          npm run export
-          cd ..
-          python3 build_frontend.py
+        run: python3 build_frontend.py
 
       - name: Build Package
         run: |

@@ -15,11 +15,12 @@ const navItems = [
 
 export function Sidebar() {
   const pathname = usePathname()
+  const activePath = pathname === "/dashboard" ? "/" : pathname.replace(/^\/dashboard/, "")
 
   return (
-    <aside className="fixed left-0 top-0 z-40 h-screen w-60 border-r border-border bg-card flex flex-col">
+    <aside className="sticky top-0 z-40 flex w-full flex-col border-b border-border bg-card md:fixed md:left-0 md:top-0 md:h-screen md:w-60 md:border-b-0 md:border-r">
       {/* Logo */}
-      <div className="flex items-center gap-3 px-6 py-5 border-b border-border">
+      <div className="flex items-center gap-3 border-b border-border px-4 py-4 md:px-6 md:py-5">
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600">
           <Brain className="h-5 w-5 text-white" />
         </div>
@@ -30,15 +31,15 @@ export function Sidebar() {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 px-3 py-4 space-y-1">
+      <nav className="flex gap-1 overflow-x-auto px-3 py-3 md:block md:flex-1 md:space-y-1 md:overflow-visible md:py-4">
         {navItems.map((item) => {
-          const isActive = pathname === item.href
+          const isActive = activePath === item.href
           return (
             <Link
               key={item.href}
               href={item.href}
               className={cn(
-                "flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200",
+                "flex shrink-0 items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200 md:gap-3 md:px-4",
                 isActive
                   ? "bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md"
                   : "text-muted-foreground hover:bg-secondary hover:text-foreground",
@@ -52,7 +53,7 @@ export function Sidebar() {
       </nav>
 
       {/* Bottom Section */}
-      <div className="px-3 py-4 border-t border-border space-y-3">
+      <div className="hidden space-y-3 border-t border-border px-3 py-4 md:block">
         <div className="flex items-center justify-between px-4">
           <span className="text-sm text-muted-foreground">Theme</span>
           <ThemeToggle />

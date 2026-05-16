@@ -4,8 +4,8 @@ import type React from "react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import type { MemoryLayer } from "@/lib/types"
-import { Search, ZoomIn, ZoomOut, Maximize2, Filter, X, Link2, Clock, Tag } from "lucide-react"
-import { getGraphData } from "@/lib/api"
+import { AlertTriangle, Search, ZoomIn, ZoomOut, Maximize2, Filter, X, Link2, Clock, Tag } from "lucide-react"
+import { describeApiError, getGraphData } from "@/lib/api"
 
 interface GraphNode {
   id: string
@@ -47,7 +47,7 @@ export function MemoryGraph() {
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
   const [draggedNode, setDraggedNode] = useState<string | null>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
-  const animationRef = useRef<number>()
+  const animationRef = useRef<number | null>(null)
   const particlesRef = useRef<Particle[]>([])
 
   const [zoom, setZoom] = useState(1)
@@ -59,6 +59,7 @@ export function MemoryGraph() {
   const [activeFilters, setActiveFilters] = useState<MemoryLayer[]>(["episodic", "semantic", "intent"])
   const [showFilters, setShowFilters] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   // Fetch Graph Data
   useEffect(() => {
@@ -94,6 +95,7 @@ export function MemoryGraph() {
 
         setNodes(newNodes);
         setEdges(newEdges);
+        setErrorMessage(null);
 
         // Initialize particles
         particlesRef.current = newEdges.flatMap((_, idx) =>
@@ -107,6 +109,7 @@ export function MemoryGraph() {
         setLoading(false);
       } catch (error) {
         console.error("Failed to fetch graph data:", error);
+        setErrorMessage(describeApiError(error));
         setLoading(false);
       }
     }
@@ -551,6 +554,18 @@ export function MemoryGraph() {
       if (edge.target === nodeId) connected.add(edge.source)
     })
     return nodes.filter((n) => connected.has(n.id))
+  }
+
+  if (errorMessage) {
+    return (
+      <div className="glass flex min-h-[360px] items-center justify-center rounded-xl p-6">
+        <div className="max-w-md text-center text-sm text-muted-foreground">
+          <AlertTriangle className="mx-auto mb-3 h-6 w-6 text-destructive" />
+          <p className="font-medium text-foreground">Graph data is unavailable</p>
+          <p className="mt-2">{errorMessage}</p>
+        </div>
+      </div>
+    )
   }
 
   return (

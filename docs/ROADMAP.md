@@ -61,3 +61,10 @@ The "Killer Feature": A shared server that connects all repositories and team me
 - **Pattern Detection**: "This bug happens every time we touch the auth module."
 - **Feedback Loops**: Learn which memories are useful based on user feedback.
 - **Multi-Agent Sync**: Protocol for autonomous agents to share and sync context.
+
+## Maturity Track
+
+Before expanding Phase 4, the project should harden the existing product
+surface: CLI, MCP server, REST API, dashboard, packaging, docs, and release
+checks. See [development/MATURITY_PLAN.md](development/MATURITY_PLAN.md) for the
+release-readiness levels and current priority order.

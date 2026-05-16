@@ -9,22 +9,25 @@ Repositories are first-class entities that:
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Dict, Any, Optional
 from enum import Enum
+from typing import Any, Dict, List, Optional
+
 from llm_memory.core.storage import BaseStorage
 
 
 class DependencyType(str, Enum):
     """Types of repository relationships."""
-    DEPENDS_ON = "depends_on"       # Uses code from
-    OWNED_BY = "owned_by"           # Team ownership
-    RELATED_TO = "related_to"       # General relation
-    FORKED_FROM = "forked_from"     # Fork relationship
+
+    DEPENDS_ON = "depends_on"  # Uses code from
+    OWNED_BY = "owned_by"  # Team ownership
+    RELATED_TO = "related_to"  # General relation
+    FORKED_FROM = "forked_from"  # Fork relationship
 
 
 @dataclass
 class Repository:
     """Repository entity."""
+
     id: str
     name: str
     url: Optional[str] = None
@@ -38,6 +41,7 @@ class Repository:
 @dataclass
 class RepositoryDependency:
     """Dependency relationship between repositories."""
+
     source_repo_id: str
     target_repo_id: str
     dependency_type: DependencyType

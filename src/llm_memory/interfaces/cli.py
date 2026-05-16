@@ -15,29 +15,46 @@ Usage:
     llm-memory stats                   # Show statistics
 """
 
-from pathlib import Path
-from typing import Optional, List
 import json
+from pathlib import Path
+from typing import List, Optional
 
 import typer
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
-from rich.markdown import Markdown
+from rich.console import Console, Group
 from rich.layout import Layout
-from rich.console import Group
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.table import Table
 
-from llm_memory import Memory, MemoryConfig
+from llm_memory import Memory, MemoryConfig, __version__
 
 app = typer.Typer(
-    name="llm-memory",
-    help="Human-inspired memory system for LLMs",
-    no_args_is_help=True
+    name="llm-memory", help="Human-inspired memory system for LLMs", no_args_is_help=True
 )
 console = Console()
 
 # Global memory instance (lazy loaded)
 _memory: Optional[Memory] = None
+
+
+def version_callback(value: bool):
+    """Print CLI version and exit."""
+    if value:
+        console.print(f"llm-memory {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def cli_root(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=version_callback,
+        is_eager=True,
+        help="Show version and exit.",
+    ),
+):
+    """Human-inspired memory system for LLMs."""
 
 
 def get_memory() -> Memory:
@@ -52,12 +69,15 @@ def get_memory() -> Memory:
 # Init Command
 # =============================================================================
 
+
 @app.command()
 def init(
-    project_type: str = typer.Option("code", "--type", "-t", help="Project type: code, writing, research, general"),
+    project_type: str = typer.Option(
+        "code", "--type", "-t", help="Project type: code, writing, research, general"
+    ),
     name: str = typer.Option(None, "--name", "-n", help="Project name"),
     data_dir: str = typer.Option(".llm-memory", "--data", "-d", help="Data directory"),
-    repo: str = typer.Option(None, "--repo", "-r", help="Default repository/project ID")
+    repo: str = typer.Option(None, "--repo", "-r", help="Default repository/project ID"),
 ):
     """Initialize LLM Memory in the current directory."""
     config_path = Path("llm-memory.yaml")
@@ -68,9 +88,7 @@ def init(
 
     # Create config
     config = MemoryConfig(
-        project_name=name or Path.cwd().name,
-        project_type=project_type,
-        repo_id=repo
+        project_name=name or Path.cwd().name, project_type=project_type, repo_id=repo
     )
     config.storage.data_dir = Path(data_dir) / "data"
 
@@ -91,12 +109,13 @@ def init(
 # Record Commands
 # =============================================================================
 
+
 @app.command()
 def record(
     event: str = typer.Argument(..., help="What happened"),
     category: str = typer.Option("note", "--category", "-c", help="Event category"),
     importance: float = typer.Option(0.5, "--importance", "-i", help="Importance (0.0-1.0)"),
-    repo: str = typer.Option(None, "--repo", "-r", help="Repository context")
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository context"),
 ):
     """Record an episodic memory (something that happened)."""
     memory = get_memory()
@@ -110,11 +129,11 @@ def decision(
     what: str = typer.Argument(..., help="What was decided"),
     why: str = typer.Argument(..., help="Why this choice was made"),
     alternatives: List[str] = typer.Option(None, "--alt", "-a", help="Alternatives considered"),
-    repo: str = typer.Option(None, "--repo", "-r", help="Repository context")
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository context"),
 ):
     """Record an architecture/design decision."""
     memory = get_memory()
-    mem_id = memory.decision(what, why, alternatives, repo_id=repo)
+    memory.decision(what, why, alternatives, repo_id=repo)
     console.print(f"[green]Decision recorded:[/green] {what}")
     console.print(f"[dim]Reasoning: {why}[/dim]")
 
@@ -125,11 +144,11 @@ def bug(
     cause: str = typer.Option(None, "--cause", "-c", help="Root cause"),
     fix: str = typer.Option(None, "--fix", "-f", help="How it was fixed"),
     files: List[str] = typer.Option(None, "--file", help="Files involved"),
-    repo: str = typer.Option(None, "--repo", "-r", help="Repository context")
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository context"),
 ):
     """Record a bug discovery or fix."""
     memory = get_memory()
-    mem_id = memory.episodic.bug(description, cause=cause, fix=fix, files=files, repo_id=repo)
+    memory.episodic.bug(description, cause=cause, fix=fix, files=files, repo_id=repo)
     status = "fixed" if fix else "found"
     console.print(f"[green]Bug {status}:[/green] {description}")
 
@@ -138,16 +157,17 @@ def bug(
 # Learn Commands
 # =============================================================================
 
+
 @app.command()
 def learn(
     knowledge: str = typer.Argument(..., help="The knowledge/fact/pattern"),
     category: str = typer.Option("fact", "--category", "-c", help="Knowledge category"),
     importance: float = typer.Option(0.6, "--importance", "-i", help="Importance (0.0-1.0)"),
-    repo: str = typer.Option(None, "--repo", "-r", help="Repository context")
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository context"),
 ):
     """Establish semantic knowledge (something learned)."""
     memory = get_memory()
-    mem_id = memory.learn(knowledge, category=category, importance=importance, repo_id=repo)
+    memory.learn(knowledge, category=category, importance=importance, repo_id=repo)
     console.print(f"[green]Established:[/green] {knowledge[:60]}...")
 
 
@@ -156,11 +176,11 @@ def warn(
     area: str = typer.Argument(..., help="Area/file/module"),
     warning: str = typer.Argument(..., help="What to watch out for"),
     severity: float = typer.Option(0.7, "--severity", "-s", help="Severity (0.0-1.0)"),
-    repo: str = typer.Option(None, "--repo", "-r", help="Repository context")
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository context"),
 ):
     """Add a warning about a fragile area."""
     memory = get_memory()
-    mem_id = memory.warn(area, warning, severity, repo_id=repo)
+    memory.warn(area, warning, severity, repo_id=repo)
     console.print(f"[yellow]Warning added for {area}:[/yellow] {warning}")
 
 
@@ -168,11 +188,11 @@ def warn(
 def convention(
     rule: str = typer.Argument(..., help="The convention/rule"),
     rationale: str = typer.Option(None, "--rationale", "-r", help="Why this convention exists"),
-    repo: str = typer.Option(None, "--repo", "-rp", help="Repository context")
+    repo: str = typer.Option(None, "--repo", "-rp", help="Repository context"),
 ):
     """Establish a convention or best practice."""
     memory = get_memory()
-    mem_id = memory.semantic.convention(rule, rationale, repo_id=repo)
+    memory.semantic.convention(rule, rationale, repo_id=repo)
     console.print(f"[green]Convention established:[/green] {rule}")
 
 
@@ -181,11 +201,11 @@ def issue(
     description: str = typer.Argument(..., help="Issue description"),
     workaround: str = typer.Option(None, "--workaround", "-w", help="How to work around it"),
     priority: float = typer.Option(0.5, "--priority", "-p", help="Priority (0.0-1.0)"),
-    repo: str = typer.Option(None, "--repo", "-r", help="Repository context")
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository context"),
 ):
     """Document a known issue."""
     memory = get_memory()
-    mem_id = memory.semantic.known_issue(description, workaround, priority, repo_id=repo)
+    memory.semantic.known_issue(description, workaround, priority, repo_id=repo)
     console.print(f"[yellow]Known issue documented:[/yellow] {description}")
 
 
@@ -193,27 +213,30 @@ def issue(
 # Intent Commands
 # =============================================================================
 
+
 @app.command()
 def goal(
     description: str = typer.Argument(..., help="Goal description"),
-    priority: int = typer.Option(1, "--priority", "-p", help="Priority (0=low, 1=normal, 2=high, 3=critical)"),
+    priority: int = typer.Option(
+        1, "--priority", "-p", help="Priority (0=low, 1=normal, 2=high, 3=critical)"
+    ),
     constraint: List[str] = typer.Option(None, "--constraint", "-c", help="Constraints"),
-    repo: str = typer.Option(None, "--repo", "-r", help="Repository context")
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository context"),
 ):
     """Set a goal/intent."""
     memory = get_memory()
-    intent_id = memory.goal(description, priority=priority, constraints=constraint, repo_id=repo)
+    memory.goal(description, priority=priority, constraints=constraint, repo_id=repo)
     console.print(f"[green]Goal set:[/green] {description}")
 
 
 @app.command()
 def focus(
     on: str = typer.Argument(..., help="What to focus on"),
-    avoid: List[str] = typer.Option(None, "--avoid", "-a", help="What to avoid")
+    avoid: List[str] = typer.Option(None, "--avoid", "-a", help="What to avoid"),
 ):
     """Set current focus with things to avoid."""
     memory = get_memory()
-    intent_id = memory.intent.set_focus(on, avoid)
+    memory.intent.set_focus(on, avoid)
     console.print(f"[green]Focus set:[/green] {on}")
     if avoid:
         console.print(f"[dim]Avoiding: {', '.join(avoid)}[/dim]")
@@ -223,11 +246,11 @@ def focus(
 def working(
     task: str = typer.Argument(..., help="What you're working on"),
     files: List[str] = typer.Option(None, "--file", "-f", help="Files being modified"),
-    repo: str = typer.Option(None, "--repo", "-r", help="Repository context")
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository context"),
 ):
     """Set current task."""
     memory = get_memory()
-    intent_id = memory.working_on(task, files, repo_id=repo)
+    memory.working_on(task, files, repo_id=repo)
     console.print(f"[green]Working on:[/green] {task}")
 
 
@@ -243,12 +266,13 @@ def done():
 # Search Commands
 # =============================================================================
 
+
 @app.command()
 def recall(
     query: str = typer.Argument(..., help="Search query"),
     limit: int = typer.Option(10, "--limit", "-n", help="Maximum results"),
     layer: str = typer.Option(None, "--layer", "-l", help="Filter by layer"),
-    repo: str = typer.Option(None, "--repo", "-r", help="Filter by repository")
+    repo: str = typer.Option(None, "--repo", "-r", help="Filter by repository"),
 ):
     """Search across all memories."""
     memory = get_memory()
@@ -261,6 +285,7 @@ def recall(
         return
 
     from rich.box import ROUNDED
+
     table = Table(title=f"Search Results for '{query}'", box=ROUNDED)
     table.add_column("Layer", style="cyan", width=10)
     table.add_column("Category", style="green", width=12)
@@ -268,17 +293,12 @@ def recall(
     table.add_column("Score", justify="right", style="magenta")
 
     for r in results:
-        score = f"{r.get('similarity', 0):.2f}" if r.get('similarity') else "-"
-        content = r['content'].replace("\n", " ")
+        score = f"{r.get('similarity', 0):.2f}" if r.get("similarity") else "-"
+        content = r["content"].replace("\n", " ")
         if len(content) > 80:
             content = content[:77] + "..."
 
-        table.add_row(
-            r['layer'],
-            r.get('category', '-'),
-            content,
-            score
-        )
+        table.add_row(r["layer"], r.get("category", "-"), content, score)
 
     console.print(table)
 
@@ -287,12 +307,13 @@ def recall(
 # Context Commands
 # =============================================================================
 
+
 @app.command()
 def context(
     format: str = typer.Option("text", "--format", "-f", help="Output format: text or json"),
     no_history: bool = typer.Option(False, "--no-history", help="Exclude history"),
     no_knowledge: bool = typer.Option(False, "--no-knowledge", help="Exclude knowledge"),
-    no_intent: bool = typer.Option(False, "--no-intent", help="Exclude intent")
+    no_intent: bool = typer.Option(False, "--no-intent", help="Exclude intent"),
 ):
     """Get full context for LLM injection."""
     memory = get_memory()
@@ -301,7 +322,7 @@ def context(
         include_history=not no_history,
         include_knowledge=not no_knowledge,
         include_intent=not no_intent,
-        format=format
+        format=format,
     )
 
     if format == "json":
@@ -313,7 +334,7 @@ def context(
 @app.command()
 def relevant(
     task: str = typer.Option(None, "--task", "-t", help="Task description"),
-    files: List[str] = typer.Option(None, "--file", "-f", help="Files being worked on")
+    files: List[str] = typer.Option(None, "--file", "-f", help="Files being worked on"),
 ):
     """Get memories relevant to a task or files."""
     memory = get_memory()
@@ -344,6 +365,7 @@ def relevant(
 # Maintenance Commands
 # =============================================================================
 
+
 @app.command()
 def stats():
     """Show memory statistics."""
@@ -356,20 +378,20 @@ def stats():
     table.add_column("Metric", style="cyan")
     table.add_column("Value", justify="right")
 
-    table.add_row("Total Memories", str(s.get('total_memories', 0)))
-    table.add_row("Active Intents", str(s.get('active_intents', 0)))
-    table.add_row("Relationships", str(s.get('total_relationships', 0)))
+    table.add_row("Total Memories", str(s.get("total_memories", 0)))
+    table.add_row("Active Intents", str(s.get("active_intents", 0)))
+    table.add_row("Relationships", str(s.get("total_relationships", 0)))
 
     console.print(table)
 
-    if s.get('memories_by_layer'):
+    if s.get("memories_by_layer"):
         console.print("\n[bold]By Layer:[/bold]")
-        for layer, count in s['memories_by_layer'].items():
+        for layer, count in s["memories_by_layer"].items():
             console.print(f"  {layer}: {count}")
 
-    if s.get('memories_by_category'):
+    if s.get("memories_by_category"):
         console.print("\n[bold]By Category:[/bold]")
-        for cat, count in list(s['memories_by_category'].items())[:10]:
+        for cat, count in list(s["memories_by_category"].items())[:10]:
             console.print(f"  {cat}: {count}")
 
 
@@ -392,7 +414,7 @@ def decay():
 @app.command()
 def dedup(
     layer: str = typer.Option("episodic", "--layer", "-l", help="Layer to check"),
-    threshold: float = typer.Option(0.9, "--threshold", "-t", help="Similarity threshold")
+    threshold: float = typer.Option(0.9, "--threshold", "-t", help="Similarity threshold"),
 ):
     """Find and merge duplicate memories."""
 
@@ -409,7 +431,9 @@ def dedup(
     for group in duplicates:
         console.print("--- Group ---")
         for mem in group:
-            console.print(f"[{mem['id']}] {mem['content'][:50]}... ({mem.get('similarity', 0):.2f})")
+            console.print(
+                f"[{mem['id']}] {mem['content'][:50]}... ({mem.get('similarity', 0):.2f})"
+            )
 
     # TODO: Interactive merge workflow could be added here
 
@@ -421,23 +445,24 @@ def dedup(
 quality_app = typer.Typer(help="Memory quality management")
 app.add_typer(quality_app, name="quality")
 
+
 @quality_app.command("conflicts")
 def check_conflicts(
     content: str = typer.Argument(..., help="Statement to check for conflicts"),
-    layer: str = typer.Option("semantic", "--layer", "-l", help="Layer to check against")
+    layer: str = typer.Option("semantic", "--layer", "-l", help="Layer to check against"),
 ):
     """Check if a statement conflicts with existing knowledge."""
     memory = get_memory()
-    
+
     console.print(f"Checking for conflicts with: '{content}'")
-    
+
     try:
         conflict = memory.check_conflict(content, layer=layer)
-        
+
         if conflict:
-            console.print(Panel(f"[bold red]Conflict Detected![/bold red]"))
+            console.print(Panel("[bold red]Conflict Detected![/bold red]"))
             console.print(f"Reason: {conflict.get('reason')}")
-            if conflict.get('conflicting_ids'):
+            if conflict.get("conflicting_ids"):
                 console.print(f"Conflicting IDs: {conflict.get('conflicting_ids')}")
         else:
             console.print("[green]No conflicts detected.[/green]")
@@ -446,9 +471,7 @@ def check_conflicts(
 
 
 @app.command()
-def export(
-    output: str = typer.Argument("memory-export.json", help="Output file path")
-):
+def export(output: str = typer.Argument("memory-export.json", help="Output file path")):
     """Export all memories to JSON."""
     memory = get_memory()
     memory.export(Path(output))
@@ -456,9 +479,7 @@ def export(
 
 
 @app.command(name="import")
-def import_memories(
-    input_file: str = typer.Argument(..., help="Input file path")
-):
+def import_memories(input_file: str = typer.Argument(..., help="Input file path")):
     """Import memories from JSON export."""
     memory = get_memory()
     memory.import_memories(Path(input_file))
@@ -469,24 +490,23 @@ def import_memories(
 # List Commands
 # =============================================================================
 
+
 @app.command("list")
 def list_memories(
     layer: str = typer.Option(None, "--layer", "-l", help="Filter by layer"),
     category: str = typer.Option(None, "--category", "-c", help="Filter by category"),
     limit: int = typer.Option(20, "--limit", "-n", help="Max results"),
-    full: bool = typer.Option(False, "--full", help="Show full content")
+    full: bool = typer.Option(False, "--full", help="Show full content"),
 ):
     """List recent memories."""
     from rich.box import ROUNDED
+
     memory = get_memory()
 
     # We need to access storage directly for list listing or expose it in Memory
     # Using private storage access for now as Memory doesn't have generic list
     memories = memory._storage.list_memories(
-        layer=layer,
-        category=category,
-        limit=limit,
-        order_by="created_at DESC"
+        layer=layer, category=category, limit=limit, order_by="created_at DESC"
     )
 
     if not memories:
@@ -501,16 +521,16 @@ def list_memories(
     table.add_column("Content")
 
     for m in memories:
-        content = m['content'].replace("\n", " ")
+        content = m["content"].replace("\n", " ")
         if not full and len(content) > 80:
             content = content[:77] + "..."
 
         table.add_row(
-            m['id'][:8],
-            m['created_at'][:16].replace("T", " "),
-            m['layer'],
-            m.get('category', '-'),
-            content
+            m["id"][:8],
+            m["created_at"][:16].replace("T", " "),
+            m["layer"],
+            m.get("category", "-"),
+            content,
         )
 
     console.print(table)
@@ -533,8 +553,8 @@ def list_intents():
     priority_labels = {0: "LOW", 1: "NORMAL", 2: "HIGH", 3: "CRITICAL"}
 
     for i in intents:
-        p = priority_labels.get(i.get('priority', 1), str(i.get('priority')))
-        table.add_row(p, i['description'])
+        p = priority_labels.get(i.get("priority", 1), str(i.get("priority")))
+        table.add_row(p, i["description"])
 
     console.print(table)
 
@@ -573,12 +593,13 @@ def list_issues():
 # Recall Commands (Proactive)
 # =============================================================================
 
+
 @app.command()
 def inject(
     files: List[str] = typer.Option(None, "--file", "-f", help="Files to get context for"),
     task: str = typer.Option(None, "--task", "-t", help="Task description"),
     format: str = typer.Option("markdown", "--format", help="Output format: markdown, plain, json"),
-    max_length: int = typer.Option(2000, "--max-length", "-m", help="Max output length")
+    max_length: int = typer.Option(2000, "--max-length", "-m", help="Max output length"),
 ):
     """
     Inject relevant memory context for files or task.
@@ -593,10 +614,7 @@ def inject(
 
     if files and task:
         # Comprehensive context for task with files
-        context = recall.find_relevant_for_task(
-            task_description=task,
-            files=files
-        )
+        context = recall.find_relevant_for_task(task_description=task, files=files)
         output = recall.format_injection(context, format=format, max_length=max_length)
 
     elif files:
@@ -605,12 +623,7 @@ def inject(
             context = recall.on_file_open(files[0])
         else:
             # Multiple files - aggregate
-            context = {
-                "warnings": [],
-                "bugs": [],
-                "decisions": [],
-                "knowledge": []
-            }
+            context = {"warnings": [], "bugs": [], "decisions": [], "knowledge": []}
             for file in files:
                 file_context = recall.on_file_open(file)
                 for key in context:
@@ -638,7 +651,7 @@ def find_error(
     error: str = typer.Argument(..., help="Error message to search for"),
     error_type: str = typer.Option(None, "--type", "-t", help="Error type (e.g., TypeError)"),
     file: str = typer.Option(None, "--file", "-f", help="File where error occurred"),
-    limit: int = typer.Option(5, "--limit", "-n", help="Max results")
+    limit: int = typer.Option(5, "--limit", "-n", help="Max results"),
 ):
     """
     Find similar errors that occurred in the past.
@@ -652,10 +665,7 @@ def find_error(
     recall = ProactiveRecall(memory)
 
     similar = recall.on_error(
-        error_message=error,
-        error_type=error_type,
-        file_path=file,
-        limit=limit
+        error_message=error, error_type=error_type, file_path=file, limit=limit
     )
 
     if not similar:
@@ -688,9 +698,11 @@ app.add_typer(capture_app, name="capture")
 @capture_app.command("git")
 def capture_git(
     action: str = typer.Argument(..., help="Action: install, uninstall, sync, commit, merge"),
-    commit_ref: str = typer.Option("HEAD", "--ref", "-r", help="Commit reference for 'commit' action"),
+    commit_ref: str = typer.Option(
+        "HEAD", "--ref", "-r", help="Commit reference for 'commit' action"
+    ),
     since: str = typer.Option(None, "--since", "-s", help="Date for 'sync' (e.g., '1 week ago')"),
-    limit: int = typer.Option(100, "--limit", "-n", help="Max commits for 'sync'")
+    limit: int = typer.Option(100, "--limit", "-n", help="Max commits for 'sync'"),
 ):
     """
     Git capture commands.
@@ -738,7 +750,9 @@ def capture_git(
             if success:
                 console.print(f"[green]✓[/green] Removed {hook}")
             else:
-                console.print(f"[yellow]✗[/yellow] Could not remove {hook} (not installed by llm-memory)")
+                console.print(
+                    f"[yellow]✗[/yellow] Could not remove {hook} (not installed by llm-memory)"
+                )
 
         console.print("\n[green]Git hooks removed.[/green]")
 
@@ -778,9 +792,7 @@ def capture_git(
 
 
 @capture_app.command("tests")
-def capture_tests(
-    report: str = typer.Argument("report.xml", help="Path to JUnit XML report")
-):
+def capture_tests(report: str = typer.Argument("report.xml", help="Path to JUnit XML report")):
     """Capture test failures from JUnit XML report."""
     from llm_memory.capture.tests import TestCapture
 
@@ -811,53 +823,46 @@ def register_repo(
     name: str = typer.Argument(..., help="Repository name"),
     url: str = typer.Option(None, "--url", "-u", help="Repository URL"),
     description: str = typer.Option(None, "--desc", "-d", help="Description"),
-    team_id: str = typer.Option(None, "--team", "-t", help="Owning team ID")
+    team_id: str = typer.Option(None, "--team", "-t", help="Owning team ID"),
 ):
     """Register a new repository."""
     memory = get_memory()
     from llm_memory.core.repository import Repository
-    
+
     repo = Repository(
         id=name,  # Use name as ID for simplicity in CLI
         name=name,
         url=url,
         description=description,
-        team_id=team_id
+        team_id=team_id,
     )
-    
+
     repo_id = memory.repos.register(repo)
     console.print(f"[green]Registered repository:[/green] {name}")
     console.print(f"[dim]ID: {repo_id}[/dim]")
 
 
 @repo_app.command("list")
-def list_repos(
-    team: str = typer.Option(None, "--team", "-t", help="Filter by team ID")
-):
+def list_repos(team: str = typer.Option(None, "--team", "-t", help="Filter by team ID")):
     """List registered repositories."""
     memory = get_memory()
     from rich.table import Table
-    
+
     repos = memory.repos.list_all(team_id=team)
-    
+
     if not repos:
         console.print("[yellow]No repositories found[/yellow]")
         return
-        
+
     table = Table(title="Repositories")
     table.add_column("ID", style="cyan")
     table.add_column("Name", style="green")
     table.add_column("Team", style="magenta")
     table.add_column("Description")
-    
+
     for r in repos:
-        table.add_row(
-            r.id,
-            r.name,
-            r.team_id or "-",
-            r.description or ""
-        )
-        
+        table.add_row(r.id, r.name, r.team_id or "-", r.description or "")
+
     console.print(table)
 
 
@@ -865,7 +870,7 @@ def list_repos(
 def add_dependency(
     source: str = typer.Argument(..., help="Source repository ID"),
     target: str = typer.Argument(..., help="Target repository ID"),
-    type: str = typer.Option("depends_on", "--type", "-t", help="Dependency type")
+    type: str = typer.Option("depends_on", "--type", "-t", help="Dependency type"),
 ):
     """Add a dependency between repositories."""
     memory = get_memory()
@@ -886,12 +891,12 @@ def add_dependency(
 @repo_app.command("context")
 def repo_context(
     repo: str = typer.Argument(..., help="Repository ID"),
-    format: str = typer.Option("text", "--format", "-f", help="Output format (text/json)")
+    format: str = typer.Option("text", "--format", "-f", help="Output format (text/json)"),
 ):
     """Get cross-repository context (warnings from dependencies)."""
     memory = get_memory()
     from llm_memory.core.cross_repo import CrossRepoContext
-    
+
     ctx_manager = CrossRepoContext(memory.repos.storage, memory.repos)
     context = ctx_manager.get_context_for_repo(repo)
 
@@ -914,7 +919,7 @@ def repo_context(
         console.print("\n[red]Breaking Changes:[/red]")
         for b in context["breaking_changes"]:
             console.print(f"  - [{b.get('repo_id', '?')}] {b['content']}")
-            
+
     if not context["warnings"] and not context["breaking_changes"]:
         console.print("[green]No warnings or breaking changes found in dependencies.[/green]")
 
@@ -930,18 +935,14 @@ app.add_typer(team_app, name="teams")
 @team_app.command("create")
 def create_team(
     name: str = typer.Argument(..., help="Team name"),
-    description: str = typer.Option(None, "--desc", "-d", help="Description")
+    description: str = typer.Option(None, "--desc", "-d", help="Description"),
 ):
     """Create a new team."""
     memory = get_memory()
     from llm_memory.core.team import Team
-    
-    team = Team(
-        id=name.lower().replace(" ", "-"),
-        name=name,
-        description=description
-    )
-    
+
+    team = Team(id=name.lower().replace(" ", "-"), name=name, description=description)
+
     team_id = memory.teams.create_team(team)
     console.print(f"[green]Created team:[/green] {name}")
     console.print(f"[dim]ID: {team_id}[/dim]")
@@ -951,44 +952,39 @@ def create_team(
 def create_user(
     username: str = typer.Argument(..., help="Username"),
     email: str = typer.Option(None, "--email", "-e", help="Email address"),
-    name: str = typer.Option(None, "--name", "-n", help="Display name")
+    name: str = typer.Option(None, "--name", "-n", help="Display name"),
 ):
     """Create or update a user."""
     memory = get_memory()
     from llm_memory.core.team import User
-    
-    user = User(
-        id=username,
-        username=username,
-        email=email,
-        display_name=name or username
-    )
-    
-    user_id = memory.teams.create_user(user)
+
+    user = User(id=username, username=username, email=email, display_name=name or username)
+
+    memory.teams.create_user(user)
     console.print(f"[green]User saved:[/green] {username}")
 
 
 @team_app.command("add-member")
 def add_team_member(
     team: str = typer.Argument(..., help="Team ID"),
-    user: str = typer.Argument(..., help="User ID/Username")
+    user: str = typer.Argument(..., help="User ID/Username"),
 ):
     """Add a user to a team."""
     memory = get_memory()
-    
+
     if memory.teams.add_member(team, user):
         console.print(f"[green]Added {user} to team {team}[/green]")
     else:
-        console.print(f"[red]Failed to add member (check IDs)[/red]")
+        console.print("[red]Failed to add member (check IDs)[/red]")
 
 
 @team_app.command("list")
 def list_user_teams(
-    user: str = typer.Argument("current", help="User ID (defaults to current if authenticated)")
+    user: str = typer.Argument("current", help="User ID (defaults to current if authenticated)"),
 ):
     """List teams for a user."""
     memory = get_memory()
-    
+
     if user == "current":
         # Check if we have a config user (only in authenticated contexts)
         # For local, this might be ambiguous. Let's warn.
@@ -996,11 +992,11 @@ def list_user_teams(
         return
 
     teams = memory.teams.get_user_teams(user)
-    
+
     if not teams:
         console.print(f"[yellow]No teams found for user {user}[/yellow]")
         return
-        
+
     console.print(f"[bold]Teams for {user}:[/bold]")
     for t in teams:
         console.print(f"  - {t.name} ({t.id})")
@@ -1010,14 +1006,15 @@ def list_user_teams(
 # Conversation Capture
 # =============================================================================
 
+
 @capture_app.command("conversation")
 def capture_conversation(
     file: str = typer.Argument(..., help="Path to conversation log file (text, markdown, json)"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Analyze without saving")
+    dry_run: bool = typer.Option(False, "--dry-run", help="Analyze without saving"),
 ):
     """
     Capture memories from a conversation log.
-    
+
     Uses configured LLM to extract decisions, learnings, bugs, and tasks.
     """
     try:
@@ -1025,25 +1022,27 @@ def capture_conversation(
     except ImportError:
         console.print("[red]Import Error: Could not load ConversationCapture[/red]")
         raise typer.Exit(1)
-        
+
     memory = get_memory()
-    
+
     try:
         capturer = ConversationCapture(memory)
         console.print(f"Analyzing {file}...")
-        
+
         result = capturer.parse_file(file, dry_run=dry_run)
-        
-        console.print(Panel(f"[bold]Extraction Results ({'Dry Run' if dry_run else 'Saved'})[/bold]"))
+
+        console.print(
+            Panel(f"[bold]Extraction Results ({'Dry Run' if dry_run else 'Saved'})[/bold]")
+        )
         console.print(f"Decisions: {result['decisions']}")
         console.print(f"Learnings: {result['learnings']}")
         console.print(f"Bugs:      {result['bugs']}")
         console.print(f"Tasks:     {result['tasks']}")
-        
-        if dry_run and result['raw']:
+
+        if dry_run and result["raw"]:
             console.print("\n[dim]Raw Extraction:[/dim]")
-            console.print_json(data=result['raw'])
-            
+            console.print_json(data=result["raw"])
+
     except ValueError as e:
         console.print(f"[red]Configuration Error:[/red] {e}")
         console.print("Ensure LLM_MEMORY_CAPTURE_LLM_PROVIDER is set.")
@@ -1051,7 +1050,6 @@ def capture_conversation(
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
-
 
 
 # =============================================================================
@@ -1065,7 +1063,7 @@ app.add_typer(hooks_app, name="hooks")
 
 @hooks_app.command("install")
 def hooks_install(
-    tool: str = typer.Argument(..., help="Tool name: claude-code, cursor, aider, generic")
+    tool: str = typer.Argument(..., help="Tool name: claude-code, cursor, aider, generic"),
 ):
     """
     Install hooks for an LLM tool.
@@ -1099,7 +1097,7 @@ def hooks_install(
 
 @hooks_app.command("uninstall")
 def hooks_uninstall(
-    tool: str = typer.Argument(..., help="Tool name: claude-code, cursor, aider, generic")
+    tool: str = typer.Argument(..., help="Tool name: claude-code, cursor, aider, generic"),
 ):
     """Remove hooks for an LLM tool."""
     from llm_memory.hooks import get_adapter
@@ -1129,7 +1127,7 @@ def hooks_uninstall(
 def hooks_update(
     tool: str = typer.Argument(..., help="Tool name: claude-code, cursor, aider, generic"),
     files: List[str] = typer.Option(None, "--file", "-f", help="Files being worked on"),
-    task: str = typer.Option(None, "--task", "-t", help="Task description")
+    task: str = typer.Option(None, "--task", "-t", help="Task description"),
 ):
     """
     Update context for an LLM tool.
@@ -1191,11 +1189,12 @@ def hooks_list():
 # MCP Server Command
 # =============================================================================
 
+
 @app.command()
 def serve(
     host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind"),
     port: int = typer.Option(8000, "--port", "-p", help="Port to bind"),
-    reload: bool = typer.Option(False, "--reload", help="Enable auto-reload")
+    reload: bool = typer.Option(False, "--reload", help="Enable auto-reload"),
 ):
     """Run the MCP or Central Memory Server."""
     # Note: Currently this command is ambiguous between MCP and FastAPI
@@ -1206,6 +1205,7 @@ def serve(
     console.print(f"[green]Starting Central Memory Server at http://{host}:{port}[/green]")
     try:
         import uvicorn
+
         uvicorn.run("llm_memory.server.app:app", host=host, port=port, reload=reload)
     except ImportError:
         console.print("[red]uvicorn not installed.[/red]")
@@ -1213,10 +1213,10 @@ def serve(
         raise typer.Exit(1)
 
 
-
 # =============================================================================
 # Dashboard Commands
 # =============================================================================
+
 
 @app.command()
 def status():
@@ -1273,37 +1273,31 @@ def status():
             Text.from_markup(focus_text),
             Text(""),
             Text("Working On:", style="dim"),
-            Text.from_markup(task_text)
+            Text.from_markup(task_text),
         ),
         title="Active Context",
-        box=ROUNDED
+        box=ROUNDED,
     )
 
     # Layout Construction
     layout = Layout()
     layout.split_column(
-        Layout(name="header", size=3),
-        Layout(name="main", ratio=1),
-        Layout(name="footer", size=3)
+        Layout(name="header", size=3), Layout(name="main", ratio=1), Layout(name="footer", size=3)
     )
 
     layout["header"].update(
         Panel(
-            Align.center(f"[bold blue]LLM Memory System[/bold blue] - {memory.config.storage.data_dir}"),
+            Align.center(
+                f"[bold blue]LLM Memory System[/bold blue] - {memory.config.storage.data_dir}"
+            ),
             box=ROUNDED,
-            style="white on black"
+            style="white on black",
         )
     )
 
-    layout["main"].split_row(
-        Layout(name="left", ratio=1),
-        Layout(name="right", ratio=2)
-    )
+    layout["main"].split_row(Layout(name="left", ratio=1), Layout(name="right", ratio=2))
 
-    layout["left"].split_column(
-        Layout(name="context", ratio=1),
-        Layout(name="stats", ratio=1)
-    )
+    layout["left"].split_column(Layout(name="context", ratio=1), Layout(name="stats", ratio=1))
 
     layout["left"]["context"].update(context_panel)
     layout["left"]["stats"].update(layer_table)
@@ -1311,7 +1305,9 @@ def status():
     layout["right"].update(activity_table)
 
     layout["footer"].update(
-        Align.center("[dim]Run 'llm-memory help' for commands | 'llm-memory recall' to search[/dim]")
+        Align.center(
+            "[dim]Run 'llm-memory help' for commands | 'llm-memory recall' to search[/dim]"
+        )
     )
 
     console.print(layout)

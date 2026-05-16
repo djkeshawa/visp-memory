@@ -13,9 +13,10 @@ def mock_memory():
     mock_mem.config = Mock()
     mock_mem.config.capture.llm_provider = "openai"
     mock_mem.config.capture.llm_model = "gpt-4-test"
-    mock_mem.config.compression.llm_provider = None # fallback test
+    mock_mem.config.compression.llm_provider = None  # fallback test
     mock_mem.config.repo_id = "test-repo"
     return mock_mem
+
 
 def test_conversation_capture_parsing(mock_memory):
     # Mock LLM Client
@@ -42,35 +43,30 @@ def test_conversation_capture_parsing(mock_memory):
 
         # Test dry run first
         result_dry = capturer.parse_text("log", dry_run=True)
-        assert result_dry['decisions'] == 1
+        assert result_dry["decisions"] == 1
         assert not mock_memory.decision.called
 
         # Test real run
         result = capturer.parse_text("log", dry_run=False)
 
-        assert result['decisions'] == 1
-        assert result['learnings'] == 1
+        assert result["decisions"] == 1
+        assert result["learnings"] == 1
 
         # Check calls
         mock_memory.decision.assert_called_with(
-            what="Use Redis",
-            why="Speed",
-            alternatives=["Memcached"],
-            repo_id="test-repo"
+            what="Use Redis", why="Speed", alternatives=["Memcached"], repo_id="test-repo"
         )
 
         mock_memory.learn.assert_called_with(
-            knowledge="Python 3.12 is faster",
-            category="fact",
-            importance=0.8,
-            repo_id="test-repo"
+            knowledge="Python 3.12 is faster", category="fact", importance=0.8, repo_id="test-repo"
         )
 
         mock_memory.record.assert_called()
         call_args = mock_memory.record.call_args[1]
-        assert "Bug: Race condition" == call_args['event']
-        assert "bug" == call_args['category']
-        assert call_args['metadata']['cause'] == "No lock"
+        assert "Bug: Race condition" == call_args["event"]
+        assert "bug" == call_args["category"]
+        assert call_args["metadata"]["cause"] == "No lock"
+
 
 def test_conversation_capture_config_error(mock_memory):
     # Unset provider

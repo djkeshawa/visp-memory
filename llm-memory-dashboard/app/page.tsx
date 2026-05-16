@@ -2,12 +2,12 @@
 
 import { useEffect, useState } from "react"
 import { motion } from "framer-motion"
-import { Database, Target, Brain, Share2 } from "lucide-react"
+import { AlertTriangle, Database, Target, Brain, Share2 } from "lucide-react"
 import { AnimatedStatsCard } from "@/components/dashboard/animated-stats-card"
 import { RecentActivity } from "@/components/dashboard/recent-activity"
 import { QuickActions } from "@/components/dashboard/quick-actions"
 import { SystemStatus } from "@/components/dashboard/system-status"
-import { getStats, getRecentMemories } from "@/lib/api"
+import { describeApiError, getStats, getRecentMemories } from "@/lib/api"
 import { mockSystemStatus } from "@/lib/mock-data"
 import { pageTransition } from "@/lib/animations"
 import type { Memory, Stats } from "@/lib/types"
@@ -16,6 +16,7 @@ export default function DashboardPage() {
   const [stats, setStats] = useState<Stats | null>(null)
   const [memories, setMemories] = useState<Memory[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   useEffect(() => {
     async function fetchData() {
@@ -26,8 +27,10 @@ export default function DashboardPage() {
         ])
         setStats(statsData)
         setMemories(memoriesData)
+        setLoadError(null)
       } catch (error) {
         console.error("Failed to fetch dashboard data:", error)
+        setLoadError(describeLoadError(error))
       } finally {
         setIsLoading(false)
       }
@@ -49,6 +52,18 @@ export default function DashboardPage() {
         <h1 className="text-2xl font-semibold text-foreground">Welcome back</h1>
         <p className="text-muted-foreground mt-1">Here&apos;s an overview of your memory system</p>
       </div>
+
+      {loadError ? (
+        <div className="glass rounded-xl border border-destructive/30 p-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 text-destructive" />
+            <div>
+              <p className="text-sm font-medium text-foreground">Dashboard is not connected</p>
+              <p className="mt-1 text-sm text-muted-foreground">{loadError}</p>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Stats Grid */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -94,4 +109,8 @@ export default function DashboardPage() {
       </div>
     </motion.div>
   )
+}
+
+function describeLoadError(error: unknown): string {
+  return describeApiError(error)
 }

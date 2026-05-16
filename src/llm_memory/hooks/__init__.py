@@ -8,11 +8,11 @@ Universal adapters for integrating with different LLM tools:
 - Generic (any context file)
 """
 
+from llm_memory.hooks.aider import AiderAdapter
 from llm_memory.hooks.base import LLMToolAdapter
-from llm_memory.hooks.generic import GenericAdapter
 from llm_memory.hooks.claude_code import ClaudeCodeAdapter
 from llm_memory.hooks.cursor import CursorAdapter
-from llm_memory.hooks.aider import AiderAdapter
+from llm_memory.hooks.generic import GenericAdapter
 
 __all__ = [
     "LLMToolAdapter",
@@ -43,9 +43,6 @@ def get_adapter(tool_name: str, **kwargs) -> LLMToolAdapter:
 
     adapter_class = adapters.get(tool_name.lower())
     if not adapter_class:
-        raise ValueError(
-            f"Unknown tool: {tool_name}. "
-            f"Available: {', '.join(adapters.keys())}"
-        )
+        raise ValueError(f"Unknown tool: {tool_name}. Available: {', '.join(adapters.keys())}")
 
     return adapter_class(**kwargs)

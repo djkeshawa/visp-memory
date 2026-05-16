@@ -10,11 +10,18 @@ Compression can use an LLM for intelligent summarization,
 or fall back to heuristic-based compression.
 """
 
-from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional, Callable
 from collections import defaultdict
+from datetime import datetime, timedelta
+from typing import Any, Callable, Dict, List, Optional
 
 from llm_memory.core.storage import BaseStorage
+
+COMPRESSION_PROMPT_HEADER = (
+    "Compress these {count} related memories into a single piece of actionable "
+    "knowledge.\n"
+    "Focus on patterns, rules, or insights that would help future decision-making.\n"
+    "Be concise but preserve essential information."
+)
 
 
 class MemoryCompressor:
@@ -29,9 +36,7 @@ class MemoryCompressor:
     """
 
     def __init__(
-        self,
-        storage: BaseStorage,
-        llm_compress_fn: Optional[Callable[[List[str]], str]] = None
+        self, storage: BaseStorage, llm_compress_fn: Optional[Callable[[List[str]], str]] = None
     ):
         """
         Initialize compressor.
@@ -48,6 +53,7 @@ class MemoryCompressor:
     def _parse_datetime(self, dt_str: str) -> datetime:
         """Parse datetime string, handling both timezone-aware and naive formats."""
         from datetime import timezone
+
         # Remove 'Z' suffix and parse
         dt_str = dt_str.replace("Z", "+00:00")
         dt = datetime.fromisoformat(dt_str)
@@ -57,9 +63,7 @@ class MemoryCompressor:
         return dt
 
     def compress_episodes_to_semantic(
-        self,
-        episodes: List[Dict[str, Any]],
-        category: str = None
+        self, episodes: List[Dict[str, Any]], category: str = None
     ) -> Optional[str]:
         """
         Compress a group of episodes into semantic knowledge.
@@ -110,9 +114,9 @@ class MemoryCompressor:
             tags=list(all_tags),
             metadata={
                 "compressed_from": len(episodes),
-                "compressed_at": datetime.now().isoformat()
+                "compressed_at": datetime.now().isoformat(),
             },
-            source_ids=source_ids
+            source_ids=source_ids,
         )
 
         # Mark episodes as compressed
@@ -122,8 +126,8 @@ class MemoryCompressor:
                 metadata={
                     **ep.get("metadata", {}),
                     "compressed_to": semantic_id,
-                    "compressed_at": datetime.now().isoformat()
-                }
+                    "compressed_at": datetime.now().isoformat(),
+                },
             )
 
         return semantic_id
@@ -147,19 +151,104 @@ class MemoryCompressor:
 
         # Find frequent words (excluding common ones)
         stopwords = {
-            "the", "a", "an", "is", "are", "was", "were", "be", "been",
-            "being", "have", "has", "had", "do", "does", "did", "will",
-            "would", "could", "should", "may", "might", "must", "to",
-            "of", "in", "for", "on", "with", "at", "by", "from", "as",
-            "into", "through", "during", "before", "after", "above",
-            "below", "between", "under", "again", "further", "then",
-            "once", "and", "but", "or", "nor", "so", "yet", "both",
-            "each", "few", "more", "most", "other", "some", "such",
-            "no", "not", "only", "own", "same", "than", "too", "very",
-            "just", "also", "now", "here", "there", "when", "where",
-            "why", "how", "all", "any", "both", "each", "few", "more",
-            "most", "other", "some", "such", "this", "that", "these",
-            "those", "i", "you", "he", "she", "it", "we", "they"
+            "the",
+            "a",
+            "an",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "being",
+            "have",
+            "has",
+            "had",
+            "do",
+            "does",
+            "did",
+            "will",
+            "would",
+            "could",
+            "should",
+            "may",
+            "might",
+            "must",
+            "to",
+            "of",
+            "in",
+            "for",
+            "on",
+            "with",
+            "at",
+            "by",
+            "from",
+            "as",
+            "into",
+            "through",
+            "during",
+            "before",
+            "after",
+            "above",
+            "below",
+            "between",
+            "under",
+            "again",
+            "further",
+            "then",
+            "once",
+            "and",
+            "but",
+            "or",
+            "nor",
+            "so",
+            "yet",
+            "both",
+            "each",
+            "few",
+            "more",
+            "most",
+            "other",
+            "some",
+            "such",
+            "no",
+            "not",
+            "only",
+            "own",
+            "same",
+            "than",
+            "too",
+            "very",
+            "just",
+            "also",
+            "now",
+            "here",
+            "there",
+            "when",
+            "where",
+            "why",
+            "how",
+            "all",
+            "any",
+            "both",
+            "each",
+            "few",
+            "more",
+            "most",
+            "other",
+            "some",
+            "such",
+            "this",
+            "that",
+            "these",
+            "those",
+            "i",
+            "you",
+            "he",
+            "she",
+            "it",
+            "we",
+            "they",
         }
 
         word_counts = defaultdict(int)
@@ -177,16 +266,13 @@ class MemoryCompressor:
         else:
             return f"Pattern ({len(contents)} instances): {contents[0][:100]}..."
 
-    def compress_semantic_to_principle(
-        self,
-        memories: List[Dict[str, Any]]
-    ) -> Optional[str]:
+    def compress_semantic_to_principle(self, memories: List[Dict[str, Any]]) -> Optional[str]:
         """
         Level 2 Compression: Semantic Knowledge -> Higher-Level Principles.
-        
+
         Args:
             memories: List of semantic memories to compress
-            
+
         Returns:
             ID of created principle memory
         """
@@ -201,7 +287,9 @@ class MemoryCompressor:
         importance = min(1.0, avg_importance + 0.2)
 
         # Compress
-        prompt_suffix = "\n\nExtract the underlying universal principle or rule that explains these facts."
+        prompt_suffix = (
+            "\n\nExtract the underlying universal principle or rule that explains these facts."
+        )
         if self._llm_compress:
             # We wrap the underlying compress fn to add specific instruction
             # This is a bit hacky but works without changing the interface
@@ -212,7 +300,10 @@ class MemoryCompressor:
             finally:
                 self._llm_compress = raw_compress
         else:
-            compressed = f"Principle derived from {len(memories)} facts: " + self._heuristic_compress(contents)
+            compressed = (
+                f"Principle derived from {len(memories)} facts: "
+                + self._heuristic_compress(contents)
+            )
 
         if not compressed:
             return None
@@ -227,9 +318,9 @@ class MemoryCompressor:
             metadata={
                 "compressed_from": len(memories),
                 "level": 2,
-                "compressed_at": datetime.now().isoformat()
+                "compressed_at": datetime.now().isoformat(),
             },
-            source_ids=source_ids
+            source_ids=source_ids,
         )
 
         # Link source memories to this principle (don't mark as compressed/hidden,
@@ -239,20 +330,17 @@ class MemoryCompressor:
                 source_id=mem["id"],
                 target_id=principle_id,
                 relationship="supports_principle",
-                strength=0.9
+                strength=0.9,
             )
 
         return principle_id
 
     def auto_compress(
-        self,
-        min_episodes: int = 5,
-        category_threshold: int = 3,
-        age_days: int = 7
+        self, min_episodes: int = 5, category_threshold: int = 3, age_days: int = 7
     ) -> List[str]:
         """
         Run hierarchical compression.
-        
+
         1. Episodic -> Semantic (Level 1)
         2. Semantic -> Principle (Level 2)
         """
@@ -262,16 +350,16 @@ class MemoryCompressor:
 
         # Get uncompressed episodes
         episodes = self.storage.list_memories(
-            layer="episodic",
-            limit=500,
-            order_by="created_at ASC"
+            layer="episodic", limit=500, order_by="created_at ASC"
         )
 
         # Filter to old episodes not yet compressed
         from datetime import timezone
+
         cutoff = datetime.now(timezone.utc) - timedelta(days=age_days)
         old_episodes = [
-            ep for ep in episodes
+            ep
+            for ep in episodes
             if not ep.get("metadata", {}).get("compressed_to")
             and self._parse_datetime(ep["created_at"]) < cutoff
         ]
@@ -286,8 +374,7 @@ class MemoryCompressor:
             for category, cat_episodes in by_category.items():
                 if len(cat_episodes) >= category_threshold:
                     semantic_id = self.compress_episodes_to_semantic(
-                        cat_episodes,
-                        category=category
+                        cat_episodes, category=category
                     )
                     if semantic_id:
                         created.append(semantic_id)
@@ -297,9 +384,9 @@ class MemoryCompressor:
         # Get all semantic memories (excluding principles)
         semantic = self.storage.list_memories(layer="semantic", limit=1000)
         facts = [
-            m for m in semantic
-            if m.get("category") != "principle"
-            and m.get("metadata", {}).get("level", 1) == 1
+            m
+            for m in semantic
+            if m.get("category") != "principle" and m.get("metadata", {}).get("level", 1) == 1
         ]
 
         # Cluster them (naive approach: group by auto-extracted topics/tags would be better)
@@ -318,11 +405,7 @@ class MemoryCompressor:
 
         return created
 
-    def decay_old_memories(
-        self,
-        halflife_days: int = 30,
-        min_importance: float = 0.1
-    ) -> int:
+    def decay_old_memories(self, halflife_days: int = 30, min_importance: float = 0.1) -> int:
         """
         Decay importance of old, rarely-accessed memories.
 
@@ -345,6 +428,7 @@ class MemoryCompressor:
                 # Calculate age since last access
                 accessed = self._parse_datetime(mem.get("accessed_at", mem.get("created_at")))
                 from datetime import timezone
+
                 age_days = (datetime.now(timezone.utc) - accessed).days
 
                 if age_days < 1:
@@ -352,17 +436,11 @@ class MemoryCompressor:
 
                 # Exponential decay
                 decay_factor = 0.5 ** (age_days / halflife_days)
-                new_importance = max(
-                    min_importance,
-                    mem["importance"] * decay_factor
-                )
+                new_importance = max(min_importance, mem["importance"] * decay_factor)
 
                 # Only update if significant change
                 if mem["importance"] - new_importance > 0.05:
-                    self.storage.update_memory(
-                        mem["id"],
-                        importance=new_importance
-                    )
+                    self.storage.update_memory(mem["id"], importance=new_importance)
                     decayed += 1
 
         return decayed
@@ -390,12 +468,10 @@ def create_llm_compressor(provider: str, model: str = None, api_key: str = None)
         model = model or "gpt-4o-mini"
 
         def compress_fn(contents: List[str]) -> str:
-            prompt = f"""Compress these {len(contents)} related memories into a single piece of actionable knowledge.
-Focus on patterns, rules, or insights that would help future decision-making.
-Be concise but preserve essential information.
+            prompt = f"""{COMPRESSION_PROMPT_HEADER.format(count=len(contents))}
 
 Memories:
-{chr(10).join(f'- {c}' for c in contents)}
+{chr(10).join(f"- {c}" for c in contents)}
 
 Compressed knowledge (1-2 sentences):"""
 
@@ -403,7 +479,7 @@ Compressed knowledge (1-2 sentences):"""
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=200,
-                temperature=0.3
+                temperature=0.3,
             )
             return response.choices[0].message.content.strip()
 
@@ -419,19 +495,15 @@ Compressed knowledge (1-2 sentences):"""
         model = model or "claude-3-haiku-20240307"
 
         def compress_fn(contents: List[str]) -> str:
-            prompt = f"""Compress these {len(contents)} related memories into a single piece of actionable knowledge.
-Focus on patterns, rules, or insights that would help future decision-making.
-Be concise but preserve essential information.
+            prompt = f"""{COMPRESSION_PROMPT_HEADER.format(count=len(contents))}
 
 Memories:
-{chr(10).join(f'- {c}' for c in contents)}
+{chr(10).join(f"- {c}" for c in contents)}
 
 Compressed knowledge (1-2 sentences):"""
 
             response = client.messages.create(
-                model=model,
-                max_tokens=200,
-                messages=[{"role": "user", "content": prompt}]
+                model=model, max_tokens=200, messages=[{"role": "user", "content": prompt}]
             )
             return response.content[0].text.strip()
 
@@ -446,19 +518,14 @@ Compressed knowledge (1-2 sentences):"""
         model = model or "llama3.2"
 
         def compress_fn(contents: List[str]) -> str:
-            prompt = f"""Compress these {len(contents)} related memories into a single piece of actionable knowledge.
-Focus on patterns, rules, or insights that would help future decision-making.
-Be concise but preserve essential information.
+            prompt = f"""{COMPRESSION_PROMPT_HEADER.format(count=len(contents))}
 
 Memories:
-{chr(10).join(f'- {c}' for c in contents)}
+{chr(10).join(f"- {c}" for c in contents)}
 
 Compressed knowledge (1-2 sentences):"""
 
-            response = ollama.chat(
-                model=model,
-                messages=[{"role": "user", "content": prompt}]
-            )
+            response = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}])
             return response["message"]["content"].strip()
 
         return compress_fn

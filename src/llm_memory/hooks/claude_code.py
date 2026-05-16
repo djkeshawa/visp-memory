@@ -35,7 +35,7 @@ class ClaudeCodeAdapter(GenericAdapter):
             project_root=project_root,
             context_file="CLAUDE.md",
             injection_marker="<!-- LLM-MEMORY -->",
-            append_mode=True  # Append to existing CLAUDE.md
+            append_mode=True,  # Append to existing CLAUDE.md
         )
 
     def install(self) -> Dict[str, bool]:
@@ -88,11 +88,7 @@ llm-memory warn "area" "warning"
 
         return results
 
-    def update_context(
-        self,
-        files: list[str] = None,
-        task: str = None
-    ) -> bool:
+    def update_context(self, files: list[str] = None, task: str = None) -> bool:
         """
         Update memory context in CLAUDE.md.
 
@@ -129,11 +125,7 @@ llm-memory warn "area" "warning"
             before = content.split(start_marker)[0]
             after = content.split(end_marker)[1]
 
-            new_content = (
-                f"{before}{start_marker}\n\n"
-                f"{formatted_context}"
-                f"{end_marker}{after}"
-            )
+            new_content = f"{before}{start_marker}\n\n{formatted_context}{end_marker}{after}"
 
             self.context_file.write_text(new_content)
             return True
@@ -143,4 +135,5 @@ llm-memory warn "area" "warning"
     def _get_timestamp(self) -> str:
         """Get current timestamp for context."""
         from datetime import datetime
+
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")

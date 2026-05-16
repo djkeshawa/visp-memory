@@ -31,9 +31,7 @@ class TestEpisodicMemory:
     def test_record_decision(self, memory):
         """Can record a decision with reasoning."""
         mem_id = memory.decision(
-            what="Use PostgreSQL",
-            why="Need ACID compliance",
-            alternatives=["MongoDB", "MySQL"]
+            what="Use PostgreSQL", why="Need ACID compliance", alternatives=["MongoDB", "MySQL"]
         )
         assert mem_id is not None
 
@@ -48,7 +46,7 @@ class TestEpisodicMemory:
             description="Race condition in auth",
             cause="Missing mutex",
             fix="Added lock",
-            files=["auth/token.py"]
+            files=["auth/token.py"],
         )
         assert mem_id is not None
 
@@ -59,18 +57,14 @@ class TestSemanticMemory:
     def test_establish_knowledge(self, memory):
         """Can establish semantic knowledge."""
         mem_id = memory.learn(
-            "Always use mutex locks in auth module",
-            category="invariant",
-            importance=0.9
+            "Always use mutex locks in auth module", category="invariant", importance=0.9
         )
         assert mem_id is not None
 
     def test_add_warning(self, memory):
         """Can add warnings for fragile areas."""
         mem_id = memory.warn(
-            area="database/migrations",
-            warning="Always backup before running",
-            severity=0.8
+            area="database/migrations", warning="Always backup before running", severity=0.8
         )
         assert mem_id is not None
 
@@ -80,8 +74,7 @@ class TestSemanticMemory:
     def test_add_convention(self, memory):
         """Can add conventions."""
         mem_id = memory.semantic.convention(
-            rule="All API endpoints return JSON",
-            rationale="Consistency"
+            rule="All API endpoints return JSON", rationale="Consistency"
         )
         assert mem_id is not None
 
@@ -94,11 +87,7 @@ class TestIntentMemory:
 
     def test_set_goal(self, memory):
         """Can set a goal."""
-        intent_id = memory.goal(
-            "Implement OAuth2",
-            priority=2,
-            constraints=["No breaking changes"]
-        )
+        intent_id = memory.goal("Implement OAuth2", priority=2, constraints=["No breaking changes"])
         assert intent_id is not None
 
         intents = memory.intent.get_active()
@@ -106,10 +95,7 @@ class TestIntentMemory:
 
     def test_working_on(self, memory):
         """Can track current work."""
-        intent_id = memory.working_on(
-            "Token refresh endpoint",
-            files=["auth/refresh.py"]
-        )
+        intent_id = memory.working_on("Token refresh endpoint", files=["auth/refresh.py"])
         assert intent_id is not None
 
         current = memory.intent.get_working_on()
@@ -136,6 +122,7 @@ class TestSearch:
 
         results = memory.recall("authentication")
         assert len(results) > 0
+        assert "relevance_score" in results[0]
 
     def test_relevant_for_task(self, memory):
         """Can get relevant memories for a task."""
@@ -143,12 +130,64 @@ class TestSearch:
         memory.warn("auth/", "Test thoroughly")
         memory.record("Fixed auth bug")
 
-        relevant = memory.relevant_for(
-            task="fix authentication",
-            files=["auth/login.py"]
-        )
+        relevant = memory.relevant_for(task="fix authentication", files=["auth/login.py"])
         assert "knowledge" in relevant
         assert "warnings" in relevant
+
+    def test_recall_is_read_only_for_access_metrics(self, memory):
+        """Search should not count as an explicit memory access."""
+        mem_id = memory.record("Authentication system updated")
+
+        memory.recall("authentication")
+
+        stored = memory._storage._get_memory_row(mem_id, track_access=False)
+        assert stored["access_count"] == 0
+
+    def test_recall_does_not_duplicate_layers(self, memory):
+        """Layer fan-out should not duplicate results from the fallback search path."""
+        memory.record("Authentication system updated")
+
+        results = memory.recall("authentication")
+
+        ids = [result["id"] for result in results]
+        assert len(ids) == len(set(ids))
+
+    def test_noop_embeddings_use_text_relevance_for_limited_results(self, memory):
+        """Noop vectors should not let arbitrary vector order hide lexical matches."""
+        memory.record("Database migration complete", importance=0.9)
+        memory.record("Authentication token refresh fixed", importance=0.4)
+
+        results = memory.recall("authentication", limit=1)
+
+        assert [result["content"] for result in results] == ["Authentication token refresh fixed"]
+
+
+class TestRepositoryIsolation:
+    """Tests for repository isolation behavior."""
+
+    def test_search_filters_by_repo_id(self, memory):
+        memory.record("Shared auth convention in repo A", repo_id="repo-a")
+        memory.record("Shared auth convention in repo B", repo_id="repo-b")
+
+        results = memory._storage.search_memories("auth", repo_id="repo-a")
+
+        assert {result["repo_id"] for result in results} == {"repo-a"}
+
+    def test_memory_relationships_cannot_cross_repositories(self, memory):
+        source = memory.record("Repo A event", repo_id="repo-a")
+        target = memory.record("Repo B event", repo_id="repo-b")
+
+        with pytest.raises(ValueError, match="cannot cross repository"):
+            memory._storage.add_relationship(source, target, "related")
+
+    def test_related_memories_stay_within_source_repo(self, memory):
+        source = memory.record("Repo A event", repo_id="repo-a")
+        target = memory.record("Repo A related event", repo_id="repo-a")
+        memory._storage.add_relationship(source, target, "related")
+
+        related = memory._storage.get_related_memories(source)
+
+        assert [item["id"] for item in related] == [target]
 
 
 class TestContext:
@@ -239,7 +278,9 @@ class TestImportExport:
         target = Memory(config=target_config)
         target.import_memories(export_file)
 
-        assert [m["content"] for m in target._storage.list_memories(repo_id="target-repo")] == [
+        assert sorted(
+            m["content"] for m in target._storage.list_memories(repo_id="target-repo")
+        ) == [
             "Source event",
             "Source knowledge",
         ]

@@ -10,13 +10,15 @@ Supports:
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
+
 from llm_memory.core.storage import BaseStorage
 
 
 @dataclass
 class User:
     """User entity."""
+
     id: str
     username: str
     email: Optional[str] = None
@@ -29,6 +31,7 @@ class User:
 @dataclass
 class Team:
     """Team entity."""
+
     id: str
     name: str
     description: Optional[str] = None
