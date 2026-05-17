@@ -97,6 +97,127 @@ async def test_team_attribution_and_access(client):
 
 
 @pytest.mark.asyncio
+async def test_duplicate_user_and_team_ids_return_conflict_without_overwrite(client):
+    headers = {"X-API-KEY": "test_key"}
+
+    user = await client.post(
+        "/teams/users",
+        json={"id": "alice-id", "username": "alice", "display_name": "Alice"},
+        headers=headers,
+    )
+    assert user.status_code == 200
+
+    duplicate_user = await client.post(
+        "/teams/users",
+        json={"id": "alice-id", "username": "renamed", "display_name": "Replacement"},
+        headers=headers,
+    )
+    assert duplicate_user.status_code == 409
+
+    stored_user = await client.get("/teams/users/alice-id", headers=headers)
+    assert stored_user.status_code == 200
+    assert stored_user.json()["display_name"] == "Alice"
+
+    team = await client.post(
+        "/teams",
+        json={"id": "team-alpha", "name": "Alpha", "description": "Original"},
+        headers=headers,
+    )
+    assert team.status_code == 200
+
+    duplicate_team = await client.post(
+        "/teams",
+        json={"id": "team-alpha", "name": "Renamed", "description": "Replacement"},
+        headers=headers,
+    )
+    assert duplicate_team.status_code == 409
+
+    stored_team = await client.get("/teams/team-alpha", headers=headers)
+    assert stored_team.status_code == 200
+    assert stored_team.json()["description"] == "Original"
+
+
+@pytest.mark.asyncio
+async def test_non_admin_team_reads_are_scoped_to_current_user_and_team(client):
+    app.state.storage.store_user({"id": "alice-id", "username": "alice"})
+    app.state.storage.store_user({"id": "bob-id", "username": "bob"})
+    app.state.storage.store_team({"id": "team-alpha", "name": "Alpha"})
+    app.state.storage.store_team({"id": "team-beta", "name": "Beta"})
+    app.state.storage.add_team_member("team-alpha", "alice-id")
+    app.state.storage.add_team_member("team-beta", "alice-id")
+    app.state.storage.add_team_member("team-beta", "bob-id")
+
+    set_current_user(
+        UserContext(
+            user_id="alice-id",
+            username="alice",
+            team_id="team-alpha",
+            is_admin=False,
+        )
+    )
+    try:
+        own_user = await client.get("/teams/users/alice-id")
+        assert own_user.status_code == 200
+        assert own_user.json()["id"] == "alice-id"
+
+        other_user = await client.get("/teams/users/bob-id")
+        assert other_user.status_code == 404
+
+        own_team = await client.get("/teams/team-alpha")
+        assert own_team.status_code == 200
+        assert own_team.json()["id"] == "team-alpha"
+
+        other_team = await client.get("/teams/team-beta")
+        assert other_team.status_code == 404
+
+        own_teams = await client.get("/teams/users/alice-id/teams")
+        assert own_teams.status_code == 200
+        assert [team["id"] for team in own_teams.json()] == ["team-alpha"]
+
+        other_user_teams = await client.get("/teams/users/bob-id/teams")
+        assert other_user_teams.status_code == 403
+    finally:
+        clear_current_user()
+
+
+@pytest.mark.asyncio
+async def test_non_admin_cannot_manage_users_teams_or_memberships(client):
+    app.state.storage.store_user({"id": "alice-id", "username": "alice"})
+    app.state.storage.store_user({"id": "bob-id", "username": "bob"})
+    app.state.storage.store_team({"id": "team-alpha", "name": "Alpha"})
+
+    set_current_user(
+        UserContext(
+            user_id="alice-id",
+            username="alice",
+            team_id="team-alpha",
+            is_admin=False,
+        )
+    )
+    try:
+        create_user = await client.post(
+            "/teams/users",
+            json={"id": "mallory-id", "username": "mallory"},
+        )
+        assert create_user.status_code == 403
+
+        create_team = await client.post(
+            "/teams",
+            json={"id": "team-beta", "name": "Beta"},
+        )
+        assert create_team.status_code == 403
+
+        add_member = await client.post(
+            "/teams/team-alpha/members",
+            json={"user_id": "bob-id"},
+        )
+        assert add_member.status_code == 403
+        assert app.state.storage.get_user_teams("bob-id") == []
+    finally:
+        clear_current_user()
+
+
+@pytest.mark.asyncio
 async def test_non_admin_repository_access_is_scoped_to_user_team(client):
     app.state.storage.store_repository(
         {

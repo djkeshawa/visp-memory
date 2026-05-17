@@ -16,6 +16,24 @@ from llm_memory.server.schemas import (
 router = APIRouter(prefix="/teams", tags=["teams"])
 
 
+def _require_admin(current_user: UserContext):
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Team management requires an admin user",
+        )
+
+
+def _can_access_user(user_id: str, current_user: UserContext) -> bool:
+    return current_user.is_admin or current_user.user_id == user_id
+
+
+def _can_access_team(team_id: str, current_user: UserContext) -> bool:
+    return current_user.is_admin or (
+        bool(current_user.team_id) and current_user.team_id == team_id
+    )
+
+
 # User Endpoints
 @router.post("/users", response_model=UserResponse)
 async def create_user(
@@ -24,6 +42,7 @@ async def create_user(
     current_user: UserContext = Depends(get_current_user),
 ):
     """Create a new user."""
+    _require_admin(current_user)
     team_mgr = TeamManager(request.app.state.storage)
 
     user_obj = User(
@@ -38,6 +57,8 @@ async def create_user(
         user_id = team_mgr.create_user(user_obj)
     except NotImplementedError as e:
         raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
     return {
         **user_obj.__dict__,
@@ -54,6 +75,9 @@ async def get_user(
     current_user: UserContext = Depends(get_current_user),
 ):
     """Get user details."""
+    if not _can_access_user(user_id, current_user):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
     team_mgr = TeamManager(request.app.state.storage)
     user = team_mgr.get_user(user_id)
     if not user:
@@ -74,6 +98,7 @@ async def create_team(
     current_user: UserContext = Depends(get_current_user),
 ):
     """Create a new team."""
+    _require_admin(current_user)
     team_mgr = TeamManager(request.app.state.storage)
 
     team_obj = Team(
@@ -87,6 +112,8 @@ async def create_team(
         team_id = team_mgr.create_team(team_obj)
     except NotImplementedError as e:
         raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
     return {
         **team_obj.__dict__,
@@ -102,6 +129,9 @@ async def get_team(
     current_user: UserContext = Depends(get_current_user),
 ):
     """Get team details."""
+    if not _can_access_team(team_id, current_user):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+
     team_mgr = TeamManager(request.app.state.storage)
     team = team_mgr.get_team(team_id)
     if not team:
@@ -121,6 +151,7 @@ async def add_member(
     current_user: UserContext = Depends(get_current_user),
 ):
     """Add a member to a team."""
+    _require_admin(current_user)
     team_mgr = TeamManager(request.app.state.storage)
     try:
         success = team_mgr.add_member(team_id, member.user_id)
@@ -143,8 +174,13 @@ async def get_user_teams(
     current_user: UserContext = Depends(get_current_user),
 ):
     """Get all teams for a user."""
+    if not _can_access_user(user_id, current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot list teams")
+
     team_mgr = TeamManager(request.app.state.storage)
     teams = team_mgr.get_user_teams(user_id)
+    if not current_user.is_admin:
+        teams = [team for team in teams if team.id == current_user.team_id]
 
     return [
         {

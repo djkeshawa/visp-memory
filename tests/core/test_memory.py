@@ -80,6 +80,32 @@ def test_local_storage_rejects_duplicate_repository_ids(tmp_path):
     assert storage.get_repository("app-repo")["description"] == "Original"
 
 
+def test_local_storage_rejects_duplicate_user_ids(tmp_path):
+    storage = LocalStorage(tmp_path)
+
+    storage.store_user({"id": "alice-id", "username": "alice", "display_name": "Alice"})
+
+    with pytest.raises(ValueError, match="User already exists: alice-id"):
+        storage.store_user(
+            {"id": "alice-id", "username": "renamed", "display_name": "Replacement"}
+        )
+
+    assert storage.get_user("alice-id")["display_name"] == "Alice"
+
+
+def test_local_storage_rejects_duplicate_team_ids(tmp_path):
+    storage = LocalStorage(tmp_path)
+
+    storage.store_team({"id": "team-a", "name": "Team A", "description": "Original"})
+
+    with pytest.raises(ValueError, match="Team already exists: team-a"):
+        storage.store_team(
+            {"id": "team-a", "name": "Renamed", "description": "Replacement"}
+        )
+
+    assert storage.get_team("team-a")["description"] == "Original"
+
+
 def test_local_storage_rejects_team_membership_with_missing_entities(tmp_path):
     storage = LocalStorage(tmp_path)
 

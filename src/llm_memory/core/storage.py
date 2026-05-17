@@ -1199,19 +1199,22 @@ class LocalStorage(BaseStorage):
     def store_user(self, user: Dict[str, Any]) -> str:
         user_id = user["id"]
         with self._get_db() as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO users (id, username, email, display_name, metadata)
-                VALUES (?, ?, ?, ?, ?)
-            """,
-                (
-                    user_id,
-                    user["username"],
-                    user.get("email"),
-                    user.get("display_name"),
-                    self._json_serialize(user.get("metadata", {})),
-                ),
-            )
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO users (id, username, email, display_name, metadata)
+                    VALUES (?, ?, ?, ?, ?)
+                """,
+                    (
+                        user_id,
+                        user["username"],
+                        user.get("email"),
+                        user.get("display_name"),
+                        self._json_serialize(user.get("metadata", {})),
+                    ),
+                )
+            except sqlite3.IntegrityError as e:
+                raise ValueError(f"User already exists: {user_id}") from e
             conn.commit()
         return user_id
 
@@ -1224,18 +1227,21 @@ class LocalStorage(BaseStorage):
     def store_team(self, team: Dict[str, Any]) -> str:
         team_id = team["id"]
         with self._get_db() as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO teams (id, name, description, metadata)
-                VALUES (?, ?, ?, ?)
-            """,
-                (
-                    team_id,
-                    team["name"],
-                    team.get("description"),
-                    self._json_serialize(team.get("metadata", {})),
-                ),
-            )
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO teams (id, name, description, metadata)
+                    VALUES (?, ?, ?, ?)
+                """,
+                    (
+                        team_id,
+                        team["name"],
+                        team.get("description"),
+                        self._json_serialize(team.get("metadata", {})),
+                    ),
+                )
+            except sqlite3.IntegrityError as e:
+                raise ValueError(f"Team already exists: {team_id}") from e
             conn.commit()
         return team_id
 

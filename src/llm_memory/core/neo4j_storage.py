@@ -698,18 +698,21 @@ class Neo4jStorage(BaseStorage):
     # Team and User operations
     def store_user(self, user: Dict[str, Any]) -> str:
         user_id = user["id"]
+        if self.get_user(user_id) is not None:
+            raise ValueError(f"User already exists: {user_id}")
+
         with self.driver.session() as session:
             session.run(
                 """
-                MERGE (u:User {id: $id})
-                SET u += {
+                CREATE (u:User {
+                    id: $id,
                     username: $username,
                     email: $email,
                     display_name: $display_name,
                     metadata: $metadata,
-                    created_at: coalesce(u.created_at, datetime()),
+                    created_at: datetime(),
                     last_active: datetime()
-                }
+                })
             """,
                 id=user_id,
                 username=user["username"],
@@ -727,16 +730,19 @@ class Neo4jStorage(BaseStorage):
 
     def store_team(self, team: Dict[str, Any]) -> str:
         team_id = team["id"]
+        if self.get_team(team_id) is not None:
+            raise ValueError(f"Team already exists: {team_id}")
+
         with self.driver.session() as session:
             session.run(
                 """
-                MERGE (t:Team {id: $id})
-                SET t += {
+                CREATE (t:Team {
+                    id: $id,
                     name: $name,
                     description: $description,
                     metadata: $metadata,
-                    created_at: coalesce(t.created_at, datetime())
-                }
+                    created_at: datetime()
+                })
             """,
                 id=team_id,
                 name=team["name"],
