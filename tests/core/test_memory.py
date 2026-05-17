@@ -53,6 +53,31 @@ def test_local_storage_uses_dimension_specific_vector_collection(tmp_path):
     assert collection.name == "memories_episodic_3"
 
 
+def test_local_storage_rejects_repo_dependencies_with_missing_repositories(tmp_path):
+    storage = LocalStorage(tmp_path)
+
+    with pytest.raises(ValueError, match="Repository not found: missing-source"):
+        storage.add_repo_dependency("missing-source", "missing-target", "depends_on")
+
+    storage.store_repository({"id": "app-repo", "name": "App"})
+
+    with pytest.raises(ValueError, match="Repository not found: missing-target"):
+        storage.add_repo_dependency("app-repo", "missing-target", "depends_on")
+
+    assert storage.get_repo_dependencies("app-repo") == []
+
+
+def test_local_storage_rejects_team_membership_with_missing_entities(tmp_path):
+    storage = LocalStorage(tmp_path)
+
+    assert storage.add_team_member("missing-team", "missing-user") is False
+
+    storage.store_team({"id": "team-a", "name": "Team A"})
+
+    assert storage.add_team_member("team-a", "missing-user") is False
+    assert storage.get_user_teams("missing-user") == []
+
+
 class TestEpisodicMemory:
     """Tests for episodic memory layer."""
 

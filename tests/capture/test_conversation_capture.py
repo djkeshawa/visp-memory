@@ -15,6 +15,7 @@ def mock_memory():
     mock_mem.config.capture.llm_model = "gpt-4-test"
     mock_mem.config.compression.llm_provider = None  # fallback test
     mock_mem.config.repo_id = "test-repo"
+    mock_mem.intent = Mock()
     return mock_mem
 
 
@@ -51,6 +52,7 @@ def test_conversation_capture_parsing(mock_memory):
 
         assert result["decisions"] == 1
         assert result["learnings"] == 1
+        assert result["tasks"] == 1
 
         # Check calls
         mock_memory.decision.assert_called_with(
@@ -66,6 +68,16 @@ def test_conversation_capture_parsing(mock_memory):
         assert "Bug: Race condition" == call_args["event"]
         assert "bug" == call_args["category"]
         assert call_args["metadata"]["cause"] == "No lock"
+
+        mock_memory.intent.set_goal.assert_called_with(
+            goal="Refactor auth",
+            repo_id="test-repo",
+            context={
+                "captured_as": "task",
+                "source": "conversation",
+                "status": "todo",
+            },
+        )
 
 
 def test_conversation_capture_config_error(mock_memory):

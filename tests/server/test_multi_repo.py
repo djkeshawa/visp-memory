@@ -40,6 +40,30 @@ async def test_repository_dependencies(client):
 
 
 @pytest.mark.asyncio
+async def test_repository_dependencies_require_existing_repositories(client):
+    headers = {"X-API-KEY": "test_key"}
+
+    missing_source = await client.post(
+        "/repos/missing-app/dependencies",
+        json={"target_repo_id": "missing-lib"},
+        headers=headers,
+    )
+    assert missing_source.status_code == 404
+
+    await client.post("/repos", json={"name": "App", "id": "app-repo"}, headers=headers)
+
+    missing_target = await client.post(
+        "/repos/app-repo/dependencies",
+        json={"target_repo_id": "missing-lib"},
+        headers=headers,
+    )
+    assert missing_target.status_code == 404
+
+    deps = await client.get("/repos/app-repo/dependencies", headers=headers)
+    assert deps.json() == []
+
+
+@pytest.mark.asyncio
 async def test_cross_repo_context(client):
     headers = {"X-API-KEY": "test_key"}
 

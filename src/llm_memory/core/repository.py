@@ -90,6 +90,10 @@ class RepositoryManager:
         """Add a dependency relationship. Raises NotImplementedError if backend lacks support."""
         if not hasattr(self.storage, "add_repo_dependency"):
             raise NotImplementedError("Storage backend does not support repository dependencies")
+        if self.get(dep.source_repo_id) is None:
+            raise ValueError(f"Repository not found: {dep.source_repo_id}")
+        if self.get(dep.target_repo_id) is None:
+            raise ValueError(f"Repository not found: {dep.target_repo_id}")
         return self.storage.add_repo_dependency(
             source_id=dep.source_repo_id,
             target_id=dep.target_repo_id,

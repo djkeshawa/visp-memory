@@ -33,6 +33,30 @@ async def test_user_and_team_management(client):
 
 
 @pytest.mark.asyncio
+async def test_team_membership_requires_existing_team_and_user(client):
+    headers = {"X-API-KEY": "test_key"}
+
+    missing_team = await client.post(
+        "/teams/missing-team/members",
+        json={"user_id": "missing-user"},
+        headers=headers,
+    )
+    assert missing_team.status_code == 404
+
+    await client.post("/teams", json={"name": "Alpha Team", "id": "alpha-id"}, headers=headers)
+
+    missing_user = await client.post(
+        "/teams/alpha-id/members",
+        json={"user_id": "missing-user"},
+        headers=headers,
+    )
+    assert missing_user.status_code == 404
+
+    teams = await client.get("/teams/users/missing-user/teams", headers=headers)
+    assert teams.json() == []
+
+
+@pytest.mark.asyncio
 async def test_team_attribution_and_access(client):
     headers = {"X-API-KEY": "test_key"}
 

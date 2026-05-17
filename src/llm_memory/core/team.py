@@ -96,6 +96,10 @@ class TeamManager:
         """Add user to team."""
         if not hasattr(self.storage, "add_team_member"):
             return False
+        if self.get_team(team_id) is None:
+            raise ValueError(f"Team not found: {team_id}")
+        if self.get_user(user_id) is None:
+            raise ValueError(f"User not found: {user_id}")
         return self.storage.add_team_member(team_id, user_id)
 
     def get_user_teams(self, user_id: str) -> List[Team]:

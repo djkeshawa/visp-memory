@@ -1160,6 +1160,11 @@ class LocalStorage(BaseStorage):
         version: str = None,
         notes: str = None,
     ) -> str:
+        if self.get_repository(source_id) is None:
+            raise ValueError(f"Repository not found: {source_id}")
+        if self.get_repository(target_id) is None:
+            raise ValueError(f"Repository not found: {target_id}")
+
         dep_id = self._generate_id(f"{source_id}-{target_id}-{dep_type}")
 
         with self._get_db() as conn:
@@ -1238,6 +1243,9 @@ class LocalStorage(BaseStorage):
             return self._row_to_dict(row) if row else None
 
     def add_team_member(self, team_id: str, user_id: str) -> bool:
+        if self.get_team(team_id) is None or self.get_user(user_id) is None:
+            return False
+
         with self._get_db() as conn:
             conn.execute(
                 """

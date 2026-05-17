@@ -122,7 +122,11 @@ async def add_member(
 ):
     """Add a member to a team."""
     team_mgr = TeamManager(request.app.state.storage)
-    success = team_mgr.add_member(team_id, member.user_id)
+    try:
+        success = team_mgr.add_member(team_id, member.user_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
     if not success:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,

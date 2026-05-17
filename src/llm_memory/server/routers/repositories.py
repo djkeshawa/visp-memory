@@ -114,6 +114,8 @@ async def add_dependency(
         result = repo_mgr.add_dependency(dependency)
     except NotImplementedError as e:
         raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
     return {"id": result, "status": "created"}
 

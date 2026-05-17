@@ -137,6 +137,17 @@ If nothing relevant is found for a category, return an empty list.
                     repo_id=repo_id,
                 )
 
+            for task in data.get("tasks", []):
+                self.memory.intent.set_goal(
+                    goal=task["description"],
+                    repo_id=repo_id,
+                    context={
+                        "captured_as": "task",
+                        "source": source,
+                        "status": task.get("status", "todo"),
+                    },
+                )
+
             return summary
 
         except Exception as e:
