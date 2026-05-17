@@ -80,6 +80,18 @@ def test_dashboard_file_path_resolves_exported_routes(tmp_path, monkeypatch):
     assert server_app.dashboard_file_path("missing") == tmp_path / "index.html"
 
 
+def test_dashboard_file_path_rejects_traversal_outside_static_dir(tmp_path, monkeypatch):
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("dashboard")
+    outside_file = tmp_path / "secret.txt"
+    outside_file.write_text("secret")
+
+    monkeypatch.setattr(server_app, "STATIC_DIR", static_dir)
+
+    assert server_app.dashboard_file_path("../secret.txt") == static_dir / "index.html"
+
+
 def test_server_embedding_fn_uses_configured_noop_provider():
     config = MemoryConfig()
     config.embedding.provider = "noop"

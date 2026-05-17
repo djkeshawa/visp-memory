@@ -97,6 +97,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 def dashboard_file_path(full_path: str) -> Path:
     """Resolve a dashboard route to an exported static file."""
+    static_root = STATIC_DIR.resolve()
     normalized_path = full_path.strip("/")
     candidates = []
 
@@ -112,10 +113,15 @@ def dashboard_file_path(full_path: str) -> Path:
         candidates.append(STATIC_DIR / "index.html")
 
     for candidate in candidates:
-        if candidate.exists() and candidate.is_file():
-            return candidate
+        resolved_candidate = candidate.resolve()
+        if (
+            resolved_candidate.is_relative_to(static_root)
+            and resolved_candidate.exists()
+            and resolved_candidate.is_file()
+        ):
+            return resolved_candidate
 
-    return STATIC_DIR / "index.html"
+    return static_root / "index.html"
 
 
 # Initialize App
