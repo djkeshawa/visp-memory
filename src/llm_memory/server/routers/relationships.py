@@ -53,4 +53,4 @@ async def add_relationship(
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
-    return {"id": rel_id}
+    return {"id": rel_id, "status": "created"}

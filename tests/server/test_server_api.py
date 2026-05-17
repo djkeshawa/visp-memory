@@ -270,6 +270,45 @@ async def test_recall_endpoint(client):
     assert "relevance_score" in response.json()[0]
 
 
+def test_relationships_post_route_registered_once():
+    matching_routes = [
+        route
+        for route in app.router.routes
+        if route.path == "/relationships" and "POST" in (getattr(route, "methods", set()) or set())
+    ]
+
+    assert len(matching_routes) == 1
+
+
+@pytest.mark.asyncio
+async def test_relationships_endpoint_returns_created_contract(client):
+    headers = {"X-API-KEY": "test_key"}
+    source = (
+        await client.post(
+            "/memories",
+            json={"content": "Source memory", "repo_id": "repo-a"},
+            headers=headers,
+        )
+    ).json()["id"]
+    target = (
+        await client.post(
+            "/memories",
+            json={"content": "Target memory", "repo_id": "repo-a"},
+            headers=headers,
+        )
+    ).json()["id"]
+
+    response = await client.post(
+        "/relationships",
+        json={"source_id": source, "target_id": target, "relationship": "related"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "created"
+    assert response.json()["id"]
+
+
 @pytest.mark.asyncio
 async def test_graph_endpoint_filters_relationships_by_repo(client):
     headers = {"X-API-KEY": "test_key"}

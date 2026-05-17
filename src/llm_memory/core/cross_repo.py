@@ -31,11 +31,11 @@ class CrossRepoContext:
         if not repo:
             return {"error": "Repository not found"}
 
-        relevant_repos = [repo_id]
-        if include_dependencies:
-            # Simple depth-1 deps for now, could be recursive up to max_depth
-            deps = self.repo_mgr.get_dependencies(repo_id)
-            relevant_repos.extend([d.target_repo_id for d in deps])
+        relevant_repos = self._resolve_relevant_repos(
+            repo_id=repo_id,
+            include_dependencies=include_dependencies,
+            max_depth=max_depth,
+        )
 
         # Aggregate memories from these repos
         # Look for warnings, breaking changes, etc.
@@ -56,6 +56,32 @@ class CrossRepoContext:
             "knowledge": knowledge[:20],  # Limit knowledge
             "monitored_repos": relevant_repos,
         }
+
+    def _resolve_relevant_repos(
+        self, repo_id: str, include_dependencies: bool, max_depth: int
+    ) -> List[str]:
+        """Return repo_id plus dependency repos up to max_depth, preserving first-seen order."""
+        relevant_repos = [repo_id]
+        seen = {repo_id}
+
+        if not include_dependencies or max_depth <= 0:
+            return relevant_repos
+
+        queue = [(repo_id, 0)]
+        while queue:
+            current_repo_id, depth = queue.pop(0)
+            if depth >= max_depth:
+                continue
+
+            for dep in self.repo_mgr.get_dependencies(current_repo_id):
+                target_repo_id = dep.target_repo_id
+                if target_repo_id in seen:
+                    continue
+                seen.add(target_repo_id)
+                relevant_repos.append(target_repo_id)
+                queue.append((target_repo_id, depth + 1))
+
+        return relevant_repos
 
     def search_across_repos(
         self,

@@ -10,7 +10,6 @@ from llm_memory.server.schemas import (
     MemoryCreate,
     MemoryResponse,
     MemoryUpdate,
-    RelationshipCreate,
     SearchQuery,
 )
 
@@ -224,20 +223,3 @@ async def get_graph_data(
             for r in relationships
         ],
     }
-
-
-@router.post("/relationships")
-async def create_relationship(
-    request: Request, rel: RelationshipCreate, user: UserContext = Depends(get_current_user)
-):
-    storage = request.app.state.storage
-    try:
-        rel_id = storage.add_relationship(
-            source_id=rel.source_id,
-            target_id=rel.target_id,
-            relationship=rel.relationship,
-            strength=rel.strength,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    return {"id": rel_id, "status": "created"}
