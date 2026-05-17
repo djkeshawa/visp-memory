@@ -718,6 +718,7 @@ def capture_git(
         "HEAD", "--ref", "-r", help="Commit reference for 'commit' action"
     ),
     since: str = typer.Option(None, "--since", "-s", help="Date for 'sync' (e.g., '1 week ago')"),
+    until: str = typer.Option(None, "--until", "-u", help="End date for 'sync'"),
     limit: int = typer.Option(100, "--limit", "-n", help="Max commits for 'sync'"),
 ):
     """
@@ -775,7 +776,7 @@ def capture_git(
     elif action == "sync":
         console.print(f"Syncing git history (limit: {limit})...")
 
-        memory_ids = git_capture.sync_history(since=since, limit=limit)
+        memory_ids = git_capture.sync_history(since=since, until=until, limit=limit)
 
         console.print(f"[green]Captured {len(memory_ids)} commits from history[/green]")
 

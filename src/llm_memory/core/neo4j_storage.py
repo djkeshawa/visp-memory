@@ -370,9 +370,16 @@ class Neo4jStorage(BaseStorage):
     def delete_memory(self, memory_id: str) -> bool:
         """Delete node and relationships."""
         with self.driver.session() as session:
-            session.run("MATCH (m:Memory {id: $id}) DETACH DELETE m", id=memory_id)
-            # Simple Neo4j deletes do not expose a count without querying stats.
-            return True
+            result = session.run(
+                """
+                MATCH (m:Memory {id: $id})
+                WITH collect(m) AS nodes
+                FOREACH (node IN nodes | DETACH DELETE node)
+                RETURN size(nodes) AS c
+                """,
+                id=memory_id,
+            )
+            return result.single()["c"] > 0
 
     def get_collection(self, layer: str):
         """Not applicable for Neo4j (unified)."""

@@ -253,6 +253,45 @@ class TestCLIBasicCommands:
         assert not Path("AGENTS.md").exists()
         assert not config_path.exists()
 
+    def test_capture_git_sync_forwards_until_option(self, cli_env, monkeypatch):
+        """CLI sync should expose GitCapture's supported date upper bound."""
+        import llm_memory.capture.git as git_module
+        import llm_memory.interfaces.cli as cli_module
+
+        calls = {}
+        memory = object()
+
+        class FakeGitCapture:
+            def __init__(self, captured_memory):
+                calls["memory"] = captured_memory
+
+            def sync_history(self, since=None, until=None, limit=100):
+                calls["sync"] = {"since": since, "until": until, "limit": limit}
+                return ["mem-1", "mem-2"]
+
+        monkeypatch.setattr(cli_module, "get_memory", lambda: memory)
+        monkeypatch.setattr(git_module, "GitCapture", FakeGitCapture)
+
+        result = runner.invoke(
+            app,
+            [
+                "capture",
+                "git",
+                "sync",
+                "--since",
+                "2024-01-01",
+                "--until",
+                "2024-02-01",
+                "--limit",
+                "7",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert calls["memory"] is memory
+        assert calls["sync"] == {"since": "2024-01-01", "until": "2024-02-01", "limit": 7}
+        assert "Captured 2 commits" in result.output
+
 
 class TestCLIRecallCommand:
     """Test recall/search functionality."""
