@@ -522,3 +522,60 @@ class TestImportExport:
         ]
         imported_intents = target._storage.get_active_intents(repo_id="target-repo")
         assert [i["description"] for i in imported_intents] == ["Source goal"]
+
+    def test_import_rejects_non_object_payload(self, tmp_path):
+        config = MemoryConfig(project_name="import-test", repo_id="target-repo")
+        config.storage.data_dir = tmp_path / "data"
+        config.embedding.provider = "noop"
+        memory = Memory(config=config)
+
+        import_file = tmp_path / "invalid-export.json"
+        import_file.write_text(json.dumps(["not", "an", "export"]))
+
+        with pytest.raises(ValueError, match="Import field 'root' must be an object"):
+            memory.import_memories(import_file)
+
+    def test_import_rejects_invalid_nested_payload_fields(self, tmp_path):
+        config = MemoryConfig(project_name="import-test", repo_id="target-repo")
+        config.storage.data_dir = tmp_path / "data"
+        config.embedding.provider = "noop"
+        memory = Memory(config=config)
+
+        import_file = tmp_path / "invalid-export.json"
+        import_file.write_text(
+            json.dumps({"memories": {"episodic": [{"content": "Valid", "tags": "not-list"}]}})
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=r"Import field 'memories\.episodic\[0\]\.tags' has an invalid type",
+        ):
+            memory.import_memories(import_file)
+
+    def test_import_validates_before_writing_any_memories(self, tmp_path):
+        config = MemoryConfig(project_name="import-test", repo_id="target-repo")
+        config.storage.data_dir = tmp_path / "data"
+        config.embedding.provider = "noop"
+        memory = Memory(config=config)
+
+        import_file = tmp_path / "invalid-export.json"
+        import_file.write_text(
+            json.dumps(
+                {
+                    "memories": {
+                        "episodic": [
+                            {"content": "Valid event"},
+                            {"metadata": {"missing": "content"}},
+                        ]
+                    }
+                }
+            )
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=r"Import field 'memories\.episodic\[1\]\.content' must be a string",
+        ):
+            memory.import_memories(import_file)
+
+        assert memory._storage.list_memories(repo_id="target-repo") == []

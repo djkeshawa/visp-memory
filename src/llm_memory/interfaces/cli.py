@@ -493,7 +493,11 @@ def export(output: str = typer.Argument("memory-export.json", help="Output file 
 def import_memories(input_file: str = typer.Argument(..., help="Input file path")):
     """Import memories from JSON export."""
     memory = get_memory()
-    memory.import_memories(Path(input_file))
+    try:
+        memory.import_memories(Path(input_file))
+    except (FileNotFoundError, IsADirectoryError, json.JSONDecodeError, ValueError) as exc:
+        console.print(f"[red]Import failed:[/red] {exc}")
+        raise typer.Exit(code=1)
     console.print(f"[green]Imported from {input_file}[/green]")
 
 

@@ -194,6 +194,28 @@ class TestCLIBasicCommands:
         assert "version" in data
         assert "memories" in data
 
+    def test_import_command_reports_missing_file(self, cli_env):
+        runner.invoke(app, ["init", "--type", "code"])
+
+        result = runner.invoke(app, ["import", str(cli_env / "missing-export.json")])
+
+        assert result.exit_code == 1
+        assert "Import failed:" in result.output
+        assert "missing-export.json" in result.output
+        assert "Traceback" not in result.output
+
+    def test_import_command_reports_invalid_payload(self, cli_env):
+        runner.invoke(app, ["init", "--type", "code"])
+        import_path = cli_env / "invalid-export.json"
+        import_path.write_text('{"memories": {"episodic": [{"metadata": {}}]}}')
+
+        result = runner.invoke(app, ["import", str(import_path)])
+
+        assert result.exit_code == 1
+        assert "Import failed:" in result.output
+        assert "memories.episodic[0].content" in result.output
+        assert "Traceback" not in result.output
+
     def test_dedup_command(self, cli_env):
         """Test dedup command (was broken with numpy array comparison)."""
         runner.invoke(app, ["init", "--type", "code"])

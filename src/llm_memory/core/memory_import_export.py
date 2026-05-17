@@ -56,9 +56,69 @@ def export_memory(memory: Any, path: Path = None) -> Dict[str, Any]:
     return export_data
 
 
+def _require_dict(value: Any, field_path: str) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"Import field '{field_path}' must be an object")
+    return value
+
+
+def _require_list(value: Any, field_path: str) -> list[Any]:
+    if not isinstance(value, list):
+        raise ValueError(f"Import field '{field_path}' must be a list")
+    return value
+
+
+def _validate_optional_type(
+    item: Dict[str, Any],
+    key: str,
+    expected_type: type | tuple[type, ...],
+    field_path: str,
+) -> None:
+    if key in item and item[key] is not None and not isinstance(item[key], expected_type):
+        raise ValueError(f"Import field '{field_path}.{key}' has an invalid type")
+
+
+def _validate_memory_item(item: Any, field_path: str) -> None:
+    item = _require_dict(item, field_path)
+    if not isinstance(item.get("content"), str):
+        raise ValueError(f"Import field '{field_path}.content' must be a string")
+
+    _validate_optional_type(item, "category", str, field_path)
+    _validate_optional_type(item, "importance", (int, float), field_path)
+    _validate_optional_type(item, "tags", list, field_path)
+    _validate_optional_type(item, "metadata", dict, field_path)
+    _validate_optional_type(item, "repo_id", str, field_path)
+
+
+def _validate_intent_item(item: Any, field_path: str) -> None:
+    item = _require_dict(item, field_path)
+    if not isinstance(item.get("description"), str):
+        raise ValueError(f"Import field '{field_path}.description' must be a string")
+
+    _validate_optional_type(item, "priority", int, field_path)
+    _validate_optional_type(item, "context", dict, field_path)
+    _validate_optional_type(item, "repo_id", str, field_path)
+
+
+def _validate_import_data(data: Any) -> Dict[str, Any]:
+    data = _require_dict(data, "root")
+    memories = _require_dict(data.get("memories", {}), "memories")
+
+    for layer in ("episodic", "semantic"):
+        layer_memories = _require_list(memories.get(layer, []), f"memories.{layer}")
+        for index, item in enumerate(layer_memories):
+            _validate_memory_item(item, f"memories.{layer}[{index}]")
+
+    intents = _require_list(data.get("intents", []), "intents")
+    for index, item in enumerate(intents):
+        _validate_intent_item(item, f"intents[{index}]")
+
+    return data
+
+
 def import_memories(memory: Any, path: Path) -> None:
     """Import memories from a JSON export into a Memory instance."""
-    data = json.loads(Path(path).read_text())
+    data = _validate_import_data(json.loads(Path(path).read_text()))
 
     for mem in data.get("memories", {}).get("episodic", []):
         memory._storage.store_memory(
