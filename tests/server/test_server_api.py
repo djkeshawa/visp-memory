@@ -143,6 +143,34 @@ async def test_intents_preserve_repo_id(client):
 
 
 @pytest.mark.asyncio
+async def test_complete_intent_endpoint_marks_intent_inactive(client):
+    headers = {"X-API-KEY": "test_key"}
+    payload = {"description": "Ship remote done support", "priority": 2}
+
+    create_response = await client.post("/intents", json=payload, headers=headers)
+    assert create_response.status_code == 200
+    intent_id = create_response.json()["id"]
+
+    complete_response = await client.post(f"/intents/{intent_id}/complete", headers=headers)
+    assert complete_response.status_code == 200
+    assert complete_response.json() == {"status": "completed", "id": intent_id}
+
+    list_response = await client.get("/intents", headers=headers)
+    assert list_response.status_code == 200
+    assert all(intent["id"] != intent_id for intent in list_response.json())
+
+
+@pytest.mark.asyncio
+async def test_complete_intent_endpoint_returns_404_for_missing_intent(client):
+    headers = {"X-API-KEY": "test_key"}
+
+    response = await client.post("/intents/missing/complete", headers=headers)
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Intent not found"
+
+
+@pytest.mark.asyncio
 async def test_recall_endpoint(client):
     headers = {"X-API-KEY": "test_key"}
     # First create a memory to recall

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from llm_memory.config import load_config
 from llm_memory.server.auth import UserContext, get_current_user
@@ -61,3 +61,14 @@ async def create_intent(
         "context": context,
         "created_at": datetime.now(),
     }
+
+
+@router.post("/{intent_id}/complete")
+async def complete_intent(
+    request: Request, intent_id: str, user: UserContext = Depends(get_current_user)
+):
+    storage = request.app.state.storage
+    success = storage.complete_intent(intent_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Intent not found")
+    return {"status": "completed", "id": intent_id}

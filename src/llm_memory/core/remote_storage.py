@@ -188,8 +188,11 @@ class RemoteStorage(BaseStorage):
 
     def complete_intent(self, intent_id: str) -> bool:
         """Mark intent as complete."""
-        # Mapping to update_memory since intents are memories
-        return self.update_memory(intent_id, metadata={"status": "completed"})
+        try:
+            response = self.session.post(f"{self.server_url}/intents/{intent_id}/complete")
+            return response.status_code == 200
+        except requests.RequestException:
+            return False
 
     # Relationship Operations
     def add_relationship(

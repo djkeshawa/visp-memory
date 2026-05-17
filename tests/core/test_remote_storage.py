@@ -24,8 +24,12 @@ class FakeSession:
     def __init__(self, response):
         self.response = response
         self.last_get_params = None
+        self.last_post_url = None
+        self.last_post_json = None
 
-    def post(self, url, json):
+    def post(self, url, json=None):
+        self.last_post_url = url
+        self.last_post_json = json
         return self.response
 
     def get(self, url, params=None):
@@ -82,3 +86,17 @@ def test_remote_storage_get_stats_accepts_repo_id():
 
     assert storage.get_stats(repo_id="repo-a") == {"total_memories": 3}
     assert storage.session.last_get_params == {"repo_id": "repo-a"}
+
+
+def test_remote_storage_complete_intent_calls_intent_endpoint():
+    storage = remote_storage_with(FakeResponse(200, {"status": "completed"}))
+
+    assert storage.complete_intent("intent-1") is True
+    assert storage.session.last_post_url == "http://memory.example/intents/intent-1/complete"
+    assert storage.session.last_post_json is None
+
+
+def test_remote_storage_complete_intent_returns_false_for_missing_intent():
+    storage = remote_storage_with(FakeResponse(404, {"detail": "Intent not found"}))
+
+    assert storage.complete_intent("missing") is False
