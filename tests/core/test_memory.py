@@ -144,6 +144,23 @@ class TestIntentMemory:
         memory.done()
         assert memory.intent.get_working_on() is None
 
+    def test_done_only_clears_configured_repo_task(self, tmp_path):
+        """Done should not complete current tasks from other repositories."""
+        config = MemoryConfig(project_name="done-scope-test", repo_id="repo-a")
+        config.storage.data_dir = tmp_path / "data"
+        config.embedding.provider = "noop"
+        memory = Memory(config=config)
+
+        memory.working_on("Repo A task")
+        memory.working_on("Repo B task", repo_id="repo-b")
+
+        assert memory.done() == 1
+
+        assert memory.intent.get_working_on(repo_id="repo-a") is None
+        repo_b_task = memory.intent.get_working_on(repo_id="repo-b")
+        assert repo_b_task is not None
+        assert repo_b_task["description"] == "WORKING ON: Repo B task"
+
 
 class TestSearch:
     """Tests for search functionality."""

@@ -175,14 +175,17 @@ class IntentMemory(BaseMemoryLayer):
         """
         return self.storage.complete_intent(intent_id)
 
-    def clear_task(self) -> int:
+    def clear_task(self, repo_id: str = None) -> int:
         """
         Clear "WORKING ON" intents (task complete).
+
+        Args:
+            repo_id: Optional repository filter.
 
         Returns:
             Number of intents cleared
         """
-        intents = self.get_active()
+        intents = self.get_active(repo_id=repo_id)
         cleared = 0
 
         for intent in intents:

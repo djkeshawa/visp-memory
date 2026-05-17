@@ -296,7 +296,7 @@ class Memory:
 
     def done(self) -> int:
         """Clear current task (mark as done)."""
-        return self.intent.clear_task()
+        return self.intent.clear_task(repo_id=self.config.repo_id)
 
     # =========================================================================
     # Search and Recall
