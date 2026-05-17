@@ -16,6 +16,43 @@ from llm_memory.server.schemas import DependencyCreate, RepositoryCreate, Reposi
 router = APIRouter(prefix="/repos", tags=["repositories"])
 
 
+def _can_access_repo(repo: Repository | None, user: UserContext) -> bool:
+    """Return whether the current user may access repository-scoped data."""
+    if repo is None:
+        return False
+    if user.is_admin:
+        return True
+    return bool(user.team_id) and repo.team_id == user.team_id
+
+
+def _require_repo_access(repo: Repository | None, user: UserContext) -> Repository:
+    if not _can_access_repo(repo, user):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
+    return repo
+
+
+class AuthorizedRepositoryManager(RepositoryManager):
+    """Repository manager that hides repositories outside a non-admin user's team."""
+
+    def __init__(self, storage, user: UserContext):
+        super().__init__(storage)
+        self.user = user
+
+    def get(self, repo_id: str) -> Optional[Repository]:
+        repo = super().get(repo_id)
+        return repo if _can_access_repo(repo, self.user) else None
+
+    def get_dependencies(self, repo_id: str) -> List[RepositoryDependency]:
+        if self.user.is_admin:
+            return super().get_dependencies(repo_id)
+
+        return [
+            dep
+            for dep in super().get_dependencies(repo_id)
+            if self.get(dep.target_repo_id) is not None
+        ]
+
+
 @router.post("", response_model=RepositoryResponse)
 async def register_repository(
     request: Request,
@@ -57,7 +94,17 @@ async def list_repositories(
 ):
     """List all repositories."""
     repo_mgr = RepositoryManager(request.app.state.storage)
-    repos = repo_mgr.list_all(team_id=team_id or user.team_id)
+    if user.is_admin:
+        repos = repo_mgr.list_all(team_id=team_id)
+    elif team_id and team_id != user.team_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot list repositories for another team",
+        )
+    elif not user.team_id:
+        repos = []
+    else:
+        repos = repo_mgr.list_all(team_id=user.team_id)
 
     return [
         {
@@ -76,9 +123,7 @@ async def get_repository(
 ):
     """Get repository details."""
     repo_mgr = RepositoryManager(request.app.state.storage)
-    repo = repo_mgr.get(repo_id)
-    if not repo:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
+    repo = _require_repo_access(repo_mgr.get(repo_id), user)
 
     return {
         **repo.__dict__,
@@ -103,6 +148,9 @@ async def add_dependency(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid dependency_type: {dep.dependency_type}",
         )
+
+    _require_repo_access(repo_mgr.get(repo_id), user)
+    _require_repo_access(repo_mgr.get(dep.target_repo_id), user)
 
     dependency = RepositoryDependency(
         source_repo_id=repo_id,
@@ -130,7 +178,10 @@ async def get_dependencies(
 ):
     """Get repository dependencies."""
     repo_mgr = RepositoryManager(request.app.state.storage)
+    _require_repo_access(repo_mgr.get(repo_id), user)
     deps = repo_mgr.get_dependencies(repo_id)
+    if not user.is_admin:
+        deps = [dep for dep in deps if _can_access_repo(repo_mgr.get(dep.target_repo_id), user)]
 
     return [
         {
@@ -152,7 +203,8 @@ async def get_cross_repo_context(
 ):
     """Get aggregated context from repo and dependencies."""
     storage = request.app.state.storage
-    cross_mgr = CrossRepoContext(storage)
+    repo_mgr = AuthorizedRepositoryManager(storage, user)
+    cross_mgr = CrossRepoContext(storage, repo_mgr=repo_mgr)
 
     context = cross_mgr.get_context_for_repo(
         repo_id=repo_id,
