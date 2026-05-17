@@ -78,11 +78,12 @@ def init(
     name: str = typer.Option(None, "--name", "-n", help="Project name"),
     data_dir: str = typer.Option(".llm-memory", "--data", "-d", help="Data directory"),
     repo: str = typer.Option(None, "--repo", "-r", help="Default repository/project ID"),
+    force: bool = typer.Option(False, "--force", help="Overwrite an existing config file"),
 ):
     """Initialize LLM Memory in the current directory."""
     config_path = Path("llm-memory.yaml")
 
-    if config_path.exists():
+    if config_path.exists() and not force:
         console.print("[yellow]Config already exists. Use --force to overwrite.[/yellow]")
         raise typer.Exit(1)
 

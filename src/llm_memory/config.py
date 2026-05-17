@@ -167,6 +167,11 @@ class ServerConfig(BaseSettings):
     def parse_cors_origins(cls, value: Any) -> List[str]:
         """Accept JSON-style lists or comma-separated env/config values."""
         if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.startswith("["):
+                parsed = json.loads(stripped)
+                if isinstance(parsed, list):
+                    return [str(origin).strip() for origin in parsed if str(origin).strip()]
             return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value
 

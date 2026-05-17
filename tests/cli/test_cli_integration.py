@@ -360,6 +360,24 @@ class TestCLIEdgeCases:
         assert result.exit_code != 0
         assert "already exists" in result.output.lower()
 
+    def test_init_force_overwrites_existing_config(self, cli_env):
+        """--force allows init to replace an existing config file."""
+        runner.invoke(app, ["init", "--type", "code", "--repo", "old-repo"])
+
+        result = runner.invoke(
+            app,
+            ["init", "--type", "writing", "--repo", "new-repo", "--force"],
+        )
+
+        assert result.exit_code == 0
+        assert "Initialized LLM Memory" in result.output
+
+        from llm_memory.config import MemoryConfig
+
+        config = MemoryConfig.from_file(Path("llm-memory.yaml"))
+        assert config.project_type == "writing"
+        assert config.repo_id == "new-repo"
+
     def test_recall_with_no_results(self, cli_env):
         """Test recall when no results found."""
         runner.invoke(app, ["init", "--type", "code"])

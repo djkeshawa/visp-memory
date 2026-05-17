@@ -36,6 +36,15 @@ def test_cors_origins_accept_comma_separated_values():
     ]
 
 
+def test_cors_origins_accept_json_list_values():
+    config = ServerConfig(cors_origins='["https://app.example", "http://localhost:3000"]')
+
+    assert config.cors_origins == [
+        "https://app.example",
+        "http://localhost:3000",
+    ]
+
+
 def test_file_config_env_overrides_include_deployment_settings(monkeypatch):
     config = MemoryConfig()
 
