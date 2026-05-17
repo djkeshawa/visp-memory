@@ -29,8 +29,25 @@ export interface Stats {
   connections: number
 }
 
+export interface RuntimeStatus {
+  status: "online" | "ready" | "not_ready" | "offline"
+  version?: string
+  storageBackend?: string
+  storageMode?: string
+  vectorDb?: string
+  embeddingProvider?: string
+  embeddingEffectiveProvider?: string
+  embeddingModel?: string
+  authEnabled?: boolean
+  repoId?: string | null
+  storageReady?: boolean
+  dashboardStaticAvailable?: boolean
+}
+
 export interface SystemStatus {
   apiServer: "online" | "offline"
   vectorDatabase: "ready" | "syncing" | "offline"
   embeddings: "active" | "inactive"
+  codexMcp: "available" | "inactive"
+  runtime?: RuntimeStatus
 }

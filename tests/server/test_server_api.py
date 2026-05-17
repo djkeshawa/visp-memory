@@ -13,6 +13,8 @@ async def test_root_endpoint(client):
     assert "version" in data
     assert "stats" in data
     assert "total_memories" in data
+    assert "storage_backend" in data
+    assert "embedding_provider" in data
 
 
 @pytest.mark.asyncio
@@ -34,6 +36,7 @@ async def test_readyz_reports_runtime_readiness(client, tmp_path, monkeypatch):
     assert data["status"] == "ready"
     assert data["storage_ready"] is True
     assert "storage_backend" in data
+    assert "embedding_provider" in data
     assert "auth_enabled" in data
     assert "dashboard_static_available" in data
 
@@ -121,6 +124,22 @@ async def test_intents_endpoint(client):
     response = await client.get("/intents", headers=headers)
     assert response.status_code == 200
     assert isinstance(response.json(), list)
+
+
+@pytest.mark.asyncio
+async def test_intents_preserve_repo_id(client):
+    headers = {"X-API-KEY": "test_key"}
+    payload = {"description": "Scoped Docker/Codex work", "priority": 2, "repo_id": "repo-a"}
+
+    create_response = await client.post("/intents", json=payload, headers=headers)
+    assert create_response.status_code == 200
+    assert create_response.json()["repo_id"] == "repo-a"
+
+    list_response = await client.get("/intents?repo_id=repo-a", headers=headers)
+    assert list_response.status_code == 200
+    intents = list_response.json()
+    assert any(intent["description"] == payload["description"] for intent in intents)
+    assert all(intent["repo_id"] == "repo-a" for intent in intents)
 
 
 @pytest.mark.asyncio

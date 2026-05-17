@@ -23,6 +23,7 @@ async def list_intents(
             "id": i["id"],
             "description": i["description"],
             "priority": i["priority"],
+            "repo_id": i.get("repo_id"),
             "context": i.get("context", {}),
             "status": i["status"],
             "created_at": i["created_at"],

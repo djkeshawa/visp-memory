@@ -67,18 +67,20 @@ class Memory:
         else:
             self.config = MemoryConfig.find_and_load()
 
-        # Initialize embedding provider
+        # Initialize embedding provider for local/server storage. Client-mode MCP delegates
+        # storage and embedding work to the configured memory server.
         embedding_fn = None
-        try:
-            from llm_memory.core.embeddings import get_embedding_provider
+        if self.config.storage.mode != "client":
+            try:
+                from llm_memory.core.embeddings import get_embedding_provider
 
-            embedder = get_embedding_provider(self.config.embedding)
-            embedding_fn = embedder.embed
-        except Exception as e:
-            # Embedding provider initialization failed - will use fallback search
-            import logging
+                embedder = get_embedding_provider(self.config.embedding)
+                embedding_fn = embedder.embed
+            except Exception as e:
+                # Embedding provider initialization failed - will use fallback search
+                import logging
 
-            logging.warning(f"Failed to initialize embedding provider: {e}")
+                logging.warning(f"Failed to initialize embedding provider: {e}")
 
         # Initialize storage
         if self.config.storage.mode == "client":

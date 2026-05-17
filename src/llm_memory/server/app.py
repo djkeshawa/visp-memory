@@ -3,6 +3,7 @@ FastAPI Server Entry Point
 """
 
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -34,6 +35,59 @@ def get_cors_options(config):
     return {
         "allow_origins": origins,
         "allow_credentials": allow_credentials,
+    }
+
+
+def get_server_embedding_provider(config):
+    """Build the configured embedding provider for API/server storage."""
+    if (
+        config.embedding.provider == "sentence-transformers"
+        and "LLM_MEMORY_EMBEDDING_PROVIDER" not in os.environ
+    ):
+        logger.info(
+            "Server storage is using text fallback until an embedding provider is explicitly "
+            "configured with LLM_MEMORY_EMBEDDING_PROVIDER."
+        )
+        return None
+
+    try:
+        from llm_memory.core.embeddings import get_embedding_provider
+
+        return get_embedding_provider(config.embedding)
+    except Exception as e:
+        logger.warning(
+            "Failed to initialize configured embedding provider %r for server storage; "
+            "falling back to noop embeddings: %s",
+            config.embedding.provider,
+            e,
+        )
+        try:
+            from llm_memory.core.embeddings import NoOpProvider
+
+            return NoOpProvider()
+        except Exception:
+            return None
+
+
+def get_server_embedding_fn(config):
+    """Build the configured embedding function for API/server storage."""
+    provider = get_server_embedding_provider(config)
+    return provider.embed if provider is not None else None
+
+
+def get_runtime_status(config, embedding_provider=None):
+    """Return non-secret runtime configuration for readiness and dashboard views."""
+    effective_provider = getattr(embedding_provider, "provider_name", None)
+    effective_model = getattr(embedding_provider, "model", None)
+    return {
+        "storage_backend": config.storage.backend,
+        "storage_mode": config.storage.mode,
+        "vector_db": config.storage.vector_db,
+        "embedding_provider": config.embedding.provider,
+        "embedding_effective_provider": effective_provider or config.embedding.provider,
+        "embedding_model": effective_model or config.embedding.model,
+        "auth_enabled": config.server.auth_enabled,
+        "repo_id": config.repo_id,
     }
 
 
@@ -81,18 +135,29 @@ app.add_middleware(
 )
 
 # Initialize Storage
+embedding_provider = get_server_embedding_provider(config)
+embedding_fn = embedding_provider.embed if embedding_provider is not None else None
+effective_storage_backend = "sqlite"
 if config.storage.backend == "neo4j":
     try:
-        storage = Neo4jStorage()
+        storage = Neo4jStorage(
+            uri=config.storage.neo4j_uri,
+            user=config.storage.neo4j_user,
+            password=config.storage.neo4j_password,
+            embedding_fn=embedding_fn,
+            embedding_dimension=getattr(embedding_provider, "dimension", None),
+        )
+        effective_storage_backend = "neo4j"
         logger.info("Initialized Neo4j Storage")
     except Exception as e:
         logger.error(f"Failed to initialize Neo4j, falling back to SQLite: {e}")
-        storage = LocalStorage(config.storage.data_dir)
+        storage = LocalStorage(config.storage.data_dir, embedding_fn=embedding_fn)
 else:
-    storage = LocalStorage(config.storage.data_dir)
+    storage = LocalStorage(config.storage.data_dir, embedding_fn=embedding_fn)
 
 # Save storage to app state for access in routers
 app.state.storage = storage
+app.state.storage_backend = effective_storage_backend
 
 # Include Routers
 app.include_router(memories.router)
@@ -124,9 +189,11 @@ async def root():
         "status": "online",
         "version": __version__,
         "timestamp": datetime.now().isoformat(),
-        "storage_backend": config.storage.backend,
         "stats": stats,
     }
+    runtime = get_runtime_status(config, embedding_provider)
+    runtime["storage_backend"] = app.state.storage_backend
+    response.update(runtime)
     response.update(stats)
     return response
 
@@ -159,12 +226,13 @@ async def readyz():
     payload = {
         "status": "ready" if ready else "not_ready",
         "version": __version__,
-        "storage_backend": config.storage.backend,
         "storage_ready": storage_ready,
-        "auth_enabled": config.server.auth_enabled,
         "dashboard_static_available": dashboard_static_available,
         "timestamp": datetime.now().isoformat(),
     }
+    runtime = get_runtime_status(config, embedding_provider)
+    runtime["storage_backend"] = app.state.storage_backend
+    payload.update(runtime)
 
     if storage_error:
         payload["storage_error"] = storage_error

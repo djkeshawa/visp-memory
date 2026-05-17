@@ -58,6 +58,7 @@ build/
 # Agent Artifacts
 .gemini/
 qa-docs/
+.codex-local/
 
 # Build artifacts
 src/llm_memory/server/static/

@@ -3,10 +3,12 @@
 import json
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from llm_memory import Memory, MemoryConfig
+from llm_memory.core.storage import CHROMADB_AVAILABLE, LocalStorage
 
 
 @pytest.fixture
@@ -17,6 +19,38 @@ def memory():
         config.storage.data_dir = Path(tmpdir)
         config.embedding.provider = "noop"
         yield Memory(config=config)
+
+
+def test_client_mode_does_not_initialize_local_embedding_provider():
+    config = MemoryConfig()
+    config.storage.mode = "client"
+    config.storage.server_url = "http://127.0.0.1:65535"
+    config.embedding.provider = "auto"
+
+    with patch("llm_memory.core.embeddings.get_embedding_provider") as get_embedding_provider:
+        Memory(config=config)
+
+    get_embedding_provider.assert_not_called()
+
+
+def test_local_storage_uses_dimension_specific_vector_collection(tmp_path):
+    if not CHROMADB_AVAILABLE:
+        pytest.skip("ChromaDB not installed")
+
+    class FakeEmbeddingProvider:
+        dimension = 3
+
+        def embed(self, text):
+            return [float(len(text)), 0.0, 1.0]
+
+    provider = FakeEmbeddingProvider()
+    storage = LocalStorage(tmp_path, embedding_fn=provider.embed)
+
+    storage.store_memory("Docker uses semantic embeddings", layer="episodic")
+
+    assert "episodic" in storage._collections
+    collection = storage._collections["episodic"]
+    assert collection.name == "memories_episodic_3"
 
 
 class TestEpisodicMemory:

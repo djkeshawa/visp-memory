@@ -116,4 +116,5 @@ export const mockSystemStatus: SystemStatus = {
   apiServer: "online",
   vectorDatabase: "ready",
   embeddings: "active",
+  codexMcp: "available",
 }

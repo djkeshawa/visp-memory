@@ -22,6 +22,7 @@ class EmbeddingConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LLM_MEMORY_EMBEDDING_", populate_by_name=True)
 
     provider: Literal[
+        "auto",
         "sentence-transformers",
         "openai",
         "ollama",

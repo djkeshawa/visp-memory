@@ -204,6 +204,97 @@ def create_mcp_server() -> "Server":
                     "required": ["dir_path"],
                 },
             ),
+            # Codex Workflow
+            Tool(
+                name="memory_session_start",
+                description=(
+                    "Start a work session: set the current task and return project/task memory."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "task": {"type": "string", "description": "Task being started"},
+                        "files": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Files likely to be modified",
+                        },
+                        "repo_id": {
+                            "type": "string",
+                            "description": "Repository/project ID (optional)",
+                        },
+                    },
+                },
+            ),
+            Tool(
+                name="memory_before_change",
+                description=(
+                    "Recall warnings, conventions, decisions, and past bugs before editing files."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "task": {"type": "string", "description": "Task description"},
+                        "files": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Files about to be edited",
+                        },
+                    },
+                },
+            ),
+            Tool(
+                name="memory_after_work",
+                description=(
+                    "Record the useful end-of-work memory: summary, decisions, bugs, warnings."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "summary": {"type": "string", "description": "What changed or was learned"},
+                        "category": {
+                            "type": "string",
+                            "enum": [
+                                "note",
+                                "bug_fixed",
+                                "feature_added",
+                                "refactor",
+                                "discovery",
+                                "architecture_decision",
+                                "investigation",
+                            ],
+                            "default": "note",
+                        },
+                        "decisions": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Design or release decisions to preserve",
+                        },
+                        "bugs_fixed": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Bugs fixed or root causes discovered",
+                        },
+                        "warnings": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "area": {"type": "string"},
+                                    "warning": {"type": "string"},
+                                },
+                                "required": ["area", "warning"],
+                            },
+                            "description": "Fragile areas future agents should know",
+                        },
+                        "repo_id": {
+                            "type": "string",
+                            "description": "Repository/project ID (optional)",
+                        },
+                    },
+                    "required": ["summary"],
+                },
+            ),
             # Recording Events
             Tool(
                 name="memory_record",
@@ -619,6 +710,11 @@ def create_mcp_server() -> "Server":
                     )
                 ],
             ),
+            Prompt(
+                name="codex_workflow",
+                description="Use llm-memory effectively during a Codex coding session",
+                arguments=[],
+            ),
         ]
 
     @server.get_prompt()
@@ -676,6 +772,27 @@ def create_mcp_server() -> "Server":
                             text=(
                                 f"Session summary: {summary}\n\n"
                                 "Please record this as an event and any learnings as knowledge."
+                            ),
+                        ),
+                    )
+                ],
+            )
+
+        elif name == "codex_workflow":
+            return GetPromptResult(
+                description="Codex memory workflow",
+                messages=[
+                    PromptMessage(
+                        role="user",
+                        content=TextContent(
+                            type="text",
+                            text=(
+                                "For this Codex session, use llm-memory as durable project "
+                                "context. At the start, call memory_session_start or "
+                                "memory_context. Before editing files, call memory_before_change "
+                                "with the task and file list. After meaningful work, call "
+                                "memory_after_work to record bugs, decisions, conventions, and "
+                                "fragile areas that future sessions should remember."
                             ),
                         ),
                     )
@@ -790,6 +907,100 @@ def _handle_proactive(name: str, args: dict[str, Any], memory: Memory) -> str:
         return formatted if formatted.strip() else "No context found for this directory."
 
     return f"Unknown proactive tool: {name}"
+
+
+def _format_relevant_memory(relevant: dict[str, list[dict[str, Any]]]) -> str:
+    output = []
+    if relevant.get("warnings"):
+        output.append("**Warnings:**")
+        for w in relevant["warnings"]:
+            output.append(f"  - {w['content']}")
+
+    if relevant.get("knowledge"):
+        output.append("\n**Relevant Knowledge:**")
+        for k in relevant["knowledge"][:8]:
+            output.append(f"  - {k['content']}")
+
+    if relevant.get("history"):
+        output.append("\n**Related History:**")
+        for h in relevant["history"][:5]:
+            output.append(f"  - {h['content']}")
+
+    return "\n".join(output) if output else "No relevant memories found."
+
+
+def _handle_workflow(name: str, args: dict[str, Any], memory: Memory) -> str:
+    """Handle Codex-style recall-before-work and record-after-work tools."""
+    if name == "memory_session_start":
+        task = args.get("task")
+        files = args.get("files")
+        repo_id = args.get("repo_id")
+
+        lines = ["# LLM Memory Session Context"]
+        if task:
+            intent_id = memory.working_on(task=task, files=files, repo_id=repo_id)
+            lines.append(f"\nCurrent task recorded (ID: {intent_id}): {task}")
+
+        context = memory.context(format="text", include_history=True)
+        lines.append(f"\n{context}")
+
+        if task or files:
+            relevant = memory.relevant_for(task=task, files=files)
+            lines.append("\n## Task-Relevant Memory")
+            lines.append(_format_relevant_memory(relevant))
+
+        return "\n".join(lines)
+
+    if name == "memory_before_change":
+        task = args.get("task")
+        files = args.get("files")
+        relevant = memory.relevant_for(task=task, files=files)
+        header = "# Before Changing Code"
+        if files:
+            header += f"\nFiles: {', '.join(files)}"
+        if task:
+            header += f"\nTask: {task}"
+        return f"{header}\n\n{_format_relevant_memory(relevant)}"
+
+    if name == "memory_after_work":
+        repo_id = args.get("repo_id")
+        summary_id = memory.record(
+            event=args["summary"],
+            category=args.get("category", "note"),
+            importance=0.7,
+            repo_id=repo_id,
+        )
+        recorded = [f"Recorded summary (ID: {summary_id})"]
+
+        for decision in args.get("decisions") or []:
+            decision_id = memory.decision(
+                what=decision,
+                why="Recorded from Codex end-of-work summary.",
+                repo_id=repo_id,
+            )
+            recorded.append(f"Recorded decision (ID: {decision_id}): {decision}")
+
+        for bug in args.get("bugs_fixed") or []:
+            bug_id = memory.record(
+                event=bug,
+                category="bug_fixed",
+                importance=0.8,
+                repo_id=repo_id,
+            )
+            recorded.append(f"Recorded bug fix (ID: {bug_id}): {bug}")
+
+        for item in args.get("warnings") or []:
+            warning_id = memory.warn(
+                area=item["area"],
+                warning=item["warning"],
+                severity=0.8,
+                repo_id=repo_id,
+            )
+            recorded.append(f"Recorded warning (ID: {warning_id}): {item['area']}")
+
+        return "\n".join(recorded)
+
+    return f"Unknown workflow tool: {name}"
 
 
 def _handle_recording(name: str, args: dict[str, Any], memory: Memory) -> str:
@@ -930,6 +1141,10 @@ async def handle_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
     # Proactive
     if name in ["memory_file_context", "memory_find_error", "memory_directory_context"]:
         return _handle_proactive(name, args, memory)
+
+    # Codex workflow
+    if name in ["memory_session_start", "memory_before_change", "memory_after_work"]:
+        return _handle_workflow(name, args, memory)
 
     # Recording
     if name in ["memory_record", "memory_decision"]:

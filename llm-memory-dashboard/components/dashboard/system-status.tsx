@@ -3,8 +3,7 @@
 import { useEffect, useState } from "react"
 import type { SystemStatus as SystemStatusType } from "@/lib/types"
 import { cn } from "@/lib/utils"
-import { getStats } from "@/lib/api"
-import { mockSystemStatus } from "@/lib/mock-data"
+import { getRuntimeStatus } from "@/lib/api"
 
 interface SystemStatusProps {
   status: SystemStatusType // Keep this prop for initial/fallback
@@ -17,6 +16,7 @@ const statusConfig = {
   syncing: { color: "bg-intent", label: "Syncing" },
   active: { color: "bg-success", label: "Active" },
   inactive: { color: "bg-muted-foreground", label: "Inactive" },
+  available: { color: "bg-success", label: "Available" },
 }
 
 export function SystemStatus({ status: initialStatus }: SystemStatusProps) {
@@ -30,25 +30,36 @@ export function SystemStatus({ status: initialStatus }: SystemStatusProps) {
 
   const checkStatus = async () => {
     try {
-      await getStats()
+      const runtime = await getRuntimeStatus()
+      const effectiveEmbedding = runtime.embeddingEffectiveProvider || runtime.embeddingProvider
       setStatus({
         apiServer: "online",
-        vectorDatabase: "ready", // Inferred
-        embeddings: "active"    // Inferred
+        vectorDatabase: runtime.storageReady === false ? "offline" : "ready",
+        embeddings:
+          effectiveEmbedding === "noop" || effectiveEmbedding === "none" ? "inactive" : "active",
+        codexMcp: "available",
+        runtime,
       })
     } catch (e) {
       setStatus({
         apiServer: "offline",
         vectorDatabase: "offline",
-        embeddings: "inactive"
+        embeddings: "inactive",
+        codexMcp: "inactive",
       })
     }
   }
 
   const items = [
     { label: "API Server", status: status.apiServer },
-    { label: "Vector Database", status: status.vectorDatabase },
+    {
+      label: status.runtime?.storageBackend
+        ? `Storage (${status.runtime.storageBackend})`
+        : "Storage",
+      status: status.vectorDatabase,
+    },
     { label: "Embeddings", status: status.embeddings },
+    { label: "Codex MCP", status: status.codexMcp },
   ]
 
   return (
@@ -68,6 +79,19 @@ export function SystemStatus({ status: initialStatus }: SystemStatusProps) {
           )
         })}
       </div>
+      {status.runtime ? (
+        <div className="mt-4 space-y-1 border-t border-border pt-3 text-xs text-muted-foreground">
+          <div>Mode: {status.runtime.storageMode || "local"}</div>
+          <div>Vector DB: {status.runtime.vectorDb || "chroma"}</div>
+          <div>
+            Embedding:{" "}
+            {status.runtime.embeddingEffectiveProvider ||
+              status.runtime.embeddingProvider ||
+              "unknown"}
+          </div>
+          <div>Repo: {status.runtime.repoId || "unscoped"}</div>
+        </div>
+      ) : null}
     </div>
   )
 }

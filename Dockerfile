@@ -40,10 +40,10 @@ WORKDIR /app
 # Copy built wheel from builder
 COPY --from=python-builder /app/dist/*.whl ./
 
-# Install the runtime server profile. Avoid the broad [all] extra here: it pulls
-# development tools and large local embedding stacks that are not required to
-# run the API/dashboard container.
-RUN pip install --no-cache-dir "$(ls *.whl)[api,mcp]" && \
+# Install the runtime server profile. Keep local sentence-transformers out of
+# the default image, but allow it via --build-arg LLM_MEMORY_EXTRAS=...
+ARG LLM_MEMORY_EXTRAS=api,mcp,neo4j,openai,ollama
+RUN pip install --no-cache-dir "$(ls *.whl)[${LLM_MEMORY_EXTRAS}]" && \
     rm *.whl
 
 # Switch to non-root user
@@ -51,7 +51,7 @@ USER llmuser
 
 # Set environment variables
 ENV LLM_MEMORY_STORAGE_DATA_DIR=/data
-ENV LLM_MEMORY_EMBEDDING_PROVIDER=noop
+ENV LLM_MEMORY_EMBEDDING_PROVIDER=auto
 ENV PYTHONUNBUFFERED=1
 
 # Expose API port

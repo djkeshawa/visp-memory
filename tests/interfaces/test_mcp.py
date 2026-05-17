@@ -79,3 +79,46 @@ class TestMCPServer:
                 assert "Recorded" in result
         except ImportError:
             pytest.skip("MCP not installed")
+
+    @pytest.mark.asyncio
+    async def test_mcp_workflow_before_and_after_work(self):
+        """Codex workflow tools recall before edits and record after work."""
+        try:
+            from llm_memory.interfaces.mcp import MCP_AVAILABLE, handle_tool
+
+            if not MCP_AVAILABLE:
+                pytest.skip("MCP not installed")
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                config = MemoryConfig()
+                config.storage.data_dir = Path(tmpdir)
+                config.embedding.provider = "noop"
+                memory = Memory(config=config)
+                memory.warn("src/server.py", "Check auth before changing routes")
+
+                before = await handle_tool(
+                    "memory_before_change",
+                    {"task": "change server route", "files": ["src/server.py"]},
+                    memory,
+                )
+                assert "Check auth" in before
+
+                after = await handle_tool(
+                    "memory_after_work",
+                    {
+                        "summary": "Fixed Docker server embedding fallback",
+                        "bugs_fixed": ["Server no longer triggers Chroma default model download"],
+                        "warnings": [
+                            {
+                                "area": "Dockerfile",
+                                "warning": "Keep local embeddings optional to avoid huge images",
+                            }
+                        ],
+                    },
+                    memory,
+                )
+                assert "Recorded summary" in after
+                assert "Recorded bug fix" in after
+                assert "Recorded warning" in after
+        except ImportError:
+            pytest.skip("MCP not installed")

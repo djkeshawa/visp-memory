@@ -1057,30 +1057,61 @@ def capture_conversation(
 # =============================================================================
 
 # Create hooks sub-app
-hooks_app = typer.Typer(help="Integration with LLM tools (Claude Code, Cursor, Aider)")
+hooks_app = typer.Typer(help="Integration with LLM tools (Claude Code, Codex, Cursor, Aider)")
 app.add_typer(hooks_app, name="hooks")
+
+
+def _get_hook_adapter(
+    tool: str,
+    memory: Memory,
+    server_url: str = "http://127.0.0.1:8000",
+    repo_id: str = None,
+    config_path: Path = None,
+    dry_run: bool = False,
+):
+    from llm_memory.hooks import get_adapter
+
+    if tool.lower() == "codex":
+        return get_adapter(
+            tool,
+            memory=memory,
+            server_url=server_url,
+            repo_id=repo_id,
+            config_path=config_path,
+            dry_run=dry_run,
+        )
+
+    return get_adapter(tool, memory=memory)
 
 
 @hooks_app.command("install")
 def hooks_install(
-    tool: str = typer.Argument(..., help="Tool name: claude-code, cursor, aider, generic"),
+    tool: str = typer.Argument(..., help="Tool name: claude-code, codex, cursor, aider, generic"),
+    server_url: str = typer.Option(
+        "http://127.0.0.1:8000",
+        "--server-url",
+        help="Memory server URL for Codex client-mode MCP config",
+    ),
+    repo_id: str = typer.Option(None, "--repo-id", help="Repository ID for Codex memory scope"),
+    config_path: Path = typer.Option(
+        None, "--config-path", help="Codex config path; defaults to ~/.codex/config.toml"
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview installation without writing"),
 ):
     """
     Install hooks for an LLM tool.
 
     Installs context injection for the specified tool.
     """
-    from llm_memory.hooks import get_adapter
-
     memory = get_memory()
 
     try:
-        adapter = get_adapter(tool, memory=memory)
+        adapter = _get_hook_adapter(tool, memory, server_url, repo_id, config_path, dry_run)
     except ValueError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
 
-    console.print(f"Installing {tool} integration...")
+    console.print(f"{'Previewing' if dry_run else 'Installing'} {tool} integration...")
 
     results = adapter.install()
 
@@ -1090,27 +1121,36 @@ def hooks_install(
         else:
             console.print(f"[yellow]✗[/yellow] {component}")
 
-    console.print(f"\n[green]{tool} integration installed![/green]")
+    console.print(f"\n[green]{tool} integration {'validated' if dry_run else 'installed'}![/green]")
     console.print(f"Context file: {adapter.get_context_file_path()}")
+    if tool.lower() == "codex":
+        console.print(f"Codex config: {adapter.config_path}")
+        if dry_run:
+            console.print("\n[dim]Managed MCP config block:[/dim]")
+            console.print(adapter.config_block(), markup=False)
+        else:
+            console.print("[yellow]Restart Codex after changing MCP configuration.[/yellow]")
     console.print(f"\nUpdate context with: [bold]llm-memory hooks update {tool}[/bold]")
 
 
 @hooks_app.command("uninstall")
 def hooks_uninstall(
-    tool: str = typer.Argument(..., help="Tool name: claude-code, cursor, aider, generic"),
+    tool: str = typer.Argument(..., help="Tool name: claude-code, codex, cursor, aider, generic"),
+    config_path: Path = typer.Option(
+        None, "--config-path", help="Codex config path; defaults to ~/.codex/config.toml"
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview removal without writing"),
 ):
     """Remove hooks for an LLM tool."""
-    from llm_memory.hooks import get_adapter
-
     memory = get_memory()
 
     try:
-        adapter = get_adapter(tool, memory=memory)
+        adapter = _get_hook_adapter(tool, memory, config_path=config_path, dry_run=dry_run)
     except ValueError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
 
-    console.print(f"Uninstalling {tool} integration...")
+    console.print(f"{'Previewing removal of' if dry_run else 'Uninstalling'} {tool} integration...")
 
     results = adapter.uninstall()
 
@@ -1125,7 +1165,7 @@ def hooks_uninstall(
 
 @hooks_app.command("update")
 def hooks_update(
-    tool: str = typer.Argument(..., help="Tool name: claude-code, cursor, aider, generic"),
+    tool: str = typer.Argument(..., help="Tool name: claude-code, codex, cursor, aider, generic"),
     files: List[str] = typer.Option(None, "--file", "-f", help="Files being worked on"),
     task: str = typer.Option(None, "--task", "-t", help="Task description"),
 ):
@@ -1167,6 +1207,7 @@ def hooks_list():
 
     tools = [
         ("claude-code", "Claude Code / Claude Desktop", "CLAUDE.md"),
+        ("codex", "Codex MCP + project instructions", "AGENTS.md + ~/.codex/config.toml"),
         ("cursor", "Cursor IDE", ".cursorrules"),
         ("aider", "Aider", ".aider"),
         ("generic", "Generic (any context file)", "Custom file"),

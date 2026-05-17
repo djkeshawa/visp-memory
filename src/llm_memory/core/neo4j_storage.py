@@ -24,7 +24,14 @@ class Neo4jStorage(BaseStorage):
     Storage implementation using Neo4j for both structured data and vector embeddings.
     """
 
-    def __init__(self, uri: str = None, user: str = None, password: str = None, embedding_fn=None):
+    def __init__(
+        self,
+        uri: str = None,
+        user: str = None,
+        password: str = None,
+        embedding_fn=None,
+        embedding_dimension: int = None,
+    ):
         """Initialize Neo4j driver."""
         if GraphDatabase is None:
             raise ImportError("neo4j is required for Neo4j storage: pip install llm-memory[neo4j]")
@@ -34,6 +41,10 @@ class Neo4jStorage(BaseStorage):
         self.user = user or config.storage.neo4j_user
         self.password = password or config.storage.neo4j_password
         self._embedding_fn = embedding_fn
+        embedding_owner = getattr(embedding_fn, "__self__", None)
+        self._embedding_dimension = embedding_dimension or getattr(
+            embedding_owner, "dimension", None
+        )
 
         try:
             self.driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password))
@@ -79,22 +90,23 @@ class Neo4jStorage(BaseStorage):
                 "CREATE CONSTRAINT team_id_unique IF NOT EXISTS FOR (t:Team) REQUIRE t.id IS UNIQUE"
             )
 
-            # Vector Index for embeddings (dim=384 for all-MiniLM-L6-v2)
-            # Note: This assumes Neo4j 5.15+
-            try:
-                session.run("""
+            # Vector index dimensions must match the active embedding provider.
+            if self._embedding_dimension:
+                try:
+                    dimensions = int(self._embedding_dimension)
+                    session.run(f"""
                     CREATE VECTOR INDEX memory_embedding_index IF NOT EXISTS
                     FOR (m:Memory) ON (m.embedding)
-                    OPTIONS {indexConfig: {
-                        `vector.dimensions`: 384,
+                    OPTIONS {{indexConfig: {{
+                        `vector.dimensions`: {dimensions},
                         `vector.similarity_function`: 'cosine'
-                    }}
+                    }}}}
                 """)
-            except Exception as e:
-                logger.warning(
-                    "Could not create vector index "
-                    f"(might be already present or incompatible version): {e}"
-                )
+                except Exception as e:
+                    logger.warning(
+                        "Could not create vector index "
+                        f"(might be already present or incompatible version): {e}"
+                    )
 
     @staticmethod
     def _generate_id(content: str) -> str:

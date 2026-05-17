@@ -29,15 +29,31 @@ Use the installed console script:
       "args": [],
       "cwd": "/path/to/your/project",
       "env": {
-        "LLM_MEMORY_EMBEDDING_PROVIDER": "noop"
+        "LLM_MEMORY_EMBEDDING_PROVIDER": "auto"
       }
     }
   }
 }
 ```
 
-For real semantic search, remove the `noop` setting and configure a supported
-embedding provider.
+For best recall, run the MCP server against an API server configured with
+OpenAI or Ollama embeddings. In client mode, the Codex installer delegates
+embedding generation to the server instead of doing local MCP-side embedding
+work.
+
+## Codex Configuration
+
+Use the CLI installer when Codex should connect to a running llm-memory server:
+
+```bash
+llm-memory hooks install codex \
+  --server-url http://127.0.0.1:8000 \
+  --repo-id my-project
+```
+
+The installer adds a managed `mcp_servers.llm-memory` block to the Codex config
+and writes project-level `AGENTS.md` instructions. Restart Codex after
+installing so it loads the MCP server.
 
 ## Available Tools
 
@@ -51,6 +67,9 @@ Stable local workflow tools:
 - `memory_warn`: flag a fragile file/module/area.
 - `memory_goal`: set a goal or intent.
 - `memory_file_context`: get context for a specific file.
+- `memory_session_start`: start a Codex-style session with current context.
+- `memory_before_change`: recall warnings and relevant history before edits.
+- `memory_after_work`: record useful end-of-work summary, decisions, bugs, and warnings.
 - `memory_stats`: show memory counts.
 
 ## Example Tool Calls

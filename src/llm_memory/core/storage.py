@@ -210,6 +210,7 @@ class LocalStorage(BaseStorage):
         embedding_owner = getattr(embedding_fn, "__self__", None)
         embedding_owner_name = embedding_owner.__class__.__name__.lower() if embedding_owner else ""
         self._uses_noop_embeddings = embedding_owner_name == "noopprovider"
+        self._embedding_dimension = getattr(embedding_owner, "dimension", None)
         self._chroma_client = None
         self._collections = {}
 
@@ -387,7 +388,7 @@ class LocalStorage(BaseStorage):
 
     def _get_chroma(self):
         """Get or create ChromaDB client."""
-        if not CHROMADB_AVAILABLE:
+        if not CHROMADB_AVAILABLE or self._embedding_fn is None or self._uses_noop_embeddings:
             return None
 
         if self._chroma_client is None:
@@ -410,20 +411,70 @@ class LocalStorage(BaseStorage):
             return None
 
         if layer not in self._collections:
+            collection_name = self._collection_name(layer)
             try:
-                self._collections[layer] = client.get_collection(f"memories_{layer}")
+                self._collections[layer] = client.get_collection(collection_name)
             except Exception:
                 # Create collection with cosine distance for proper similarity scores
                 # ChromaDB uses "hnsw:space" parameter - "cosine", "l2", or "ip" (inner product)
                 self._collections[layer] = client.create_collection(
-                    name=f"memories_{layer}",
+                    name=collection_name,
                     metadata={
                         "description": f"Memory embeddings for {layer} layer",
                         "hnsw:space": "cosine",
+                        "embedding_dimension": self._embedding_dimension or 0,
                     },
                 )
+                self._backfill_collection(layer, self._collections[layer])
 
         return self._collections[layer]
+
+    def _collection_name(self, layer: MemoryLayer) -> str:
+        """Use dimension-specific collections so old noop vectors do not poison search."""
+        if self._embedding_dimension:
+            return f"memories_{layer}_{self._embedding_dimension}"
+        return f"memories_{layer}"
+
+    def _backfill_collection(self, layer: MemoryLayer, collection) -> None:
+        """Populate a newly-created vector collection from SQLite memory rows."""
+        if self._embedding_fn is None:
+            return
+
+        memories = self.list_memories(layer=layer, limit=10000, order_by="created_at ASC")
+        if not memories:
+            return
+
+        ids = []
+        documents = []
+        metadatas = []
+        embeddings = []
+
+        for memory in memories:
+            try:
+                embedding = self._embedding_fn(memory["content"])
+            except Exception:
+                continue
+
+            metadata = {
+                "category": memory.get("category") or "general",
+                "importance": memory.get("importance") or 0.5,
+                "tags": self._json_serialize(memory.get("tags") or []),
+            }
+            if memory.get("repo_id"):
+                metadata["repo_id"] = memory["repo_id"]
+
+            ids.append(memory["id"])
+            documents.append(memory["content"])
+            metadatas.append(metadata)
+            embeddings.append(embedding)
+
+        if ids:
+            collection.upsert(
+                ids=ids,
+                documents=documents,
+                metadatas=metadatas,
+                embeddings=embeddings,
+            )
 
     @staticmethod
     def _generate_id(content: str) -> str:
@@ -525,7 +576,7 @@ class LocalStorage(BaseStorage):
             if embedding is not None:
                 add_kwargs["embeddings"] = [embedding]
 
-            collection.add(**add_kwargs)
+            collection.upsert(**add_kwargs)
 
         return memory_id
 

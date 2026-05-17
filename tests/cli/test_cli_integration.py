@@ -179,6 +179,55 @@ class TestCLIBasicCommands:
         # Should not crash - may or may not find duplicates
         assert "duplicates" in result.output.lower()
 
+    def test_codex_hook_install_writes_agents_and_config(self, cli_env):
+        """Codex hook installs project instructions and a managed MCP block."""
+        config_path = cli_env / "codex" / "config.toml"
+
+        result = runner.invoke(
+            app,
+            [
+                "hooks",
+                "install",
+                "codex",
+                "--server-url",
+                "http://127.0.0.1:8001",
+                "--repo-id",
+                "repo-a",
+                "--config-path",
+                str(config_path),
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert Path("AGENTS.md").exists()
+        assert "Before changing code" in Path("AGENTS.md").read_text()
+        config = config_path.read_text()
+        assert "[mcp_servers.llm-memory]" in config
+        assert 'LLM_MEMORY_STORAGE_SERVER_URL = "http://127.0.0.1:8001"' in config
+        assert 'LLM_MEMORY_REPO_ID = "repo-a"' in config
+        assert "LLM_MEMORY_EMBEDDING_PROVIDER" not in config
+
+    def test_codex_hook_dry_run_does_not_write(self, cli_env):
+        """Dry-run prints the Codex MCP block without mutating files."""
+        config_path = cli_env / "codex" / "config.toml"
+
+        result = runner.invoke(
+            app,
+            [
+                "hooks",
+                "install",
+                "codex",
+                "--config-path",
+                str(config_path),
+                "--dry-run",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert "[mcp_servers.llm-memory]" in result.output
+        assert not Path("AGENTS.md").exists()
+        assert not config_path.exists()
+
 
 class TestCLIRecallCommand:
     """Test recall/search functionality."""

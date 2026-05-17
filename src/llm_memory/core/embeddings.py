@@ -8,6 +8,8 @@ Supports:
 - Custom providers
 """
 
+import importlib.util
+import os
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
@@ -15,9 +17,19 @@ import numpy as np
 
 from llm_memory.config import EmbeddingConfig
 
+DEFAULT_EMBEDDING_MODELS = {
+    "sentence-transformers": "all-MiniLM-L6-v2",
+    "openai": "text-embedding-3-small",
+    "ollama": "nomic-embed-text",
+}
+
+_CONFIG_DEFAULT_MODEL = DEFAULT_EMBEDDING_MODELS["sentence-transformers"]
+
 
 class EmbeddingProvider(ABC):
     """Abstract base class for embedding providers."""
+
+    provider_name = "unknown"
 
     @abstractmethod
     def embed(self, text: str) -> List[float]:
@@ -39,7 +51,9 @@ class EmbeddingProvider(ABC):
 class SentenceTransformerProvider(EmbeddingProvider):
     """Local embeddings using sentence-transformers."""
 
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+    provider_name = "sentence-transformers"
+
+    def __init__(self, model_name: str = DEFAULT_EMBEDDING_MODELS["sentence-transformers"]):
         try:
             from sentence_transformers import SentenceTransformer
         except ImportError:
@@ -64,9 +78,11 @@ class SentenceTransformerProvider(EmbeddingProvider):
 class OpenAIProvider(EmbeddingProvider):
     """OpenAI embeddings via API."""
 
+    provider_name = "openai"
+
     def __init__(
         self,
-        model: str = "text-embedding-3-small",
+        model: str = DEFAULT_EMBEDDING_MODELS["openai"],
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ):
@@ -108,13 +124,15 @@ class OpenAIProvider(EmbeddingProvider):
 class OllamaProvider(EmbeddingProvider):
     """Local embeddings via Ollama."""
 
-    def __init__(self, model: str = "nomic-embed-text", host: Optional[str] = None):
+    provider_name = "ollama"
+
+    def __init__(self, model: str = DEFAULT_EMBEDDING_MODELS["ollama"], host: Optional[str] = None):
         try:
             import ollama
         except ImportError:
             raise ImportError("ollama required: pip install ollama")
 
-        self._ollama = ollama
+        self._client = ollama.Client(host=host) if host and hasattr(ollama, "Client") else ollama
         self.model = model
         self.host = host
 
@@ -123,11 +141,7 @@ class OllamaProvider(EmbeddingProvider):
         self._dimension = len(test_embedding)
 
     def embed(self, text: str) -> List[float]:
-        kwargs = {"model": self.model, "prompt": text}
-        if self.host:
-            kwargs["host"] = self.host
-
-        response = self._ollama.embeddings(**kwargs)
+        response = self._client.embeddings(model=self.model, prompt=text)
         return response["embedding"]
 
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
@@ -145,6 +159,8 @@ class NoOpProvider(EmbeddingProvider):
     Used when embeddings are disabled or ChromaDB handles them.
     """
 
+    provider_name = "noop"
+
     def __init__(self, dimension: int = 384):
         self._dimension = dimension
 
@@ -159,6 +175,37 @@ class NoOpProvider(EmbeddingProvider):
         return self._dimension
 
 
+def _model_for_provider(config: EmbeddingConfig, provider: str) -> str:
+    """Return a usable model for the selected provider."""
+    model = (config.model or "").strip()
+    if not model or (model == _CONFIG_DEFAULT_MODEL and provider != "sentence-transformers"):
+        return DEFAULT_EMBEDDING_MODELS[provider]
+    return model
+
+
+def _has_module(module_name: str) -> bool:
+    return importlib.util.find_spec(module_name) is not None
+
+
+def _openai_key_available(config: EmbeddingConfig) -> bool:
+    return bool(config.api_key or os.getenv("EMBEDDING_API_KEY") or os.getenv("OPENAI_API_KEY"))
+
+
+def _ollama_host(config: EmbeddingConfig) -> Optional[str]:
+    return config.api_base or os.getenv("EMBEDDING_API_BASE") or os.getenv("OLLAMA_HOST")
+
+
+def _provider_for_auto(config: EmbeddingConfig) -> str:
+    """Choose the best available semantic embedding provider for the current runtime."""
+    if _openai_key_available(config):
+        return "openai"
+    if _ollama_host(config):
+        return "ollama"
+    if _has_module("sentence_transformers"):
+        return "sentence-transformers"
+    return "noop"
+
+
 def get_embedding_provider(config: EmbeddingConfig) -> EmbeddingProvider:
     """
     Factory function to create embedding provider from config.
@@ -170,15 +217,24 @@ def get_embedding_provider(config: EmbeddingConfig) -> EmbeddingProvider:
         EmbeddingProvider instance
     """
     provider = config.provider.lower()
+    if provider == "auto":
+        provider = _provider_for_auto(config)
 
     if provider == "sentence-transformers":
-        return SentenceTransformerProvider(model_name=config.model)
+        return SentenceTransformerProvider(model_name=_model_for_provider(config, provider))
 
     elif provider == "openai":
-        return OpenAIProvider(model=config.model, api_key=config.api_key, api_base=config.api_base)
+        return OpenAIProvider(
+            model=_model_for_provider(config, provider),
+            api_key=config.api_key or os.getenv("EMBEDDING_API_KEY") or None,
+            api_base=config.api_base or os.getenv("EMBEDDING_API_BASE") or None,
+        )
 
     elif provider == "ollama":
-        return OllamaProvider(model=config.model, host=config.api_base)
+        return OllamaProvider(
+            model=_model_for_provider(config, provider),
+            host=_ollama_host(config),
+        )
 
     elif provider == "none" or provider == "noop":
         return NoOpProvider()

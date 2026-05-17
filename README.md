@@ -84,10 +84,29 @@ pip install https://github.com/djkeshawa/llm-memory/releases/download/v0.1.0/llm
 
 ### Method 2: Docker
 
-Run the full system in a container (ideal for servers/teams).
+Run the API, dashboard, MCP-capable package, and storage with Docker Compose.
+The `lite` profile uses SQLite and automatic embedding selection. The `full`
+profile starts Neo4j plus Ollama and pulls `nomic-embed-text`, so recall uses
+real semantic embeddings out of the box.
 
 ```bash
-docker run -p 8000:8000 -v ~/.llm-memory:/data ghcr.io/djkeshawa/llm-memory:latest
+# Quick local server + dashboard
+docker compose --profile lite up --build
+
+# Full graph deployment with Neo4j included
+docker compose --profile full up --build
+```
+
+Open `http://localhost:8000/dashboard`. Set `LLM_MEMORY_EMBEDDING_PROVIDER`
+to `openai` with `OPENAI_API_KEY` when you prefer hosted embeddings; automatic
+selection prefers OpenAI when a key is present, otherwise the full profile uses
+Ollama. Local sentence-transformer embeddings are intentionally optional because
+they make the image much larger:
+
+```bash
+LLM_MEMORY_EXTRAS=api,mcp,neo4j,local-embeddings \
+LLM_MEMORY_EMBEDDING_PROVIDER=sentence-transformers \
+docker compose --profile full up --build
 ```
 
 ### Method 3: Standalone Executable
@@ -164,7 +183,7 @@ export NEO4J_PASSWORD="your-password"
 | `NEO4J_USER` | Neo4j username | `neo4j` |
 | `NEO4J_PASSWORD` | Neo4j password | **Required** |
 | `LLM_MEMORY_REPO_ID` | Default project scope | *None* |
-| `LLM_MEMORY_EMBEDDING_PROVIDER` | Embedding provider: `sentence-transformers`, `openai`, `ollama`, `noop` | `sentence-transformers` |
+| `LLM_MEMORY_EMBEDDING_PROVIDER` | Embedding provider: `auto`, `sentence-transformers`, `openai`, `ollama`, `noop` | `auto` |
 | `LLM_MEMORY_API_KEY` | API key for server auth | *None* |
 | `LLM_MEMORY_JWT_TOKEN` | JWT token for client mode | *None* |
 | `LLM_MEMORY_JWT_SECRET` | Secret for JWT signing (server) | *None* |
@@ -244,6 +263,24 @@ Add to your `claude_desktop_config.json`:
 - `memory_warn`: Flag fragile code areas.
 - `memory_goal`: Manage project intent.
 - `memory_file_context`: Get proactive context for specific files.
+- `memory_session_start`: Start a Codex-style work session with project context.
+- `memory_before_change`: Recall relevant warnings before editing files.
+- `memory_after_work`: Record useful end-of-work memory.
+
+### Codex Workflow
+
+Install the Codex integration after the Docker/API server is running:
+
+```bash
+llm-memory hooks install codex \
+  --server-url http://127.0.0.1:8000 \
+  --repo-id llm-memory
+```
+
+This writes project-level `AGENTS.md` workflow guidance and a managed MCP block
+in `~/.codex/config.toml`. Restart Codex after installing. In each session,
+use memory recall before changing code and record decisions, bug fixes, release
+notes, and fragile areas after work.
 
 ---
 

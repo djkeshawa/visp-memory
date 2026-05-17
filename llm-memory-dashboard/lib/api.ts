@@ -1,5 +1,5 @@
 
-import { Memory, Intent, Stats, SearchResult } from "./types"
+import { Memory, Intent, RuntimeStatus, Stats, SearchResult } from "./types"
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_LLM_MEMORY_API_URL || ""
 
@@ -122,6 +122,26 @@ export async function getStats(): Promise<Stats> {
         activeIntents: stats.active_intents || 0,
         knowledgeNodes: stats.memories_by_layer?.semantic || 0,
         connections: stats.total_relationships || 0,
+    }
+}
+
+export async function getRuntimeStatus(): Promise<RuntimeStatus> {
+    const res = await request("/", { headers: authHeaders() })
+    const data = await res.json()
+
+    return {
+        status: data.status || "online",
+        version: data.version,
+        storageBackend: data.storage_backend,
+        storageMode: data.storage_mode,
+        vectorDb: data.vector_db,
+        embeddingProvider: data.embedding_provider,
+        embeddingEffectiveProvider: data.embedding_effective_provider,
+        embeddingModel: data.embedding_model,
+        authEnabled: data.auth_enabled,
+        repoId: data.repo_id,
+        storageReady: data.storage_ready,
+        dashboardStaticAvailable: data.dashboard_static_available,
     }
 }
 

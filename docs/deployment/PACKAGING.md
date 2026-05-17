@@ -135,45 +135,33 @@ docker run -p 8000:8000 \
 
 ### Docker Compose
 
-Create `docker-compose.yml`:
+The repository includes `docker-compose.yml` with two deployment profiles:
 
-```yaml
-version: '3.8'
+```bash
+# SQLite-backed local deployment
+docker compose --profile lite up --build
 
-services:
-  llm-memory:
-    image: llm-memory:latest
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./data:/home/llmuser/.llm-memory
-    environment:
-      - LLM_MEMORY_STORAGE_BACKEND=neo4j
-      - NEO4J_URI=bolt://neo4j:7687
-      - NEO4J_PASSWORD=memorypass
-    depends_on:
-      - neo4j
-    restart: unless-stopped
-
-  neo4j:
-    image: neo4j:5.15
-    ports:
-      - "7474:7474"
-      - "7687:7687"
-    volumes:
-      - neo4j-data:/data
-    environment:
-      - NEO4J_AUTH=neo4j/memorypass
-      - NEO4J_PLUGINS=["apoc"]
-    restart: unless-stopped
-
-volumes:
-  neo4j-data:
+# Full graph deployment with Neo4j included
+docker compose --profile full up --build
 ```
 
-Run with:
+Both profiles expose the API/dashboard at `http://localhost:8000/dashboard`.
+The full profile starts Neo4j 5 plus Ollama, pulls `nomic-embed-text`, and
+configures `LLM_MEMORY_STORAGE_BACKEND=neo4j`, `NEO4J_URI=bolt://neo4j:7687`,
+`OLLAMA_HOST=http://ollama:11434`, and persistent volumes automatically.
+Override `NEO4J_PASSWORD`, `LLM_MEMORY_PORT`, or `LLM_MEMORY_REPO_ID` in your
+shell or `.env` file.
+
+The default image includes API, MCP, Neo4j driver, OpenAI embeddings, and Ollama
+embeddings. `LLM_MEMORY_EMBEDDING_PROVIDER=auto` prefers OpenAI when
+`OPENAI_API_KEY` or `EMBEDDING_API_KEY` is set, then Ollama when `OLLAMA_HOST`
+is available. Local sentence-transformer embeddings are optional because they
+add large model/runtime dependencies:
+
 ```bash
-docker-compose up -d
+LLM_MEMORY_EXTRAS=api,mcp,neo4j,local-embeddings \
+LLM_MEMORY_EMBEDDING_PROVIDER=sentence-transformers \
+docker compose --profile full up --build
 ```
 
 ### Registry Publishing
