@@ -5,6 +5,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from llm_memory.config import load_config
 from llm_memory.server.auth import UserContext, get_current_user
+from llm_memory.server.authorization import (
+    can_access_scoped_record,
+    require_repo_scope_access,
+    require_scoped_record_access,
+)
 from llm_memory.server.schemas import IntentCreate, IntentResponse
 
 router = APIRouter(prefix="/intents", tags=["intents"])
@@ -16,7 +21,12 @@ async def list_intents(
 ):
     storage = request.app.state.storage
     config = load_config()
-    intents = storage.get_active_intents(repo_id=repo_id or config.repo_id)
+    intent_repo_id = repo_id or config.repo_id
+    require_repo_scope_access(storage, intent_repo_id, user)
+    intents = storage.get_active_intents(repo_id=intent_repo_id)
+    intents = [
+        i for i in intents if can_access_scoped_record(storage, i, user, scope_field="context")
+    ]
 
     return [
         {
@@ -38,9 +48,11 @@ async def create_intent(
 ):
     storage = request.app.state.storage
     config = load_config()
+    intent_repo_id = intent.repo_id or config.repo_id
+    require_repo_scope_access(storage, intent_repo_id, user)
 
     # Add author attribution
-    context = intent.context or {}
+    context = dict(intent.context or {})
     context["author_id"] = user.user_id
     if user.team_id:
         context["team_id"] = user.team_id
@@ -48,7 +60,7 @@ async def create_intent(
     intent_id = storage.set_intent(
         description=intent.description,
         priority=intent.priority if hasattr(intent, "priority") else 0,
-        repo_id=intent.repo_id or config.repo_id,
+        repo_id=intent_repo_id,
         context=context,
     )
 
@@ -56,7 +68,7 @@ async def create_intent(
         "id": intent_id,
         "description": intent.description,
         "priority": getattr(intent, "priority", 0),
-        "repo_id": intent.repo_id or config.repo_id,
+        "repo_id": intent_repo_id,
         "status": "active",
         "context": context,
         "created_at": datetime.now(),
@@ -68,6 +80,13 @@ async def complete_intent(
     request: Request, intent_id: str, user: UserContext = Depends(get_current_user)
 ):
     storage = request.app.state.storage
+    intent = next(
+        (item for item in storage.get_active_intents(repo_id=None) if item["id"] == intent_id),
+        None,
+    )
+    require_scoped_record_access(
+        storage, intent, user, scope_field="context", not_found_detail="Intent not found"
+    )
     success = storage.complete_intent(intent_id)
     if not success:
         raise HTTPException(status_code=404, detail="Intent not found")

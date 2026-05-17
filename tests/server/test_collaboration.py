@@ -366,3 +366,222 @@ async def test_non_admin_cross_repo_context_does_not_include_other_team_dependen
         assert blocked_context.status_code == 404
     finally:
         clear_current_user()
+
+
+@pytest.mark.asyncio
+async def test_non_admin_memory_routes_are_scoped_to_current_team(client):
+    app.state.storage.store_repository(
+        {
+            "name": "Alpha Repo",
+            "id": "repo-alpha",
+            "team_id": "team-alpha",
+        }
+    )
+    app.state.storage.store_repository(
+        {
+            "name": "Beta Repo",
+            "id": "repo-beta",
+            "team_id": "team-beta",
+        }
+    )
+    alpha_memory_id = app.state.storage.store_memory(
+        "Alpha private memory",
+        repo_id="repo-alpha",
+        metadata={"team_id": "team-alpha"},
+    )
+    beta_memory_id = app.state.storage.store_memory(
+        "Beta private memory",
+        repo_id="repo-beta",
+        metadata={"team_id": "team-beta"},
+    )
+
+    set_current_user(
+        UserContext(
+            user_id="alice",
+            username="alice",
+            team_id="team-alpha",
+            is_admin=False,
+        )
+    )
+    try:
+        own_memories = await client.get("/memories?repo_id=repo-alpha")
+        assert own_memories.status_code == 200
+        assert [memory["id"] for memory in own_memories.json()] == [alpha_memory_id]
+
+        other_repo_memories = await client.get("/memories?repo_id=repo-beta")
+        assert other_repo_memories.status_code == 404
+
+        leaked_recall = await client.post(
+            "/recall",
+            json={"query": "private", "limit": 10},
+        )
+        assert leaked_recall.status_code == 200
+        assert [memory["id"] for memory in leaked_recall.json()] == [alpha_memory_id]
+
+        blocked_create = await client.post(
+            "/memories",
+            json={"content": "Cross-team write", "repo_id": "repo-beta"},
+        )
+        assert blocked_create.status_code == 404
+
+        blocked_get = await client.get(f"/memories/{beta_memory_id}")
+        assert blocked_get.status_code == 404
+
+        blocked_update = await client.patch(
+            f"/memories/{beta_memory_id}",
+            json={"content": "Changed by wrong team"},
+        )
+        assert blocked_update.status_code == 404
+
+        blocked_delete = await client.delete(f"/memories/{beta_memory_id}")
+        assert blocked_delete.status_code == 404
+        assert app.state.storage.get_memory(beta_memory_id)["content"] == "Beta private memory"
+    finally:
+        clear_current_user()
+
+
+@pytest.mark.asyncio
+async def test_non_admin_intent_routes_are_scoped_to_current_team(client):
+    app.state.storage.store_repository(
+        {
+            "name": "Alpha Repo",
+            "id": "repo-alpha",
+            "team_id": "team-alpha",
+        }
+    )
+    app.state.storage.store_repository(
+        {
+            "name": "Beta Repo",
+            "id": "repo-beta",
+            "team_id": "team-beta",
+        }
+    )
+    alpha_intent_id = app.state.storage.set_intent(
+        "Alpha ship work",
+        repo_id="repo-alpha",
+        context={"team_id": "team-alpha"},
+    )
+    beta_intent_id = app.state.storage.set_intent(
+        "Beta ship work",
+        repo_id="repo-beta",
+        context={"team_id": "team-beta"},
+    )
+
+    set_current_user(
+        UserContext(
+            user_id="alice",
+            username="alice",
+            team_id="team-alpha",
+            is_admin=False,
+        )
+    )
+    try:
+        own_intents = await client.get("/intents")
+        assert own_intents.status_code == 200
+        assert [intent["id"] for intent in own_intents.json()] == [alpha_intent_id]
+
+        other_repo_intents = await client.get("/intents?repo_id=repo-beta")
+        assert other_repo_intents.status_code == 404
+
+        blocked_create = await client.post(
+            "/intents",
+            json={"description": "Cross-team goal", "repo_id": "repo-beta"},
+        )
+        assert blocked_create.status_code == 404
+
+        blocked_complete = await client.post(f"/intents/{beta_intent_id}/complete")
+        assert blocked_complete.status_code == 404
+        assert any(
+            intent["id"] == beta_intent_id
+            for intent in app.state.storage.get_active_intents(repo_id="repo-beta")
+        )
+
+        complete_own = await client.post(f"/intents/{alpha_intent_id}/complete")
+        assert complete_own.status_code == 200
+        assert complete_own.json() == {"status": "completed", "id": alpha_intent_id}
+    finally:
+        clear_current_user()
+
+
+@pytest.mark.asyncio
+async def test_non_admin_relationship_routes_are_scoped_to_current_team(client):
+    app.state.storage.store_repository(
+        {
+            "name": "Alpha Repo",
+            "id": "repo-alpha",
+            "team_id": "team-alpha",
+        }
+    )
+    app.state.storage.store_repository(
+        {
+            "name": "Beta Repo",
+            "id": "repo-beta",
+            "team_id": "team-beta",
+        }
+    )
+    alpha_source_id = app.state.storage.store_memory(
+        "Alpha source",
+        repo_id="repo-alpha",
+        metadata={"team_id": "team-alpha"},
+    )
+    alpha_target_id = app.state.storage.store_memory(
+        "Alpha target",
+        repo_id="repo-alpha",
+        metadata={"team_id": "team-alpha"},
+    )
+    beta_source_id = app.state.storage.store_memory(
+        "Beta source",
+        repo_id="repo-beta",
+        metadata={"team_id": "team-beta"},
+    )
+    beta_target_id = app.state.storage.store_memory(
+        "Beta target",
+        repo_id="repo-beta",
+        metadata={"team_id": "team-beta"},
+    )
+    alpha_relationship_id = app.state.storage.add_relationship(
+        alpha_source_id,
+        alpha_target_id,
+        "related_to",
+    )
+    app.state.storage.add_relationship(beta_source_id, beta_target_id, "related_to")
+
+    set_current_user(
+        UserContext(
+            user_id="alice",
+            username="alice",
+            team_id="team-alpha",
+            is_admin=False,
+        )
+    )
+    try:
+        relationships = await client.get("/relationships")
+        assert relationships.status_code == 200
+        assert [relationship["id"] for relationship in relationships.json()] == [
+            alpha_relationship_id
+        ]
+
+        other_repo_relationships = await client.get("/relationships?repo_id=repo-beta")
+        assert other_repo_relationships.status_code == 404
+
+        blocked_cross_team = await client.post(
+            "/relationships",
+            json={
+                "source_id": alpha_source_id,
+                "target_id": beta_source_id,
+                "relationship": "related_to",
+            },
+        )
+        assert blocked_cross_team.status_code == 404
+
+        allowed_same_team = await client.post(
+            "/relationships",
+            json={
+                "source_id": alpha_source_id,
+                "target_id": alpha_target_id,
+                "relationship": "supports",
+            },
+        )
+        assert allowed_same_team.status_code == 200
+    finally:
+        clear_current_user()

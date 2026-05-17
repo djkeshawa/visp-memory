@@ -6,6 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from llm_memory.config import load_config
 from llm_memory.core.ranking import rank_memory_results
 from llm_memory.server.auth import UserContext, get_current_user
+from llm_memory.server.authorization import (
+    can_access_scoped_record,
+    require_repo_scope_access,
+    require_scoped_record_access,
+)
 from llm_memory.server.schemas import (
     MemoryCreate,
     MemoryResponse,
@@ -36,14 +41,19 @@ async def list_memories(
 ):
     storage = request.app.state.storage
     config = load_config()
+    memory_repo_id = repo_id or config.repo_id
+    require_repo_scope_access(storage, memory_repo_id, user)
     limit = max(1, min(limit, 200))
     memories = storage.list_memories(
         limit=limit,
-        repo_id=repo_id or config.repo_id,
+        repo_id=memory_repo_id,
         layer=layer,
         category=category,
         order_by=order_by,
     )
+    memories = [
+        m for m in memories if can_access_scoped_record(storage, m, user, scope_field="metadata")
+    ]
     return [
         {
             "id": m["id"],
@@ -69,9 +79,11 @@ async def create_memory(
 ):
     storage = request.app.state.storage
     config = load_config()
+    memory_repo_id = memory.repo_id or config.repo_id
+    require_repo_scope_access(storage, memory_repo_id, user)
 
     # Add author attribution to metadata
-    metadata = memory.metadata or {}
+    metadata = dict(memory.metadata or {})
     metadata["author_id"] = user.user_id
     if user.team_id:
         metadata["team_id"] = user.team_id
@@ -81,7 +93,7 @@ async def create_memory(
         layer=memory.layer,
         category=memory.category,
         importance=memory.importance,
-        repo_id=memory.repo_id or config.repo_id,
+        repo_id=memory_repo_id,
         tags=memory.tags,
         metadata=metadata,
     )
@@ -89,7 +101,7 @@ async def create_memory(
         "id": mem_id,
         **memory.model_dump(),
         "metadata": metadata,
-        "repo_id": memory.repo_id or config.repo_id,
+        "repo_id": memory_repo_id,
         "created_at": datetime.now(),
         "accessed_at": datetime.now(),
         "similarity": None,
@@ -103,8 +115,9 @@ async def get_memory(
 ):
     storage = request.app.state.storage
     mem = storage.get_memory(memory_id)
-    if not mem:
-        raise HTTPException(status_code=404, detail="Memory not found")
+    mem = require_scoped_record_access(
+        storage, mem, user, scope_field="metadata", not_found_detail="Memory not found"
+    )
 
     return {
         "id": mem["id"],
@@ -127,6 +140,10 @@ async def delete_memory(
     request: Request, memory_id: str, user: UserContext = Depends(get_current_user)
 ):
     storage = request.app.state.storage
+    mem = storage.get_memory(memory_id)
+    require_scoped_record_access(
+        storage, mem, user, scope_field="metadata", not_found_detail="Memory not found"
+    )
     success = storage.delete_memory(memory_id)
     if not success:
         raise HTTPException(status_code=404, detail="Memory not found")
@@ -141,11 +158,22 @@ async def update_memory(
     user: UserContext = Depends(get_current_user),
 ):
     storage = request.app.state.storage
+    mem = storage.get_memory(memory_id)
+    mem = require_scoped_record_access(
+        storage, mem, user, scope_field="metadata", not_found_detail="Memory not found"
+    )
 
     # Filter out None values
     update_data = {k: v for k, v in update.model_dump().items() if v is not None}
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields to update")
+    if "metadata" in update_data and not user.is_admin:
+        metadata = dict(update_data["metadata"] or {})
+        existing_metadata = mem.get("metadata") or {}
+        for reserved_key in ("author_id", "team_id"):
+            if reserved_key in existing_metadata:
+                metadata[reserved_key] = existing_metadata[reserved_key]
+        update_data["metadata"] = metadata
 
     success = storage.update_memory(memory_id, **update_data)
     if not success:
@@ -159,16 +187,21 @@ async def recall(
 ):
     storage = request.app.state.storage
     config = load_config()
+    recall_repo_id = query.repo_id or config.repo_id
+    require_repo_scope_access(storage, recall_repo_id, user)
     layers = query.layers or [None]
     results = []
     for layer in layers:
+        layer_results = storage.search_memories(
+            query=query.query,
+            layer=layer,
+            limit=query.limit,
+            repo_id=recall_repo_id,
+        )
         results.extend(
-            storage.search_memories(
-                query=query.query,
-                layer=layer,
-                limit=query.limit,
-                repo_id=query.repo_id or config.repo_id,
-            )
+            r
+            for r in layer_results
+            if can_access_scoped_record(storage, r, user, scope_field="metadata")
         )
     results = rank_memory_results(results, query=query.query, limit=query.limit)
     return [
@@ -198,7 +231,12 @@ async def get_graph_data(
     storage = request.app.state.storage
     config = load_config()
     graph_repo_id = repo_id or config.repo_id
+    require_repo_scope_access(storage, graph_repo_id, user)
     memories = storage.list_memories(limit=200, repo_id=graph_repo_id)
+    memories = [
+        m for m in memories if can_access_scoped_record(storage, m, user, scope_field="metadata")
+    ]
+    visible_memory_ids = {m["id"] for m in memories}
     relationships = storage.get_all_relationships(repo_id=graph_repo_id)
 
     return {
@@ -221,5 +259,6 @@ async def get_graph_data(
                 "label": r["relationship"],
             }
             for r in relationships
+            if r["source_id"] in visible_memory_ids and r["target_id"] in visible_memory_ids
         ],
     }
