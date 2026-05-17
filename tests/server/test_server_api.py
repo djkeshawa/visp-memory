@@ -1,3 +1,5 @@
+import sqlite3
+
 import pytest
 
 from llm_memory.server import app as server_app
@@ -15,6 +17,29 @@ async def test_root_endpoint(client):
     assert "total_memories" in data
     assert "storage_backend" in data
     assert "embedding_provider" in data
+
+
+@pytest.mark.asyncio
+async def test_root_endpoint_filters_stats_by_repo_id(client):
+    headers = {"X-API-KEY": "test_key"}
+    await client.post(
+        "/memories",
+        json={"content": "Repo A memory", "repo_id": "repo-a"},
+        headers=headers,
+    )
+    await client.post(
+        "/memories",
+        json={"content": "Repo B memory", "repo_id": "repo-b"},
+        headers=headers,
+    )
+
+    response = await client.get("/?repo_id=repo-a")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["stats"]["total_memories"] == 1
+    assert data["total_memories"] == 1
+    assert data["stats"]["memories_by_layer"] == {"episodic": 1}
 
 
 @pytest.mark.asyncio
@@ -116,6 +141,34 @@ async def test_create_memory_with_attribution(client):
     response = await client.get(f"/memories/{mem_id}", headers=headers)
     assert response.status_code == 200
     assert response.json()["metadata"]["author_id"] == "api_key_user"
+
+
+@pytest.mark.asyncio
+async def test_memory_responses_use_persisted_accessed_at(client):
+    headers = {"X-API-KEY": "test_key"}
+    create_response = await client.post(
+        "/memories",
+        json={"content": "Timestamp target", "layer": "episodic"},
+        headers=headers,
+    )
+    assert create_response.status_code == 200
+    mem_id = create_response.json()["id"]
+
+    with sqlite3.connect(app.state.storage.db_path) as conn:
+        conn.execute(
+            "UPDATE memories SET accessed_at = ? WHERE id = ?",
+            ("2000-01-01 00:00:00", mem_id),
+        )
+        conn.commit()
+
+    list_response = await client.get("/memories", headers=headers)
+    assert list_response.status_code == 200
+    listed = next(memory for memory in list_response.json() if memory["id"] == mem_id)
+    assert listed["accessed_at"] == "2000-01-01T00:00:00"
+
+    get_response = await client.get(f"/memories/{mem_id}", headers=headers)
+    assert get_response.status_code == 200
+    assert get_response.json()["accessed_at"] == "2000-01-01T00:00:00"
 
 
 @pytest.mark.asyncio

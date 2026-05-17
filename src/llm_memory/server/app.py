@@ -183,10 +183,10 @@ except ImportError:
 
 
 @app.get("/", tags=["system"])
-async def root():
+async def root(repo_id: str = None):
     """System status and stats."""
     try:
-        stats = app.state.storage.get_stats()
+        stats = app.state.storage.get_stats(repo_id=repo_id or config.repo_id)
     except Exception as e:
         logger.error(f"Failed to get stats: {e}")
         stats = {}

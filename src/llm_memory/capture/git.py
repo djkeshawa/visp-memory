@@ -445,7 +445,7 @@ class GitCapture:
 # Automatically records commits to memory
 
 # Run llm-memory capture in background to avoid slowing down commits
-(llm-memory capture git commit HEAD &) 2>/dev/null
+(llm-memory capture git commit --ref HEAD &) 2>/dev/null
 
 exit 0
 """

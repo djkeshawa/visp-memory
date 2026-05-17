@@ -18,6 +18,13 @@ from llm_memory.server.schemas import (
 router = APIRouter(tags=["memories"])
 
 
+def _as_datetime(value):
+    """Normalize storage timestamps for API responses."""
+    if isinstance(value, str):
+        return datetime.fromisoformat(value)
+    return value or datetime.now()
+
+
 @router.get("/memories", response_model=List[MemoryResponse])
 async def list_memories(
     request: Request,
@@ -48,10 +55,8 @@ async def list_memories(
             "importance": m.get("importance", 0.5),
             "tags": m.get("tags", []),
             "metadata": m.get("metadata", {}),
-            "created_at": datetime.fromisoformat(m["created_at"])
-            if isinstance(m["created_at"], str)
-            else m["created_at"],
-            "accessed_at": datetime.now(),
+            "created_at": _as_datetime(m.get("created_at")),
+            "accessed_at": _as_datetime(m.get("accessed_at")),
             "similarity": m.get("similarity"),
             "relevance_score": m.get("relevance_score"),
         }
@@ -111,10 +116,8 @@ async def get_memory(
         "importance": mem.get("importance", 0.5),
         "tags": mem.get("tags", []),
         "metadata": mem.get("metadata", {}),
-        "created_at": datetime.fromisoformat(mem["created_at"])
-        if isinstance(mem["created_at"], str)
-        else mem["created_at"],
-        "accessed_at": datetime.now(),
+        "created_at": _as_datetime(mem.get("created_at")),
+        "accessed_at": _as_datetime(mem.get("accessed_at")),
         "similarity": mem.get("similarity"),
         "relevance_score": mem.get("relevance_score"),
     }
@@ -179,10 +182,8 @@ async def recall(
             "importance": r.get("importance", 0.5),
             "tags": r.get("tags", []),
             "metadata": r.get("metadata", {}),
-            "created_at": datetime.fromisoformat(r["created_at"])
-            if isinstance(r["created_at"], str)
-            else r["created_at"],
-            "accessed_at": datetime.now(),
+            "created_at": _as_datetime(r.get("created_at")),
+            "accessed_at": _as_datetime(r.get("accessed_at")),
             "similarity": r.get("similarity"),
             "relevance_score": r.get("relevance_score"),
         }
