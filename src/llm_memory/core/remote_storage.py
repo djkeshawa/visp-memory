@@ -85,7 +85,15 @@ class RemoteStorage(BaseStorage):
     def search_memories(self, query: str, repo_id: str = None, **kwargs) -> List[Dict[str, Any]]:
         """Search across memories."""
         try:
-            payload = {"query": query, "repo_id": repo_id, **kwargs}
+            filters = {key: value for key, value in kwargs.items() if value is not None}
+            layer = filters.pop("layer", None)
+            if layer and "layers" not in filters:
+                filters["layers"] = [layer]
+            payload = {
+                key: value
+                for key, value in {"query": query, "repo_id": repo_id, **filters}.items()
+                if value is not None
+            }
             response = self.session.post(f"{self.server_url}/recall", json=payload)
             response.raise_for_status()
             return response.json()
@@ -95,7 +103,11 @@ class RemoteStorage(BaseStorage):
     def list_memories(self, repo_id: str = None, **kwargs) -> List[Dict[str, Any]]:
         """List memories with optional filtering."""
         try:
-            params = {"repo_id": repo_id, **kwargs}
+            params = {
+                key: value
+                for key, value in {"repo_id": repo_id, **kwargs}.items()
+                if value is not None
+            }
             response = self.session.get(f"{self.server_url}/memories", params=params)
             response.raise_for_status()
             return response.json()

@@ -119,6 +119,34 @@ async def test_create_memory_with_attribution(client):
 
 
 @pytest.mark.asyncio
+async def test_list_memories_filters_by_layer_and_category(client):
+    headers = {"X-API-KEY": "test_key"}
+    await client.post(
+        "/memories",
+        json={"content": "Regular event", "layer": "episodic", "category": "note"},
+        headers=headers,
+    )
+    await client.post(
+        "/memories",
+        json={"content": "Fragile auth warning", "layer": "semantic", "category": "fragile_area"},
+        headers=headers,
+    )
+    await client.post(
+        "/memories",
+        json={"content": "Team convention", "layer": "semantic", "category": "convention"},
+        headers=headers,
+    )
+
+    response = await client.get(
+        "/memories?layer=semantic&category=fragile_area",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert [memory["content"] for memory in response.json()] == ["Fragile auth warning"]
+
+
+@pytest.mark.asyncio
 async def test_intents_endpoint(client):
     headers = {"X-API-KEY": "test_key"}
     response = await client.get("/intents", headers=headers)

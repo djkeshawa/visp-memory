@@ -22,13 +22,22 @@ router = APIRouter(tags=["memories"])
 async def list_memories(
     request: Request,
     repo_id: str = None,
+    layer: str = None,
+    category: str = None,
     limit: int = 50,
+    order_by: str = "created_at DESC",
     user: UserContext = Depends(get_current_user),
 ):
     storage = request.app.state.storage
     config = load_config()
     limit = max(1, min(limit, 200))
-    memories = storage.list_memories(limit=limit, repo_id=repo_id or config.repo_id)
+    memories = storage.list_memories(
+        limit=limit,
+        repo_id=repo_id or config.repo_id,
+        layer=layer,
+        category=category,
+        order_by=order_by,
+    )
     return [
         {
             "id": m["id"],

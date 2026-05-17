@@ -26,6 +26,7 @@ class FakeSession:
         self.last_get_params = None
         self.last_post_url = None
         self.last_post_json = None
+        self.last_get_url = None
 
     def post(self, url, json=None):
         self.last_post_url = url
@@ -33,6 +34,7 @@ class FakeSession:
         return self.response
 
     def get(self, url, params=None):
+        self.last_get_url = url
         self.last_get_params = params
         return self.response
 
@@ -86,6 +88,30 @@ def test_remote_storage_get_stats_accepts_repo_id():
 
     assert storage.get_stats(repo_id="repo-a") == {"total_memories": 3}
     assert storage.session.last_get_params == {"repo_id": "repo-a"}
+
+
+def test_remote_storage_search_maps_layer_to_api_layers_payload():
+    storage = remote_storage_with(FakeResponse(200, []))
+
+    assert storage.search_memories("auth", layer="episodic", limit=5, repo_id="repo-a") == []
+    assert storage.session.last_post_url == "http://memory.example/recall"
+    assert storage.session.last_post_json == {
+        "query": "auth",
+        "repo_id": "repo-a",
+        "limit": 5,
+        "layers": ["episodic"],
+    }
+
+
+def test_remote_storage_list_sends_supported_filters_without_none_values():
+    storage = remote_storage_with(FakeResponse(200, []))
+
+    assert storage.list_memories(layer="semantic", category="fragile_area", repo_id=None) == []
+    assert storage.session.last_get_url == "http://memory.example/memories"
+    assert storage.session.last_get_params == {
+        "layer": "semantic",
+        "category": "fragile_area",
+    }
 
 
 def test_remote_storage_complete_intent_calls_intent_endpoint():
