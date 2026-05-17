@@ -84,7 +84,11 @@ class IntentMemory(BaseMemoryLayer):
         )
 
     def set_focus(
-        self, focus: str, avoid: List[str] = None, priority: IntentPriority = IntentPriority.HIGH
+        self,
+        focus: str,
+        avoid: List[str] = None,
+        priority: IntentPriority = IntentPriority.HIGH,
+        repo_id: str = None,
     ) -> str:
         """
         Set current focus area with things to avoid.
@@ -107,10 +111,15 @@ class IntentMemory(BaseMemoryLayer):
             goal=f"FOCUS: {focus}",
             priority=priority,
             constraints=[f"AVOID: {item}" for item in (avoid or [])],
+            repo_id=repo_id,
         )
 
     def add_constraint(
-        self, constraint: str, reason: str = None, priority: IntentPriority = IntentPriority.NORMAL
+        self,
+        constraint: str,
+        reason: str = None,
+        priority: IntentPriority = IntentPriority.NORMAL,
+        repo_id: str = None,
     ) -> str:
         """
         Add a constraint/rule that should be respected.
@@ -133,7 +142,7 @@ class IntentMemory(BaseMemoryLayer):
         if reason:
             description += f" (Reason: {reason})"
 
-        return self.set_goal(goal=description, priority=priority)
+        return self.set_goal(goal=description, priority=priority, repo_id=repo_id)
 
     def working_on(
         self, task: str, files: List[str] = None, notes: str = None, repo_id: str = None

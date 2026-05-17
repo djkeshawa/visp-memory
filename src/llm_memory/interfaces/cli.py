@@ -65,6 +65,11 @@ def get_memory() -> Memory:
     return _memory
 
 
+def _repo_scope(memory: Memory, repo: str = None) -> str:
+    """Resolve a CLI repository override against the configured default."""
+    return repo or memory.config.repo_id
+
+
 # =============================================================================
 # Init Command
 # =============================================================================
@@ -149,7 +154,9 @@ def bug(
 ):
     """Record a bug discovery or fix."""
     memory = get_memory()
-    memory.episodic.bug(description, cause=cause, fix=fix, files=files, repo_id=repo)
+    memory.episodic.bug(
+        description, cause=cause, fix=fix, files=files, repo_id=_repo_scope(memory, repo)
+    )
     status = "fixed" if fix else "found"
     console.print(f"[green]Bug {status}:[/green] {description}")
 
@@ -193,7 +200,7 @@ def convention(
 ):
     """Establish a convention or best practice."""
     memory = get_memory()
-    memory.semantic.convention(rule, rationale, repo_id=repo)
+    memory.semantic.convention(rule, rationale, repo_id=_repo_scope(memory, repo))
     console.print(f"[green]Convention established:[/green] {rule}")
 
 
@@ -206,7 +213,9 @@ def issue(
 ):
     """Document a known issue."""
     memory = get_memory()
-    memory.semantic.known_issue(description, workaround, priority, repo_id=repo)
+    memory.semantic.known_issue(
+        description, workaround, priority, repo_id=_repo_scope(memory, repo)
+    )
     console.print(f"[yellow]Known issue documented:[/yellow] {description}")
 
 
@@ -234,10 +243,11 @@ def goal(
 def focus(
     on: str = typer.Argument(..., help="What to focus on"),
     avoid: List[str] = typer.Option(None, "--avoid", "-a", help="What to avoid"),
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository context"),
 ):
     """Set current focus with things to avoid."""
     memory = get_memory()
-    memory.intent.set_focus(on, avoid)
+    memory.intent.set_focus(on, avoid, repo_id=_repo_scope(memory, repo))
     console.print(f"[green]Focus set:[/green] {on}")
     if avoid:
         console.print(f"[dim]Avoiding: {', '.join(avoid)}[/dim]")
@@ -498,6 +508,7 @@ def list_memories(
     category: str = typer.Option(None, "--category", "-c", help="Filter by category"),
     limit: int = typer.Option(20, "--limit", "-n", help="Max results"),
     full: bool = typer.Option(False, "--full", help="Show full content"),
+    repo: str = typer.Option(None, "--repo", "-r", help="Filter by repository"),
 ):
     """List recent memories."""
     from rich.box import ROUNDED
@@ -507,7 +518,11 @@ def list_memories(
     # We need to access storage directly for list listing or expose it in Memory
     # Using private storage access for now as Memory doesn't have generic list
     memories = memory._storage.list_memories(
-        layer=layer, category=category, limit=limit, order_by="created_at DESC"
+        layer=layer,
+        category=category,
+        limit=limit,
+        order_by="created_at DESC",
+        repo_id=_repo_scope(memory, repo),
     )
 
     if not memories:
@@ -538,10 +553,10 @@ def list_memories(
 
 
 @app.command()
-def list_intents():
+def list_intents(repo: str = typer.Option(None, "--repo", "-r", help="Filter by repository")):
     """List active intents/goals."""
     memory = get_memory()
-    intents = memory.intent.get_active()
+    intents = memory.intent.get_active(repo_id=_repo_scope(memory, repo))
 
     if not intents:
         console.print("[yellow]No active intents[/yellow]")
@@ -561,10 +576,10 @@ def list_intents():
 
 
 @app.command()
-def list_warnings():
+def list_warnings(repo: str = typer.Option(None, "--repo", "-r", help="Filter by repository")):
     """List all warnings."""
     memory = get_memory()
-    warnings = memory.semantic.get_warnings()
+    warnings = memory.semantic.get_warnings(repo_id=_repo_scope(memory, repo))
 
     if not warnings:
         console.print("[green]No warnings[/green]")
@@ -576,10 +591,10 @@ def list_warnings():
 
 
 @app.command()
-def list_issues():
+def list_issues(repo: str = typer.Option(None, "--repo", "-r", help="Filter by repository")):
     """List known issues."""
     memory = get_memory()
-    issues = memory.semantic.get_known_issues()
+    issues = memory.semantic.get_known_issues(repo_id=_repo_scope(memory, repo))
 
     if not issues:
         console.print("[green]No known issues[/green]")
@@ -1269,6 +1284,7 @@ def status():
 
     memory = get_memory()
     stats = memory.stats()
+    repo_id = memory.config.repo_id
 
     # 1. System Info
     info_table = Table(box=None, show_header=False, padding=(0, 2))
@@ -1286,7 +1302,7 @@ def status():
         layer_table.add_row(layer.capitalize(), str(count))
 
     # 3. Recent Activity (Last 5 Episodic)
-    recent = memory.episodic.recent(limit=5)
+    recent = memory.episodic.recent(limit=5, repo_id=repo_id)
     activity_table = Table(title="Recent Activity", box=ROUNDED, show_header=True, expand=True)
     activity_table.add_column("Time", style="dim", width=12)
     activity_table.add_column("Category", style="green", width=10)
@@ -1299,7 +1315,7 @@ def status():
         activity_table.add_row(time_str, m["category"], m["content"][:60])
 
     # 4. Current Context (Intents/Warnings)
-    intent_summary = memory.intent.summarize()
+    intent_summary = memory.intent.summarize(repo_id=repo_id)
 
     focus_text = "[italic dim]No current focus[/]"
     if intent_summary.get("focus"):

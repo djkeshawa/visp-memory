@@ -152,6 +152,31 @@ class TestCLIBasicCommands:
         assert result.exit_code == 0
         assert "Goal set" in result.output
 
+    def test_lower_layer_cli_commands_use_configured_repo(self, cli_env):
+        """Commands that call lower layers directly should still use the default repo."""
+        runner.invoke(app, ["init", "--type", "code", "--repo", "default-repo"])
+
+        bug_result = runner.invoke(app, ["bug", "Default repo bug", "--fix", "Patched it"])
+        convention_result = runner.invoke(app, ["convention", "Default repo convention"])
+        issue_result = runner.invoke(app, ["issue", "Default repo issue"])
+        focus_result = runner.invoke(app, ["focus", "Default repo focus"])
+
+        assert bug_result.exit_code == 0
+        assert convention_result.exit_code == 0
+        assert issue_result.exit_code == 0
+        assert focus_result.exit_code == 0
+
+        from llm_memory import Memory
+
+        memory = Memory()
+        scoped_memories = memory._storage.list_memories(repo_id="default-repo")
+        scoped_intents = memory._storage.get_active_intents(repo_id="default-repo")
+
+        assert any("Default repo bug" in m["content"] for m in scoped_memories)
+        assert any("Default repo convention" in m["content"] for m in scoped_memories)
+        assert any("Default repo issue" in m["content"] for m in scoped_memories)
+        assert any("Default repo focus" in i["description"] for i in scoped_intents)
+
     def test_export_command(self, cli_env):
         """Test export command (was broken via stats call)."""
         runner.invoke(app, ["init", "--type", "code"])
@@ -301,6 +326,37 @@ class TestCLIListCommands:
         assert result.exit_code == 0
         # Check that the goal appears in output (case-insensitive)
         assert "implement feature x" in result.output.lower()
+
+    def test_list_commands_use_configured_repo(self, cli_env):
+        """List commands should not show records from other repos by default."""
+        runner.invoke(app, ["init", "--type", "code", "--repo", "repo-a"])
+        runner.invoke(app, ["record", "Repo A event"])
+        runner.invoke(app, ["record", "Repo B event", "--repo", "repo-b"])
+        runner.invoke(app, ["goal", "Repo A goal"])
+        runner.invoke(app, ["goal", "Repo B goal", "--repo", "repo-b"])
+        runner.invoke(app, ["warn", "auth.py", "Repo A warning"])
+        runner.invoke(app, ["warn", "auth.py", "Repo B warning", "--repo", "repo-b"])
+        runner.invoke(app, ["issue", "Repo A issue"])
+        runner.invoke(app, ["issue", "Repo B issue", "--repo", "repo-b"])
+
+        memories = runner.invoke(app, ["list", "--full"])
+        intents = runner.invoke(app, ["list-intents"])
+        warnings = runner.invoke(app, ["list-warnings"])
+        issues = runner.invoke(app, ["list-issues"])
+
+        assert memories.exit_code == 0
+        assert intents.exit_code == 0
+        assert warnings.exit_code == 0
+        assert issues.exit_code == 0
+
+        assert "Repo A event" in memories.output
+        assert "Repo B event" not in memories.output
+        assert "Repo A goal" in intents.output
+        assert "Repo B goal" not in intents.output
+        assert "Repo A warning" in warnings.output
+        assert "Repo B warning" not in warnings.output
+        assert "Repo A issue" in issues.output
+        assert "Repo B issue" not in issues.output
 
 
 class TestCLIContextGeneration:
