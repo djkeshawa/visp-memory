@@ -208,9 +208,9 @@ class IntentMemory(BaseMemoryLayer):
         """Get all active intents, ordered by priority."""
         return self.storage.get_active_intents(repo_id=repo_id)
 
-    def get_current_focus(self) -> Optional[Dict[str, Any]]:
+    def get_current_focus(self, repo_id: str = None) -> Optional[Dict[str, Any]]:
         """Get the current primary focus."""
-        intents = self.get_active()
+        intents = self.get_active(repo_id=repo_id)
 
         for intent in intents:
             if intent["description"].startswith("FOCUS:"):
@@ -219,9 +219,9 @@ class IntentMemory(BaseMemoryLayer):
         # Return highest priority if no explicit focus
         return intents[0] if intents else None
 
-    def get_constraints(self) -> List[str]:
+    def get_constraints(self, repo_id: str = None) -> List[str]:
         """Get all active constraints as a list of strings."""
-        intents = self.get_active()
+        intents = self.get_active(repo_id=repo_id)
         constraints = []
 
         for intent in intents:
@@ -239,9 +239,9 @@ class IntentMemory(BaseMemoryLayer):
 
         return constraints
 
-    def get_working_on(self) -> Optional[Dict[str, Any]]:
+    def get_working_on(self, repo_id: str = None) -> Optional[Dict[str, Any]]:
         """Get current task being worked on."""
-        intents = self.get_active()
+        intents = self.get_active(repo_id=repo_id)
 
         for intent in intents:
             if intent["description"].startswith("WORKING ON:"):
@@ -259,9 +259,9 @@ class IntentMemory(BaseMemoryLayer):
         intents = self.get_active(repo_id=repo_id)
 
         return {
-            "focus": self.get_current_focus(),
-            "constraints": self.get_constraints(),
-            "current_task": self.get_working_on(),
+            "focus": self.get_current_focus(repo_id=repo_id),
+            "constraints": self.get_constraints(repo_id=repo_id),
+            "current_task": self.get_working_on(repo_id=repo_id),
             "all_goals": intents,
             "total_active": len(intents),
         }

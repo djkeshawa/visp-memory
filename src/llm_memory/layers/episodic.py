@@ -204,7 +204,11 @@ class EpisodicMemory(BaseMemoryLayer):
         )
 
     def search(
-        self, query: str, category: EpisodeCategory = None, limit: int = 10
+        self,
+        query: str,
+        category: EpisodeCategory = None,
+        limit: int = 10,
+        repo_id: str = None,
     ) -> List[Dict[str, Any]]:
         """
         Search episodic memories.
@@ -213,6 +217,7 @@ class EpisodicMemory(BaseMemoryLayer):
             query: Search query (semantic search)
             category: Filter by category (EpisodeCategory enum or string)
             limit: Maximum results
+            repo_id: Optional repository filter
 
         Returns:
             List of matching memories
@@ -225,15 +230,24 @@ class EpisodicMemory(BaseMemoryLayer):
         else:
             category_value = None
 
-        return super().search(query=query, layer="episodic", category=category_value, limit=limit)
+        return super().search(
+            query=query,
+            layer="episodic",
+            category=category_value,
+            limit=limit,
+            repo_id=repo_id,
+        )
 
-    def recent(self, limit: int = 20, category: EpisodeCategory = None) -> List[Dict[str, Any]]:
+    def recent(
+        self, limit: int = 20, category: EpisodeCategory = None, repo_id: str = None
+    ) -> List[Dict[str, Any]]:
         """Get recent episodic memories."""
         return self.list_items(
             layer="episodic",
             category=category.value if category else None,
             limit=limit,
             order_by="created_at DESC",
+            repo_id=repo_id,
         )
 
     def get_uncompressed(self, limit: int = 50) -> List[Dict[str, Any]]:

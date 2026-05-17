@@ -350,18 +350,21 @@ class Memory:
         results = {"knowledge": [], "warnings": [], "history": []}
 
         # Get relevant semantic knowledge
+        repo_id = self.config.repo_id
         if task or files:
-            results["knowledge"] = self.semantic.relevant_for(files=files, query=task, limit=limit)
+            results["knowledge"] = self.semantic.relevant_for(
+                files=files, query=task, limit=limit, repo_id=repo_id
+            )
 
         # Get warnings for files
         if files:
             for f in files:
-                warnings = self.semantic.get_warnings(f)
+                warnings = self.semantic.get_warnings(f, repo_id=repo_id)
                 results["warnings"].extend(warnings)
 
         # Get relevant history
         if task:
-            results["history"] = self.episodic.search(task, limit=limit // 2)
+            results["history"] = self.episodic.search(task, limit=limit // 2, repo_id=repo_id)
 
         return results
 

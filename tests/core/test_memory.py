@@ -259,6 +259,60 @@ class TestRepositoryIsolation:
 
         assert [item["id"] for item in related] == [target]
 
+    def test_relevant_for_uses_configured_repo_id(self, tmp_path):
+        config = MemoryConfig(project_name="relevant-scope-test", repo_id="repo-a")
+        config.storage.data_dir = tmp_path / "data"
+        config.embedding.provider = "noop"
+        memory = Memory(config=config)
+
+        memory.learn("Repo A auth knowledge")
+        memory.learn("Repo B auth knowledge", repo_id="repo-b")
+        memory.warn("auth/login.py", "Repo A warning")
+        memory.warn("auth/login.py", "Repo B warning", repo_id="repo-b")
+        memory.record("Repo A auth history")
+        memory.record("Repo B auth history", repo_id="repo-b")
+
+        relevant = memory.relevant_for(task="auth", files=["auth/login.py"], limit=10)
+
+        for section in ("knowledge", "warnings", "history"):
+            assert relevant[section]
+            assert {item["repo_id"] for item in relevant[section]} == {"repo-a"}
+            assert all("Repo B" not in item["content"] for item in relevant[section])
+
+    def test_context_uses_configured_repo_id(self, tmp_path):
+        config = MemoryConfig(project_name="context-scope-test", repo_id="repo-a")
+        config.storage.data_dir = tmp_path / "data"
+        config.embedding.provider = "noop"
+        memory = Memory(config=config)
+
+        memory.warn("deploy", "Repo A warning")
+        memory.semantic.convention("Repo A convention", repo_id="repo-a")
+        memory.semantic.known_issue("Repo A issue", repo_id="repo-a")
+        memory.record("Repo A event")
+        memory.goal("Repo A goal")
+        memory.working_on("Repo A task")
+
+        memory.warn("deploy", "Repo B warning", repo_id="repo-b")
+        memory.semantic.convention("Repo B convention", repo_id="repo-b")
+        memory.semantic.known_issue("Repo B issue", repo_id="repo-b")
+        memory.record("Repo B event", repo_id="repo-b")
+        memory.goal("Repo B goal", repo_id="repo-b")
+        memory.working_on("Repo B task", repo_id="repo-b")
+
+        context = memory.context(format="json")
+
+        assert context["intent"]["current_task"] == "WORKING ON: Repo A task"
+        assert context["intent"]["goals"] == ["WORKING ON: Repo A task", "Repo A goal"]
+        assert context["knowledge"] == {
+            "warnings": ["WARNING [deploy]: Repo A warning"],
+            "conventions": ["Repo A convention"],
+            "known_issues": ["Known Issue: Repo A issue"],
+        }
+        assert [event["event"] for event in context["history"]["recent_events"]] == [
+            "Repo A event"
+        ]
+        assert context["meta"]["stats"]["total_memories"] == 4
+
 
 class TestContext:
     """Tests for context generation."""

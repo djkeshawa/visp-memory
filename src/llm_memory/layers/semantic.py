@@ -220,7 +220,11 @@ class SemanticMemory(BaseMemoryLayer):
         )
 
     def search(
-        self, query: str, category: KnowledgeCategory = None, limit: int = 10
+        self,
+        query: str,
+        category: KnowledgeCategory = None,
+        limit: int = 10,
+        repo_id: str = None,
     ) -> List[Dict[str, Any]]:
         """
         Search semantic knowledge.
@@ -229,6 +233,7 @@ class SemanticMemory(BaseMemoryLayer):
             query: Search query (semantic search)
             category: Filter by category (KnowledgeCategory enum or string)
             limit: Maximum results
+            repo_id: Optional repository filter
 
         Returns:
             List of matching knowledge
@@ -241,12 +246,21 @@ class SemanticMemory(BaseMemoryLayer):
         else:
             category_value = None
 
-        return super().search(query=query, layer="semantic", category=category_value, limit=limit)
+        return super().search(
+            query=query,
+            layer="semantic",
+            category=category_value,
+            limit=limit,
+            repo_id=repo_id,
+        )
 
-    def get_warnings(self, area: str = None) -> List[Dict[str, Any]]:
+    def get_warnings(self, area: str = None, repo_id: str = None) -> List[Dict[str, Any]]:
         """Get warnings, optionally filtered by area."""
         results = self.list_items(
-            layer="semantic", category=KnowledgeCategory.FRAGILE_AREA.value, limit=100
+            layer="semantic",
+            category=KnowledgeCategory.FRAGILE_AREA.value,
+            limit=100,
+            repo_id=repo_id,
         )
 
         if area:
@@ -259,26 +273,28 @@ class SemanticMemory(BaseMemoryLayer):
 
         return results
 
-    def get_conventions(self) -> List[Dict[str, Any]]:
+    def get_conventions(self, repo_id: str = None) -> List[Dict[str, Any]]:
         """Get all established conventions."""
         return self.list_items(
             layer="semantic",
             category=KnowledgeCategory.CONVENTION.value,
             limit=100,
             order_by="importance DESC",
+            repo_id=repo_id,
         )
 
-    def get_known_issues(self) -> List[Dict[str, Any]]:
+    def get_known_issues(self, repo_id: str = None) -> List[Dict[str, Any]]:
         """Get all known issues."""
         return self.list_items(
             layer="semantic",
             category=KnowledgeCategory.KNOWN_ISSUE.value,
             limit=100,
             order_by="importance DESC",
+            repo_id=repo_id,
         )
 
     def relevant_for(
-        self, files: List[str] = None, query: str = None, limit: int = 10
+        self, files: List[str] = None, query: str = None, limit: int = 10, repo_id: str = None
     ) -> List[Dict[str, Any]]:
         """
         Get knowledge relevant to specific files or a query.
@@ -287,6 +303,7 @@ class SemanticMemory(BaseMemoryLayer):
             files: List of file paths to get knowledge for
             query: Optional query to also consider
             limit: Maximum results
+            repo_id: Optional repository filter
 
         Returns:
             Relevant knowledge sorted by relevance
@@ -296,12 +313,12 @@ class SemanticMemory(BaseMemoryLayer):
         # Search by files
         if files:
             for file in files:
-                file_results = self.search(file, limit=5)
+                file_results = self.search(file, limit=5, repo_id=repo_id)
                 results.extend(file_results)
 
         # Search by query
         if query:
-            query_results = self.search(query, limit=limit)
+            query_results = self.search(query, limit=limit, repo_id=repo_id)
             results.extend(query_results)
 
         ranked = rank_memory_results(results, query=query or " ".join(files or []), limit=limit)

@@ -14,9 +14,10 @@ def build_context(
 ) -> Dict[str, Any]:
     """Build structured context from a Memory instance."""
     context: Dict[str, Any] = {}
+    repo_id = memory.config.repo_id
 
     if include_intent:
-        intent_summary = memory.intent.summarize(repo_id=memory.config.repo_id)
+        intent_summary = memory.intent.summarize(repo_id=repo_id)
         context["intent"] = {
             "current_focus": (
                 intent_summary["focus"]["description"] if intent_summary["focus"] else None
@@ -31,9 +32,9 @@ def build_context(
         }
 
     if include_knowledge:
-        warnings = memory.semantic.get_warnings()[:10]
-        conventions = memory.semantic.get_conventions()[:10]
-        known_issues = memory.semantic.get_known_issues()[:5]
+        warnings = memory.semantic.get_warnings(repo_id=repo_id)[:10]
+        conventions = memory.semantic.get_conventions(repo_id=repo_id)[:10]
+        known_issues = memory.semantic.get_known_issues(repo_id=repo_id)[:5]
 
         context["knowledge"] = {
             "warnings": [warning["content"] for warning in warnings],
@@ -42,7 +43,7 @@ def build_context(
         }
 
     if include_history:
-        recent = memory.episodic.recent(limit=10)
+        recent = memory.episodic.recent(limit=10, repo_id=repo_id)
         context["history"] = {
             "recent_events": [
                 {
@@ -56,7 +57,7 @@ def build_context(
 
     context["meta"] = {
         "generated_at": datetime.now().isoformat(),
-        "stats": memory._storage.get_stats(),
+        "stats": memory._storage.get_stats(repo_id=repo_id),
     }
     return context
 
