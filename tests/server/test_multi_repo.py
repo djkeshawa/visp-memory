@@ -21,6 +21,29 @@ async def test_repo_registration_and_isolation(client):
 
 
 @pytest.mark.asyncio
+async def test_repo_registration_rejects_duplicate_generated_id(client):
+    headers = {"X-API-KEY": "test_key"}
+
+    first = await client.post(
+        "/repos",
+        json={"name": "My Repo", "description": "Original"},
+        headers=headers,
+    )
+    assert first.status_code == 200
+
+    second = await client.post(
+        "/repos",
+        json={"name": "my-repo", "description": "Replacement"},
+        headers=headers,
+    )
+    assert second.status_code == 409
+
+    repo = await client.get("/repos/my-repo", headers=headers)
+    assert repo.status_code == 200
+    assert repo.json()["description"] == "Original"
+
+
+@pytest.mark.asyncio
 async def test_repository_dependencies(client):
     headers = {"X-API-KEY": "test_key"}
 

@@ -612,18 +612,25 @@ class Neo4jStorage(BaseStorage):
         repo_id = repo.get("id") or self._generate_id(repo["name"])
 
         with self.driver.session() as session:
+            existing = session.run(
+                "MATCH (r:Repository {id: $id}) RETURN r LIMIT 1",
+                id=repo_id,
+            ).single()
+            if existing:
+                raise ValueError(f"Repository already exists: {repo_id}")
+
             session.run(
                 """
-                MERGE (r:Repository {id: $id})
-                SET r += {
+                CREATE (r:Repository {
+                    id: $id,
                     name: $name,
                     url: $url,
                     description: $description,
                     tech_stack: $tech_stack,
                     team_id: $team_id,
                     metadata: $metadata,
-                    created_at: coalesce(r.created_at, datetime())
-                }
+                    created_at: datetime()
+                })
             """,
                 id=repo_id,
                 name=repo["name"],

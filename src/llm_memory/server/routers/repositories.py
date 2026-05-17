@@ -39,6 +39,8 @@ async def register_repository(
         repo_id = repo_mgr.register(repo_obj)
     except NotImplementedError as e:
         raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
     return {
         **repo_obj.__dict__,

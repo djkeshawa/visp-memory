@@ -3,23 +3,33 @@ Pydantic schemas for the Memory Server API.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+MemoryLayer = Literal["raw", "episodic", "semantic", "intent"]
+MAX_QUERY_LIMIT = 200
+
 
 class MemoryCreate(BaseModel):
-    content: str
-    layer: str = "episodic"
+    content: str = Field(min_length=1)
+    layer: MemoryLayer = "episodic"
     category: str = "note"
-    importance: float = 0.5
+    importance: float = Field(default=0.5, ge=0.0, le=1.0)
     repo_id: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
-class MemoryResponse(MemoryCreate):
+class MemoryResponse(BaseModel):
     id: str
+    content: str
+    layer: str
+    category: str
+    importance: float = 0.5
+    repo_id: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     accessed_at: datetime
     similarity: Optional[float] = None
@@ -27,10 +37,10 @@ class MemoryResponse(MemoryCreate):
 
 
 class SearchQuery(BaseModel):
-    query: str
-    layers: Optional[List[str]] = None
+    query: str = Field(min_length=1)
+    layers: Optional[List[MemoryLayer]] = None
     repo_id: Optional[str] = None
-    limit: int = 10
+    limit: int = Field(default=10, ge=1, le=MAX_QUERY_LIMIT)
 
 
 class IntentCreate(BaseModel):
@@ -47,8 +57,8 @@ class IntentResponse(IntentCreate):
 
 
 class MemoryUpdate(BaseModel):
-    content: Optional[str] = None
-    importance: Optional[float] = None
+    content: Optional[str] = Field(default=None, min_length=1)
+    importance: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     tags: Optional[List[str]] = None
     metadata: Optional[Dict[str, Any]] = None
 

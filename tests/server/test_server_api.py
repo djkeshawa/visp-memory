@@ -144,6 +144,48 @@ async def test_create_memory_with_attribution(client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"content": "Bad layer", "layer": "not-a-layer"},
+        {"content": "Bad importance", "importance": 1.5},
+        {"content": "Bad importance", "importance": -0.1},
+        {"content": "", "layer": "episodic"},
+    ],
+)
+async def test_create_memory_rejects_invalid_payloads(client, payload):
+    headers = {"X-API-KEY": "test_key"}
+
+    response = await client.post("/memories", json=payload, headers=headers)
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"importance": 2},
+        {"importance": -1},
+        {"content": ""},
+    ],
+)
+async def test_update_memory_rejects_invalid_payloads(client, payload):
+    headers = {"X-API-KEY": "test_key"}
+    create_response = await client.post(
+        "/memories",
+        json={"content": "Update validation target"},
+        headers=headers,
+    )
+    assert create_response.status_code == 200
+    mem_id = create_response.json()["id"]
+
+    response = await client.patch(f"/memories/{mem_id}", json=payload, headers=headers)
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_memory_responses_use_persisted_accessed_at(client):
     headers = {"X-API-KEY": "test_key"}
     create_response = await client.post(
@@ -268,6 +310,24 @@ async def test_recall_endpoint(client):
     assert response.json()[0]["content"] == "Recall target"
     assert "similarity" in response.json()[0]
     assert "relevance_score" in response.json()[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"query": "", "limit": 10},
+        {"query": "target", "limit": 0},
+        {"query": "target", "limit": 201},
+        {"query": "target", "layers": ["not-a-layer"]},
+    ],
+)
+async def test_recall_rejects_invalid_payloads(client, payload):
+    headers = {"X-API-KEY": "test_key"}
+
+    response = await client.post("/recall", json=payload, headers=headers)
+
+    assert response.status_code == 422
 
 
 def test_relationships_post_route_registered_once():

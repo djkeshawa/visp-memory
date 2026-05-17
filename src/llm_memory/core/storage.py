@@ -1115,23 +1115,26 @@ class LocalStorage(BaseStorage):
         repo_id = repo.get("id") or self._generate_id(repo["name"])
 
         with self._get_db() as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO repositories (
-                    id, name, url, description, tech_stack, team_id, metadata
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO repositories (
+                        id, name, url, description, tech_stack, team_id, metadata
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        repo_id,
+                        repo["name"],
+                        repo.get("url"),
+                        repo.get("description"),
+                        self._json_serialize(repo.get("tech_stack", [])),
+                        repo.get("team_id"),
+                        self._json_serialize(repo.get("metadata", {})),
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-                (
-                    repo_id,
-                    repo["name"],
-                    repo.get("url"),
-                    repo.get("description"),
-                    self._json_serialize(repo.get("tech_stack", [])),
-                    repo.get("team_id"),
-                    self._json_serialize(repo.get("metadata", {})),
-                ),
-            )
+            except sqlite3.IntegrityError as e:
+                raise ValueError(f"Repository already exists: {repo_id}") from e
             conn.commit()
         return repo_id
 

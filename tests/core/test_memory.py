@@ -67,6 +67,19 @@ def test_local_storage_rejects_repo_dependencies_with_missing_repositories(tmp_p
     assert storage.get_repo_dependencies("app-repo") == []
 
 
+def test_local_storage_rejects_duplicate_repository_ids(tmp_path):
+    storage = LocalStorage(tmp_path)
+
+    storage.store_repository({"id": "app-repo", "name": "App", "description": "Original"})
+
+    with pytest.raises(ValueError, match="Repository already exists: app-repo"):
+        storage.store_repository(
+            {"id": "app-repo", "name": "Renamed", "description": "Replacement"}
+        )
+
+    assert storage.get_repository("app-repo")["description"] == "Original"
+
+
 def test_local_storage_rejects_team_membership_with_missing_entities(tmp_path):
     storage = LocalStorage(tmp_path)
 
