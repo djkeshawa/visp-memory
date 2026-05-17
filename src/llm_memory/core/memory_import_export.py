@@ -7,6 +7,28 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
+REDACTED_SECRET = "***REDACTED***"
+_SENSITIVE_CONFIG_KEYS = {
+    "api_key",
+    "api_keys",
+    "jwt_token",
+    "jwt_secret",
+    "neo4j_password",
+}
+
+
+def _redact_config_secrets(value: Any, key: str | None = None) -> Any:
+    """Redact known credential fields before config is written to export files."""
+    if isinstance(value, dict):
+        return {k: _redact_config_secrets(v, k) for k, v in value.items()}
+    if isinstance(value, list):
+        if key in _SENSITIVE_CONFIG_KEYS:
+            return [REDACTED_SECRET for _ in value]
+        return [_redact_config_secrets(item) for item in value]
+    if key in _SENSITIVE_CONFIG_KEYS and value:
+        return REDACTED_SECRET
+    return value
+
 
 def export_memory(memory: Any, path: Path = None) -> Dict[str, Any]:
     """Export memories, intents, config, and stats for the configured repository."""
@@ -15,7 +37,7 @@ def export_memory(memory: Any, path: Path = None) -> Dict[str, Any]:
     export_data = {
         "version": "1.0",
         "exported_at": datetime.now().isoformat(),
-        "config": memory.config.model_dump(),
+        "config": _redact_config_secrets(memory.config.model_dump()),
         "memories": {
             "episodic": memory._storage.list_memories(
                 layer="episodic", limit=10000, repo_id=repo_id

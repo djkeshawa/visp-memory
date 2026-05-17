@@ -52,3 +52,41 @@ def test_neo4j_delete_memory_returns_true_when_deleted():
     query, params = storage.driver.session_obj.calls[0]
     assert "DETACH DELETE" in query
     assert params == {"id": "memory-id"}
+
+
+def test_neo4j_add_relationship_rejects_unsafe_relationship_type():
+    storage = neo4j_storage_with_delete_count(1)
+
+    try:
+        storage.add_relationship("source", "target", "related`) DETACH DELETE b //")
+    except ValueError as exc:
+        assert "Relationship type" in str(exc)
+    else:
+        raise AssertionError("Expected unsafe relationship type to be rejected")
+
+    assert storage.driver.session_obj.calls == []
+
+
+def test_neo4j_add_relationship_normalizes_safe_relationship_type():
+    storage = neo4j_storage_with_delete_count(1)
+
+    rel_id = storage.add_relationship("source", "target", "depends on")
+
+    assert rel_id
+    query, params = storage.driver.session_obj.calls[0]
+    assert "[r:DEPENDS_ON]" in query
+    assert params["source_id"] == "source"
+    assert params["target_id"] == "target"
+
+
+def test_neo4j_get_related_memories_rejects_unsafe_relationship_type():
+    storage = neo4j_storage_with_delete_count(1)
+
+    try:
+        storage.get_related_memories("memory-id", "related`) DETACH DELETE related //")
+    except ValueError as exc:
+        assert "Relationship type" in str(exc)
+    else:
+        raise AssertionError("Expected unsafe relationship type to be rejected")
+
+    assert storage.driver.session_obj.calls == []

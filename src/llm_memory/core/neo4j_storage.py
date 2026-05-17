@@ -5,6 +5,7 @@ Neo4j Storage implementation for LLM Memory.
 import hashlib
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -17,6 +18,18 @@ from llm_memory.config import load_config
 from llm_memory.core.storage import BaseStorage, MemoryLayer
 
 logger = logging.getLogger(__name__)
+_RELATIONSHIP_TYPE_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+
+
+def _normalize_relationship_type(relationship: str) -> str:
+    """Return a safe Cypher relationship type for direct query interpolation."""
+    rel_type = "_".join(relationship.upper().split())
+    if not rel_type or _RELATIONSHIP_TYPE_RE.fullmatch(rel_type) is None:
+        raise ValueError(
+            "Relationship type must contain only letters, numbers, spaces, and underscores, "
+            "and must start with a letter or underscore"
+        )
+    return rel_type
 
 
 class Neo4jStorage(BaseStorage):
@@ -446,8 +459,7 @@ class Neo4jStorage(BaseStorage):
         self, source_id: str, target_id: str, relationship: str, strength: float = 1.0
     ) -> str:
         """Create a relationship."""
-        # Normalize relationship type (uppercase, no spaces)
-        rel_type = relationship.upper().replace(" ", "_")
+        rel_type = _normalize_relationship_type(relationship)
         rel_id = self._generate_id(f"{source_id}-{target_id}-{rel_type}")
 
         with self.driver.session() as session:
@@ -472,7 +484,7 @@ class Neo4jStorage(BaseStorage):
         # Check against basic injection
         rel_clause = ""
         if relationship:
-            safe_rel = relationship.upper().replace(" ", "_")
+            safe_rel = _normalize_relationship_type(relationship)
             rel_clause = f":{safe_rel}"
 
         query = f"""

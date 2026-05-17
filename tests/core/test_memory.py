@@ -457,6 +457,37 @@ class TestImportExport:
         assert [m["content"] for m in exported["memories"]["semantic"]] == ["Knowledge in repo A"]
         assert [i["description"] for i in exported["intents"]] == ["Goal in repo A"]
 
+    def test_export_redacts_config_secrets(self, tmp_path):
+        config = MemoryConfig(project_name="export-test", repo_id="repo-a")
+        config.storage.data_dir = tmp_path / "data"
+        config.embedding.provider = "noop"
+        config.embedding.api_key = "embedding-secret"
+        config.storage.api_key = "storage-secret"
+        config.storage.jwt_token = "jwt-token-secret"
+        config.storage.neo4j_password = "neo4j-secret"
+        config.server.jwt_secret = "server-secret"
+        config.server.api_keys = ["server-api-secret"]
+        memory = Memory(config=config)
+
+        export_file = tmp_path / "repo-a-export.json"
+        export_data = memory.export(export_file)
+        exported = json.loads(export_file.read_text())
+
+        serialized_export = json.dumps(exported)
+        for secret in (
+            "embedding-secret",
+            "storage-secret",
+            "jwt-token-secret",
+            "neo4j-secret",
+            "server-secret",
+            "server-api-secret",
+        ):
+            assert secret not in serialized_export
+
+        assert export_data["config"]["embedding"]["api_key"] == "***REDACTED***"
+        assert exported["config"]["storage"]["jwt_token"] == "***REDACTED***"
+        assert exported["config"]["server"]["api_keys"] == ["***REDACTED***"]
+
     def test_import_uses_configured_repo_when_export_has_no_repo_id(self, tmp_path):
         source_config = MemoryConfig(project_name="export-test", repo_id="source-repo")
         source_config.storage.data_dir = tmp_path / "source"
