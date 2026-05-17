@@ -15,6 +15,7 @@ except ImportError:  # pragma: no cover - exercised only when optional extra is 
     GraphDatabase = None
 
 from llm_memory.config import load_config
+from llm_memory.core.ranking import clamp_score, rank_memory_results, text_similarity
 from llm_memory.core.storage import BaseStorage, MemoryLayer
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,11 @@ class Neo4jStorage(BaseStorage):
     Storage implementation using Neo4j for both structured data and vector embeddings.
     """
 
+    AUTO_LINK_RELATIONSHIP = "related_to"
+    SOURCE_LINK_RELATIONSHIP = "derived_from"
+    DEFAULT_AUTO_LINK_LIMIT = 3
+    DEFAULT_AUTO_LINK_MIN_SCORE = 0.45
+
     def __init__(
         self,
         uri: str = None,
@@ -58,6 +64,10 @@ class Neo4jStorage(BaseStorage):
         self._embedding_dimension = embedding_dimension or getattr(
             embedding_owner, "dimension", None
         )
+        self._vector_property = self._vector_property_name(self._embedding_dimension)
+        self._vector_index = self._vector_index_name(self._embedding_dimension)
+        embedding_owner_name = embedding_owner.__class__.__name__.lower() if embedding_owner else ""
+        self._uses_noop_embeddings = embedding_owner_name == "noopprovider"
 
         try:
             self.driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password))
@@ -108,8 +118,8 @@ class Neo4jStorage(BaseStorage):
                 try:
                     dimensions = int(self._embedding_dimension)
                     session.run(f"""
-                    CREATE VECTOR INDEX memory_embedding_index IF NOT EXISTS
-                    FOR (m:Memory) ON (m.embedding)
+                    CREATE VECTOR INDEX {self._vector_index} IF NOT EXISTS
+                    FOR (m:Memory) ON (m.`{self._vector_property}`)
                     OPTIONS {{indexConfig: {{
                         `vector.dimensions`: {dimensions},
                         `vector.similarity_function`: 'cosine'
@@ -120,6 +130,18 @@ class Neo4jStorage(BaseStorage):
                         "Could not create vector index "
                         f"(might be already present or incompatible version): {e}"
                     )
+
+    @staticmethod
+    def _vector_property_name(dimension: int = None) -> str:
+        if dimension:
+            return f"embedding_{int(dimension)}"
+        return "embedding"
+
+    @staticmethod
+    def _vector_index_name(dimension: int = None) -> str:
+        if dimension:
+            return f"memory_embedding_index_{int(dimension)}"
+        return "memory_embedding_index"
 
     @staticmethod
     def _generate_id(content: str) -> str:
@@ -179,6 +201,9 @@ class Neo4jStorage(BaseStorage):
         metadata: Dict[str, Any] = None,
         source_ids: List[str] = None,
         embedding: List[float] = None,
+        auto_link: bool = True,
+        auto_link_limit: int = DEFAULT_AUTO_LINK_LIMIT,
+        auto_link_min_score: float = DEFAULT_AUTO_LINK_MIN_SCORE,
     ) -> str:
         """Store a memory node."""
 
@@ -222,7 +247,7 @@ class Neo4jStorage(BaseStorage):
             if embedding:
                 query += """
                  WITH m
-                 CALL db.create.setNodeVectorProperty(m, 'embedding', $embedding)
+                 CALL db.create.setNodeVectorProperty(m, $vector_property, $embedding)
                  """
 
             session.run(
@@ -237,6 +262,7 @@ class Neo4jStorage(BaseStorage):
                 metadata=self._json_serialize(metadata),
                 source_ids=source_ids,
                 embedding=embedding,
+                vector_property=self._vector_property,
             )
 
             # 2. Add extra labels
@@ -244,7 +270,87 @@ class Neo4jStorage(BaseStorage):
                 if label != "Memory":
                     session.run(f"MATCH (m:Memory {{id: $id}}) SET m:{label}", id=memory_id)
 
+        self._auto_link_memory(
+            memory_id=memory_id,
+            content=content,
+            repo_id=repo_id,
+            source_ids=source_ids,
+            enabled=auto_link,
+            limit=auto_link_limit,
+            min_score=auto_link_min_score,
+        )
+
         return memory_id
+
+    def _auto_link_memory(
+        self,
+        memory_id: str,
+        content: str,
+        repo_id: str = None,
+        source_ids: List[str] = None,
+        enabled: bool = True,
+        limit: int = DEFAULT_AUTO_LINK_LIMIT,
+        min_score: float = DEFAULT_AUTO_LINK_MIN_SCORE,
+    ) -> None:
+        """Create provenance and conservative similarity links for a new memory."""
+        source_ids = list(dict.fromkeys(source_ids or []))
+        excluded_ids = {memory_id, *source_ids}
+
+        for source_id in source_ids:
+            if source_id == memory_id:
+                continue
+            self.add_relationship(
+                source_id=source_id,
+                target_id=memory_id,
+                relationship=self.SOURCE_LINK_RELATIONSHIP,
+                strength=1.0,
+            )
+
+        if not enabled or limit <= 0:
+            return
+
+        candidates = self._auto_link_candidates(
+            content=content,
+            repo_id=repo_id,
+            limit=max(limit * 4, limit + len(excluded_ids) + 1),
+        )
+
+        created = 0
+        threshold = clamp_score(min_score)
+        for candidate in candidates:
+            candidate_id = candidate.get("id")
+            if not candidate_id or candidate_id in excluded_ids:
+                continue
+
+            score = max(
+                clamp_score(candidate.get("similarity")),
+                text_similarity(content, str(candidate.get("content", ""))),
+            )
+            if score < threshold:
+                continue
+
+            self.add_relationship(
+                source_id=memory_id,
+                target_id=candidate_id,
+                relationship=self.AUTO_LINK_RELATIONSHIP,
+                strength=score,
+            )
+
+            created += 1
+            if created >= limit:
+                break
+
+    def _auto_link_candidates(
+        self, content: str, repo_id: str = None, limit: int = 12
+    ) -> List[Dict[str, Any]]:
+        """Find candidate memories without trusting noop vector similarity."""
+        if self._embedding_fn is not None and not self._uses_noop_embeddings:
+            return self.search_memories(query=content, repo_id=repo_id, limit=limit)
+
+        memories = self.list_memories(repo_id=repo_id, limit=max(limit, 200))
+        for memory in memories:
+            memory["similarity"] = text_similarity(content, str(memory.get("content", "")))
+        return rank_memory_results(memories, query=content, limit=limit)
 
     def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
         """Get a memory by ID."""
@@ -287,25 +393,27 @@ class Neo4jStorage(BaseStorage):
                 logger.warning(f"Failed to generate embedding for query: {e}")
                 embedding = None
 
+        fallback_cypher = """
+            MATCH (m:Memory)
+            WHERE ($layer IS NULL OR m.layer = $layer)
+            AND ($repo_id IS NULL OR m.repo_id = $repo_id)
+            AND ($category IS NULL OR m.category = $category)
+            AND m.importance >= $min_importance
+            AND toLower(m.content) CONTAINS toLower($query)
+            RETURN m, 0.0 as score
+            LIMIT $limit
+        """
+
         if not embedding:
             # Fallback to simple text search or property filter if no embedding available
             logger.warning(
                 "No embedding available for vector search. Falling back to property filter."
             )
-            cypher = """
-                MATCH (m:Memory)
-                WHERE ($layer IS NULL OR m.layer = $layer)
-                AND ($repo_id IS NULL OR m.repo_id = $repo_id)
-                AND ($category IS NULL OR m.category = $category)
-                AND m.importance >= $min_importance
-                AND toLower(m.content) CONTAINS toLower($query)
-                RETURN m, 0.0 as score
-                LIMIT $limit
-            """
+            cypher = fallback_cypher
         else:
             # Vector Search
-            cypher = """
-                CALL db.index.vector.queryNodes('memory_embedding_index', $limit, $embedding)
+            cypher = f"""
+                CALL db.index.vector.queryNodes('{self._vector_index}', $limit, $embedding)
                 YIELD node, score
                 WHERE ($layer IS NULL OR node.layer = $layer)
                 AND ($repo_id IS NULL OR node.repo_id = $repo_id)
@@ -314,16 +422,34 @@ class Neo4jStorage(BaseStorage):
                 RETURN node as m, score
             """
 
+        try:
+            return self._run_memory_search(
+                cypher,
+                query=query,
+                embedding=embedding,
+                limit=limit,
+                layer=layer,
+                repo_id=repo_id,
+                category=category,
+                min_importance=min_importance,
+            )
+        except Exception as e:
+            if not embedding:
+                raise
+            logger.warning(f"Vector search failed; falling back to text search: {e}")
+            return self._run_memory_search(
+                fallback_cypher,
+                query=query,
+                embedding=None,
+                limit=limit,
+                layer=layer,
+                repo_id=repo_id,
+                category=category,
+                min_importance=min_importance,
+            )
+
+    def _run_memory_search(self, cypher: str, **params) -> List[Dict[str, Any]]:
         with self.driver.session() as session:
-            params = {
-                "query": query,
-                "embedding": embedding,
-                "limit": limit,
-                "layer": layer,
-                "repo_id": repo_id,
-                "category": category,
-                "min_importance": min_importance,
-            }
             result = session.run(cypher, params)
 
             memories = []
@@ -461,11 +587,23 @@ class Neo4jStorage(BaseStorage):
         """Create a relationship."""
         rel_type = _normalize_relationship_type(relationship)
         rel_id = self._generate_id(f"{source_id}-{target_id}-{rel_type}")
+        auto_rel_type = _normalize_relationship_type(self.AUTO_LINK_RELATIONSHIP)
 
         with self.driver.session() as session:
+            if rel_type != auto_rel_type:
+                session.run(
+                    f"""
+                    MATCH (a:Memory {{id: $source_id}})-[r:{auto_rel_type}]-
+                          (b:Memory {{id: $target_id}})
+                    DELETE r
+                """,
+                    source_id=source_id,
+                    target_id=target_id,
+                )
             session.run(
                 f"""
-                MATCH (a:Memory {{id: $source_id}}), (b:Memory {{id: $target_id}})
+                MATCH (a:Memory {{id: $source_id}})
+                MATCH (b:Memory {{id: $target_id}})
                 MERGE (a)-[r:{rel_type}]->(b)
                 SET r.id = $rel_id, r.weight = $strength, r.created_at = datetime()
             """,
@@ -495,8 +633,12 @@ class Neo4jStorage(BaseStorage):
         with self.driver.session() as session:
             result = session.run(query, id=memory_id)
             items = []
+            seen_ids = set()
             for record in result:
                 item = self._node_to_dict(dict(record["related"]))
+                if item.get("id") in seen_ids:
+                    continue
+                seen_ids.add(item.get("id"))
                 item["relationship"] = record["rel_type"]
                 item["strength"] = record["strength"]
                 items.append(item)

@@ -4,11 +4,11 @@ Pluggable embedding providers for LLM Memory.
 Supports:
 - sentence-transformers (local, free, default)
 - OpenAI embeddings (API)
+- OpenRouter embeddings (OpenAI-compatible API)
 - Ollama embeddings (local)
 - Custom providers
 """
 
-import importlib.util
 import os
 from abc import ABC, abstractmethod
 from typing import List, Optional
@@ -20,8 +20,10 @@ from llm_memory.config import EmbeddingConfig
 DEFAULT_EMBEDDING_MODELS = {
     "sentence-transformers": "all-MiniLM-L6-v2",
     "openai": "text-embedding-3-small",
+    "openrouter": "openai/text-embedding-3-small",
     "ollama": "nomic-embed-text",
 }
+OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
 
 _CONFIG_DEFAULT_MODEL = DEFAULT_EMBEDDING_MODELS["sentence-transformers"]
 
@@ -85,6 +87,8 @@ class OpenAIProvider(EmbeddingProvider):
         model: str = DEFAULT_EMBEDDING_MODELS["openai"],
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        provider_name: str = "openai",
+        verify: bool = False,
     ):
         try:
             from openai import OpenAI
@@ -99,14 +103,20 @@ class OpenAIProvider(EmbeddingProvider):
 
         self.client = OpenAI(**kwargs)
         self.model = model
+        self.provider_name = provider_name
 
         # Dimension lookup for known models
         self._dimensions = {
             "text-embedding-3-small": 1536,
+            "openai/text-embedding-3-small": 1536,
             "text-embedding-3-large": 3072,
+            "openai/text-embedding-3-large": 3072,
             "text-embedding-ada-002": 1536,
+            "openai/text-embedding-ada-002": 1536,
         }
-        self._dimension = self._dimensions.get(model, 1536)
+        self._dimension = self._dimensions.get(model)
+        if verify or self._dimension is None:
+            self._dimension = len(self.embed("test"))
 
     def embed(self, text: str) -> List[float]:
         response = self.client.embeddings.create(input=text, model=self.model)
@@ -119,6 +129,27 @@ class OpenAIProvider(EmbeddingProvider):
     @property
     def dimension(self) -> int:
         return self._dimension
+
+
+class OpenRouterProvider(OpenAIProvider):
+    """OpenRouter embeddings via the OpenAI-compatible embeddings API."""
+
+    provider_name = "openrouter"
+
+    def __init__(
+        self,
+        model: str = DEFAULT_EMBEDDING_MODELS["openrouter"],
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        verify: bool = False,
+    ):
+        super().__init__(
+            model=model,
+            api_key=api_key,
+            api_base=api_base or OPENROUTER_API_BASE,
+            provider_name=self.provider_name,
+            verify=verify,
+        )
 
 
 class OllamaProvider(EmbeddingProvider):
@@ -180,30 +211,84 @@ def _model_for_provider(config: EmbeddingConfig, provider: str) -> str:
     model = (config.model or "").strip()
     if not model or (model == _CONFIG_DEFAULT_MODEL and provider != "sentence-transformers"):
         return DEFAULT_EMBEDDING_MODELS[provider]
+    if provider == "openrouter" and model in {
+        "text-embedding-3-small",
+        "text-embedding-3-large",
+        "text-embedding-ada-002",
+    }:
+        return f"openai/{model}"
     return model
-
-
-def _has_module(module_name: str) -> bool:
-    return importlib.util.find_spec(module_name) is not None
 
 
 def _openai_key_available(config: EmbeddingConfig) -> bool:
     return bool(config.api_key or os.getenv("EMBEDDING_API_KEY") or os.getenv("OPENAI_API_KEY"))
 
 
-def _ollama_host(config: EmbeddingConfig) -> Optional[str]:
+def _openrouter_api_base(config: EmbeddingConfig) -> str:
+    return config.api_base or os.getenv("EMBEDDING_API_BASE") or OPENROUTER_API_BASE
+
+
+def _openrouter_key(config: EmbeddingConfig) -> Optional[str]:
+    return config.api_key or os.getenv("OPENROUTER_API_KEY") or os.getenv("EMBEDDING_API_KEY")
+
+
+def _openrouter_key_available(config: EmbeddingConfig) -> bool:
+    return bool(os.getenv("OPENROUTER_API_KEY")) or (
+        bool(config.api_key or os.getenv("EMBEDDING_API_KEY"))
+        and "openrouter" in _openrouter_api_base(config).lower()
+    )
+
+
+def _ollama_host(config: EmbeddingConfig, *, explicit: bool = False) -> Optional[str]:
+    if not explicit:
+        return os.getenv("OLLAMA_HOST")
     return config.api_base or os.getenv("EMBEDDING_API_BASE") or os.getenv("OLLAMA_HOST")
 
 
-def _provider_for_auto(config: EmbeddingConfig) -> str:
-    """Choose the best available semantic embedding provider for the current runtime."""
+def _candidate_providers_for_auto(config: EmbeddingConfig) -> list[str]:
+    """Return cloud-first embedding candidates for automatic provider selection."""
+    providers = []
+    if _openrouter_key_available(config):
+        providers.append("openrouter")
     if _openai_key_available(config):
-        return "openai"
-    if _ollama_host(config):
-        return "ollama"
-    if _has_module("sentence_transformers"):
-        return "sentence-transformers"
-    return "noop"
+        providers.append("openai")
+    providers.append("ollama")
+    providers.append("noop")
+    return providers
+
+
+def _build_provider(
+    config: EmbeddingConfig, provider: str, *, verify: bool = False
+) -> EmbeddingProvider:
+    if provider == "sentence-transformers":
+        return SentenceTransformerProvider(model_name=_model_for_provider(config, provider))
+
+    if provider == "openrouter":
+        return OpenRouterProvider(
+            model=_model_for_provider(config, provider),
+            api_key=_openrouter_key(config),
+            api_base=_openrouter_api_base(config),
+            verify=verify,
+        )
+
+    if provider == "openai":
+        return OpenAIProvider(
+            model=_model_for_provider(config, provider),
+            api_key=config.api_key or os.getenv("EMBEDDING_API_KEY") or os.getenv("OPENAI_API_KEY"),
+            api_base=config.api_base or os.getenv("EMBEDDING_API_BASE") or None,
+            verify=verify,
+        )
+
+    if provider == "ollama":
+        return OllamaProvider(
+            model=_model_for_provider(config, provider),
+            host=_ollama_host(config, explicit=not verify),
+        )
+
+    if provider == "none" or provider == "noop":
+        return NoOpProvider()
+
+    raise ValueError(f"Unknown embedding provider: {provider}")
 
 
 def get_embedding_provider(config: EmbeddingConfig) -> EmbeddingProvider:
@@ -217,30 +302,15 @@ def get_embedding_provider(config: EmbeddingConfig) -> EmbeddingProvider:
         EmbeddingProvider instance
     """
     provider = config.provider.lower()
-    if provider == "auto":
-        provider = _provider_for_auto(config)
-
-    if provider == "sentence-transformers":
-        return SentenceTransformerProvider(model_name=_model_for_provider(config, provider))
-
-    elif provider == "openai":
-        return OpenAIProvider(
-            model=_model_for_provider(config, provider),
-            api_key=config.api_key or os.getenv("EMBEDDING_API_KEY") or None,
-            api_base=config.api_base or os.getenv("EMBEDDING_API_BASE") or None,
-        )
-
-    elif provider == "ollama":
-        return OllamaProvider(
-            model=_model_for_provider(config, provider),
-            host=_ollama_host(config),
-        )
-
-    elif provider == "none" or provider == "noop":
+    if provider in {"auto", "cloud"}:
+        for candidate in _candidate_providers_for_auto(config):
+            try:
+                return _build_provider(config, candidate, verify=True)
+            except Exception:
+                continue
         return NoOpProvider()
 
-    else:
-        raise ValueError(f"Unknown embedding provider: {provider}")
+    return _build_provider(config, provider)
 
 
 def cosine_similarity(a: List[float], b: List[float]) -> float:

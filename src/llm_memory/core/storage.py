@@ -15,7 +15,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from llm_memory.core.ranking import normalize_distance_score, rank_memory_results, text_similarity
+from llm_memory.core.ranking import (
+    clamp_score,
+    normalize_distance_score,
+    rank_memory_results,
+    text_similarity,
+)
 
 try:
     import chromadb
@@ -190,6 +195,11 @@ class BaseStorage(ABC):
 
 class LocalStorage(BaseStorage):
     """Unified storage for structured data and vector embeddings (Local SQLite + Chroma)."""
+
+    AUTO_LINK_RELATIONSHIP = "related_to"
+    SOURCE_LINK_RELATIONSHIP = "derived_from"
+    DEFAULT_AUTO_LINK_LIMIT = 3
+    DEFAULT_AUTO_LINK_MIN_SCORE = 0.45
 
     def __init__(self, data_dir: Path, embedding_fn=None):
         """
@@ -508,6 +518,9 @@ class LocalStorage(BaseStorage):
         metadata: Dict[str, Any] = None,
         source_ids: List[str] = None,
         embedding: List[float] = None,
+        auto_link: bool = True,
+        auto_link_limit: int = DEFAULT_AUTO_LINK_LIMIT,
+        auto_link_min_score: float = DEFAULT_AUTO_LINK_MIN_SCORE,
     ) -> str:
         """
         Store a memory in both SQLite and vector DB.
@@ -522,6 +535,9 @@ class LocalStorage(BaseStorage):
             metadata: Additional metadata
             source_ids: IDs of source memories (for compression tracking)
             embedding: Pre-computed embedding (optional)
+            auto_link: Whether to create graph relationships to related memories
+            auto_link_limit: Maximum inferred similarity links to create
+            auto_link_min_score: Minimum similarity score required for inferred links
 
         Returns:
             Memory ID
@@ -578,7 +594,83 @@ class LocalStorage(BaseStorage):
 
             collection.upsert(**add_kwargs)
 
+        self._auto_link_memory(
+            memory_id=memory_id,
+            content=content,
+            repo_id=repo_id,
+            source_ids=source_ids,
+            enabled=auto_link,
+            limit=auto_link_limit,
+            min_score=auto_link_min_score,
+        )
+
         return memory_id
+
+    def _auto_link_memory(
+        self,
+        memory_id: str,
+        content: str,
+        repo_id: str = None,
+        source_ids: List[str] = None,
+        enabled: bool = True,
+        limit: int = DEFAULT_AUTO_LINK_LIMIT,
+        min_score: float = DEFAULT_AUTO_LINK_MIN_SCORE,
+    ) -> None:
+        """Create provenance and conservative similarity links for a new memory."""
+        source_ids = list(dict.fromkeys(source_ids or []))
+        excluded_ids = {memory_id, *source_ids}
+
+        for source_id in source_ids:
+            if source_id == memory_id:
+                continue
+            try:
+                self.add_relationship(
+                    source_id=source_id,
+                    target_id=memory_id,
+                    relationship=self.SOURCE_LINK_RELATIONSHIP,
+                    strength=1.0,
+                )
+            except ValueError:
+                # Source IDs can come from imports or legacy data. Invalid cross-repo or
+                # missing sources should not block storing the memory itself.
+                continue
+
+        if not enabled or limit <= 0:
+            return
+
+        candidates = self.search_memories(
+            query=content,
+            repo_id=repo_id,
+            limit=max(limit * 4, limit + len(excluded_ids) + 1),
+        )
+
+        created = 0
+        threshold = clamp_score(min_score)
+        for candidate in candidates:
+            candidate_id = candidate.get("id")
+            if not candidate_id or candidate_id in excluded_ids:
+                continue
+
+            score = max(
+                clamp_score(candidate.get("similarity")),
+                text_similarity(content, str(candidate.get("content", ""))),
+            )
+            if score < threshold:
+                continue
+
+            try:
+                self.add_relationship(
+                    source_id=memory_id,
+                    target_id=candidate_id,
+                    relationship=self.AUTO_LINK_RELATIONSHIP,
+                    strength=score,
+                )
+            except ValueError:
+                continue
+
+            created += 1
+            if created >= limit:
+                break
 
     def _get_memory_row(self, memory_id: str, *, track_access: bool) -> Optional[Dict[str, Any]]:
         """Get a memory by ID, optionally updating explicit access metrics."""
@@ -952,6 +1044,24 @@ class LocalStorage(BaseStorage):
         rel_id = self._generate_id(f"{source_id}-{target_id}-{relationship}")
 
         with self._get_db() as conn:
+            if relationship != self.AUTO_LINK_RELATIONSHIP:
+                conn.execute(
+                    """
+                    DELETE FROM relationships
+                    WHERE relationship = ?
+                    AND (
+                        (source_id = ? AND target_id = ?)
+                        OR (source_id = ? AND target_id = ?)
+                    )
+                """,
+                    (
+                        self.AUTO_LINK_RELATIONSHIP,
+                        source_id,
+                        target_id,
+                        target_id,
+                        source_id,
+                    ),
+                )
             conn.execute(
                 """
                 INSERT OR REPLACE INTO relationships (
@@ -993,7 +1103,15 @@ class LocalStorage(BaseStorage):
 
         with self._get_db() as conn:
             cursor = conn.execute(query, params)
-            return [self._row_to_dict(row) for row in cursor.fetchall()]
+            related = []
+            seen_ids = set()
+            for row in cursor.fetchall():
+                item = self._row_to_dict(row)
+                if item["id"] in seen_ids:
+                    continue
+                seen_ids.add(item["id"])
+                related.append(item)
+            return related
 
     def get_all_relationships(self, repo_id: str = None) -> List[Dict[str, Any]]:
         """Get all relationships."""

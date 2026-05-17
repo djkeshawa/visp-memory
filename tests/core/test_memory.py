@@ -80,6 +80,73 @@ def test_local_storage_rejects_duplicate_repository_ids(tmp_path):
     assert storage.get_repository("app-repo")["description"] == "Original"
 
 
+def test_local_storage_auto_links_source_ids(tmp_path):
+    storage = LocalStorage(tmp_path)
+    source_id = storage.store_memory(
+        "Release smoke test captured the packaged dashboard behavior",
+        repo_id="repo-a",
+        auto_link=False,
+    )
+
+    target_id = storage.store_memory(
+        "Dashboard release knowledge was compressed from the release smoke test",
+        layer="semantic",
+        repo_id="repo-a",
+        source_ids=[source_id],
+        auto_link=False,
+    )
+
+    relationships = storage.get_all_relationships(repo_id="repo-a")
+
+    assert relationships == [
+        {
+            "id": relationships[0]["id"],
+            "source_id": source_id,
+            "target_id": target_id,
+            "relationship": "derived_from",
+            "strength": 1.0,
+            "created_at": relationships[0]["created_at"],
+        }
+    ]
+
+
+def test_local_storage_auto_links_similar_memories_in_same_repo(tmp_path):
+    storage = LocalStorage(tmp_path)
+    first_id = storage.store_memory(
+        "Authentication token refresh uses mutex locking around the shared cache",
+        repo_id="repo-a",
+        auto_link=False,
+    )
+    second_id = storage.store_memory(
+        "Authentication token refresh should acquire the mutex before shared cache writes",
+        repo_id="repo-a",
+    )
+
+    relationships = storage.get_all_relationships(repo_id="repo-a")
+
+    assert [
+        (rel["source_id"], rel["target_id"], rel["relationship"])
+        for rel in relationships
+    ] == [(second_id, first_id, "related_to")]
+    assert relationships[0]["strength"] >= 0.45
+
+
+def test_local_storage_auto_links_do_not_cross_repositories(tmp_path):
+    storage = LocalStorage(tmp_path)
+    storage.store_memory(
+        "Authentication token refresh uses mutex locking around the shared cache",
+        repo_id="repo-a",
+        auto_link=False,
+    )
+    storage.store_memory(
+        "Authentication token refresh uses mutex locking around the shared cache",
+        repo_id="repo-b",
+    )
+
+    assert storage.get_all_relationships(repo_id="repo-a") == []
+    assert storage.get_all_relationships(repo_id="repo-b") == []
+
+
 def test_local_storage_rejects_duplicate_user_ids(tmp_path):
     storage = LocalStorage(tmp_path)
 

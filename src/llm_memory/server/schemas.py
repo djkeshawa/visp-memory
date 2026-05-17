@@ -19,6 +19,7 @@ class MemoryCreate(BaseModel):
     repo_id: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    source_ids: List[str] = Field(default_factory=list)
 
 
 class MemoryResponse(BaseModel):

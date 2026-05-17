@@ -23,8 +23,10 @@ class EmbeddingConfig(BaseSettings):
 
     provider: Literal[
         "auto",
+        "cloud",
         "sentence-transformers",
         "openai",
+        "openrouter",
         "ollama",
         "custom",
         "none",

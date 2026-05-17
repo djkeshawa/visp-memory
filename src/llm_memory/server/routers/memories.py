@@ -96,6 +96,7 @@ async def create_memory(
         repo_id=memory_repo_id,
         tags=memory.tags,
         metadata=metadata,
+        source_ids=memory.source_ids,
     )
     return {
         "id": mem_id,
