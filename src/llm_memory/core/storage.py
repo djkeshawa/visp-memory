@@ -835,7 +835,7 @@ class LocalStorage(BaseStorage):
             conn.commit()
             updated = cursor.rowcount > 0
 
-        if updated and content is not None:
+        if updated and any(value is not None for value in (content, importance, tags)):
             memory = self._get_memory_row(memory_id, track_access=False)
             if memory:
                 collection = self._get_collection(memory["layer"])
@@ -848,11 +848,13 @@ class LocalStorage(BaseStorage):
                         }
                         if memory.get("repo_id"):
                             metadata_dict["repo_id"] = memory["repo_id"]
-                        collection.update(
-                            ids=[memory_id],
-                            documents=[content],
-                            metadatas=[metadata_dict],
-                        )
+                        update_kwargs = {
+                            "ids": [memory_id],
+                            "metadatas": [metadata_dict],
+                        }
+                        if content is not None:
+                            update_kwargs["documents"] = [content]
+                        collection.update(**update_kwargs)
                     except Exception:
                         pass
 

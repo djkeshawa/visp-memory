@@ -195,6 +195,42 @@ class TestSearch:
 
         assert [result["content"] for result in results] == ["Authentication token refresh fixed"]
 
+    def test_update_memory_refreshes_vector_metadata_for_filter_fields(self, tmp_path):
+        """Importance and tags updates should keep vector-store metadata in sync."""
+
+        class FakeCollection:
+            def __init__(self):
+                self.update_calls = []
+
+            def update(self, **kwargs):
+                self.update_calls.append(kwargs)
+
+        storage = LocalStorage(tmp_path)
+        mem_id = storage.store_memory(
+            "Indexed memory",
+            repo_id="repo-a",
+            importance=0.2,
+            tags=["old"],
+        )
+        collection = FakeCollection()
+        storage._get_collection = lambda layer: collection
+
+        assert storage.update_memory(mem_id, importance=0.9, tags=["new"]) is True
+
+        assert collection.update_calls == [
+            {
+                "ids": [mem_id],
+                "metadatas": [
+                    {
+                        "category": "general",
+                        "importance": 0.9,
+                        "tags": '["new"]',
+                        "repo_id": "repo-a",
+                    }
+                ],
+            }
+        ]
+
 
 class TestRepositoryIsolation:
     """Tests for repository isolation behavior."""
