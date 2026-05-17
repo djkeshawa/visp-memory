@@ -204,7 +204,9 @@ async def recall(
             for r in layer_results
             if can_access_scoped_record(storage, r, user, scope_field="metadata")
         )
-    results = rank_memory_results(results, query=query.query, limit=query.limit)
+    results = rank_memory_results(
+        results, query=query.query, limit=query.limit, min_score=query.min_score
+    )
     return [
         {
             "id": r["id"],

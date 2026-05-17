@@ -16,7 +16,7 @@ from llm_memory.core.compression import MemoryCompressor, create_llm_compressor
 from llm_memory.core.memory_context import build_context, format_context_text
 from llm_memory.core.memory_import_export import export_memory, import_memories
 from llm_memory.core.neo4j_storage import Neo4jStorage
-from llm_memory.core.ranking import rank_memory_results
+from llm_memory.core.ranking import DEFAULT_RECALL_MIN_SCORE, rank_memory_results
 from llm_memory.core.remote_storage import RemoteStorage
 from llm_memory.core.repository import RepositoryManager
 from llm_memory.core.storage import LocalStorage
@@ -303,7 +303,12 @@ class Memory:
     # =========================================================================
 
     def recall(
-        self, query: str, layers: List[str] = None, repo_id: str = None, limit: int = 10
+        self,
+        query: str,
+        layers: List[str] = None,
+        repo_id: str = None,
+        limit: int = 10,
+        min_score: float = DEFAULT_RECALL_MIN_SCORE,
     ) -> List[Dict[str, Any]]:
         """
         Search across all memory layers.
@@ -312,6 +317,7 @@ class Memory:
             query: Search query (natural language)
             layers: Which layers to search (default: all)
             limit: Maximum results per layer
+            min_score: Minimum canonical relevance score to return
 
         Returns:
             List of matching memories with similarity scores
@@ -331,7 +337,7 @@ class Memory:
             )
             results.extend(layer_results)
 
-        return rank_memory_results(results, query=query, limit=limit)
+        return rank_memory_results(results, query=query, limit=limit, min_score=min_score)
 
     def relevant_for(
         self, task: str = None, files: List[str] = None, limit: int = 15

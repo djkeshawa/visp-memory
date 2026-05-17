@@ -128,7 +128,17 @@ def test_local_storage_auto_links_similar_memories_in_same_repo(tmp_path):
         (rel["source_id"], rel["target_id"], rel["relationship"])
         for rel in relationships
     ] == [(second_id, first_id, "related_to")]
-    assert relationships[0]["strength"] >= 0.45
+    assert relationships[0]["strength"] >= 0.60
+
+
+def test_memory_recall_filters_unrelated_queries_by_default(memory):
+    memory.learn(
+        "OpenRouter cloud embeddings power project recall",
+        category="embeddings",
+        importance=0.9,
+    )
+
+    assert memory.recall("banana bread recipe") == []
 
 
 def test_local_storage_auto_links_do_not_cross_repositories(tmp_path):

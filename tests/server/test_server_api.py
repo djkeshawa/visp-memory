@@ -313,6 +313,25 @@ async def test_recall_endpoint(client):
 
 
 @pytest.mark.asyncio
+async def test_recall_endpoint_filters_low_relevance_results_by_default(client):
+    headers = {"X-API-KEY": "test_key"}
+    await client.post(
+        "/memories",
+        json={"content": "OpenRouter cloud embeddings power project recall", "layer": "semantic"},
+        headers=headers,
+    )
+
+    response = await client.post(
+        "/recall",
+        json={"query": "banana bread recipe", "limit": 10},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "payload",
     [
@@ -320,6 +339,7 @@ async def test_recall_endpoint(client):
         {"query": "target", "limit": 0},
         {"query": "target", "limit": 201},
         {"query": "target", "layers": ["not-a-layer"]},
+        {"query": "target", "min_score": 1.1},
     ],
 )
 async def test_recall_rejects_invalid_payloads(client, payload):

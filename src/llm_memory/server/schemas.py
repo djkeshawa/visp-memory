@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from llm_memory.core.ranking import DEFAULT_RECALL_MIN_SCORE
+
 MemoryLayer = Literal["raw", "episodic", "semantic", "intent"]
 MAX_QUERY_LIMIT = 200
 
@@ -42,6 +44,7 @@ class SearchQuery(BaseModel):
     layers: Optional[List[MemoryLayer]] = None
     repo_id: Optional[str] = None
     limit: int = Field(default=10, ge=1, le=MAX_QUERY_LIMIT)
+    min_score: float = Field(default=DEFAULT_RECALL_MIN_SCORE, ge=0.0, le=1.0)
 
 
 class IntentCreate(BaseModel):

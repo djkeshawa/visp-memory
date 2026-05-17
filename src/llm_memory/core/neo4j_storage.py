@@ -15,7 +15,12 @@ except ImportError:  # pragma: no cover - exercised only when optional extra is 
     GraphDatabase = None
 
 from llm_memory.config import load_config
-from llm_memory.core.ranking import clamp_score, rank_memory_results, text_similarity
+from llm_memory.core.ranking import (
+    clamp_score,
+    rank_memory_results,
+    relationship_score,
+    text_similarity,
+)
 from llm_memory.core.storage import BaseStorage, MemoryLayer
 
 logger = logging.getLogger(__name__)
@@ -41,7 +46,7 @@ class Neo4jStorage(BaseStorage):
     AUTO_LINK_RELATIONSHIP = "related_to"
     SOURCE_LINK_RELATIONSHIP = "derived_from"
     DEFAULT_AUTO_LINK_LIMIT = 3
-    DEFAULT_AUTO_LINK_MIN_SCORE = 0.45
+    DEFAULT_AUTO_LINK_MIN_SCORE = 0.53
 
     def __init__(
         self,
@@ -322,9 +327,10 @@ class Neo4jStorage(BaseStorage):
             if not candidate_id or candidate_id in excluded_ids:
                 continue
 
-            score = max(
-                clamp_score(candidate.get("similarity")),
-                text_similarity(content, str(candidate.get("content", ""))),
+            score = relationship_score(
+                candidate.get("similarity"),
+                content,
+                str(candidate.get("content", "")),
             )
             if score < threshold:
                 continue

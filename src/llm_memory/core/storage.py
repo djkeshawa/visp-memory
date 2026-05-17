@@ -19,6 +19,7 @@ from llm_memory.core.ranking import (
     clamp_score,
     normalize_distance_score,
     rank_memory_results,
+    relationship_score,
     text_similarity,
 )
 
@@ -199,7 +200,7 @@ class LocalStorage(BaseStorage):
     AUTO_LINK_RELATIONSHIP = "related_to"
     SOURCE_LINK_RELATIONSHIP = "derived_from"
     DEFAULT_AUTO_LINK_LIMIT = 3
-    DEFAULT_AUTO_LINK_MIN_SCORE = 0.45
+    DEFAULT_AUTO_LINK_MIN_SCORE = 0.53
 
     def __init__(self, data_dir: Path, embedding_fn=None):
         """
@@ -651,9 +652,10 @@ class LocalStorage(BaseStorage):
             if not candidate_id or candidate_id in excluded_ids:
                 continue
 
-            score = max(
-                clamp_score(candidate.get("similarity")),
-                text_similarity(content, str(candidate.get("content", ""))),
+            score = relationship_score(
+                candidate.get("similarity"),
+                content,
+                str(candidate.get("content", "")),
             )
             if score < threshold:
                 continue

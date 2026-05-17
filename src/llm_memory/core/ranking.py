@@ -2,8 +2,38 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any
+
+DEFAULT_RECALL_MIN_SCORE = 0.56
+_LEXICAL_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "for",
+    "had",
+    "has",
+    "how",
+    "in",
+    "is",
+    "it",
+    "no",
+    "not",
+    "of",
+    "on",
+    "or",
+    "the",
+    "this",
+    "to",
+    "was",
+    "what",
+    "when",
+    "where",
+    "why",
+    "with",
+}
 
 
 def clamp_score(value: Any, default: float = 0.0) -> float:
@@ -26,11 +56,33 @@ def normalize_distance_score(distance: Any) -> float:
 
 def text_similarity(query: str, content: str) -> float:
     """Return a simple lexical overlap score for deterministic fallback ranking."""
-    query_terms = {term.lower() for term in query.split() if term.strip()}
-    content_terms = {term.lower() for term in content.split() if term.strip()}
+    query_terms = {
+        term.lower()
+        for term in re.findall(r"[a-zA-Z0-9_]+", query)
+        if term.lower() not in _LEXICAL_STOPWORDS
+    }
+    content_terms = {
+        term.lower()
+        for term in re.findall(r"[a-zA-Z0-9_]+", content)
+        if term.lower() not in _LEXICAL_STOPWORDS
+    }
     if not query_terms:
         return 0.0
     return len(query_terms & content_terms) / len(query_terms)
+
+
+def relationship_score(similarity: Any, query: str, content: str) -> float:
+    """
+    Score whether two memories should be connected in the graph.
+
+    Embedding models can produce a non-trivial similarity floor for unrelated short
+    project notes. Requiring lexical support keeps inferred graph links conservative.
+    """
+    semantic = clamp_score(similarity)
+    lexical = text_similarity(query, content)
+    if lexical == 0.0 and semantic < 0.78:
+        return 0.0
+    return clamp_score((semantic * 0.75) + (lexical * 0.25))
 
 
 def _age_score(memory: dict[str, Any]) -> float:
@@ -80,6 +132,7 @@ def rank_memory_results(
     query: str | None = None,
     limit: int | None = None,
     dedupe: bool = True,
+    min_score: float | None = None,
 ) -> list[dict[str, Any]]:
     """Attach relevance_score and return memories in canonical relevance order."""
     ranked: list[dict[str, Any]] = []
@@ -94,6 +147,8 @@ def rank_memory_results(
 
         scored = dict(memory)
         scored["relevance_score"] = score_memory_result(scored, query=query)
+        if min_score is not None and scored["relevance_score"] < clamp_score(min_score):
+            continue
         ranked.append(scored)
 
     ranked.sort(
