@@ -210,7 +210,7 @@ jobs:
 
           - **Full Documentation**: See [README.md](../../blob/main/README.md)
           - **Packaging Guide**: See [PACKAGING.md](../../blob/main/PACKAGING.md)
-          - **Project Instructions**: See [CLAUDE.md](../../blob/main/CLAUDE.md)
+          - **Codex Plugin**: See [plugins/llm-memory](../../tree/main/plugins/llm-memory)
 
           ---
 
