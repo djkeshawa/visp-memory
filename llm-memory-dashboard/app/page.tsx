@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { Suspense, useEffect, useState } from "react"
 import { motion } from "framer-motion"
 import { AlertTriangle, Database, Target, Brain, Share2 } from "lucide-react"
 import { AnimatedStatsCard } from "@/components/dashboard/animated-stats-card"
@@ -10,9 +10,11 @@ import { SystemStatus } from "@/components/dashboard/system-status"
 import { describeApiError, getStats, getRecentMemories } from "@/lib/api"
 import { mockSystemStatus } from "@/lib/mock-data"
 import { pageTransition } from "@/lib/animations"
+import { useSelectedProjectId } from "@/lib/project-selection"
 import type { Memory, Stats } from "@/lib/types"
 
-export default function DashboardPage() {
+function DashboardContent() {
+  const selectedRepoId = useSelectedProjectId()
   const [stats, setStats] = useState<Stats | null>(null)
   const [memories, setMemories] = useState<Memory[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -20,10 +22,11 @@ export default function DashboardPage() {
 
   useEffect(() => {
     async function fetchData() {
+      setIsLoading(true)
       try {
         const [statsData, memoriesData] = await Promise.all([
-          getStats(),
-          getRecentMemories(),
+          getStats(selectedRepoId),
+          getRecentMemories(8, selectedRepoId),
         ])
         setStats(statsData)
         setMemories(memoriesData)
@@ -36,7 +39,7 @@ export default function DashboardPage() {
       }
     }
     fetchData()
-  }, [])
+  }, [selectedRepoId])
 
   const displayStats = stats || {
     totalMemories: 0,
@@ -50,7 +53,9 @@ export default function DashboardPage() {
       {/* Header */}
       <div>
         <h1 className="text-2xl font-semibold text-foreground">Welcome back</h1>
-        <p className="text-muted-foreground mt-1">Here&apos;s an overview of your memory system</p>
+        <p className="text-muted-foreground mt-1">
+          {selectedRepoId ? `Project: ${selectedRepoId}` : "Here's an overview of your memory system"}
+        </p>
       </div>
 
       {loadError ? (
@@ -108,6 +113,14 @@ export default function DashboardPage() {
         </div>
       </div>
     </motion.div>
+  )
+}
+
+export default function DashboardPage() {
+  return (
+    <Suspense fallback={null}>
+      <DashboardContent />
+    </Suspense>
   )
 }
 

@@ -184,6 +184,29 @@ class IntentMemory(BaseMemoryLayer):
         """
         return self.storage.complete_intent(intent_id)
 
+    def update(
+        self,
+        intent_id: str,
+        description: str = None,
+        priority: IntentPriority | int = None,
+        status: str = None,
+        context: Dict[str, Any] = None,
+    ) -> bool:
+        """Update an intent's mutable fields."""
+        if isinstance(priority, IntentPriority):
+            priority = priority.value
+        return self.storage.update_intent(
+            intent_id,
+            description=description,
+            priority=priority,
+            status=status,
+            context=context,
+        )
+
+    def close(self, intent_id: str) -> bool:
+        """Close an intent without marking it completed."""
+        return self.update(intent_id, status="closed")
+
     def clear_task(self, repo_id: str = None) -> int:
         """
         Clear "WORKING ON" intents (task complete).

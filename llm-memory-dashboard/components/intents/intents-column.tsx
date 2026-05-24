@@ -11,9 +11,12 @@ interface IntentsColumnProps {
   title: string
   intents: Intent[]
   type: "active" | "completed"
+  onComplete?: (intent: Intent) => void
+  onClose?: (intent: Intent) => void
+  onUpdate?: (intent: Intent, updates: { description: string; priority: number }) => void
 }
 
-export function IntentsColumn({ title, intents, type }: IntentsColumnProps) {
+export function IntentsColumn({ title, intents, type, onComplete, onClose, onUpdate }: IntentsColumnProps) {
   const isEmpty = intents.length === 0
 
   return (
@@ -51,7 +54,13 @@ export function IntentsColumn({ title, intents, type }: IntentsColumnProps) {
       ) : (
         <motion.div className="space-y-3" variants={staggerContainer} initial="hidden" animate="visible">
           {intents.map((intent) => (
-            <IntentCard key={intent.id} intent={intent} />
+            <IntentCard
+              key={intent.id}
+              intent={intent}
+              onComplete={onComplete}
+              onClose={onClose}
+              onUpdate={onUpdate}
+            />
           ))}
         </motion.div>
       )}

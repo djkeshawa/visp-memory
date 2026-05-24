@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from llm_memory import Memory, MemoryConfig
+from llm_memory.core.indexing import ReindexScope
 from llm_memory.core.storage import CHROMADB_AVAILABLE, LocalStorage
 
 
@@ -51,6 +52,146 @@ def test_local_storage_uses_dimension_specific_vector_collection(tmp_path):
     assert "episodic" in storage._collections
     collection = storage._collections["episodic"]
     assert collection.name == "memories_episodic_3"
+
+
+def test_local_storage_rebuild_embedding_index_scopes_by_repo_and_layer(tmp_path, monkeypatch):
+    class FakeEmbeddingProvider:
+        dimension = 3
+
+        def embed(self, text):
+            return [float(len(text)), 1.0, 0.0]
+
+    class FakeClient:
+        def list_collections(self):
+            return []
+
+    class FakeCollection:
+        def __init__(self):
+            self.upserts = []
+
+        def count(self):
+            return 0
+
+        def upsert(self, **kwargs):
+            self.upserts.append(kwargs)
+
+    provider = FakeEmbeddingProvider()
+    storage = LocalStorage(tmp_path, embedding_fn=provider.embed)
+    collection = FakeCollection()
+    monkeypatch.setattr("llm_memory.core.storage.CHROMADB_AVAILABLE", True)
+    monkeypatch.setattr(storage, "_get_chroma", lambda: FakeClient())
+    monkeypatch.setattr(storage, "_get_collection", lambda _layer: collection)
+
+    storage.store_memory("Repo A event", layer="episodic", repo_id="repo-a", auto_link=False)
+    storage.store_memory("Repo B event", layer="episodic", repo_id="repo-b", auto_link=False)
+    storage.store_memory("Repo A fact", layer="semantic", repo_id="repo-a", auto_link=False)
+    collection.upserts.clear()
+
+    dry_run = storage.rebuild_embedding_index(
+        scope=ReindexScope(repo_id="repo-a", layer="episodic"),
+        dry_run=True,
+    )
+    assert dry_run.status == "ready"
+    assert dry_run.matched_memories == 1
+    assert collection.upserts == []
+
+    result = storage.rebuild_embedding_index(
+        scope=ReindexScope(repo_id="repo-a", layer="episodic"),
+        dry_run=False,
+    )
+    assert result.status == "completed"
+    assert result.reindexed_memories == 1
+    assert collection.upserts[0]["documents"] == ["Repo A event"]
+
+
+def test_update_memory_refreshes_vector_embedding(tmp_path, monkeypatch):
+    class FakeEmbeddingProvider:
+        dimension = 2
+
+        def embed(self, text):
+            return [float(len(text)), 0.0]
+
+    class FakeCollection:
+        def __init__(self):
+            self.updated = None
+
+        def upsert(self, **kwargs):
+            pass
+
+        def update(self, **kwargs):
+            self.updated = kwargs
+
+    provider = FakeEmbeddingProvider()
+    storage = LocalStorage(tmp_path, embedding_fn=provider.embed)
+    collection = FakeCollection()
+    monkeypatch.setattr(storage, "_get_collection", lambda _layer: collection)
+
+    memory_id = storage.store_memory("Old content", auto_link=False)
+    assert storage.update_memory(memory_id, content="New vector content") is True
+
+    assert collection.updated["documents"] == ["New vector content"]
+    assert collection.updated["embeddings"] == [[18.0, 0.0]]
+
+
+def test_archived_memories_are_excluded_from_default_list_and_search(tmp_path):
+    storage = LocalStorage(tmp_path)
+    active_id = storage.store_memory("Active deploy note", auto_link=False)
+    archived_id = storage.store_memory("Archived deploy note", auto_link=False)
+
+    assert storage.update_memory(archived_id, status="archived") is True
+
+    listed_ids = {item["id"] for item in storage.list_memories(status="active")}
+    assert active_id in listed_ids
+    assert archived_id not in listed_ids
+
+    archived_ids = {item["id"] for item in storage.list_memories(status="archived")}
+    assert archived_ids == {archived_id}
+
+    all_ids = {item["id"] for item in storage.list_memories(status="all")}
+    assert {active_id, archived_id}.issubset(all_ids)
+
+    search_ids = {item["id"] for item in storage.search_memories("deploy")}
+    assert active_id in search_ids
+    assert archived_id not in search_ids
+
+
+def test_memory_status_migration_defaults_old_rows_to_active(tmp_path):
+    db_dir = tmp_path / "legacy"
+    db_dir.mkdir()
+    db_path = db_dir / "memories.db"
+
+    import sqlite3
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE memories (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                layer TEXT NOT NULL DEFAULT 'episodic',
+                category TEXT DEFAULT 'general',
+                importance REAL DEFAULT 0.5,
+                repo_id TEXT DEFAULT NULL,
+                access_count INTEGER DEFAULT 0,
+                tags TEXT DEFAULT '[]',
+                metadata TEXT DEFAULT '{}',
+                source_ids TEXT DEFAULT '[]',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                compressed_at TIMESTAMP DEFAULT NULL
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO memories (id, content, layer) VALUES (?, ?, ?)",
+            ("legacy-memory", "Legacy active memory", "episodic"),
+        )
+
+    storage = LocalStorage(db_dir)
+    memory = storage.get_memory("legacy-memory")
+
+    assert memory["status"] == "active"
+    assert memory["quality_flags"] == []
 
 
 def test_local_storage_rejects_repo_dependencies_with_missing_repositories(tmp_path):
@@ -383,6 +524,7 @@ class TestSearch:
                         "category": "general",
                         "importance": 0.9,
                         "tags": '["new"]',
+                        "status": "active",
                         "repo_id": "repo-a",
                     }
                 ],
@@ -564,6 +706,32 @@ class TestImportExport:
         assert export_data["config"]["embedding"]["api_key"] == "***REDACTED***"
         assert exported["config"]["storage"]["jwt_token"] == "***REDACTED***"
         assert exported["config"]["server"]["api_keys"] == ["***REDACTED***"]
+
+    def test_export_scrubs_vector_payloads(self, tmp_path, monkeypatch):
+        config = MemoryConfig(project_name="export-test", repo_id="repo-a")
+        config.storage.data_dir = tmp_path / "data"
+        config.embedding.provider = "noop"
+        memory = Memory(config=config)
+
+        def fake_list_memories(*, layer, **_kwargs):
+            if layer == "episodic":
+                return [
+                    {
+                        "id": "memory-1",
+                        "content": "Exported event",
+                        "layer": "episodic",
+                        "embedding": [1.0, 2.0],
+                        "embedding_1536": [3.0, 4.0],
+                    }
+                ]
+            return []
+
+        monkeypatch.setattr(memory._storage, "list_memories", fake_list_memories)
+
+        export_data = memory.export()
+        exported_memory = export_data["memories"]["episodic"][0]
+        assert "embedding" not in exported_memory
+        assert "embedding_1536" not in exported_memory
 
     def test_import_uses_configured_repo_when_export_has_no_repo_id(self, tmp_path):
         source_config = MemoryConfig(project_name="export-test", repo_id="source-repo")

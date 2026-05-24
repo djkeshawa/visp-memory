@@ -17,6 +17,15 @@ _SENSITIVE_CONFIG_KEYS = {
 }
 
 
+def _scrub_memory_vectors(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove vector payloads before export files are written."""
+    return {
+        key: value
+        for key, value in item.items()
+        if key != "embedding" and not key.startswith("embedding_")
+    }
+
+
 def _redact_config_secrets(value: Any, key: str | None = None) -> Any:
     """Redact known credential fields before config is written to export files."""
     if isinstance(value, dict):
@@ -39,12 +48,18 @@ def export_memory(memory: Any, path: Path = None) -> Dict[str, Any]:
         "exported_at": datetime.now().isoformat(),
         "config": _redact_config_secrets(memory.config.model_dump()),
         "memories": {
-            "episodic": memory._storage.list_memories(
-                layer="episodic", limit=10000, repo_id=repo_id
-            ),
-            "semantic": memory._storage.list_memories(
-                layer="semantic", limit=10000, repo_id=repo_id
-            ),
+            "episodic": [
+                _scrub_memory_vectors(item)
+                for item in memory._storage.list_memories(
+                    layer="episodic", limit=10000, repo_id=repo_id
+                )
+            ],
+            "semantic": [
+                _scrub_memory_vectors(item)
+                for item in memory._storage.list_memories(
+                    layer="semantic", limit=10000, repo_id=repo_id
+                )
+            ],
         },
         "intents": memory._storage.get_active_intents(repo_id=repo_id),
         "stats": memory.stats(),

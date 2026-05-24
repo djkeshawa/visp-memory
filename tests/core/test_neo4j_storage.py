@@ -122,3 +122,35 @@ def test_neo4j_uses_dimension_specific_vector_property_for_memories():
 def test_neo4j_dimension_specific_vector_index_names():
     assert Neo4jStorage._vector_property_name(1536) == "embedding_1536"
     assert Neo4jStorage._vector_index_name(1536) == "memory_embedding_index_1536"
+
+
+def test_neo4j_node_to_dict_strips_dimension_specific_vectors():
+    data = Neo4jStorage._node_to_dict(
+        {
+            "id": "memory-id",
+            "content": "Memory",
+            "embedding": [1.0],
+            "embedding_1536": [2.0],
+        }
+    )
+
+    assert "embedding" not in data
+    assert "embedding_1536" not in data
+
+
+def test_neo4j_update_memory_refreshes_dimension_specific_vector():
+    storage = neo4j_storage_with_delete_count(1)
+    storage._embedding_fn = lambda text: [float(len(text)), 0.0]
+    storage._embedding_dimension = 2
+    storage._vector_property = Neo4jStorage._vector_property_name(2)
+
+    assert storage.update_memory("memory-id", content="updated content") is True
+
+    update_query, update_params = storage.driver.session_obj.calls[0]
+    assert "SET m.content = $content" in update_query
+    assert update_params["content"] == "updated content"
+
+    vector_query, vector_params = storage.driver.session_obj.calls[1]
+    assert "setNodeVectorProperty(m, $vector_property, $embedding)" in vector_query
+    assert vector_params["vector_property"] == "embedding_2"
+    assert vector_params["embedding"] == [15.0, 0.0]

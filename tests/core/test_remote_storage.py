@@ -26,6 +26,8 @@ class FakeSession:
         self.last_get_params = None
         self.last_post_url = None
         self.last_post_json = None
+        self.last_patch_url = None
+        self.last_patch_json = None
         self.last_get_url = None
 
     def post(self, url, json=None):
@@ -36,6 +38,11 @@ class FakeSession:
     def get(self, url, params=None):
         self.last_get_url = url
         self.last_get_params = params
+        return self.response
+
+    def patch(self, url, json=None):
+        self.last_patch_url = url
+        self.last_patch_json = json
         return self.response
 
 
@@ -126,3 +133,11 @@ def test_remote_storage_complete_intent_returns_false_for_missing_intent():
     storage = remote_storage_with(FakeResponse(404, {"detail": "Intent not found"}))
 
     assert storage.complete_intent("missing") is False
+
+
+def test_remote_storage_update_intent_calls_patch_endpoint():
+    storage = remote_storage_with(FakeResponse(200, {"status": "updated"}))
+
+    assert storage.update_intent("intent-1", description="New goal", priority=3) is True
+    assert storage.session.last_patch_url == "http://memory.example/intents/intent-1"
+    assert storage.session.last_patch_json == {"description": "New goal", "priority": 3}

@@ -291,12 +291,13 @@ def _build_provider(
     raise ValueError(f"Unknown embedding provider: {provider}")
 
 
-def get_embedding_provider(config: EmbeddingConfig) -> EmbeddingProvider:
+def get_embedding_provider(config: EmbeddingConfig, *, verify: bool = False) -> EmbeddingProvider:
     """
     Factory function to create embedding provider from config.
 
     Args:
         config: EmbeddingConfig with provider settings
+        verify: perform a test embedding before returning explicit API-backed providers
 
     Returns:
         EmbeddingProvider instance
@@ -310,7 +311,7 @@ def get_embedding_provider(config: EmbeddingConfig) -> EmbeddingProvider:
                 continue
         return NoOpProvider()
 
-    return _build_provider(config, provider)
+    return _build_provider(config, provider, verify=verify)
 
 
 def cosine_similarity(a: List[float], b: List[float]) -> float:

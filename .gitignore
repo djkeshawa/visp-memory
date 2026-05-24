@@ -59,6 +59,7 @@ build/
 .gemini/
 qa-docs/
 .codex-local/
+plan/
 
 # Build artifacts
 src/llm_memory/server/static/

@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "llm-memory": {
+      "command": "python3",
+      "args": ["-m", "llm_memory.interfaces.mcp"],
+      "env": {
+        "LLM_MEMORY_STORAGE_MODE": "client",
+        "LLM_MEMORY_STORAGE_SERVER_URL": "http://127.0.0.1:8001",
+        "LLM_MEMORY_REPO_ID": "llm-memory",
+        "LLM_MEMORY_EMBEDDING_PROVIDER": "noop"
+      }
+    }
+  }
+}

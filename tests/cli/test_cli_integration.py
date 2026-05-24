@@ -5,6 +5,7 @@ These tests verify that CLI commands work end-to-end and catch regressions
 that unit tests might miss (e.g., parameter mismatches between layers).
 """
 
+import json
 import tempfile
 from pathlib import Path
 
@@ -356,6 +357,18 @@ class TestCLIRecallCommand:
         # Should not have negative scores (which were the bug)
         assert "-0." not in result.output or result.output.count("-0.") == 0
 
+    def test_remember_returns_latest_memory(self, cli_env):
+        """Remember should show the newest active memory."""
+        runner.invoke(app, ["init", "--type", "code"])
+        runner.invoke(app, ["record", "Older CLI memory"])
+        runner.invoke(app, ["record", "Latest CLI memory"])
+
+        result = runner.invoke(app, ["remember"])
+
+        assert result.exit_code == 0
+        assert "Latest Memory" in result.output
+        assert "Latest CLI memory" in result.output
+
 
 class TestCLIListCommands:
     """Test various list commands."""
@@ -388,6 +401,57 @@ class TestCLIListCommands:
         # Check that the goal appears in output (case-insensitive)
         assert "implement feature x" in result.output.lower()
 
+    def test_intent_subcommands_update_close_and_list_by_status(self, cli_env):
+        """Intent subcommands should update and close intents by ID."""
+        runner.invoke(app, ["init", "--type", "code"])
+        runner.invoke(app, ["goal", "Original feature goal", "--priority", "1"])
+
+        from llm_memory import Memory
+
+        memory = Memory()
+        intent_id = memory.intent.get_active()[0]["id"]
+
+        update = runner.invoke(
+            app,
+            [
+                "intent",
+                "update",
+                intent_id,
+                "--description",
+                "Updated feature goal",
+                "--priority",
+                "3",
+            ],
+        )
+        close = runner.invoke(app, ["intent", "close", intent_id])
+        closed = runner.invoke(app, ["intent", "list", "--status", "closed"])
+        active = runner.invoke(app, ["list-intents"])
+
+        assert update.exit_code == 0
+        assert close.exit_code == 0
+        assert closed.exit_code == 0
+        assert active.exit_code == 0
+        assert "Updated feature goal" in closed.output
+        assert "CRITICAL" in closed.output
+        assert "Updated feature goal" not in active.output
+
+    def test_intent_complete_subcommand(self, cli_env):
+        """Intent complete should mark a specific intent completed."""
+        runner.invoke(app, ["init", "--type", "code"])
+        runner.invoke(app, ["goal", "Complete this goal"])
+
+        from llm_memory import Memory
+
+        memory = Memory()
+        intent_id = memory.intent.get_active()[0]["id"]
+
+        complete = runner.invoke(app, ["intent", "complete", intent_id])
+        completed = runner.invoke(app, ["list-intents", "--status", "completed"])
+
+        assert complete.exit_code == 0
+        assert completed.exit_code == 0
+        assert "Complete this goal" in completed.output
+
     def test_list_commands_use_configured_repo(self, cli_env):
         """List commands should not show records from other repos by default."""
         runner.invoke(app, ["init", "--type", "code", "--repo", "repo-a"])
@@ -418,6 +482,32 @@ class TestCLIListCommands:
         assert "Repo B warning" not in warnings.output
         assert "Repo A issue" in issues.output
         assert "Repo B issue" not in issues.output
+
+    def test_decay_preview_commands_show_risk_without_mutating_importance(self, cli_env):
+        """Decay preview should identify old memories without applying decay."""
+        runner.invoke(app, ["init", "--type", "code"])
+
+        from llm_memory import Memory
+
+        memory = Memory()
+        memory_id = memory.record("Old unused memory for decay preview", importance=0.8)
+        with memory._storage._get_db() as conn:
+            conn.execute(
+                "UPDATE memories SET accessed_at = '2020-01-01 00:00:00' WHERE id = ?",
+                (memory_id,),
+            )
+            conn.commit()
+
+        top_level = runner.invoke(app, ["decay-preview", "--halflife-days", "30"])
+        grouped = runner.invoke(app, ["health", "decay-preview", "--halflife-days", "30"])
+        stored = memory._storage.list_memories(status="active", limit=1)[0]
+
+        assert top_level.exit_code == 0
+        assert grouped.exit_code == 0
+        assert "likely_to_decay" in top_level.output
+        assert "Old unused memory" in top_level.output
+        assert "Memory Health" in grouped.output
+        assert stored["importance"] == 0.8
 
 
 class TestCLIContextGeneration:
@@ -510,6 +600,55 @@ class TestCLIEdgeCases:
         result = runner.invoke(app, ["stats"])
         assert result.exit_code == 0
         assert "Total Memories" in result.output
+
+
+class TestCLIDiagnostics:
+    """Test CLI diagnostics commands."""
+
+    def test_doctor_command_json(self, cli_env):
+        """Doctor should emit structured diagnostics JSON."""
+        runner.invoke(app, ["init", "--type", "code"])
+
+        result = runner.invoke(app, ["doctor", "--format", "json"])
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["configured"]["project_type"] == "code"
+        assert payload["storage"]["mode"] in ("local", "client")
+        assert payload["providers"]["embedding"]["configured_provider"] == "noop"
+
+    def test_doctor_command_text(self, cli_env):
+        """Doctor text mode should emit a readable summary."""
+        runner.invoke(app, ["init", "--type", "code"])
+
+        result = runner.invoke(app, ["doctor"])
+        assert result.exit_code == 0
+        assert "LLM Memory Diagnostics" in result.output
+
+    def test_providers_command_json_is_safe_for_secrets(self, cli_env, monkeypatch):
+        """Providers JSON should not print secret values, only presence flags."""
+        runner.invoke(app, ["init", "--type", "code"])
+        monkeypatch.setenv("EMBEDDING_API_KEY", "secret-token")
+
+        result = runner.invoke(app, ["providers", "--format", "json"])
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["embedding"]["credentials"]["api_key_configured"] is True
+        assert "secret-token" not in result.output
+
+    def test_providers_test_command_uses_connectivity(self, cli_env, monkeypatch):
+        """Provider test should run connectivity check for explicit provider."""
+        runner.invoke(app, ["init", "--type", "code"])
+
+        def fake_provider(_config, verify: bool = True):
+            raise RuntimeError("provider request rejected")
+
+        monkeypatch.setattr("llm_memory.core.embeddings.get_embedding_provider", fake_provider)
+
+        result = runner.invoke(app, ["providers", "test", "openai", "--format", "json"])
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["result"]["configured_provider"] == "openai"
+        assert payload["result"]["connected"] is False
 
 
 if __name__ == "__main__":

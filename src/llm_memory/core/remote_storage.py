@@ -185,16 +185,19 @@ class RemoteStorage(BaseStorage):
         except requests.RequestException as e:
             raise self._write_error("set intent", e) from e
 
-    def get_active_intents(self, repo_id: str = None) -> List[Dict[str, Any]]:
-        """Get active intents."""
+    def get_active_intents(
+        self, repo_id: str = None, status: str = "active"
+    ) -> List[Dict[str, Any]]:
+        """Get intents filtered by status."""
         try:
-            params = {}
+            params = {"status": status}
             if repo_id:
                 params["repo_id"] = repo_id
             response = self.session.get(f"{self.server_url}/intents", params=params)
             response.raise_for_status()
-            # Filter for active ones client-side if needed, but endpoint returns list
-            return [i for i in response.json() if i.get("status") == "active"]
+            if status == "all":
+                return response.json()
+            return [i for i in response.json() if i.get("status") == status]
         except requests.RequestException:
             return []
 
@@ -202,6 +205,17 @@ class RemoteStorage(BaseStorage):
         """Mark intent as complete."""
         try:
             response = self.session.post(f"{self.server_url}/intents/{intent_id}/complete")
+            return response.status_code == 200
+        except requests.RequestException:
+            return False
+
+    def update_intent(self, intent_id: str, **kwargs) -> bool:
+        """Update an intent on the remote server."""
+        payload = {key: value for key, value in kwargs.items() if value is not None}
+        if not payload:
+            return False
+        try:
+            response = self.session.patch(f"{self.server_url}/intents/{intent_id}", json=payload)
             return response.status_code == 200
         except requests.RequestException:
             return False
@@ -291,6 +305,14 @@ class RemoteStorage(BaseStorage):
             response = self.session.get(f"{self.server_url}/repos", params=params)
             response.raise_for_status()
             return response.json()
+        except requests.RequestException:
+            return []
+
+    def list_project_ids(self) -> List[str]:
+        try:
+            response = self.session.get(f"{self.server_url}/repos/scopes")
+            response.raise_for_status()
+            return [item["id"] for item in response.json() if item.get("id")]
         except requests.RequestException:
             return []
 

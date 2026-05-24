@@ -16,8 +16,10 @@ Usage:
 """
 
 import json
+import os
+from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import typer
 from rich.console import Console, Group
@@ -27,6 +29,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from llm_memory import Memory, MemoryConfig, __version__
+from llm_memory.config import load_config
 
 app = typer.Typer(
     name="llm-memory", help="Human-inspired memory system for LLMs", no_args_is_help=True
@@ -70,9 +73,444 @@ def _repo_scope(memory: Memory, repo: str = None) -> str:
     return repo or memory.config.repo_id
 
 
+def _parse_cli_datetime(value: Any) -> datetime:
+    """Parse storage timestamps from local or remote backends."""
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    if isinstance(value, str):
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+    return datetime.now()
+
+
+def _priority_label(priority: int) -> str:
+    labels = {0: "LOW", 1: "NORMAL", 2: "HIGH", 3: "CRITICAL"}
+    return labels.get(priority, str(priority))
+
+
+def _intent_table(intents: List[dict], *, title: str = "Intents") -> Table:
+    table = Table(title=title)
+    table.add_column("ID", style="dim", width=10, overflow="ignore")
+    table.add_column("Status", style="green", width=10)
+    table.add_column("Priority", style="cyan", justify="center")
+    table.add_column("Description")
+
+    for intent in intents:
+        priority = int(intent.get("priority", 1) or 0)
+        table.add_row(
+            str(intent["id"])[:10],
+            intent.get("status", "active"),
+            _priority_label(priority),
+            intent["description"],
+        )
+
+    return table
+
+
+def _memory_decay_preview(
+    memory: Memory,
+    *,
+    repo: str = None,
+    layer: str = None,
+    category: str = None,
+    limit: int = 25,
+    halflife_days: int = None,
+    min_importance: float = 0.1,
+) -> list[dict]:
+    """Calculate dry-run decay projections without mutating memories."""
+    effective_halflife_days = max(1, halflife_days or memory.config.decay_halflife_days)
+    min_importance = max(0.0, min(min_importance, 1.0))
+    memories = memory._storage.list_memories(
+        layer=layer,
+        category=category,
+        limit=10000,
+        order_by="accessed_at ASC",
+        repo_id=_repo_scope(memory, repo),
+        status="active",
+    )
+    now = datetime.now()
+    rows = []
+
+    for item in memories:
+        current = float(item.get("importance", 0.5) or 0.0)
+        accessed = _parse_cli_datetime(item.get("accessed_at") or item.get("created_at"))
+        age_days = max(0.0, (now - accessed).total_seconds() / 86400)
+        projected = max(min_importance, current * (0.5 ** (age_days / effective_halflife_days)))
+        decay_amount = max(0.0, current - projected)
+
+        if current <= min_importance + 0.001:
+            risk = "at_floor"
+        elif projected <= min_importance + 0.05 or decay_amount >= 0.2:
+            risk = "likely_to_decay"
+        elif decay_amount >= 0.05:
+            risk = "weakening"
+        else:
+            risk = "stable"
+
+        rows.append(
+            {
+                "id": item["id"],
+                "risk": risk,
+                "current": current,
+                "projected": projected,
+                "drop": decay_amount,
+                "age_days": age_days,
+                "access_count": int(item.get("access_count") or 0),
+                "layer": item.get("layer", "-"),
+                "category": item.get("category", "-"),
+                "content": " ".join(str(item.get("content", "")).split()),
+            }
+        )
+
+    risk_rank = {"likely_to_decay": 0, "weakening": 1, "at_floor": 2, "stable": 3}
+    rows.sort(key=lambda item: (risk_rank[item["risk"]], -item["drop"], item["projected"]))
+    return rows[: max(1, min(limit, 100))]
+
+
+def _format_age_days(days: float) -> str:
+    if days >= 365:
+        return f"{days / 365:.1f}y"
+    return f"{days:.0f}d"
+
+
+def _print_decay_preview(
+    *,
+    repo: str = None,
+    layer: str = None,
+    category: str = None,
+    limit: int = 25,
+    halflife_days: int = None,
+    min_importance: float = 0.1,
+):
+    memory = get_memory()
+    rows = _memory_decay_preview(
+        memory,
+        repo=repo,
+        layer=layer,
+        category=category,
+        limit=limit,
+        halflife_days=halflife_days,
+        min_importance=min_importance,
+    )
+    effective_halflife_days = max(1, halflife_days or memory.config.decay_halflife_days)
+
+    if not rows:
+        console.print("[yellow]No active memories found[/yellow]")
+        return
+
+    console.print(
+        Panel(
+            (
+                f"[bold]Memory decay preview[/bold]\n"
+                f"Half-life: {effective_halflife_days}d | "
+                f"Minimum importance: {min_importance:.2f} | "
+                f"Decay enabled: {memory.config.decay_enabled}"
+            )
+        )
+    )
+
+    table = Table(title="Memory Health")
+    table.add_column("ID", style="dim", width=10, overflow="ignore")
+    table.add_column("Risk", style="yellow", width=17, no_wrap=True)
+    table.add_column("Strength", style="cyan", width=20)
+    table.add_column("Idle", justify="right", width=7)
+    table.add_column("Content")
+
+    for item in rows:
+        content = f"[{item['layer']}] {item['content']}"
+        if len(content) > 80:
+            content = content[:77] + "..."
+        table.add_row(
+            str(item["id"])[:10],
+            item["risk"],
+            f"{item['current']:.2f} -> {item['projected']:.2f} (-{item['drop']:.2f})",
+            _format_age_days(item["age_days"]),
+            content,
+        )
+
+    console.print(table)
+    console.print("\n[bold]Top candidates:[/bold]")
+    for item in rows[:5]:
+        content = item["content"]
+        if len(content) > 120:
+            content = content[:117] + "..."
+        console.print(f"- [{item['risk']}] {str(item['id'])[:10]} {content}")
+
+
+def _latest_memory(
+    memory: Memory,
+    *,
+    repo: str = None,
+    layer: str = None,
+    category: str = None,
+    status: str = "active",
+) -> dict | None:
+    memories = memory._storage.list_memories(
+        layer=layer,
+        category=category,
+        limit=1,
+        order_by="created_at DESC",
+        repo_id=_repo_scope(memory, repo),
+        status=status,
+    )
+    return memories[0] if memories else None
+
+
+def _provider_error_message(provider: str, exc: Exception) -> str:
+    """Return a generic, non-secret provider failure message."""
+    text = str(exc)
+    provider_label = (provider or "embedding").replace("-", " ").title()
+    if "401" in text or "unauthorized" in text.lower():
+        return f"{provider_label} rejected credentials."
+    if "403" in text or "forbidden" in text.lower():
+        return f"{provider_label} denied access."
+    if "timeout" in text.lower():
+        return f"{provider_label} connection timed out."
+    return f"{provider_label} initialization failed."
+
+
+def _embedding_provider_status(
+    config: MemoryConfig, provider: str = None, *, verify: bool = True
+) -> dict:
+    """Build embedding provider diagnostics without leaking secrets."""
+    configured_provider = (provider or config.embedding.provider or "sentence-transformers").lower()
+
+    provider_config = config.embedding.model_copy()
+    provider_config.provider = configured_provider
+
+    diagnostics: dict[str, Any] = {
+        "configured_provider": configured_provider,
+        "effective_provider": configured_provider,
+        "connected": False,
+        "status": "pending",
+        "status_message": "Not tested.",
+        "error": None,
+        "driver_model": None,
+        "dimension": None,
+        "credentials": {
+            "api_key_configured": bool(
+                provider_config.api_key
+                or os.getenv("EMBEDDING_API_KEY")
+                or os.getenv("OPENAI_API_KEY")
+                or os.getenv("OPENROUTER_API_KEY")
+            ),
+            "api_base_set": bool(provider_config.api_base or os.getenv("EMBEDDING_API_BASE")),
+            "api_host_set": bool(os.getenv("OLLAMA_HOST")),
+        },
+        "configured_model": provider_config.model,
+    }
+
+    try:
+        from llm_memory.core.embeddings import get_embedding_provider
+
+        provider_instance = get_embedding_provider(provider_config, verify=verify)
+        effective_provider = getattr(provider_instance, "provider_name", configured_provider)
+        diagnostics["effective_provider"] = effective_provider
+        diagnostics["driver_model"] = getattr(provider_instance, "model", None)
+        diagnostics["dimension"] = getattr(provider_instance, "dimension", None)
+        if effective_provider in {"noop", "none"}:
+            diagnostics["connected"] = False
+            diagnostics["status"] = (
+                "disabled" if configured_provider in {"noop", "none"} else "fallback"
+            )
+            diagnostics["status_message"] = (
+                "Embeddings disabled."
+                if diagnostics["status"] == "disabled"
+                else "Fallback provider in use."
+            )
+        else:
+            diagnostics["connected"] = True
+            diagnostics["status"] = "connected"
+            diagnostics["status_message"] = "Embedding provider connected."
+    except Exception as exc:
+        diagnostics["status"] = "failed"
+        diagnostics["status_message"] = _provider_error_message(configured_provider, exc)
+        diagnostics["error"] = exc.__class__.__name__
+
+    return diagnostics
+
+
+def _provider_report_payload() -> dict[str, Any]:
+    """Collect provider diagnostics using local configuration only."""
+    config = load_config()
+    return {
+        "version": __version__,
+        "configured": {
+            "project_name": config.project_name,
+            "repo_id": config.repo_id,
+            "project_type": config.project_type,
+            "storage_mode": config.storage.mode,
+            "storage_backend": config.storage.backend,
+        },
+        "embedding": _embedding_provider_status(config, provider=None),
+        "storage_path": str(config.storage.data_dir),
+    }
+
+
+def _doctor_payload(verify_providers: bool = True) -> dict[str, Any]:
+    """Collect diagnostics for doctor output."""
+    config = load_config()
+    return {
+        "version": __version__,
+        "configured": {
+            "project_name": config.project_name,
+            "repo_id": config.repo_id,
+            "project_type": config.project_type,
+        },
+        "storage": _storage_doctor_status(config),
+        "providers": {"embedding": _embedding_provider_status(config, verify=verify_providers)},
+    }
+
+
+def _storage_doctor_status(config: MemoryConfig) -> dict[str, Any]:
+    """Collect lightweight storage diagnostics."""
+    status = {
+        "mode": config.storage.mode,
+        "backend": config.storage.backend,
+        "vector_db": config.storage.vector_db,
+        "data_dir": str(config.storage.data_dir),
+    }
+    if config.storage.mode == "client":
+        status["connected"] = None
+        status["status"] = "remote_mode_not_checked"
+        status["status_message"] = "Storage is client mode; diagnostics skip connectivity checks."
+        return status
+
+    try:
+        status_path = Path(config.storage.data_dir)
+        status_path.mkdir(parents=True, exist_ok=True)
+        status["connected"] = True
+        status["status"] = "accessible"
+        status["status_message"] = "Data directory is writable."
+    except Exception as exc:
+        status["connected"] = False
+        status["status"] = "unwritable_data_dir"
+        status["status_message"] = str(exc)
+    return status
+
+
+def _print_provider_payload(payload: dict[str, Any], as_json: bool = False):
+    if as_json:
+        console.print_json(data=payload)
+        return
+
+    embedding = payload["embedding"]
+    table = Table(title="Providers")
+    table.add_column("Layer", style="cyan")
+    table.add_column("Configured", style="green")
+    table.add_column("Effective")
+    table.add_column("Connected")
+    table.add_column("Status")
+    table.add_column("Message")
+
+    table.add_row(
+        "embedding",
+        embedding["configured_provider"],
+        embedding["effective_provider"],
+        "yes" if embedding["connected"] else "no",
+        embedding["status"],
+        embedding["status_message"],
+    )
+
+    console.print(table)
+
+    if embedding["status"] not in {"connected", "disabled", "fallback"}:
+        maybe_error = embedding.get("error")
+        if maybe_error:
+            console.print(f"[yellow]Error[/yellow]: {maybe_error}")
+
+
+def _print_doctor_payload(payload: dict[str, Any], as_json: bool = False):
+    if as_json:
+        # Ensure rich JSON output is stable and non-serializable fields are dropped.
+        console.print_json(data=payload)
+        return
+
+    console.print("[bold]LLM Memory Diagnostics[/bold]")
+    configured = payload["configured"]
+    console.print(f"Project: {configured['project_name']} ({configured['project_type']})")
+    if configured["repo_id"]:
+        console.print(f"Repo: {configured['repo_id']}")
+
+    storage = payload["storage"]
+    console.print(
+        f"Storage: mode={storage['mode']}, backend={storage['backend']}, path={storage['data_dir']}"
+    )
+    console.print(
+        f"Storage status: {storage['status']} ({storage.get('status_message')})"
+    )
+
+    embedding = payload["providers"]["embedding"]
+    console.print(
+        f"Embedding: configured={embedding['configured_provider']}, "
+        f"effective={embedding['effective_provider']}, connected={embedding['connected']}"
+    )
+    console.print(f"Embedding status: {embedding['status']} - {embedding['status_message']}")
+
+
 # =============================================================================
 # Init Command
 # =============================================================================
+
+
+@app.command()
+def doctor(
+    output_format: str = typer.Option(
+        "text", "--format", "-f", help="Output format: text or json"
+    ),
+):
+    """Run local diagnostics for storage and providers."""
+    payload = _doctor_payload(verify_providers=True)
+    as_json = output_format.lower() == "json"
+    _print_doctor_payload(payload, as_json=as_json)
+
+
+providers_app = typer.Typer(help="Provider diagnostics")
+app.add_typer(providers_app, name="providers")
+
+
+@providers_app.callback(invoke_without_command=True)
+def providers(
+    ctx: typer.Context,
+    output_format: str = typer.Option(
+        "text", "--format", "-f", help="Output format: text or json"
+    ),
+):
+    """Show configured provider statuses."""
+    if ctx.invoked_subcommand:
+        return
+    payload = _provider_report_payload()
+    as_json = output_format.lower() == "json"
+    _print_provider_payload(payload, as_json=as_json)
+
+
+@providers_app.command("test")
+def providers_test(
+    provider: str = typer.Argument(..., help="Provider name to test"),
+    output_format: str = typer.Option(
+        "text", "--format", "-f", help="Output format: text or json"
+    ),
+):
+    """Test a specific provider configuration."""
+    config = load_config()
+    payload = {"provider": provider.lower(), "result": _embedding_provider_status(config, provider)}
+    as_json = output_format.lower() == "json"
+
+    if as_json:
+        console.print_json(data=payload)
+    else:
+        result = payload["result"]
+        console.print(f"Provider test: {provider}")
+        console.print(f"Configured: {result['configured_provider']}")
+        console.print(f"Effective: {result['effective_provider']}")
+        console.print(f"Connected: {'yes' if result['connected'] else 'no'}")
+        console.print(f"Status: {result['status']}")
+        console.print(f"Message: {result['status_message']}")
+        if result["error"]:
+            console.print(f"Error: {result['error']}")
+
+    if not payload["result"]["connected"]:
+        raise typer.Exit(1)
+
 
 
 @app.command()
@@ -223,6 +661,9 @@ def issue(
 # Intent Commands
 # =============================================================================
 
+intent_app = typer.Typer(help="Intent lifecycle management")
+app.add_typer(intent_app, name="intent")
+
 
 @app.command()
 def goal(
@@ -273,6 +714,96 @@ def done():
     console.print(f"[green]Cleared {cleared} task(s)[/green]")
 
 
+@intent_app.command("list")
+def intent_list(
+    repo: str = typer.Option(None, "--repo", "-r", help="Filter by repository"),
+    status: str = typer.Option(
+        "active",
+        "--status",
+        help="Filter by status: active, completed, closed, or all",
+    ),
+):
+    """List intents by status."""
+    if status not in {"active", "completed", "closed", "all"}:
+        raise typer.BadParameter("status must be active, completed, closed, or all")
+
+    memory = get_memory()
+    intents = memory._storage.get_active_intents(
+        repo_id=_repo_scope(memory, repo),
+        status=status,
+    )
+
+    if not intents:
+        console.print(f"[yellow]No {status} intents[/yellow]")
+        return
+
+    console.print(_intent_table(intents, title=f"{status.title()} Intents"))
+
+
+@intent_app.command("update")
+def intent_update(
+    intent_id: str = typer.Argument(..., help="Intent ID to update"),
+    description: Optional[str] = typer.Option(
+        None, "--description", "-d", help="Updated description"
+    ),
+    priority: Optional[int] = typer.Option(
+        None,
+        "--priority",
+        "-p",
+        help="Priority (0=low, 1=normal, 2=high, 3=critical)",
+    ),
+    status: Optional[str] = typer.Option(
+        None,
+        "--status",
+        help="Set status: active, completed, or closed",
+    ),
+):
+    """Update an intent by ID."""
+    if status is not None and status not in {"active", "completed", "closed"}:
+        raise typer.BadParameter("status must be active, completed, or closed")
+
+    if description is None and priority is None and status is None:
+        console.print("[yellow]No fields provided to update[/yellow]")
+        raise typer.Exit(code=1)
+
+    memory = get_memory()
+    updated = memory.intent.update(
+        intent_id,
+        description=description,
+        priority=priority,
+        status=status,
+    )
+    if not updated:
+        console.print(f"[red]Intent not found:[/red] {intent_id}")
+        raise typer.Exit(code=1)
+
+    console.print(f"[green]Intent updated:[/green] {intent_id}")
+
+
+@intent_app.command("complete")
+def intent_complete(intent_id: str = typer.Argument(..., help="Intent ID to complete")):
+    """Mark an intent as completed by ID."""
+    memory = get_memory()
+    completed = memory.intent.complete(intent_id)
+    if not completed:
+        console.print(f"[red]Intent not found:[/red] {intent_id}")
+        raise typer.Exit(code=1)
+
+    console.print(f"[green]Intent completed:[/green] {intent_id}")
+
+
+@intent_app.command("close")
+def intent_close(intent_id: str = typer.Argument(..., help="Intent ID to close")):
+    """Close an intent by ID without marking it completed."""
+    memory = get_memory()
+    closed = memory.intent.close(intent_id)
+    if not closed:
+        console.print(f"[red]Intent not found:[/red] {intent_id}")
+        raise typer.Exit(code=1)
+
+    console.print(f"[green]Intent closed:[/green] {intent_id}")
+
+
 # =============================================================================
 # Search Commands
 # =============================================================================
@@ -284,12 +815,13 @@ def recall(
     limit: int = typer.Option(10, "--limit", "-n", help="Maximum results"),
     layer: str = typer.Option(None, "--layer", "-l", help="Filter by layer"),
     repo: str = typer.Option(None, "--repo", "-r", help="Filter by repository"),
+    status: str = typer.Option("active", "--status", help="Filter by memory status"),
 ):
     """Search across all memories."""
     memory = get_memory()
 
     layers = [layer] if layer else None
-    results = memory.recall(query, layers=layers, limit=limit, repo_id=repo)
+    results = memory.recall(query, layers=layers, limit=limit, repo_id=repo, status=status)
 
     if not results:
         console.print("[yellow]No results found[/yellow]")
@@ -311,6 +843,45 @@ def recall(
 
         table.add_row(r["layer"], r.get("category", "-"), content, score)
 
+    console.print(table)
+
+
+@app.command()
+def remember(
+    repo: str = typer.Option(None, "--repo", "-r", help="Filter by repository"),
+    layer: str = typer.Option(None, "--layer", "-l", help="Filter by layer"),
+    category: str = typer.Option(None, "--category", "-c", help="Filter by category"),
+    status: str = typer.Option("active", "--status", help="Filter by memory status"),
+    full: bool = typer.Option(False, "--full", help="Show full content"),
+):
+    """Recall the latest memory in the current repository scope."""
+    memory = get_memory()
+    latest = _latest_memory(
+        memory,
+        repo=repo,
+        layer=layer,
+        category=category,
+        status=status,
+    )
+
+    if latest is None:
+        console.print("[yellow]No memories found[/yellow]")
+        return
+
+    content = latest["content"].replace("\n", " ")
+    if not full and len(content) > 200:
+        content = content[:197] + "..."
+
+    table = Table(title="Latest Memory")
+    table.add_column("Field", style="cyan")
+    table.add_column("Value")
+    table.add_row("ID", latest["id"])
+    table.add_row("Layer", latest.get("layer", "-"))
+    table.add_row("Category", latest.get("category", "-"))
+    table.add_row("Repo", str(latest.get("repo_id") or "-"))
+    table.add_row("Created", str(latest.get("created_at", "-")).replace("T", " "))
+    table.add_row("Importance", f"{float(latest.get('importance', 0.5) or 0.0):.2f}")
+    table.add_row("Content", content)
     console.print(table)
 
 
@@ -422,6 +993,36 @@ def decay():
     console.print(f"[green]Decayed {affected} memories[/green]")
 
 
+@app.command("decay-preview")
+def decay_preview(
+    repo: str = typer.Option(None, "--repo", "-r", help="Filter by repository"),
+    layer: str = typer.Option(None, "--layer", "-l", help="Filter by memory layer"),
+    category: str = typer.Option(None, "--category", "-c", help="Filter by category"),
+    limit: int = typer.Option(25, "--limit", "-n", min=1, max=100, help="Max results"),
+    halflife_days: Optional[int] = typer.Option(
+        None,
+        "--halflife-days",
+        help="Decay half-life override in days",
+    ),
+    min_importance: float = typer.Option(
+        0.1,
+        "--min-importance",
+        min=0.0,
+        max=1.0,
+        help="Minimum projected importance floor",
+    ),
+):
+    """Preview memory strength and decay risk without mutating memories."""
+    _print_decay_preview(
+        repo=repo,
+        layer=layer,
+        category=category,
+        limit=limit,
+        halflife_days=halflife_days,
+        min_importance=min_importance,
+    )
+
+
 @app.command()
 def dedup(
     layer: str = typer.Option("episodic", "--layer", "-l", help="Layer to check"),
@@ -455,6 +1056,38 @@ def dedup(
 
 quality_app = typer.Typer(help="Memory quality management")
 app.add_typer(quality_app, name="quality")
+health_app = typer.Typer(help="Memory health and lifecycle previews")
+app.add_typer(health_app, name="health")
+
+
+@health_app.command("decay-preview")
+def health_decay_preview(
+    repo: str = typer.Option(None, "--repo", "-r", help="Filter by repository"),
+    layer: str = typer.Option(None, "--layer", "-l", help="Filter by memory layer"),
+    category: str = typer.Option(None, "--category", "-c", help="Filter by category"),
+    limit: int = typer.Option(25, "--limit", "-n", min=1, max=100, help="Max results"),
+    halflife_days: Optional[int] = typer.Option(
+        None,
+        "--halflife-days",
+        help="Decay half-life override in days",
+    ),
+    min_importance: float = typer.Option(
+        0.1,
+        "--min-importance",
+        min=0.0,
+        max=1.0,
+        help="Minimum projected importance floor",
+    ),
+):
+    """Preview memory strength and decay risk without mutating memories."""
+    _print_decay_preview(
+        repo=repo,
+        layer=layer,
+        category=category,
+        limit=limit,
+        halflife_days=halflife_days,
+        min_importance=min_importance,
+    )
 
 
 @quality_app.command("conflicts")
@@ -513,6 +1146,7 @@ def list_memories(
     limit: int = typer.Option(20, "--limit", "-n", help="Max results"),
     full: bool = typer.Option(False, "--full", help="Show full content"),
     repo: str = typer.Option(None, "--repo", "-r", help="Filter by repository"),
+    status: str = typer.Option("active", "--status", help="Filter by memory status"),
 ):
     """List recent memories."""
     from rich.box import ROUNDED
@@ -527,6 +1161,7 @@ def list_memories(
         limit=limit,
         order_by="created_at DESC",
         repo_id=_repo_scope(memory, repo),
+        status=status,
     )
 
     if not memories:
@@ -557,26 +1192,29 @@ def list_memories(
 
 
 @app.command()
-def list_intents(repo: str = typer.Option(None, "--repo", "-r", help="Filter by repository")):
-    """List active intents/goals."""
+def list_intents(
+    repo: str = typer.Option(None, "--repo", "-r", help="Filter by repository"),
+    status: str = typer.Option(
+        "active",
+        "--status",
+        help="Filter by status: active, completed, closed, or all",
+    ),
+):
+    """List intents/goals."""
+    if status not in {"active", "completed", "closed", "all"}:
+        raise typer.BadParameter("status must be active, completed, closed, or all")
+
     memory = get_memory()
-    intents = memory.intent.get_active(repo_id=_repo_scope(memory, repo))
+    intents = memory._storage.get_active_intents(
+        repo_id=_repo_scope(memory, repo),
+        status=status,
+    )
 
     if not intents:
-        console.print("[yellow]No active intents[/yellow]")
+        console.print(f"[yellow]No {status} intents[/yellow]")
         return
 
-    table = Table(title="Active Intents")
-    table.add_column("Priority", style="cyan", justify="center")
-    table.add_column("Description")
-
-    priority_labels = {0: "LOW", 1: "NORMAL", 2: "HIGH", 3: "CRITICAL"}
-
-    for i in intents:
-        p = priority_labels.get(i.get("priority", 1), str(i.get("priority")))
-        table.add_row(p, i["description"])
-
-    console.print(table)
+    console.print(_intent_table(intents, title=f"{status.title()} Intents"))
 
 
 @app.command()

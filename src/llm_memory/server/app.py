@@ -19,13 +19,44 @@ from llm_memory import __version__
 from llm_memory.config import load_config
 from llm_memory.core.neo4j_storage import Neo4jStorage
 from llm_memory.core.storage import LocalStorage
-from llm_memory.server.routers import intents, memories, relationships, repositories, teams
+from llm_memory.server.routers import (
+    ai,
+    diagnostics,
+    intents,
+    memories,
+    platform,
+    quality,
+    relationships,
+    repositories,
+    teams,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 config = load_config()
+
+
+def describe_embedding_connection_error(provider: str, error: Exception) -> tuple[str, str]:
+    """Return a non-secret error class and user-facing connection message."""
+    status_code = getattr(error, "status_code", None)
+    provider_label = provider.replace("-", " ").title()
+    if status_code == 401:
+        return (
+            "HTTP 401",
+            f"{provider_label} rejected the configured credentials; check the API key.",
+        )
+    if status_code == 403:
+        return (
+            "HTTP 403",
+            f"{provider_label} denied access for the configured credentials.",
+        )
+
+    return (
+        error.__class__.__name__,
+        f"{provider} embedding driver failed to connect.",
+    )
 
 
 def get_cors_options(config):
@@ -40,6 +71,12 @@ def get_cors_options(config):
 
 def get_server_embedding_provider(config):
     """Build the configured embedding provider for API/server storage."""
+    provider, _ = get_server_embedding_runtime(config)
+    return provider
+
+
+def get_server_embedding_runtime(config):
+    """Build the server embedding provider and a non-secret connection status."""
     if (
         config.embedding.provider == "sentence-transformers"
         and "LLM_MEMORY_EMBEDDING_PROVIDER" not in os.environ
@@ -48,13 +85,45 @@ def get_server_embedding_provider(config):
             "Server storage is using text fallback until an embedding provider is explicitly "
             "configured with LLM_MEMORY_EMBEDDING_PROVIDER."
         )
-        return None
+        return None, {
+            "embedding_driver_status": "not_configured",
+            "embedding_driver_connected": False,
+            "embedding_last_checked_at": datetime.now().isoformat(),
+            "embedding_status_message": (
+                "No server embedding driver is configured; using text fallback."
+            ),
+        }
 
     try:
         from llm_memory.core.embeddings import get_embedding_provider
 
-        return get_embedding_provider(config.embedding)
+        provider = get_embedding_provider(config.embedding, verify=True)
+        provider_name = getattr(provider, "provider_name", None)
+        if provider_name in {"noop", "none"}:
+            configured_provider = config.embedding.provider
+            status = "disabled" if configured_provider in {"noop", "none"} else "fallback"
+            message = (
+                "Embeddings are disabled."
+                if status == "disabled"
+                else "No embedding driver connected; using noop embeddings."
+            )
+            return provider, {
+                "embedding_driver_status": status,
+                "embedding_driver_connected": False,
+                "embedding_last_checked_at": datetime.now().isoformat(),
+                "embedding_status_message": message,
+            }
+
+        return provider, {
+            "embedding_driver_status": "connected",
+            "embedding_driver_connected": True,
+            "embedding_last_checked_at": datetime.now().isoformat(),
+            "embedding_status_message": "Embedding driver connected.",
+        }
     except Exception as e:
+        error_name, error_message = describe_embedding_connection_error(
+            config.embedding.provider, e
+        )
         logger.warning(
             "Failed to initialize configured embedding provider %r for server storage; "
             "falling back to noop embeddings: %s",
@@ -64,9 +133,21 @@ def get_server_embedding_provider(config):
         try:
             from llm_memory.core.embeddings import NoOpProvider
 
-            return NoOpProvider()
+            return NoOpProvider(), {
+                "embedding_driver_status": "failed",
+                "embedding_driver_connected": False,
+                "embedding_last_checked_at": datetime.now().isoformat(),
+                "embedding_status_message": f"{error_message} Using noop embeddings.",
+                "embedding_connection_error": error_name,
+            }
         except Exception:
-            return None
+            return None, {
+                "embedding_driver_status": "failed",
+                "embedding_driver_connected": False,
+                "embedding_last_checked_at": datetime.now().isoformat(),
+                "embedding_status_message": error_message,
+                "embedding_connection_error": error_name,
+            }
 
 
 def get_server_embedding_fn(config):
@@ -75,20 +156,38 @@ def get_server_embedding_fn(config):
     return provider.embed if provider is not None else None
 
 
-def get_runtime_status(config, embedding_provider=None):
+def get_runtime_status(config, embedding_provider=None, embedding_status=None):
     """Return non-secret runtime configuration for readiness and dashboard views."""
     effective_provider = getattr(embedding_provider, "provider_name", None)
     effective_model = getattr(embedding_provider, "model", None)
-    return {
+    if embedding_status is None:
+        if effective_provider in {"noop", "none"}:
+            embedding_status = {
+                "embedding_driver_status": "disabled",
+                "embedding_driver_connected": False,
+            }
+        elif embedding_provider is None:
+            embedding_status = {
+                "embedding_driver_status": "not_configured",
+                "embedding_driver_connected": False,
+            }
+        else:
+            embedding_status = {
+                "embedding_driver_status": "connected",
+                "embedding_driver_connected": True,
+            }
+    status = {
         "storage_backend": config.storage.backend,
         "storage_mode": config.storage.mode,
         "vector_db": config.storage.vector_db,
         "embedding_provider": config.embedding.provider,
-        "embedding_effective_provider": effective_provider or config.embedding.provider,
+        "embedding_effective_provider": effective_provider,
         "embedding_model": effective_model or config.embedding.model,
         "auth_enabled": config.server.auth_enabled,
         "repo_id": config.repo_id,
     }
+    status.update(embedding_status)
+    return status
 
 
 cors_options = get_cors_options(config)
@@ -141,7 +240,7 @@ app.add_middleware(
 )
 
 # Initialize Storage
-embedding_provider = get_server_embedding_provider(config)
+embedding_provider, embedding_runtime_status = get_server_embedding_runtime(config)
 embedding_fn = embedding_provider.embed if embedding_provider is not None else None
 effective_storage_backend = "sqlite"
 if config.storage.backend == "neo4j":
@@ -164,13 +263,19 @@ else:
 # Save storage to app state for access in routers
 app.state.storage = storage
 app.state.storage_backend = effective_storage_backend
+app.state.embedding_provider = embedding_provider
+app.state.embedding_runtime_status = embedding_runtime_status
 
 # Include Routers
 app.include_router(memories.router)
 app.include_router(intents.router)
+app.include_router(ai.router)
+app.include_router(quality.router)
+app.include_router(platform.router)
 app.include_router(repositories.router)
 app.include_router(teams.router)
 app.include_router(relationships.router)
+app.include_router(diagnostics.router)
 
 # Optional routers for Phase 3.4+ (to be implemented)
 try:
@@ -197,7 +302,7 @@ async def root(repo_id: str = None):
         "timestamp": datetime.now().isoformat(),
         "stats": stats,
     }
-    runtime = get_runtime_status(config, embedding_provider)
+    runtime = get_runtime_status(config, embedding_provider, embedding_runtime_status)
     runtime["storage_backend"] = app.state.storage_backend
     response.update(runtime)
     response.update(stats)
@@ -236,7 +341,7 @@ async def readyz():
         "dashboard_static_available": dashboard_static_available,
         "timestamp": datetime.now().isoformat(),
     }
-    runtime = get_runtime_status(config, embedding_provider)
+    runtime = get_runtime_status(config, embedding_provider, embedding_runtime_status)
     runtime["storage_backend"] = app.state.storage_backend
     payload.update(runtime)
 

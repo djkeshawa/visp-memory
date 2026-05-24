@@ -119,3 +119,22 @@ def test_explicit_openai_uses_provider_default_when_config_model_is_local_defaul
 
     assert provider.provider_name == "openai"
     assert provider.model == "text-embedding-3-small"
+
+
+def test_explicit_openrouter_can_verify_connection(monkeypatch):
+    openai_client = Mock()
+    openai_client.embeddings.create.return_value = SimpleNamespace(
+        data=[SimpleNamespace(embedding=[0.1, 0.2, 0.3])]
+    )
+    openai_module = SimpleNamespace(OpenAI=Mock(return_value=openai_client))
+    monkeypatch.setitem(sys.modules, "openai", openai_module)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+
+    config = EmbeddingConfig(provider="openrouter")
+    provider = get_embedding_provider(config, verify=True)
+
+    assert provider.provider_name == "openrouter"
+    assert provider.dimension == 3
+    openai_client.embeddings.create.assert_called_once_with(
+        input="test", model="openai/text-embedding-3-small"
+    )

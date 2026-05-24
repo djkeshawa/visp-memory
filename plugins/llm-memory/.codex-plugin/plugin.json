@@ -1,0 +1,25 @@
+{
+  "name": "llm-memory",
+  "version": "0.1.0",
+  "description": "Local-first Codex integration for LLM Memory recall, capture, diagnostics, and maintenance.",
+  "author": {
+    "name": "LLM Memory"
+  },
+  "license": "MIT",
+  "keywords": ["memory", "codex", "recall", "local-first"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "LLM Memory",
+    "shortDescription": "Use project memory directly from Codex.",
+    "longDescription": "Local-first Codex workflows for recalling project context, capturing decisions, running diagnostics, and maintaining LLM Memory without requiring cloud AI credentials.",
+    "developerName": "LLM Memory",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": [
+      "Recall memory for this repo",
+      "Capture this coding session",
+      "Run LLM Memory diagnostics"
+    ],
+    "brandColor": "#2563EB"
+  }
+}

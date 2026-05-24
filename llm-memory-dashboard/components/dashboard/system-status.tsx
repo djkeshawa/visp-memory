@@ -31,12 +31,10 @@ export function SystemStatus({ status: initialStatus }: SystemStatusProps) {
   const checkStatus = async () => {
     try {
       const runtime = await getRuntimeStatus()
-      const effectiveEmbedding = runtime.embeddingEffectiveProvider || runtime.embeddingProvider
       setStatus({
         apiServer: "online",
         vectorDatabase: runtime.storageReady === false ? "offline" : "ready",
-        embeddings:
-          effectiveEmbedding === "noop" || effectiveEmbedding === "none" ? "inactive" : "active",
+        embeddings: embeddingHealthStatus(runtime),
         codexMcp: "available",
         runtime,
       })
@@ -89,9 +87,28 @@ export function SystemStatus({ status: initialStatus }: SystemStatusProps) {
               status.runtime.embeddingProvider ||
               "unknown"}
           </div>
+          {status.runtime.embeddingStatusMessage ? (
+            <div>Embedding status: {status.runtime.embeddingStatusMessage}</div>
+          ) : null}
+          {status.runtime.embeddingConnectionError ? (
+            <div>Embedding error: {status.runtime.embeddingConnectionError}</div>
+          ) : null}
           <div>Repo: {status.runtime.repoId || "unscoped"}</div>
         </div>
       ) : null}
     </div>
   )
+}
+
+function embeddingHealthStatus(runtime: NonNullable<SystemStatusType["runtime"]>) {
+  if (runtime.embeddingDriverConnected === true) return "active"
+
+  if (
+    runtime.embeddingDriverStatus === "failed" ||
+    runtime.embeddingDriverStatus === "fallback"
+  ) {
+    return "offline"
+  }
+
+  return "inactive"
 }

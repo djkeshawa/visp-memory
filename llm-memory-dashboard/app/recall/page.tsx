@@ -8,9 +8,11 @@ import { SearchSuggestions } from "@/components/recall/search-suggestions"
 import { SearchResults } from "@/components/recall/search-results"
 import { describeApiError, searchMemories } from "@/lib/api"
 import { pageTransition } from "@/lib/animations"
+import { useSelectedProjectId } from "@/lib/project-selection"
 import type { Memory } from "@/lib/types"
 
 function RecallContent() {
+  const selectedRepoId = useSelectedProjectId()
   const [query, setQuery] = useState("")
   const [results, setResults] = useState<Memory[] | null>(null)
   const [isLoading, setIsLoading] = useState(false)
@@ -21,7 +23,7 @@ function RecallContent() {
     setIsLoading(true)
 
     try {
-      const searchResults = await searchMemories(searchQuery)
+      const searchResults = await searchMemories(searchQuery, 10, selectedRepoId)
       setResults(searchResults)
       setErrorMessage(null)
     } catch (error) {

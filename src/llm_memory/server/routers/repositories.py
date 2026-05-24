@@ -11,7 +11,12 @@ from llm_memory.core.repository import (
     RepositoryManager,
 )
 from llm_memory.server.auth import UserContext, get_current_user
-from llm_memory.server.schemas import DependencyCreate, RepositoryCreate, RepositoryResponse
+from llm_memory.server.schemas import (
+    DependencyCreate,
+    ProjectScopeResponse,
+    RepositoryCreate,
+    RepositoryResponse,
+)
 
 router = APIRouter(prefix="/repos", tags=["repositories"])
 
@@ -112,6 +117,33 @@ async def list_repositories(
             "created_at": r.created_at or datetime.now(),
         }
         for r in repos
+    ]
+
+
+@router.get("/scopes", response_model=List[ProjectScopeResponse])
+async def list_project_scopes(request: Request, user: UserContext = Depends(get_current_user)):
+    """List repository/project scopes available for dashboard filtering."""
+    storage = request.app.state.storage
+    repo_mgr = RepositoryManager(storage)
+    if user.is_admin:
+        repos = repo_mgr.list_all()
+    elif not user.team_id:
+        repos = []
+    else:
+        repos = repo_mgr.list_all(team_id=user.team_id)
+    repo_by_id = {repo.id: repo for repo in repos}
+
+    project_ids = set(repo_by_id)
+    if user.is_admin and hasattr(storage, "list_project_ids"):
+        project_ids.update(storage.list_project_ids())
+
+    return [
+        {
+            "id": project_id,
+            "name": repo_by_id[project_id].name if project_id in repo_by_id else project_id,
+            "registered": project_id in repo_by_id,
+        }
+        for project_id in sorted(project_ids)
     ]
 
 

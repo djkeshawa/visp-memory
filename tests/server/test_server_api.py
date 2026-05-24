@@ -103,6 +103,30 @@ async def test_readyz_returns_503_when_storage_check_fails(client, tmp_path, mon
 
 
 @pytest.mark.asyncio
+async def test_project_scopes_include_registered_and_memory_repo_ids(client):
+    headers = {"X-API-KEY": "test_key"}
+    await client.post(
+        "/repos",
+        json={"id": "registered-repo", "name": "Registered Repo"},
+        headers=headers,
+    )
+    await client.post(
+        "/memories",
+        json={"content": "Repo scoped memory", "repo_id": "memory-repo"},
+        headers=headers,
+    )
+
+    response = await client.get("/repos/scopes", headers=headers)
+
+    assert response.status_code == 200
+    scopes = {scope["id"]: scope for scope in response.json()}
+    assert scopes["registered-repo"]["name"] == "Registered Repo"
+    assert scopes["registered-repo"]["registered"] is True
+    assert scopes["memory-repo"]["name"] == "memory-repo"
+    assert scopes["memory-repo"]["registered"] is False
+
+
+@pytest.mark.asyncio
 async def test_favicon_head_does_not_error(client):
     response = await client.head("/favicon.ico")
     assert response.status_code == 200
@@ -242,6 +266,214 @@ async def test_list_memories_filters_by_layer_and_category(client):
 
 
 @pytest.mark.asyncio
+async def test_remember_returns_latest_visible_active_memory(client):
+    headers = {"X-API-KEY": "test_key"}
+    old_response = await client.post(
+        "/memories",
+        json={"content": "Older memory", "repo_id": "repo-a"},
+        headers=headers,
+    )
+    latest_response = await client.post(
+        "/memories",
+        json={"content": "Latest memory to remember", "repo_id": "repo-a"},
+        headers=headers,
+    )
+    archived_response = await client.post(
+        "/memories",
+        json={"content": "Archived newest memory", "repo_id": "repo-a"},
+        headers=headers,
+    )
+    other_repo_response = await client.post(
+        "/memories",
+        json={"content": "Other repo latest memory", "repo_id": "repo-b"},
+        headers=headers,
+    )
+    assert old_response.status_code == 200
+    assert latest_response.status_code == 200
+    assert archived_response.status_code == 200
+    assert other_repo_response.status_code == 200
+
+    with sqlite3.connect(app.state.storage.db_path) as conn:
+        conn.execute(
+            "UPDATE memories SET created_at = '2020-01-01 00:00:00' WHERE id = ?",
+            (old_response.json()["id"],),
+        )
+        conn.execute(
+            "UPDATE memories SET created_at = '2030-01-01 00:00:00' WHERE id = ?",
+            (latest_response.json()["id"],),
+        )
+        conn.execute(
+            """
+            UPDATE memories
+            SET created_at = '2031-01-01 00:00:00', status = 'archived'
+            WHERE id = ?
+            """,
+            (archived_response.json()["id"],),
+        )
+        conn.execute(
+            "UPDATE memories SET created_at = '2032-01-01 00:00:00' WHERE id = ?",
+            (other_repo_response.json()["id"],),
+        )
+        conn.commit()
+
+    response = await client.get("/remember?repo_id=repo-a", headers=headers)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == latest_response.json()["id"]
+    assert data["content"] == "Latest memory to remember"
+
+
+@pytest.mark.asyncio
+async def test_archived_memory_is_hidden_from_default_list_and_recall(client):
+    headers = {"X-API-KEY": "test_key"}
+    create_response = await client.post(
+        "/memories",
+        json={"content": "Archive target memory", "layer": "episodic"},
+        headers=headers,
+    )
+    assert create_response.status_code == 200
+    mem_id = create_response.json()["id"]
+    assert create_response.json()["status"] == "active"
+
+    patch_response = await client.patch(
+        f"/memories/{mem_id}",
+        json={"status": "archived"},
+        headers=headers,
+    )
+    assert patch_response.status_code == 200
+
+    list_response = await client.get("/memories", headers=headers)
+    assert list_response.status_code == 200
+    assert all(memory["id"] != mem_id for memory in list_response.json())
+
+    archived_response = await client.get("/memories?status=archived", headers=headers)
+    assert archived_response.status_code == 200
+    archived = archived_response.json()
+    assert [memory["id"] for memory in archived] == [mem_id]
+    assert archived[0]["archived_at"] is not None
+
+    recall_response = await client.post(
+        "/recall",
+        json={"query": "Archive target memory", "limit": 10},
+        headers=headers,
+    )
+    assert recall_response.status_code == 200
+    assert all(memory["id"] != mem_id for memory in recall_response.json())
+
+
+@pytest.mark.asyncio
+async def test_quality_duplicates_are_repo_scoped_and_exclude_archived(client):
+    headers = {"X-API-KEY": "test_key"}
+    duplicate = "Repeatable duplicate memory"
+    first = await client.post(
+        "/memories",
+        json={"content": duplicate, "repo_id": "repo-a"},
+        headers=headers,
+    )
+    second = await client.post(
+        "/memories",
+        json={"content": duplicate.lower(), "repo_id": "repo-a"},
+        headers=headers,
+    )
+    archived = await client.post(
+        "/memories",
+        json={"content": duplicate, "repo_id": "repo-a"},
+        headers=headers,
+    )
+    await client.post(
+        "/memories",
+        json={"content": duplicate, "repo_id": "repo-b"},
+        headers=headers,
+    )
+    await client.patch(
+        f"/memories/{archived.json()['id']}",
+        json={"status": "archived"},
+        headers=headers,
+    )
+
+    response = await client.get("/quality/duplicates?repo_id=repo-a", headers=headers)
+
+    assert response.status_code == 200
+    candidates = response.json()["candidates"]
+    assert len(candidates) == 1
+    assert set(candidates[0]["ids"]) == {first.json()["id"], second.json()["id"]}
+
+
+@pytest.mark.asyncio
+async def test_quality_decay_preview_indicates_memories_that_would_decay(client):
+    headers = {"X-API-KEY": "test_key"}
+    old_response = await client.post(
+        "/memories",
+        json={"content": "Old unused memory", "repo_id": "repo-a", "importance": 0.8},
+        headers=headers,
+    )
+    recent_response = await client.post(
+        "/memories",
+        json={"content": "Recent stable memory", "repo_id": "repo-a", "importance": 0.7},
+        headers=headers,
+    )
+    assert old_response.status_code == 200
+    assert recent_response.status_code == 200
+
+    old_id = old_response.json()["id"]
+    recent_id = recent_response.json()["id"]
+    with app.state.storage._get_db() as conn:
+        conn.execute(
+            "UPDATE memories SET accessed_at = '2020-01-01 00:00:00' WHERE id = ?",
+            (old_id,),
+        )
+        conn.commit()
+
+    response = await client.get(
+        "/quality/decay-preview?repo_id=repo-a&halflife_days=30&limit=10",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["halflife_days"] == 30
+    candidates = {item["memory_id"]: item for item in data["candidates"]}
+    assert candidates[old_id]["risk"] == "likely_to_decay"
+    assert candidates[old_id]["projected_importance"] < candidates[old_id]["current_importance"]
+    assert candidates[old_id]["decay_amount"] > candidates[recent_id]["decay_amount"]
+
+
+@pytest.mark.asyncio
+async def test_audit_log_records_memory_state_changes_without_secrets(client):
+    headers = {"X-API-KEY": "test_key"}
+    create_response = await client.post(
+        "/memories",
+        json={
+            "content": "Audited memory",
+            "repo_id": "audit-repo",
+            "metadata": {"api_key": "secret-value", "safe": "visible"},
+        },
+        headers=headers,
+    )
+    mem_id = create_response.json()["id"]
+    await client.patch(
+        f"/memories/{mem_id}",
+        json={"status": "archived"},
+        headers=headers,
+    )
+    await client.delete(f"/memories/{mem_id}", headers=headers)
+
+    response = await client.get(
+        "/platform/audit-log?repo_id=audit-repo",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    events = response.json()
+    event_types = [event["event_type"] for event in events]
+    assert event_types == ["memory.deleted", "memory.archived", "memory.created"]
+    assert all(event["actor_id"] == "api_key_user" for event in events)
+    assert all(event["repo_id"] == "audit-repo" for event in events)
+    assert "secret-value" not in str(events)
+
+
+@pytest.mark.asyncio
 async def test_intents_endpoint(client):
     headers = {"X-API-KEY": "test_key"}
     response = await client.get("/intents", headers=headers)
@@ -281,6 +513,43 @@ async def test_complete_intent_endpoint_marks_intent_inactive(client):
     list_response = await client.get("/intents", headers=headers)
     assert list_response.status_code == 200
     assert all(intent["id"] != intent_id for intent in list_response.json())
+
+
+@pytest.mark.asyncio
+async def test_intents_can_be_listed_updated_and_closed(client):
+    headers = {"X-API-KEY": "test_key"}
+    create_response = await client.post(
+        "/intents",
+        json={"description": "Original goal", "priority": 1, "repo_id": "repo-a"},
+        headers=headers,
+    )
+    assert create_response.status_code == 200
+    intent_id = create_response.json()["id"]
+
+    update_response = await client.patch(
+        f"/intents/{intent_id}",
+        json={"description": "Updated goal", "priority": 3},
+        headers=headers,
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["description"] == "Updated goal"
+    assert update_response.json()["priority"] == 3
+
+    close_response = await client.post(f"/intents/{intent_id}/close", headers=headers)
+    assert close_response.status_code == 200
+    assert close_response.json() == {"status": "closed", "id": intent_id}
+
+    active_response = await client.get("/intents?repo_id=repo-a", headers=headers)
+    assert active_response.status_code == 200
+    assert all(intent["id"] != intent_id for intent in active_response.json())
+
+    closed_response = await client.get(
+        "/intents?repo_id=repo-a&status=closed",
+        headers=headers,
+    )
+    assert closed_response.status_code == 200
+    assert closed_response.json()[0]["id"] == intent_id
+    assert closed_response.json()[0]["status"] == "closed"
 
 
 @pytest.mark.asyncio
@@ -329,6 +598,71 @@ async def test_recall_endpoint_filters_low_relevance_results_by_default(client):
 
     assert response.status_code == 200
     assert response.json() == []
+
+
+@pytest.mark.asyncio
+async def test_ask_memory_returns_scoped_citations(client):
+    headers = {"X-API-KEY": "test_key"}
+    await client.post(
+        "/memories",
+        json={
+            "content": "Use OpenRouter embeddings for cloud recall",
+            "layer": "semantic",
+            "repo_id": "repo-a",
+        },
+        headers=headers,
+    )
+    await client.post(
+        "/memories",
+        json={
+            "content": "Repo B uses a different provider",
+            "layer": "semantic",
+            "repo_id": "repo-b",
+        },
+        headers=headers,
+    )
+
+    response = await client.post(
+        "/ai/ask",
+        json={"query": "Which embeddings power cloud recall?", "repo_id": "repo-a"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["mode"] == "retrieval_only"
+    assert data["provider_status"] == "not_configured"
+    assert len(data["citations"]) == 1
+    assert data["citations"][0]["repo_id"] == "repo-a"
+    assert data["citations"][0]["memory_id"] in data["answer"]
+    assert "Repo B" not in data["answer"]
+
+
+@pytest.mark.asyncio
+async def test_ask_memory_excludes_archived_memories(client):
+    headers = {"X-API-KEY": "test_key"}
+    create_response = await client.post(
+        "/memories",
+        json={"content": "Archived answer source", "layer": "semantic"},
+        headers=headers,
+    )
+    mem_id = create_response.json()["id"]
+    await client.patch(
+        f"/memories/{mem_id}",
+        json={"status": "archived"},
+        headers=headers,
+    )
+
+    response = await client.post(
+        "/ai/ask",
+        json={"query": "Archived answer source"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["citations"] == []
+    assert "No active memories matched" in data["answer"]
 
 
 @pytest.mark.asyncio

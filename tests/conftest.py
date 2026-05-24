@@ -31,8 +31,12 @@ async def client():
                     "llm_memory.server.routers.intents.load_config",
                     return_value=config,
                 ):
-                    async with httpx.AsyncClient(
-                        transport=transport,
-                        base_url="http://testserver",
-                    ) as test_client:
-                        yield test_client
+                    with mock.patch(
+                        "llm_memory.server.routers.quality.load_config",
+                        return_value=config,
+                    ):
+                        async with httpx.AsyncClient(
+                            transport=transport,
+                            base_url="http://testserver",
+                        ) as test_client:
+                            yield test_client

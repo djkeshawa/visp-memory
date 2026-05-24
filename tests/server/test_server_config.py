@@ -3,7 +3,13 @@ from pathlib import Path
 from llm_memory.config import MemoryConfig, ServerConfig
 from llm_memory.core.embeddings import NoOpProvider
 from llm_memory.server import app as server_app
-from llm_memory.server.app import get_cors_options, get_runtime_status, get_server_embedding_fn
+from llm_memory.server.app import (
+    describe_embedding_connection_error,
+    get_cors_options,
+    get_runtime_status,
+    get_server_embedding_fn,
+    get_server_embedding_runtime,
+)
 
 
 def test_default_cors_options_are_not_wildcard():
@@ -115,4 +121,48 @@ def test_runtime_status_exposes_non_secret_deployment_fields():
     assert status["storage_mode"] == "server"
     assert status["embedding_provider"] == "noop"
     assert status["embedding_effective_provider"] == "noop"
+    assert status["embedding_driver_status"] == "disabled"
+    assert status["embedding_driver_connected"] is False
     assert "neo4j_password" not in status
+
+
+def test_server_embedding_runtime_marks_default_server_fallback_inactive(monkeypatch):
+    monkeypatch.delenv("LLM_MEMORY_EMBEDDING_PROVIDER", raising=False)
+    config = MemoryConfig()
+    config.embedding.provider = "sentence-transformers"
+
+    provider, status = get_server_embedding_runtime(config)
+
+    assert provider is None
+    assert status["embedding_driver_status"] == "not_configured"
+    assert status["embedding_driver_connected"] is False
+
+
+def test_server_embedding_runtime_marks_failed_explicit_driver(monkeypatch):
+    config = MemoryConfig()
+    config.embedding.provider = "openrouter"
+
+    def fail_provider(_config, *, verify=False):
+        assert verify is True
+        raise RuntimeError("bad key")
+
+    import llm_memory.core.embeddings as embeddings
+
+    monkeypatch.setattr(embeddings, "get_embedding_provider", fail_provider)
+
+    provider, status = get_server_embedding_runtime(config)
+
+    assert provider.provider_name == "noop"
+    assert status["embedding_driver_status"] == "failed"
+    assert status["embedding_driver_connected"] is False
+    assert status["embedding_connection_error"] == "RuntimeError"
+
+
+def test_embedding_connection_error_describes_openrouter_401():
+    error = RuntimeError("Unauthorized")
+    error.status_code = 401
+
+    error_name, message = describe_embedding_connection_error("openrouter", error)
+
+    assert error_name == "HTTP 401"
+    assert "rejected the configured credentials" in message

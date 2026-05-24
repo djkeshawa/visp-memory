@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { Suspense, useEffect, useState } from "react"
 import { motion } from "framer-motion"
 import { AlertTriangle, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -17,11 +17,13 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
 import { IntentsColumn } from "@/components/intents/intents-column"
-import { createIntent, describeApiError, getActiveIntents } from "@/lib/api"
+import { closeIntent, completeIntent, createIntent, describeApiError, getIntents, updateIntent } from "@/lib/api"
 import { pageTransition } from "@/lib/animations"
+import { useSelectedProjectId } from "@/lib/project-selection"
 import type { Intent } from "@/lib/types"
 
-export default function IntentsPage() {
+function IntentsContent() {
+  const selectedRepoId = useSelectedProjectId()
   const [intents, setIntents] = useState<Intent[]>([])
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [newDescription, setNewDescription] = useState("")
@@ -31,10 +33,10 @@ export default function IntentsPage() {
 
   useEffect(() => {
     fetchIntents()
-  }, [])
+  }, [selectedRepoId])
 
   const fetchIntents = () => {
-    getActiveIntents()
+    getIntents(selectedRepoId, "all")
       .then((data) => {
         setIntents(data)
         setErrorMessage(null)
@@ -51,7 +53,7 @@ export default function IntentsPage() {
 
     setIsSubmitting(true)
     try {
-      await createIntent(newDescription, newPriority[0])
+      await createIntent(newDescription, newPriority[0], selectedRepoId)
       setErrorMessage(null)
       setNewDescription("")
       setNewPriority([5])
@@ -65,8 +67,38 @@ export default function IntentsPage() {
     }
   }
 
+  const handleComplete = async (intent: Intent) => {
+    try {
+      await completeIntent(intent.id)
+      fetchIntents()
+    } catch (error) {
+      console.error("Failed to complete intent", error)
+      setErrorMessage(describeApiError(error))
+    }
+  }
+
+  const handleClose = async (intent: Intent) => {
+    try {
+      await closeIntent(intent.id)
+      fetchIntents()
+    } catch (error) {
+      console.error("Failed to close intent", error)
+      setErrorMessage(describeApiError(error))
+    }
+  }
+
+  const handleUpdate = async (intent: Intent, updates: { description: string; priority: number }) => {
+    try {
+      await updateIntent(intent.id, updates)
+      fetchIntents()
+    } catch (error) {
+      console.error("Failed to update intent", error)
+      setErrorMessage(describeApiError(error))
+    }
+  }
+
   const activeIntents = intents.filter((i) => i.status === "active")
-  const completedIntents = intents.filter((i) => i.status === "completed")
+  const closedIntents = intents.filter((i) => i.status === "completed" || i.status === "closed")
 
   return (
     <motion.div initial="initial" animate="animate" variants={pageTransition} className="space-y-8">
@@ -141,9 +173,29 @@ export default function IntentsPage() {
 
       {/* Two Column Layout */}
       <div className="grid gap-8 md:grid-cols-2">
-        <IntentsColumn title="Active" intents={activeIntents} type="active" />
-        <IntentsColumn title="Completed" intents={completedIntents} type="completed" />
+        <IntentsColumn
+          title="Active"
+          intents={activeIntents}
+          type="active"
+          onComplete={handleComplete}
+          onClose={handleClose}
+          onUpdate={handleUpdate}
+        />
+        <IntentsColumn
+          title="Closed"
+          intents={closedIntents}
+          type="completed"
+          onUpdate={handleUpdate}
+        />
       </div>
     </motion.div>
+  )
+}
+
+export default function IntentsPage() {
+  return (
+    <Suspense fallback={null}>
+      <IntentsContent />
+    </Suspense>
   )
 }

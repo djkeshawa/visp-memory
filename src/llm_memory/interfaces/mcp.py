@@ -35,6 +35,7 @@ Or with uvx:
 
 import json
 import logging
+from datetime import datetime
 from typing import Any
 
 try:
@@ -124,6 +125,22 @@ def create_mcp_server() -> "Server":
                         },
                     },
                     "required": ["query"],
+                },
+            ),
+            Tool(
+                name="memory_remember",
+                description="Recall the latest memory in the current repository scope.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "repo_id": {"type": "string", "description": "Repository/project ID"},
+                        "layer": {
+                            "type": "string",
+                            "enum": ["raw", "episodic", "semantic", "intent"],
+                            "description": "Optional memory layer filter",
+                        },
+                        "category": {"type": "string", "description": "Optional category filter"},
+                    },
                 },
             ),
             Tool(
@@ -499,6 +516,39 @@ def create_mcp_server() -> "Server":
                 description="Clear current task (mark as done).",
                 inputSchema={"type": "object", "properties": {}},
             ),
+            Tool(
+                name="memory_update_intent",
+                description="Update an existing goal or intent by ID.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "intent_id": {"type": "string", "description": "Intent ID to update"},
+                        "description": {"type": "string", "description": "Updated description"},
+                        "priority": {
+                            "type": "integer",
+                            "enum": [0, 1, 2, 3],
+                            "description": "Priority: 0=low, 1=normal, 2=high, 3=critical",
+                        },
+                        "status": {
+                            "type": "string",
+                            "enum": ["active", "completed", "closed"],
+                            "description": "Updated intent status",
+                        },
+                    },
+                    "required": ["intent_id"],
+                },
+            ),
+            Tool(
+                name="memory_close_intent",
+                description="Close an intent by ID without marking it completed.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "intent_id": {"type": "string", "description": "Intent ID to close"},
+                    },
+                    "required": ["intent_id"],
+                },
+            ),
             # Utility
             Tool(
                 name="memory_stats",
@@ -513,7 +563,18 @@ def create_mcp_server() -> "Server":
             Tool(
                 name="memory_list_intents",
                 description="List all active goals and intents.",
-                inputSchema={"type": "object", "properties": {}},
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "repo_id": {"type": "string", "description": "Repository/project ID"},
+                        "status": {
+                            "type": "string",
+                            "enum": ["active", "completed", "closed", "all"],
+                            "default": "active",
+                            "description": "Intent status filter",
+                        },
+                    },
+                },
             ),
             # Maintenance
             Tool(
@@ -525,6 +586,31 @@ def create_mcp_server() -> "Server":
                 name="memory_decay",
                 description="Apply decay to old, unused memories.",
                 inputSchema={"type": "object", "properties": {}},
+            ),
+            Tool(
+                name="memory_decay_preview",
+                description=(
+                    "Preview memory strength and which memories would decay without mutating them."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "repo_id": {"type": "string", "description": "Repository/project ID"},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 10},
+                        "halflife_days": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Decay half-life override in days",
+                        },
+                        "min_importance": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "default": 0.1,
+                            "description": "Minimum projected importance floor",
+                        },
+                    },
+                },
             ),
             Tool(
                 name="memory_clear_goals",
@@ -830,6 +916,27 @@ def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
             output.append(f"- [{r['layer']}/{r.get('category', 'unknown')}]{sim}: {r['content']}")
         return "\n".join(output)
 
+    elif name == "memory_remember":
+        memories = memory._storage.list_memories(
+            repo_id=args.get("repo_id") or memory.config.repo_id,
+            layer=args.get("layer"),
+            category=args.get("category"),
+            status="active",
+            limit=1,
+            order_by="created_at DESC",
+        )
+        if not memories:
+            return "No latest memory found."
+        latest = memories[0]
+        return (
+            "Latest memory:\n"
+            f"- ID: {latest['id']}\n"
+            f"- Layer: {latest.get('layer', 'unknown')}\n"
+            f"- Category: {latest.get('category', 'unknown')}\n"
+            f"- Created: {latest.get('created_at')}\n"
+            f"- Content: {latest.get('content', '')}"
+        )
+
     elif name == "memory_relevant":
         relevant = memory.relevant_for(task=args.get("task"), files=args.get("files"))
 
@@ -1080,7 +1187,83 @@ def _handle_intent(name: str, args: dict[str, Any], memory: Memory) -> str:
         cleared = memory.done()
         return f"Cleared {cleared} task(s)"
 
+    elif name == "memory_update_intent":
+        update_data = {
+            key: args[key]
+            for key in ("description", "priority", "status")
+            if key in args and args[key] is not None
+        }
+        if not update_data:
+            return "No intent fields provided to update."
+        updated = memory.intent.update(args["intent_id"], **update_data)
+        if not updated:
+            return f"Intent not found: {args['intent_id']}"
+        return f"Intent updated: {args['intent_id']}"
+
+    elif name == "memory_close_intent":
+        closed = memory.intent.close(args["intent_id"])
+        if not closed:
+            return f"Intent not found: {args['intent_id']}"
+        return f"Intent closed: {args['intent_id']}"
+
     return f"Unknown intent tool: {name}"
+
+
+def _parse_memory_datetime(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    if isinstance(value, str):
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+    return datetime.now()
+
+
+def _format_decay_preview(args: dict[str, Any], memory: Memory) -> str:
+    repo_id = args.get("repo_id") or memory.config.repo_id
+    limit = max(1, min(int(args.get("limit", 10)), 100))
+    halflife_days = max(1, int(args.get("halflife_days") or memory.config.decay_halflife_days))
+    min_importance = max(0.0, min(float(args.get("min_importance", 0.1)), 1.0))
+    memories = memory._storage.list_memories(
+        repo_id=repo_id,
+        status="active",
+        limit=10000,
+        order_by="accessed_at ASC",
+    )
+    now = datetime.now()
+    previews = []
+    for item in memories:
+        current = float(item.get("importance", 0.5) or 0.0)
+        accessed = _parse_memory_datetime(item.get("accessed_at") or item.get("created_at"))
+        age_days = max(0.0, (now - accessed).total_seconds() / 86400)
+        projected = max(min_importance, current * (0.5 ** (age_days / halflife_days)))
+        decay_amount = max(0.0, current - projected)
+        if current <= min_importance + 0.001:
+            risk = "at_floor"
+        elif projected <= min_importance + 0.05 or decay_amount >= 0.2:
+            risk = "likely_to_decay"
+        elif decay_amount >= 0.05:
+            risk = "weakening"
+        else:
+            risk = "stable"
+        previews.append((risk, decay_amount, age_days, current, projected, item))
+
+    risk_rank = {"likely_to_decay": 0, "weakening": 1, "at_floor": 2, "stable": 3}
+    previews.sort(key=lambda row: (risk_rank[row[0]], -row[1], row[4], -row[2]))
+    if not previews:
+        return "No active memories found for decay preview."
+
+    lines = [
+        (
+            f"Decay preview: halflife={halflife_days}d, "
+            f"min_importance={min_importance:.2f}, decay_enabled={memory.config.decay_enabled}"
+        )
+    ]
+    for risk, decay_amount, age_days, current, projected, item in previews[:limit]:
+        snippet = " ".join(str(item.get("content", "")).split())[:100]
+        lines.append(
+            f"- [{risk}] {item['id']}: {current:.2f} -> {projected:.2f} "
+            f"(drop {decay_amount:.2f}, idle {age_days:.1f}d) {snippet}"
+        )
+    return "\n".join(lines)
 
 
 def _handle_utility(name: str, args: dict[str, Any], memory: Memory) -> str:
@@ -1096,7 +1279,10 @@ def _handle_utility(name: str, args: dict[str, Any], memory: Memory) -> str:
         return "\n".join(f"- {w['content']}" for w in warnings)
 
     elif name == "memory_list_intents":
-        intents = memory.intent.get_active()
+        intents = memory._storage.get_active_intents(
+            repo_id=args.get("repo_id"),
+            status=args.get("status", "active"),
+        )
         if not intents:
             return "No active intents."
 
@@ -1120,6 +1306,9 @@ def _handle_maintenance(name: str, args: dict[str, Any], memory: Memory) -> str:
         affected = memory.decay()
         return f"Decay applied to {affected} memories."
 
+    elif name == "memory_decay_preview":
+        return _format_decay_preview(args, memory)
+
     elif name == "memory_clear_goals":
         cleared = memory.intent.clear_all()
         return f"Cleared {cleared} goals."
@@ -1135,7 +1324,7 @@ async def handle_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
         return _handle_context(args, memory)
 
     # Search
-    if name in ["memory_recall", "memory_relevant"]:
+    if name in ["memory_recall", "memory_remember", "memory_relevant"]:
         return _handle_search(name, args, memory)
 
     # Proactive
@@ -1155,7 +1344,13 @@ async def handle_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
         return _handle_knowledge(name, args, memory)
 
     # Intent
-    if name in ["memory_goal", "memory_working_on", "memory_done"]:
+    if name in [
+        "memory_goal",
+        "memory_working_on",
+        "memory_done",
+        "memory_update_intent",
+        "memory_close_intent",
+    ]:
         return _handle_intent(name, args, memory)
 
     # Utility
@@ -1163,7 +1358,7 @@ async def handle_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
         return _handle_utility(name, args, memory)
 
     # Maintenance
-    if name in ["memory_compress", "memory_decay", "memory_clear_goals"]:
+    if name in ["memory_compress", "memory_decay", "memory_decay_preview", "memory_clear_goals"]:
         return _handle_maintenance(name, args, memory)
 
     return f"Unknown tool: {name}"

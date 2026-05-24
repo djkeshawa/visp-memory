@@ -8,6 +8,7 @@ Combines:
 
 import hashlib
 import json
+import re
 import sqlite3
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
@@ -15,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
+from llm_memory.core.indexing import EmbeddingIndexReport, ReindexResult, ReindexScope
 from llm_memory.core.ranking import (
     clamp_score,
     normalize_distance_score,
@@ -33,6 +35,7 @@ except ImportError:
 
 
 MemoryLayer = Literal["raw", "episodic", "semantic", "intent"]
+MemoryStatus = Literal["active", "pending", "archived", "deleted"]
 
 
 class BaseStorage(ABC):
@@ -88,13 +91,20 @@ class BaseStorage(ABC):
         pass
 
     @abstractmethod
-    def get_active_intents(self, repo_id: str = None) -> List[Dict[str, Any]]:
-        """Get active intents."""
+    def get_active_intents(
+        self, repo_id: str = None, status: str = "active"
+    ) -> List[Dict[str, Any]]:
+        """Get intents filtered by status."""
         pass
 
     @abstractmethod
     def complete_intent(self, intent_id: str) -> bool:
         """Complete an intent."""
+        pass
+
+    @abstractmethod
+    def update_intent(self, intent_id: str, **kwargs) -> bool:
+        """Update an intent."""
         pass
 
     # Relationship Operations
@@ -148,6 +158,11 @@ class BaseStorage(ABC):
     @abstractmethod
     def list_repositories(self, team_id: str = None) -> List[Dict[str, Any]]:
         """List all repositories."""
+        pass
+
+    @abstractmethod
+    def list_project_ids(self) -> List[str]:
+        """List repository/project IDs referenced by stored data."""
         pass
 
     @abstractmethod
@@ -243,6 +258,13 @@ class LocalStorage(BaseStorage):
                     tags TEXT DEFAULT '[]',
                     metadata TEXT DEFAULT '{}',
                     source_ids TEXT DEFAULT '[]',
+                    status TEXT DEFAULT 'active',
+                    approved_by TEXT DEFAULT NULL,
+                    approved_at TIMESTAMP DEFAULT NULL,
+                    archived_at TIMESTAMP DEFAULT NULL,
+                    source TEXT DEFAULT NULL,
+                    quality_flags TEXT DEFAULT '[]',
+                    last_quality_checked_at TIMESTAMP DEFAULT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     compressed_at TIMESTAMP DEFAULT NULL
@@ -256,6 +278,23 @@ class LocalStorage(BaseStorage):
                 # Column doesn't exist, add it
                 conn.execute("ALTER TABLE memories ADD COLUMN repo_id TEXT DEFAULT NULL")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_repo ON memories(repo_id)")
+
+            memory_migrations = {
+                "status": "ALTER TABLE memories ADD COLUMN status TEXT DEFAULT 'active'",
+                "approved_by": "ALTER TABLE memories ADD COLUMN approved_by TEXT DEFAULT NULL",
+                "approved_at": "ALTER TABLE memories ADD COLUMN approved_at TIMESTAMP DEFAULT NULL",
+                "archived_at": "ALTER TABLE memories ADD COLUMN archived_at TIMESTAMP DEFAULT NULL",
+                "source": "ALTER TABLE memories ADD COLUMN source TEXT DEFAULT NULL",
+                "quality_flags": "ALTER TABLE memories ADD COLUMN quality_flags TEXT DEFAULT '[]'",
+                "last_quality_checked_at": (
+                    "ALTER TABLE memories ADD COLUMN last_quality_checked_at TIMESTAMP DEFAULT NULL"
+                ),
+            }
+            for column, statement in memory_migrations.items():
+                try:
+                    conn.execute(f"SELECT {column} FROM memories LIMIT 1")
+                except sqlite3.OperationalError:
+                    conn.execute(statement)
 
             # Intent tracking (current direction/goals)
             conn.execute("""
@@ -365,10 +404,24 @@ class LocalStorage(BaseStorage):
                 )
             """)
 
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS audit_logs (
+                    id TEXT PRIMARY KEY,
+                    event_type TEXT NOT NULL,
+                    actor_id TEXT,
+                    repo_id TEXT,
+                    target_type TEXT,
+                    target_id TEXT,
+                    metadata TEXT DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             # Indexes
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_layer ON memories(layer)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_repo ON memories(repo_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status)")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance)"
             )
@@ -384,6 +437,9 @@ class LocalStorage(BaseStorage):
                 "CREATE INDEX IF NOT EXISTS idx_repo_deps_source "
                 "ON repository_dependencies(source_repo_id)"
             )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_event ON audit_logs(event_type)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_logs(actor_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_repo ON audit_logs(repo_id)")
 
             conn.commit()
 
@@ -446,6 +502,253 @@ class LocalStorage(BaseStorage):
             return f"memories_{layer}_{self._embedding_dimension}"
         return f"memories_{layer}"
 
+    def _list_vector_collection_names(self) -> List[str]:
+        """Return Chroma collection names without creating new collections."""
+        client = self._get_chroma()
+        if client is None:
+            return []
+        try:
+            collections = client.list_collections()
+        except Exception:
+            return []
+        names = []
+        for collection in collections:
+            name = getattr(collection, "name", None) or str(collection)
+            if name:
+                names.append(name)
+        return names
+
+    def _count_vector_collection(self, collection_name: str) -> Optional[int]:
+        client = self._get_chroma()
+        if client is None:
+            return None
+        try:
+            return int(client.get_collection(collection_name).count())
+        except Exception:
+            return None
+
+    def _memory_filters_from_scope(self, scope: ReindexScope) -> tuple[str, list[Any]]:
+        clauses = ["1=1"]
+        params: list[Any] = []
+        if scope.layer:
+            clauses.append("layer = ?")
+            params.append(scope.layer)
+        if scope.repo_id:
+            clauses.append("repo_id = ?")
+            params.append(scope.repo_id)
+        if scope.category:
+            clauses.append("category = ?")
+            params.append(scope.category)
+        return " AND ".join(clauses), params
+
+    def _list_reindex_candidates(self, scope: ReindexScope) -> List[Dict[str, Any]]:
+        where, params = self._memory_filters_from_scope(scope)
+        query = f"SELECT * FROM memories WHERE {where} ORDER BY layer ASC, created_at ASC"
+        with self._get_db() as conn:
+            cursor = conn.execute(query, params)
+            return [self._row_to_dict(row) for row in cursor.fetchall()]
+
+    def _count_reindex_candidates(self, scope: ReindexScope) -> int:
+        where, params = self._memory_filters_from_scope(scope)
+        with self._get_db() as conn:
+            cursor = conn.execute(f"SELECT COUNT(*) FROM memories WHERE {where}", params)
+            return int(cursor.fetchone()[0])
+
+    def _embedding_collection_summary(
+        self, scope: ReindexScope
+    ) -> tuple[list[str], list[str], Optional[int]]:
+        layers = [scope.layer] if scope.layer else ["raw", "episodic", "semantic", "intent"]
+        active = [self._collection_name(layer) for layer in layers]
+        existing = set(self._list_vector_collection_names())
+        legacy = []
+        for name in sorted(existing):
+            for layer in layers:
+                if name == f"memories_{layer}" and name != self._collection_name(layer):
+                    legacy.append(name)
+                    break
+                dimension_collection = re.fullmatch(rf"memories_{re.escape(layer)}_\d+", name)
+                if dimension_collection and name != self._collection_name(layer):
+                    legacy.append(name)
+                    break
+
+        indexed_total = 0
+        indexed_known = False
+        for name in active:
+            count = self._count_vector_collection(name)
+            if count is not None:
+                indexed_total += count
+                indexed_known = True
+
+        return active, sorted(set(legacy)), indexed_total if indexed_known else None
+
+    def inspect_embedding_index(
+        self,
+        *,
+        storage_backend: str,
+        provider: str,
+        effective_provider: str = None,
+        model: str = None,
+        dimension: int = None,
+        scope: ReindexScope = None,
+    ) -> EmbeddingIndexReport:
+        """Inspect whether the active embedding index needs maintenance."""
+        scope = scope or ReindexScope()
+        matched = self._count_reindex_candidates(scope)
+        active, legacy, indexed = self._embedding_collection_summary(scope)
+
+        if self._uses_noop_embeddings:
+            status = "disabled"
+            message = "Noop embeddings are active; vector index search is disabled."
+        elif self._embedding_fn is None:
+            status = "not_configured"
+            message = "No embedding function is configured; text fallback is used."
+        elif not CHROMADB_AVAILABLE:
+            status = "not_configured"
+            message = "ChromaDB is not installed, so vector indexes cannot be rebuilt."
+        elif dimension or self._embedding_dimension:
+            status = "available"
+            message = "Embedding index is available for the active provider dimension."
+        else:
+            status = "unknown"
+            message = "Embedding provider is active but its vector dimension is unknown."
+
+        needs_reindex = bool(
+            matched
+            and status == "available"
+            and (legacy or indexed is None or indexed < matched)
+        )
+        if legacy:
+            message = (
+                "Legacy embedding collections were found for a different dimension; "
+                "run a dry-run and rebuild after provider changes."
+            )
+        elif indexed is not None and indexed < matched and status == "available":
+            message = "The active embedding index has fewer vectors than matching memories."
+
+        return EmbeddingIndexReport(
+            storage_backend=storage_backend,
+            provider=provider,
+            effective_provider=effective_provider,
+            model=model,
+            dimension=dimension or self._embedding_dimension,
+            status=status,
+            message=message,
+            scope=scope.as_filter_dict(),
+            matched_memories=matched,
+            indexed_memories=indexed,
+            active_collections=active,
+            legacy_collections=legacy,
+            needs_reindex=needs_reindex,
+        )
+
+    def rebuild_embedding_index(
+        self, *, scope: ReindexScope = None, dry_run: bool = True
+    ) -> ReindexResult:
+        """Rebuild active-dimension vector entries for matching memories."""
+        scope = scope or ReindexScope()
+        candidates = self._list_reindex_candidates(scope)
+        active, legacy, _ = self._embedding_collection_summary(scope)
+
+        if self._uses_noop_embeddings:
+            return ReindexResult(
+                dry_run=dry_run,
+                status="disabled",
+                message="Noop embeddings are active; there is no vector index to rebuild.",
+                scope=scope.as_filter_dict(),
+                matched_memories=len(candidates),
+                dimension=self._embedding_dimension,
+                active_collections=active,
+                legacy_collections=legacy,
+            )
+        if self._embedding_fn is None or not CHROMADB_AVAILABLE:
+            return ReindexResult(
+                dry_run=dry_run,
+                status="not_configured",
+                message="A real embedding function and ChromaDB are required to rebuild vectors.",
+                scope=scope.as_filter_dict(),
+                matched_memories=len(candidates),
+                dimension=self._embedding_dimension,
+                active_collections=active,
+                legacy_collections=legacy,
+            )
+        if dry_run:
+            return ReindexResult(
+                dry_run=True,
+                status="ready",
+                message="Dry run complete; no embeddings were changed.",
+                scope=scope.as_filter_dict(),
+                matched_memories=len(candidates),
+                dimension=self._embedding_dimension,
+                active_collections=active,
+                legacy_collections=legacy,
+            )
+
+        grouped: dict[str, dict[str, list[Any]]] = {}
+        errors: list[dict[str, str]] = []
+        for memory in candidates:
+            try:
+                embedding = self._embedding_fn(memory["content"])
+            except Exception as exc:
+                errors.append({"id": memory["id"], "error": exc.__class__.__name__})
+                continue
+
+            metadata = {
+                "category": memory.get("category") or "general",
+                "importance": memory.get("importance") or 0.5,
+                "tags": self._json_serialize(memory.get("tags") or []),
+                "status": memory.get("status") or "active",
+            }
+            if memory.get("repo_id"):
+                metadata["repo_id"] = memory["repo_id"]
+
+            layer = memory["layer"]
+            layer_group = grouped.setdefault(
+                layer, {"ids": [], "documents": [], "metadatas": [], "embeddings": []}
+            )
+            layer_group["ids"].append(memory["id"])
+            layer_group["documents"].append(memory["content"])
+            layer_group["metadatas"].append(metadata)
+            layer_group["embeddings"].append(embedding)
+
+        reindexed = 0
+        for layer, payload in grouped.items():
+            collection = self._get_collection(layer)
+            if collection is None:
+                errors.extend(
+                    {"id": memory_id, "error": "CollectionUnavailable"}
+                    for memory_id in payload["ids"]
+                )
+                continue
+            try:
+                collection.upsert(**payload)
+                reindexed += len(payload["ids"])
+            except Exception as exc:
+                errors.extend(
+                    {"id": memory_id, "error": exc.__class__.__name__}
+                    for memory_id in payload["ids"]
+                )
+
+        failed = len(errors)
+        status = "completed" if failed == 0 else "partial_failure"
+        message = (
+            f"Rebuilt {reindexed} embedding vectors."
+            if failed == 0
+            else f"Rebuilt {reindexed} embedding vectors; {failed} failed."
+        )
+        return ReindexResult(
+            dry_run=False,
+            status=status,
+            message=message,
+            scope=scope.as_filter_dict(),
+            matched_memories=len(candidates),
+            reindexed_memories=reindexed,
+            failed_memories=failed,
+            dimension=self._embedding_dimension,
+            active_collections=active,
+            legacy_collections=legacy,
+            errors=errors[:50],
+        )
+
     def _backfill_collection(self, layer: MemoryLayer, collection) -> None:
         """Populate a newly-created vector collection from SQLite memory rows."""
         if self._embedding_fn is None:
@@ -470,6 +773,7 @@ class LocalStorage(BaseStorage):
                 "category": memory.get("category") or "general",
                 "importance": memory.get("importance") or 0.5,
                 "tags": self._json_serialize(memory.get("tags") or []),
+                "status": memory.get("status") or "active",
             }
             if memory.get("repo_id"):
                 metadata["repo_id"] = memory["repo_id"]
@@ -518,6 +822,9 @@ class LocalStorage(BaseStorage):
         tags: List[str] = None,
         metadata: Dict[str, Any] = None,
         source_ids: List[str] = None,
+        status: MemoryStatus = "active",
+        source: str = None,
+        quality_flags: List[str] = None,
         embedding: List[float] = None,
         auto_link: bool = True,
         auto_link_limit: int = DEFAULT_AUTO_LINK_LIMIT,
@@ -547,6 +854,7 @@ class LocalStorage(BaseStorage):
         tags = tags or []
         metadata = metadata or {}
         source_ids = source_ids or []
+        quality_flags = quality_flags or []
 
         if embedding is None and self._embedding_fn is not None:
             try:
@@ -555,13 +863,15 @@ class LocalStorage(BaseStorage):
                 embedding = None
 
         # Store in SQLite
+        created_at = datetime.now().isoformat()
         with self._get_db() as conn:
             conn.execute(
                 """
                 INSERT INTO memories (
-                    id, content, layer, repo_id, category, importance, tags, metadata, source_ids
+                    id, content, layer, repo_id, category, importance, tags, metadata,
+                    source_ids, status, source, quality_flags, created_at, accessed_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     memory_id,
@@ -573,6 +883,11 @@ class LocalStorage(BaseStorage):
                     self._json_serialize(tags),
                     self._json_serialize(metadata),
                     self._json_serialize(source_ids),
+                    status,
+                    source,
+                    self._json_serialize(quality_flags),
+                    created_at,
+                    created_at,
                 ),
             )
             conn.commit()
@@ -584,6 +899,7 @@ class LocalStorage(BaseStorage):
                 "category": category,
                 "importance": importance,
                 "tags": self._json_serialize(tags),
+                "status": status,
             }
             if repo_id:
                 metadata_dict["repo_id"] = repo_id
@@ -708,6 +1024,7 @@ class LocalStorage(BaseStorage):
         category: str = None,
         limit: int = 10,
         min_importance: float = 0.0,
+        status: str = "active",
     ) -> List[Dict[str, Any]]:
         """
         Semantic search across memories.
@@ -768,7 +1085,12 @@ class LocalStorage(BaseStorage):
                         similarity = normalize_distance_score(distance)
 
                         memory = self._get_memory_row(mem_id, track_access=False)
-                        if memory:
+                        if not memory:
+                            continue
+                        status_matches = (
+                            not status or status == "all" or memory.get("status") == status
+                        )
+                        if status_matches:
                             seen_ids.add(mem_id)
                             memory["similarity"] = similarity
                             results.append(memory)
@@ -787,6 +1109,7 @@ class LocalStorage(BaseStorage):
                     limit=limit - len(results),
                     min_importance=min_importance,
                     exclude_ids=seen_ids,
+                    status=status,
                 )
             )
 
@@ -801,6 +1124,7 @@ class LocalStorage(BaseStorage):
         limit: int = 10,
         min_importance: float = 0.0,
         exclude_ids: set[str] = None,
+        status: str = "active",
     ) -> List[Dict[str, Any]]:
         """Fallback SQLite search used when vector search is unavailable or incomplete."""
         exclude_ids = exclude_ids or set()
@@ -820,6 +1144,10 @@ class LocalStorage(BaseStorage):
         if category:
             sql += " AND category = ?"
             params.append(category)
+
+        if status and status != "all":
+            sql += " AND status = ?"
+            params.append(status)
 
         if terms:
             sql += " AND ("
@@ -854,6 +1182,7 @@ class LocalStorage(BaseStorage):
         layer: MemoryLayer = None,
         repo_id: str = None,
         category: str = None,
+        status: str = "active",
         limit: int = 50,
         order_by: str = "created_at DESC",
     ) -> List[Dict[str, Any]]:
@@ -872,6 +1201,10 @@ class LocalStorage(BaseStorage):
         if category:
             query += " AND category = ?"
             params.append(category)
+
+        if status and status != "all":
+            query += " AND status = ?"
+            params.append(status)
 
         allowed_order_by = {
             "created_at DESC",
@@ -898,6 +1231,12 @@ class LocalStorage(BaseStorage):
         importance: float = None,
         tags: List[str] = None,
         metadata: Dict[str, Any] = None,
+        status: MemoryStatus = None,
+        approved_by: str = None,
+        approved_at: str = None,
+        archived_at: str = None,
+        source: str = None,
+        quality_flags: List[str] = None,
     ) -> bool:
         """Update an existing memory."""
         updates = []
@@ -919,6 +1258,34 @@ class LocalStorage(BaseStorage):
             updates.append("metadata = ?")
             params.append(self._json_serialize(metadata))
 
+        if status is not None:
+            updates.append("status = ?")
+            params.append(status)
+            if status == "archived":
+                updates.append("archived_at = COALESCE(archived_at, CURRENT_TIMESTAMP)")
+            elif status == "active":
+                updates.append("archived_at = NULL")
+
+        if approved_by is not None:
+            updates.append("approved_by = ?")
+            params.append(approved_by)
+
+        if approved_at is not None:
+            updates.append("approved_at = ?")
+            params.append(approved_at)
+
+        if archived_at is not None:
+            updates.append("archived_at = ?")
+            params.append(archived_at)
+
+        if source is not None:
+            updates.append("source = ?")
+            params.append(source)
+
+        if quality_flags is not None:
+            updates.append("quality_flags = ?")
+            params.append(self._json_serialize(quality_flags))
+
         if not updates:
             return False
 
@@ -929,7 +1296,7 @@ class LocalStorage(BaseStorage):
             conn.commit()
             updated = cursor.rowcount > 0
 
-        if updated and any(value is not None for value in (content, importance, tags)):
+        if updated and any(value is not None for value in (content, importance, tags, status)):
             memory = self._get_memory_row(memory_id, track_access=False)
             if memory:
                 collection = self._get_collection(memory["layer"])
@@ -939,6 +1306,7 @@ class LocalStorage(BaseStorage):
                             "category": memory.get("category", "general"),
                             "importance": memory.get("importance", 0.5),
                             "tags": self._json_serialize(memory.get("tags", [])),
+                            "status": memory.get("status", "active"),
                         }
                         if memory.get("repo_id"):
                             metadata_dict["repo_id"] = memory["repo_id"]
@@ -948,6 +1316,11 @@ class LocalStorage(BaseStorage):
                         }
                         if content is not None:
                             update_kwargs["documents"] = [content]
+                            if self._embedding_fn is not None:
+                                try:
+                                    update_kwargs["embeddings"] = [self._embedding_fn(content)]
+                                except Exception:
+                                    pass
                         collection.update(**update_kwargs)
                     except Exception:
                         pass
@@ -1003,10 +1376,16 @@ class LocalStorage(BaseStorage):
 
         return intent_id
 
-    def get_active_intents(self, repo_id: str = None) -> List[Dict[str, Any]]:
-        """Get all active intents, ordered by priority."""
-        query = "SELECT * FROM intents WHERE status = 'active'"
+    def get_active_intents(
+        self, repo_id: str = None, status: str = "active"
+    ) -> List[Dict[str, Any]]:
+        """Get intents ordered by priority."""
+        query = "SELECT * FROM intents WHERE 1=1"
         params = []
+
+        if status and status != "all":
+            query += " AND status = ?"
+            params.append(status)
 
         if repo_id:
             query += " AND repo_id = ?"
@@ -1020,14 +1399,47 @@ class LocalStorage(BaseStorage):
 
     def complete_intent(self, intent_id: str) -> bool:
         """Mark an intent as completed."""
+        return self.update_intent(intent_id, status="completed")
+
+    def update_intent(
+        self,
+        intent_id: str,
+        description: str = None,
+        priority: int = None,
+        status: str = None,
+        context: Dict[str, Any] = None,
+    ) -> bool:
+        """Update mutable intent fields."""
+        updates = []
+        params = []
+
+        if description is not None:
+            updates.append("description = ?")
+            params.append(description)
+        if priority is not None:
+            updates.append("priority = ?")
+            params.append(priority)
+        if status is not None:
+            updates.append("status = ?")
+            params.append(status)
+        if context is not None:
+            updates.append("context = ?")
+            params.append(self._json_serialize(context))
+
+        if not updates:
+            return False
+
+        updates.append("updated_at = CURRENT_TIMESTAMP")
+        params.append(intent_id)
+
         with self._get_db() as conn:
             cursor = conn.execute(
-                """
+                f"""
                 UPDATE intents
-                SET status = 'completed', updated_at = CURRENT_TIMESTAMP
+                SET {", ".join(updates)}
                 WHERE id = ?
-            """,
-                (intent_id,),
+                """,
+                params,
             )
             conn.commit()
             return cursor.rowcount > 0
@@ -1160,10 +1572,10 @@ class LocalStorage(BaseStorage):
             stats = {}
 
             # Build WHERE clause for repo filtering
-            repo_filter = ""
+            repo_filter = " WHERE status = 'active'"
             repo_params = []
             if repo_id:
-                repo_filter = " WHERE repo_id = ?"
+                repo_filter += " AND repo_id = ?"
                 repo_params = [repo_id]
 
             # Memory counts by layer
@@ -1218,17 +1630,98 @@ class LocalStorage(BaseStorage):
 
             return stats
 
+    def list_project_ids(self) -> List[str]:
+        """List distinct repository/project IDs referenced by stored data."""
+        with self._get_db() as conn:
+            cursor = conn.execute(
+                """
+                SELECT repo_id AS id FROM memories WHERE repo_id IS NOT NULL AND repo_id != ''
+                UNION
+                SELECT repo_id AS id FROM intents WHERE repo_id IS NOT NULL AND repo_id != ''
+                UNION
+                SELECT id FROM repositories WHERE id IS NOT NULL AND id != ''
+                ORDER BY id
+                """
+            )
+            return [row[0] for row in cursor.fetchall()]
+
     @staticmethod
     def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
         """Convert SQLite row to dictionary."""
         d = dict(row)
 
         # Parse JSON fields
-        for field in ["tags", "metadata", "source_ids", "memory_ids", "context", "tech_stack"]:
+        for field in [
+            "tags",
+            "metadata",
+            "source_ids",
+            "quality_flags",
+            "memory_ids",
+            "context",
+            "tech_stack",
+        ]:
             if field in d and d[field]:
                 d[field] = LocalStorage._json_deserialize(d[field])
 
         return d
+
+    def append_audit_log(
+        self,
+        event_type: str,
+        actor_id: str = None,
+        repo_id: str = None,
+        target_type: str = None,
+        target_id: str = None,
+        metadata: Dict[str, Any] = None,
+    ) -> str:
+        """Append a non-secret audit event."""
+        audit_id = self._generate_id(f"{event_type}:{target_id or ''}")
+        with self._get_db() as conn:
+            conn.execute(
+                """
+                INSERT INTO audit_logs (
+                    id, event_type, actor_id, repo_id, target_type, target_id, metadata
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    audit_id,
+                    event_type,
+                    actor_id,
+                    repo_id,
+                    target_type,
+                    target_id,
+                    self._json_serialize(metadata or {}),
+                ),
+            )
+            conn.commit()
+        return audit_id
+
+    def list_audit_logs(
+        self,
+        actor_id: str = None,
+        repo_id: str = None,
+        event_type: str = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """List audit log entries with optional filters."""
+        query = "SELECT * FROM audit_logs WHERE 1=1"
+        params: list[Any] = []
+        if actor_id:
+            query += " AND actor_id = ?"
+            params.append(actor_id)
+        if repo_id:
+            query += " AND repo_id = ?"
+            params.append(repo_id)
+        if event_type:
+            query += " AND event_type = ?"
+            params.append(event_type)
+        query += " ORDER BY created_at DESC, rowid DESC LIMIT ?"
+        params.append(limit)
+
+        with self._get_db() as conn:
+            cursor = conn.execute(query, params)
+            return [self._row_to_dict(row) for row in cursor.fetchall()]
 
     # Repository operations
     def store_repository(self, repo: Dict[str, Any]) -> str:

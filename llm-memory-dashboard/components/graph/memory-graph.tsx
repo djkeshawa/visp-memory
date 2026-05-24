@@ -38,7 +38,11 @@ interface Particle {
   speed: number
 }
 
-export function MemoryGraph() {
+interface MemoryGraphProps {
+  repoId?: string | null
+}
+
+export function MemoryGraph({ repoId }: MemoryGraphProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [nodes, setNodes] = useState<GraphNode[]>([])
@@ -64,8 +68,9 @@ export function MemoryGraph() {
   // Fetch Graph Data
   useEffect(() => {
     async function fetchData() {
+      setLoading(true);
       try {
-        const data = await getGraphData();
+        const data = await getGraphData(repoId);
 
         // Map API nodes to GraphNodes
         const newNodes: GraphNode[] = data.nodes.map((n: any) => ({
@@ -115,7 +120,7 @@ export function MemoryGraph() {
     }
 
     fetchData();
-  }, []);
+  }, [repoId]);
 
   const filteredNodes = nodes.filter((node) => {
     const matchesSearch =

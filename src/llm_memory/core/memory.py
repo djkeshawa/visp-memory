@@ -309,6 +309,7 @@ class Memory:
         repo_id: str = None,
         limit: int = 10,
         min_score: float = DEFAULT_RECALL_MIN_SCORE,
+        status: str = "active",
     ) -> List[Dict[str, Any]]:
         """
         Search across all memory layers.
@@ -334,6 +335,7 @@ class Memory:
                 layer=layer,
                 repo_id=search_repo_id,
                 limit=limit,
+                status=status,
             )
             results.extend(layer_results)
 

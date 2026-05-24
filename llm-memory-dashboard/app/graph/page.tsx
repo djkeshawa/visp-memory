@@ -1,19 +1,21 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { Suspense, useEffect, useState } from "react"
 import { motion } from "framer-motion"
 import { MemoryGraph } from "@/components/graph/memory-graph"
 import { pageTransition } from "@/lib/animations"
 import { Network } from "lucide-react"
 import { getStats } from "@/lib/api"
+import { useSelectedProjectId } from "@/lib/project-selection"
 import type { Stats } from "@/lib/types"
 
-export default function GraphPage() {
+function GraphContent() {
+  const selectedRepoId = useSelectedProjectId()
   const [stats, setStats] = useState<Stats | null>(null)
 
   useEffect(() => {
-    getStats().then(setStats).catch(console.error)
-  }, [])
+    getStats(selectedRepoId).then(setStats).catch(console.error)
+  }, [selectedRepoId])
 
   return (
     <motion.div initial="initial" animate="animate" variants={pageTransition} className="space-y-6">
@@ -44,7 +46,15 @@ export default function GraphPage() {
         </div>
       </div>
 
-      <MemoryGraph />
+      <MemoryGraph repoId={selectedRepoId} />
     </motion.div>
+  )
+}
+
+export default function GraphPage() {
+  return (
+    <Suspense fallback={null}>
+      <GraphContent />
+    </Suspense>
   )
 }
