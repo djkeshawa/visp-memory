@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from llm_memory.server.app import app
@@ -5,11 +7,18 @@ from llm_memory.server.auth import UserContext, get_current_user
 
 
 def set_current_user(user: UserContext):
-    app.dependency_overrides[get_current_user] = lambda: user
+    async def override_current_user():
+        return user
+
+    app.dependency_overrides[get_current_user] = override_current_user
 
 
 def clear_current_user():
     app.dependency_overrides.pop(get_current_user, None)
+
+
+async def get_without_hanging(client, path: str):
+    return await asyncio.wait_for(client.get(path), timeout=1)
 
 
 @pytest.mark.asyncio
@@ -138,6 +147,26 @@ async def test_duplicate_user_and_team_ids_return_conflict_without_overwrite(cli
 
 
 @pytest.mark.asyncio
+async def test_non_admin_user_read_does_not_hang_with_current_user_override(client):
+    app.state.storage.store_user({"id": "alice-id", "username": "alice"})
+
+    set_current_user(
+        UserContext(
+            user_id="alice-id",
+            username="alice",
+            team_id="team-alpha",
+            is_admin=False,
+        )
+    )
+    try:
+        own_user = await get_without_hanging(client, "/teams/users/alice-id")
+        assert own_user.status_code == 200
+        assert own_user.json()["id"] == "alice-id"
+    finally:
+        clear_current_user()
+
+
+@pytest.mark.asyncio
 async def test_non_admin_team_reads_are_scoped_to_current_user_and_team(client):
     app.state.storage.store_user({"id": "alice-id", "username": "alice"})
     app.state.storage.store_user({"id": "bob-id", "username": "bob"})
@@ -156,25 +185,25 @@ async def test_non_admin_team_reads_are_scoped_to_current_user_and_team(client):
         )
     )
     try:
-        own_user = await client.get("/teams/users/alice-id")
+        own_user = await get_without_hanging(client, "/teams/users/alice-id")
         assert own_user.status_code == 200
         assert own_user.json()["id"] == "alice-id"
 
-        other_user = await client.get("/teams/users/bob-id")
+        other_user = await get_without_hanging(client, "/teams/users/bob-id")
         assert other_user.status_code == 404
 
-        own_team = await client.get("/teams/team-alpha")
+        own_team = await get_without_hanging(client, "/teams/team-alpha")
         assert own_team.status_code == 200
         assert own_team.json()["id"] == "team-alpha"
 
-        other_team = await client.get("/teams/team-beta")
+        other_team = await get_without_hanging(client, "/teams/team-beta")
         assert other_team.status_code == 404
 
-        own_teams = await client.get("/teams/users/alice-id/teams")
+        own_teams = await get_without_hanging(client, "/teams/users/alice-id/teams")
         assert own_teams.status_code == 200
         assert [team["id"] for team in own_teams.json()] == ["team-alpha"]
 
-        other_user_teams = await client.get("/teams/users/bob-id/teams")
+        other_user_teams = await get_without_hanging(client, "/teams/users/bob-id/teams")
         assert other_user_teams.status_code == 403
     finally:
         clear_current_user()
