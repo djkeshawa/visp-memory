@@ -4,7 +4,7 @@
 
 > **Vision**: A central, cross-functional memory that evolves with your team. Starting as a local tool for individuals, it will grow into a shared organizational brain that tracks context across multiple repositories.
 
-![LLM Memory Dashboard](https://raw.githubusercontent.com/djkeshawa/llm-memory/main/docs/dashboard-preview.png)
+![LLM Memory Dashboard](docs/dashboard-preview.png)
 
 ---
 
