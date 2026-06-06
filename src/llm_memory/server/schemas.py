@@ -12,6 +12,7 @@ from llm_memory.core.ranking import DEFAULT_RECALL_MIN_SCORE
 MemoryLayer = Literal["raw", "episodic", "semantic", "intent"]
 MemoryStatus = Literal["active", "pending", "archived", "deleted"]
 IntentStatus = Literal["active", "completed", "closed"]
+RelationshipConfidence = Literal["observed", "inferred", "ambiguous", "manual"]
 MAX_QUERY_LIMIT = 200
 
 
@@ -164,11 +165,23 @@ class AuditLogEntry(BaseModel):
     created_at: datetime
 
 
+class RelationshipEvidence(BaseModel):
+    confidence: RelationshipConfidence = "ambiguous"
+    confidence_score: float = Field(default=0.5, ge=0.0, le=1.0)
+    source: Optional[str] = None
+    source_file: Optional[str] = None
+    source_location: Optional[str] = None
+    reason: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
 class RelationshipCreate(BaseModel):
     source_id: str
     target_id: str
     relationship: str
     strength: float = 1.0
+    evidence: Optional[RelationshipEvidence] = None
 
 
 class RepositoryCreate(BaseModel):

@@ -335,6 +335,7 @@ async def get_graph_data(
                 "target": r["target_id"],
                 "value": r["strength"],
                 "label": r["relationship"],
+                "evidence": r.get("evidence"),
             }
             for r in relationships
             if r["source_id"] in visible_memory_ids and r["target_id"] in visible_memory_ids

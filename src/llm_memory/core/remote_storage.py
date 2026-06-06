@@ -222,7 +222,12 @@ class RemoteStorage(BaseStorage):
 
     # Relationship Operations
     def add_relationship(
-        self, source_id: str, target_id: str, relationship: str, strength: float = 1.0
+        self,
+        source_id: str,
+        target_id: str,
+        relationship: str,
+        strength: float = 1.0,
+        evidence: Dict[str, Any] = None,
     ) -> str:
         """Create a relationship."""
         try:
@@ -232,6 +237,8 @@ class RemoteStorage(BaseStorage):
                 "relationship": relationship,
                 "strength": strength,
             }
+            if evidence is not None:
+                payload["evidence"] = evidence
             response = self.session.post(f"{self.server_url}/relationships", json=payload)
             response.raise_for_status()
             return self._response_id(response, "add relationship")

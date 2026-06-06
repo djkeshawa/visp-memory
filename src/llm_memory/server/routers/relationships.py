@@ -1,7 +1,6 @@
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
 
 from llm_memory.server.auth import UserContext, get_current_user
 from llm_memory.server.authorization import (
@@ -9,15 +8,9 @@ from llm_memory.server.authorization import (
     require_repo_scope_access,
     require_scoped_record_access,
 )
+from llm_memory.server.schemas import RelationshipCreate
 
 router = APIRouter(prefix="/relationships", tags=["relationships"])
-
-
-class RelationshipCreate(BaseModel):
-    source_id: str
-    target_id: str
-    relationship: str
-    strength: float = 1.0
 
 
 @router.get("", response_model=List[dict])
@@ -83,11 +76,13 @@ async def add_relationship(
             detail="Memory relationships cannot cross repository boundaries",
         )
     try:
+        evidence = rel.evidence.model_dump(exclude_none=True) if rel.evidence else None
         rel_id = storage.add_relationship(
             source_id=rel.source_id,
             target_id=rel.target_id,
             relationship=rel.relationship,
             strength=rel.strength,
+            evidence=evidence,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e

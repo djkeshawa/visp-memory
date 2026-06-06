@@ -724,6 +724,83 @@ async def test_relationships_endpoint_returns_created_contract(client):
 
 
 @pytest.mark.asyncio
+async def test_relationships_endpoint_round_trips_evidence(client):
+    headers = {"X-API-KEY": "test_key"}
+    source = (
+        await client.post(
+            "/memories",
+            json={"content": "Source evidence memory", "repo_id": "repo-a"},
+            headers=headers,
+        )
+    ).json()["id"]
+    target = (
+        await client.post(
+            "/memories",
+            json={"content": "Target evidence memory", "repo_id": "repo-a"},
+            headers=headers,
+        )
+    ).json()["id"]
+
+    response = await client.post(
+        "/relationships",
+        json={
+            "source_id": source,
+            "target_id": target,
+            "relationship": "observed_in",
+            "strength": 0.8,
+            "evidence": {
+                "confidence": "observed",
+                "confidence_score": 0.9,
+                "source": "api",
+                "source_file": "tests/server/test_server_api.py",
+                "source_location": "test_relationships_endpoint_round_trips_evidence",
+                "reason": "The API test directly links source and target memories.",
+                "created_by": "pytest",
+            },
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200
+
+    list_response = await client.get("/relationships?repo_id=repo-a", headers=headers)
+    assert list_response.status_code == 200
+    relationship = list_response.json()[0]
+
+    assert relationship["source_id"] == source
+    assert relationship["target_id"] == target
+    assert relationship["relationship"] == "observed_in"
+    assert relationship["strength"] == 0.8
+    assert relationship["evidence"] == {
+        "confidence": "observed",
+        "confidence_score": 0.9,
+        "source": "api",
+        "source_file": "tests/server/test_server_api.py",
+        "source_location": "test_relationships_endpoint_round_trips_evidence",
+        "reason": "The API test directly links source and target memories.",
+        "created_by": "pytest",
+        "created_at": relationship["created_at"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_relationships_endpoint_rejects_invalid_evidence_confidence(client):
+    headers = {"X-API-KEY": "test_key"}
+
+    response = await client.post(
+        "/relationships",
+        json={
+            "source_id": "source",
+            "target_id": "target",
+            "relationship": "related",
+            "evidence": {"confidence": "trusted"},
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_graph_endpoint_filters_relationships_by_repo(client):
     headers = {"X-API-KEY": "test_key"}
     mem_a = (
@@ -756,7 +833,17 @@ async def test_graph_endpoint_filters_relationships_by_repo(client):
     assert cross_response.status_code == 400
     await client.post(
         "/relationships",
-        json={"source_id": mem_b, "target_id": mem_b2, "relationship": "same"},
+        json={
+            "source_id": mem_b,
+            "target_id": mem_b2,
+            "relationship": "same",
+            "evidence": {
+                "confidence": "manual",
+                "confidence_score": 0.7,
+                "source": "api",
+                "reason": "Repo B graph fixture links the memories.",
+            },
+        },
         headers=headers,
     )
 
@@ -766,3 +853,7 @@ async def test_graph_endpoint_filters_relationships_by_repo(client):
     assert {node["id"] for node in graph["nodes"]} == {mem_b, mem_b2}
     assert len(graph["links"]) == 1
     assert graph["links"][0]["label"] == "same"
+    assert graph["links"][0]["evidence"]["confidence"] == "manual"
+    assert graph["links"][0]["evidence"]["confidence_score"] == 0.7
+    assert graph["links"][0]["evidence"]["source"] == "api"
+    assert graph["links"][0]["evidence"]["reason"] == "Repo B graph fixture links the memories."

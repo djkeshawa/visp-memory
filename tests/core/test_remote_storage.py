@@ -110,6 +110,58 @@ def test_remote_storage_search_maps_layer_to_api_layers_payload():
     }
 
 
+def test_remote_storage_add_relationship_sends_evidence_payload():
+    storage = remote_storage_with(FakeResponse(200, {"id": "rel-1"}))
+
+    assert (
+        storage.add_relationship(
+            "source",
+            "target",
+            "observed_in",
+            strength=0.8,
+            evidence={
+                "confidence": "observed",
+                "confidence_score": 0.9,
+                "source": "api",
+                "reason": "Remote client supplied evidence.",
+            },
+        )
+        == "rel-1"
+    )
+
+    assert storage.session.last_post_url == "http://memory.example/relationships"
+    assert storage.session.last_post_json == {
+        "source_id": "source",
+        "target_id": "target",
+        "relationship": "observed_in",
+        "strength": 0.8,
+        "evidence": {
+            "confidence": "observed",
+            "confidence_score": 0.9,
+            "source": "api",
+            "reason": "Remote client supplied evidence.",
+        },
+    }
+
+
+def test_remote_storage_get_relationships_preserves_evidence_payload():
+    payload = [
+        {
+            "id": "rel-1",
+            "source_id": "source",
+            "target_id": "target",
+            "relationship": "observed_in",
+            "strength": 0.8,
+            "evidence": {"confidence": "observed", "source": "api"},
+        }
+    ]
+    storage = remote_storage_with(FakeResponse(200, payload))
+
+    assert storage.get_all_relationships(repo_id="repo-a") == payload
+    assert storage.session.last_get_url == "http://memory.example/relationships"
+    assert storage.session.last_get_params == {"repo_id": "repo-a"}
+
+
 def test_remote_storage_list_sends_supported_filters_without_none_values():
     storage = remote_storage_with(FakeResponse(200, []))
 
