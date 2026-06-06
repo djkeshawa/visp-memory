@@ -983,3 +983,151 @@ class TestImportExport:
             memory.import_memories(import_file)
 
         assert memory._storage.list_memories(repo_id="target-repo") == []
+
+
+class TestGraphRecall:
+    """Tests for evidence-backed graph recall."""
+
+    def test_graph_trace_returns_evidence_and_deterministic_omissions(self, tmp_path):
+        config = MemoryConfig(project_name="graph-recall", repo_id="repo-a")
+        config.storage.data_dir = tmp_path / "data"
+        config.embedding.provider = "noop"
+        memory = Memory(config=config)
+
+        source_id = memory.record(
+            "Auth route checks repository scope before returning memories",
+            importance=0.9,
+        )
+        bug_id = memory.record(
+            "Bug fixed where graph route leaked cross repository memories",
+            importance=0.8,
+        )
+        knowledge_id = memory.learn(
+            "Use require_repo_scope_access before graph recall traversal",
+            importance=0.7,
+        )
+        memory._storage.add_relationship(
+            source_id,
+            bug_id,
+            "explains",
+            strength=0.8,
+            evidence={
+                "confidence": "observed",
+                "confidence_score": 0.9,
+                "source": "test",
+                "reason": "The auth route fix explains the graph leak.",
+            },
+        )
+        memory._storage.add_relationship(
+            bug_id,
+            knowledge_id,
+            "mitigated_by",
+            strength=0.7,
+            evidence={
+                "confidence": "manual",
+                "confidence_score": 0.8,
+                "source": "test",
+                "reason": "The access helper mitigates the leak.",
+            },
+        )
+
+        trace = memory.graph_trace(
+            "auth graph repository leak",
+            depth=2,
+            token_budget=1000,
+            limit=2,
+        )
+
+        assert trace["mode"] == "trace"
+        assert {node["id"] for node in trace["nodes"]} >= {source_id, bug_id}
+        assert any(
+            edge["reason"] == "The auth route fix explains the graph leak."
+            for edge in trace["edges"]
+        )
+        assert all("relevance_factors" in node for node in trace["nodes"])
+        assert all("edge_score" in edge["relevance_factors"] for edge in trace["edges"])
+
+        tiny = memory.graph_trace(
+            "auth graph repository leak",
+            depth=2,
+            token_budget=5,
+            limit=3,
+        )
+
+        assert len(tiny["nodes"]) == 1
+        assert tiny["omitted"][0]["type"] == "depth" or any(
+            item["type"] == "token_budget" for item in tiny["omitted"]
+        )
+
+    def test_graph_path_returns_shortest_evidence_path(self, tmp_path):
+        config = MemoryConfig(project_name="graph-path", repo_id="repo-a")
+        config.storage.data_dir = tmp_path / "data"
+        config.embedding.provider = "noop"
+        memory = Memory(config=config)
+
+        source_id = memory._storage.store_memory(
+            "Source alpha", repo_id="repo-a", auto_link=False
+        )
+        middle_id = memory._storage.store_memory(
+            "Bridge beta", repo_id="repo-a", auto_link=False
+        )
+        target_id = memory._storage.store_memory(
+            "Target gamma", repo_id="repo-a", auto_link=False
+        )
+        memory._storage.add_relationship(source_id, middle_id, "first", strength=0.7)
+        memory._storage.add_relationship(middle_id, target_id, "second", strength=0.8)
+
+        result = memory.graph_path(source_id, target_id, max_hops=2)
+
+        assert result["mode"] == "path"
+        assert [edge["relationship"] for edge in result["edges"]] == ["first", "second"]
+        assert {node["id"] for node in result["nodes"]} == {source_id, middle_id, target_id}
+
+    def test_graph_recall_uses_portable_storage_api(self):
+        from llm_memory.recall.graph import GraphRecall
+
+        class FakeStorage:
+            memories = {
+                "a": {
+                    "id": "a",
+                    "content": "Portable source memory",
+                    "layer": "episodic",
+                    "category": "note",
+                    "importance": 0.8,
+                    "repo_id": "repo-a",
+                },
+                "b": {
+                    "id": "b",
+                    "content": "Portable target memory",
+                    "layer": "semantic",
+                    "category": "fact",
+                    "importance": 0.7,
+                    "repo_id": "repo-a",
+                },
+            }
+
+            def get_memory(self, memory_id):
+                return self.memories.get(memory_id)
+
+            def get_all_relationships(self, repo_id=None):
+                return [
+                    {
+                        "source_id": "a",
+                        "target_id": "b",
+                        "relationship": "portable",
+                        "strength": 0.9,
+                        "evidence": {
+                            "confidence": "observed",
+                            "confidence_score": 0.9,
+                            "reason": "Portable API methods are sufficient.",
+                        },
+                    }
+                ]
+
+            def search_memories(self, query, repo_id=None, limit=10, status="active"):
+                return [self.memories["a"]]
+
+        result = GraphRecall(FakeStorage()).trace("portable", repo_id="repo-a")
+
+        assert {node["id"] for node in result["nodes"]} == {"a", "b"}
+        assert result["edges"][0]["reason"] == "Portable API methods are sufficient."

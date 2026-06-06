@@ -857,3 +857,58 @@ async def test_graph_endpoint_filters_relationships_by_repo(client):
     assert graph["links"][0]["evidence"]["confidence_score"] == 0.7
     assert graph["links"][0]["evidence"]["source"] == "api"
     assert graph["links"][0]["evidence"]["reason"] == "Repo B graph fixture links the memories."
+
+
+@pytest.mark.asyncio
+async def test_graph_recall_trace_endpoint_returns_evidence(client):
+    headers = {"X-API-KEY": "test_key"}
+    source = (
+        await client.post(
+            "/memories",
+            json={"content": "Graph recall auth route memory", "repo_id": "repo-a"},
+            headers=headers,
+        )
+    ).json()["id"]
+    target = (
+        await client.post(
+            "/memories",
+            json={"content": "Graph recall repository scope evidence", "repo_id": "repo-a"},
+            headers=headers,
+        )
+    ).json()["id"]
+    await client.post(
+        "/relationships",
+        json={
+            "source_id": source,
+            "target_id": target,
+            "relationship": "supports",
+            "strength": 0.8,
+            "evidence": {
+                "confidence": "observed",
+                "confidence_score": 0.9,
+                "source": "api",
+                "reason": "The source memory supports the repository scope evidence.",
+            },
+        },
+        headers=headers,
+    )
+
+    response = await client.post(
+        "/graph-recall/trace",
+        json={
+            "query": "graph recall auth route",
+            "repo_id": "repo-a",
+            "depth": 1,
+            "token_budget": 1000,
+            "limit": 2,
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["mode"] == "trace"
+    assert {node["id"] for node in data["nodes"]} >= {source, target}
+    assert data["edges"][0]["relationship"] == "supports"
+    assert data["edges"][0]["evidence"]["confidence"] == "observed"
+    assert data["edges"][0]["reason"] == "The source memory supports the repository scope evidence."

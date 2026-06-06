@@ -85,6 +85,41 @@ def relationship_score(similarity: Any, query: str, content: str) -> float:
     return clamp_score((semantic * 0.75) + (lexical * 0.25))
 
 
+def graph_edge_score(strength: Any, evidence: dict[str, Any] | None = None) -> float:
+    """Score a graph edge using relationship strength and evidence confidence."""
+    evidence = evidence or {}
+    strength_score = clamp_score(strength, default=0.5)
+    confidence_score = clamp_score(evidence.get("confidence_score"), default=strength_score)
+    confidence = evidence.get("confidence")
+    confidence_bonus = {
+        "observed": 0.10,
+        "manual": 0.08,
+        "inferred": 0.04,
+        "ambiguous": 0.0,
+    }.get(confidence, 0.0)
+    return clamp_score((strength_score * 0.45) + (confidence_score * 0.45) + confidence_bonus)
+
+
+def graph_node_relevance(
+    query_score: Any,
+    importance: Any,
+    edge_score: Any,
+    distance: Any,
+) -> float:
+    """Score graph recall nodes while penalizing distant context."""
+    try:
+        distance_value = max(0, int(distance))
+    except (TypeError, ValueError):
+        distance_value = 0
+    distance_score = 1.0 / (1.0 + distance_value)
+    return clamp_score(
+        (clamp_score(query_score) * 0.45)
+        + (clamp_score(importance, default=0.5) * 0.20)
+        + (clamp_score(edge_score, default=0.5) * 0.25)
+        + (distance_score * 0.10)
+    )
+
+
 def _age_score(memory: dict[str, Any]) -> float:
     """Score recent memories higher without making recency dominate relevance."""
     raw_timestamp = memory.get("accessed_at") or memory.get("created_at")

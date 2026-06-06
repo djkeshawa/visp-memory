@@ -229,3 +229,38 @@ class TestMCPServer:
         assert "score=0.95" in result
         assert "source=test" in result
         assert "why this edge is relevant" in result
+
+    @pytest.mark.asyncio
+    async def test_mcp_memory_trace_outputs_relationship_reasons(self):
+        """MCP trace output includes graph relationship reasons."""
+        from llm_memory.interfaces.mcp import handle_tool
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = MemoryConfig()
+            config.storage.data_dir = Path(tmpdir)
+            config.embedding.provider = "noop"
+            memory = Memory(config=config)
+
+            source_id = memory.record("Trace recall should explain auth routes")
+            target_id = memory.record("Repository scope evidence matters for auth routes")
+            memory._storage.add_relationship(
+                source_id,
+                target_id,
+                "supports",
+                evidence={
+                    "confidence": "observed",
+                    "confidence_score": 0.9,
+                    "reason": "Relationship reason appears in MCP trace output.",
+                },
+            )
+
+            result = await handle_tool(
+                "memory_trace",
+                {"query": "trace auth routes", "depth": 1, "token_budget": 1000},
+                memory,
+            )
+
+        assert "# Graph Recall: trace" in result
+        assert source_id in result
+        assert target_id in result
+        assert "Relationship reason appears in MCP trace output." in result

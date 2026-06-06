@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 try:
-    from fastapi import FastAPI
+    from fastapi import Depends, FastAPI
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import FileResponse, JSONResponse, Response
     from fastapi.staticfiles import StaticFiles
@@ -19,6 +19,12 @@ from llm_memory import __version__
 from llm_memory.config import load_config
 from llm_memory.core.neo4j_storage import Neo4jStorage
 from llm_memory.core.storage import LocalStorage
+from llm_memory.recall.graph import GraphRecall
+from llm_memory.server.auth import UserContext, get_current_user
+from llm_memory.server.authorization import (
+    can_access_scoped_record,
+    require_repo_scope_access,
+)
 from llm_memory.server.routers import (
     ai,
     diagnostics,
@@ -29,6 +35,13 @@ from llm_memory.server.routers import (
     relationships,
     repositories,
     teams,
+)
+from llm_memory.server.schemas import (
+    GraphNeighborsRequest,
+    GraphPathRequest,
+    GraphRecallResponse,
+    GraphTraceRequest,
+    GraphWhyRelevantRequest,
 )
 
 # Configure logging
@@ -349,6 +362,100 @@ async def readyz():
         payload["storage_error"] = storage_error
 
     return JSONResponse(status_code=200 if ready else 503, content=payload)
+
+
+def _filter_graph_recall_result(result, user: UserContext):
+    """Apply scoped-memory visibility after graph recall traversal."""
+    visible_ids = set()
+    filtered_nodes = []
+    for node in result["nodes"]:
+        memory = app.state.storage.get_memory(node["id"])
+        if memory and can_access_scoped_record(
+            app.state.storage, memory, user, scope_field="metadata"
+        ):
+            visible_ids.add(node["id"])
+            filtered_nodes.append(node)
+
+    result["nodes"] = filtered_nodes
+    result["edges"] = [
+        edge
+        for edge in result["edges"]
+        if edge["source_id"] in visible_ids and edge["target_id"] in visible_ids
+    ]
+    return result
+
+
+def _require_graph_repo_access(repo_id: str | None, user: UserContext) -> str | None:
+    graph_repo_id = repo_id or config.repo_id
+    require_repo_scope_access(app.state.storage, graph_repo_id, user)
+    return graph_repo_id
+
+
+@app.post("/graph-recall/trace", response_model=GraphRecallResponse, tags=["graph-recall"])
+async def graph_recall_trace(
+    payload: GraphTraceRequest, user: UserContext = Depends(get_current_user)
+):
+    """Return an agent-optimized evidence-backed recall subgraph for a query."""
+    graph_repo_id = _require_graph_repo_access(payload.repo_id, user)
+    result = GraphRecall(app.state.storage).trace(
+        query=payload.query,
+        repo_id=graph_repo_id,
+        depth=payload.depth,
+        token_budget=payload.token_budget,
+        limit=payload.limit,
+        relationship_filter=payload.relationship_filter,
+    )
+    return _filter_graph_recall_result(result, user)
+
+
+@app.post("/graph-recall/neighbors", response_model=GraphRecallResponse, tags=["graph-recall"])
+async def graph_recall_neighbors(
+    payload: GraphNeighborsRequest, user: UserContext = Depends(get_current_user)
+):
+    """Return a compact relationship neighborhood for a memory."""
+    graph_repo_id = _require_graph_repo_access(payload.repo_id, user)
+    result = GraphRecall(app.state.storage).neighbors(
+        memory_id=payload.memory_id,
+        relationship_filter=payload.relationship_filter,
+        repo_id=graph_repo_id,
+        depth=payload.depth,
+        token_budget=payload.token_budget,
+        limit=payload.limit,
+    )
+    return _filter_graph_recall_result(result, user)
+
+
+@app.post("/graph-recall/path", response_model=GraphRecallResponse, tags=["graph-recall"])
+async def graph_recall_path(
+    payload: GraphPathRequest, user: UserContext = Depends(get_current_user)
+):
+    """Return the shortest evidence-backed relationship path between memories."""
+    graph_repo_id = _require_graph_repo_access(payload.repo_id, user)
+    result = GraphRecall(app.state.storage).path(
+        source_id=payload.source_id,
+        target_id=payload.target_id,
+        repo_id=graph_repo_id,
+        max_hops=payload.max_hops,
+        token_budget=payload.token_budget,
+    )
+    return _filter_graph_recall_result(result, user)
+
+
+@app.post("/graph-recall/why-relevant", response_model=GraphRecallResponse, tags=["graph-recall"])
+async def graph_recall_why_relevant(
+    payload: GraphWhyRelevantRequest, user: UserContext = Depends(get_current_user)
+):
+    """Explain why a memory is relevant to a query through relationship evidence."""
+    graph_repo_id = _require_graph_repo_access(payload.repo_id, user)
+    result = GraphRecall(app.state.storage).why_relevant(
+        query=payload.query,
+        memory_id=payload.memory_id,
+        repo_id=graph_repo_id,
+        depth=payload.depth,
+        token_budget=payload.token_budget,
+        limit=payload.limit,
+    )
+    return _filter_graph_recall_result(result, user)
 
 
 @app.head("/favicon.ico", include_in_schema=False)

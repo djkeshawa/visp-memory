@@ -158,6 +158,68 @@ def create_mcp_server() -> "Server":
                     },
                 },
             ),
+            Tool(
+                name="memory_trace",
+                description="Trace query-relevant memories through evidence-backed relationships.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Recall query"},
+                        "repo_id": {"type": "string", "description": "Repository/project ID"},
+                        "depth": {"type": "integer", "default": 2},
+                        "token_budget": {"type": "integer", "default": 2000},
+                        "limit": {"type": "integer", "default": 5},
+                    },
+                    "required": ["query"],
+                },
+            ),
+            Tool(
+                name="memory_neighbors",
+                description="Get a compact evidence-backed neighborhood for a memory.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "memory_id": {"type": "string", "description": "Memory ID"},
+                        "repo_id": {"type": "string", "description": "Repository/project ID"},
+                        "relationship_filter": {"type": "string"},
+                        "depth": {"type": "integer", "default": 1},
+                        "token_budget": {"type": "integer", "default": 2000},
+                        "limit": {"type": "integer", "default": 25},
+                    },
+                    "required": ["memory_id"],
+                },
+            ),
+            Tool(
+                name="memory_path",
+                description="Find the shortest evidence-backed path between two memories.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "source_id": {"type": "string", "description": "Source memory ID"},
+                        "target_id": {"type": "string", "description": "Target memory ID"},
+                        "repo_id": {"type": "string", "description": "Repository/project ID"},
+                        "max_hops": {"type": "integer", "default": 4},
+                        "token_budget": {"type": "integer", "default": 2000},
+                    },
+                    "required": ["source_id", "target_id"],
+                },
+            ),
+            Tool(
+                name="memory_why_relevant",
+                description="Explain why a memory is relevant to a query.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Recall query"},
+                        "memory_id": {"type": "string", "description": "Memory ID"},
+                        "repo_id": {"type": "string", "description": "Repository/project ID"},
+                        "depth": {"type": "integer", "default": 2},
+                        "token_budget": {"type": "integer", "default": 2000},
+                        "limit": {"type": "integer", "default": 5},
+                    },
+                    "required": ["query", "memory_id"],
+                },
+            ),
             # Proactive Recall
             Tool(
                 name="memory_file_context",
@@ -1096,6 +1158,45 @@ def _format_relevant_memory(
     return "\n".join(output) if output else "No relevant memories found."
 
 
+def _format_graph_recall(result: dict[str, Any]) -> str:
+    lines = [f"# Graph Recall: {result.get('mode', 'unknown')}"]
+    if result.get("explanation"):
+        lines.append(result["explanation"])
+    if result.get("query"):
+        lines.append(f"Query: {result['query']}")
+
+    lines.append("\n## Memories")
+    for node in result.get("nodes", []):
+        score = node.get("relevance_score", 0.0)
+        factors = node.get("relevance_factors", {})
+        distance = factors.get("distance", 0)
+        lines.append(
+            f"- {node['id']} [{node.get('layer', 'unknown')}] "
+            f"score={score:.2f} distance={distance}: {node.get('content', '')}"
+        )
+
+    lines.append("\n## Relationships")
+    if result.get("edges"):
+        for edge in result["edges"]:
+            evidence = edge.get("evidence") or {}
+            reason = edge.get("reason") or evidence.get("reason") or "No reason recorded."
+            confidence = evidence.get("confidence", "unknown")
+            lines.append(
+                f"- {edge['source_id']} -> {edge['target_id']} "
+                f"({edge.get('relationship', 'related')}): {reason} "
+                f"[confidence={confidence}, score={edge.get('relevance_score', 0.0):.2f}]"
+            )
+    else:
+        lines.append("- No relationship evidence returned.")
+
+    if result.get("omitted"):
+        lines.append("\n## Omitted Context")
+        for item in result["omitted"]:
+            lines.append(f"- {item.get('count', 1)} {item.get('type')}: {item.get('reason')}")
+
+    return "\n".join(lines)
+
+
 def _handle_workflow(name: str, args: dict[str, Any], memory: Memory) -> str:
     """Handle Codex-style recall-before-work and record-after-work tools."""
     if name == "memory_session_start":
@@ -1168,6 +1269,57 @@ def _handle_workflow(name: str, args: dict[str, Any], memory: Memory) -> str:
         return "\n".join(recorded)
 
     return f"Unknown workflow tool: {name}"
+
+
+def _handle_graph_recall(name: str, args: dict[str, Any], memory: Memory) -> str:
+    """Handle graph-shaped recall tools."""
+    if name == "memory_trace":
+        return _format_graph_recall(
+            memory.graph_trace(
+                query=args["query"],
+                repo_id=args.get("repo_id"),
+                depth=args.get("depth", 2),
+                token_budget=args.get("token_budget", 2000),
+                limit=args.get("limit", 5),
+            )
+        )
+
+    if name == "memory_neighbors":
+        return _format_graph_recall(
+            memory.graph_neighbors(
+                memory_id=args["memory_id"],
+                relationship_filter=args.get("relationship_filter"),
+                repo_id=args.get("repo_id"),
+                depth=args.get("depth", 1),
+                token_budget=args.get("token_budget", 2000),
+                limit=args.get("limit", 25),
+            )
+        )
+
+    if name == "memory_path":
+        return _format_graph_recall(
+            memory.graph_path(
+                source_id=args["source_id"],
+                target_id=args["target_id"],
+                repo_id=args.get("repo_id"),
+                max_hops=args.get("max_hops", 4),
+                token_budget=args.get("token_budget", 2000),
+            )
+        )
+
+    if name == "memory_why_relevant":
+        return _format_graph_recall(
+            memory.graph_why_relevant(
+                query=args["query"],
+                memory_id=args["memory_id"],
+                repo_id=args.get("repo_id"),
+                depth=args.get("depth", 2),
+                token_budget=args.get("token_budget", 2000),
+                limit=args.get("limit", 5),
+            )
+        )
+
+    return f"Unknown graph recall tool: {name}"
 
 
 def _handle_recording(name: str, args: dict[str, Any], memory: Memory) -> str:
@@ -1386,6 +1538,9 @@ async def handle_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
     # Search
     if name in ["memory_recall", "memory_remember", "memory_relevant"]:
         return _handle_search(name, args, memory)
+
+    if name in ["memory_trace", "memory_neighbors", "memory_path", "memory_why_relevant"]:
+        return _handle_graph_recall(name, args, memory)
 
     # Proactive
     if name in ["memory_file_context", "memory_find_error", "memory_directory_context"]:

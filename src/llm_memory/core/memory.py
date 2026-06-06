@@ -341,6 +341,88 @@ class Memory:
 
         return rank_memory_results(results, query=query, limit=limit, min_score=min_score)
 
+    def graph_neighbors(
+        self,
+        memory_id: str,
+        relationship_filter: str = None,
+        repo_id: str = None,
+        depth: int = 1,
+        token_budget: int = 2000,
+        limit: int = 25,
+    ) -> Dict[str, Any]:
+        """Return a compact relationship neighborhood for a memory."""
+        from llm_memory.recall.graph import GraphRecall
+
+        return GraphRecall(self._storage).neighbors(
+            memory_id=memory_id,
+            relationship_filter=relationship_filter,
+            repo_id=repo_id or self.config.repo_id,
+            depth=depth,
+            token_budget=token_budget,
+            limit=limit,
+        )
+
+    def graph_path(
+        self,
+        source_id: str,
+        target_id: str,
+        repo_id: str = None,
+        max_hops: int = 4,
+        token_budget: int = 2000,
+    ) -> Dict[str, Any]:
+        """Return the shortest evidence-backed relationship path between two memories."""
+        from llm_memory.recall.graph import GraphRecall
+
+        return GraphRecall(self._storage).path(
+            source_id=source_id,
+            target_id=target_id,
+            repo_id=repo_id or self.config.repo_id,
+            max_hops=max_hops,
+            token_budget=token_budget,
+        )
+
+    def graph_trace(
+        self,
+        query: str,
+        repo_id: str = None,
+        depth: int = 2,
+        token_budget: int = 2000,
+        limit: int = 5,
+        relationship_filter: str = None,
+    ) -> Dict[str, Any]:
+        """Return ranked seed memories plus evidence-backed relationship context."""
+        from llm_memory.recall.graph import GraphRecall
+
+        return GraphRecall(self._storage).trace(
+            query=query,
+            repo_id=repo_id or self.config.repo_id,
+            depth=depth,
+            token_budget=token_budget,
+            limit=limit,
+            relationship_filter=relationship_filter,
+        )
+
+    def graph_why_relevant(
+        self,
+        query: str,
+        memory_id: str,
+        repo_id: str = None,
+        depth: int = 2,
+        token_budget: int = 2000,
+        limit: int = 5,
+    ) -> Dict[str, Any]:
+        """Explain why a specific memory is relevant to a query."""
+        from llm_memory.recall.graph import GraphRecall
+
+        return GraphRecall(self._storage).why_relevant(
+            query=query,
+            memory_id=memory_id,
+            repo_id=repo_id or self.config.repo_id,
+            depth=depth,
+            token_budget=token_budget,
+            limit=limit,
+        )
+
     def relevant_for(
         self, task: str = None, files: List[str] = None, limit: int = 15
     ) -> Dict[str, List[Dict[str, Any]]]:

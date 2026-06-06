@@ -1,4 +1,10 @@
-from llm_memory.core.ranking import rank_memory_results, relationship_score, score_memory_result
+from llm_memory.core.ranking import (
+    graph_edge_score,
+    graph_node_relevance,
+    rank_memory_results,
+    relationship_score,
+    score_memory_result,
+)
 
 
 def test_relevance_score_combines_similarity_text_and_importance():
@@ -65,3 +71,19 @@ def test_relationship_score_requires_more_than_embedding_noise():
         "OpenRouter cloud embeddings",
         "Cloud embeddings use OpenRouter",
     ) >= 0.60
+
+
+def test_graph_scores_include_evidence_and_distance():
+    observed = graph_edge_score(
+        0.7,
+        {"confidence": "observed", "confidence_score": 0.9},
+    )
+    ambiguous = graph_edge_score(
+        0.7,
+        {"confidence": "ambiguous", "confidence_score": 0.3},
+    )
+
+    assert observed > ambiguous
+    assert graph_node_relevance(0.9, 0.7, observed, distance=0) > graph_node_relevance(
+        0.9, 0.7, observed, distance=3
+    )

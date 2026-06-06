@@ -60,6 +60,94 @@ class SearchQuery(BaseModel):
     min_score: float = Field(default=DEFAULT_RECALL_MIN_SCORE, ge=0.0, le=1.0)
 
 
+GraphRecallMode = Literal["neighbors", "path", "trace", "why_relevant"]
+
+
+class RelationshipEvidence(BaseModel):
+    confidence: RelationshipConfidence = "ambiguous"
+    confidence_score: float = Field(default=0.5, ge=0.0, le=1.0)
+    source: Optional[str] = None
+    source_file: Optional[str] = None
+    source_location: Optional[str] = None
+    reason: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
+class GraphTraceRequest(BaseModel):
+    query: str = Field(min_length=1)
+    repo_id: Optional[str] = None
+    depth: int = Field(default=2, ge=0, le=4)
+    token_budget: int = Field(default=2000, ge=1, le=100000)
+    limit: int = Field(default=5, ge=1, le=50)
+    relationship_filter: Optional[str] = None
+
+
+class GraphNeighborsRequest(BaseModel):
+    memory_id: str = Field(min_length=1)
+    repo_id: Optional[str] = None
+    relationship_filter: Optional[str] = None
+    depth: int = Field(default=1, ge=0, le=4)
+    token_budget: int = Field(default=2000, ge=1, le=100000)
+    limit: int = Field(default=25, ge=1, le=100)
+
+
+class GraphPathRequest(BaseModel):
+    source_id: str = Field(min_length=1)
+    target_id: str = Field(min_length=1)
+    repo_id: Optional[str] = None
+    max_hops: int = Field(default=4, ge=1, le=6)
+    token_budget: int = Field(default=2000, ge=1, le=100000)
+
+
+class GraphWhyRelevantRequest(BaseModel):
+    query: str = Field(min_length=1)
+    memory_id: str = Field(min_length=1)
+    repo_id: Optional[str] = None
+    depth: int = Field(default=2, ge=0, le=4)
+    token_budget: int = Field(default=2000, ge=1, le=100000)
+    limit: int = Field(default=5, ge=1, le=50)
+
+
+class GraphRecallNode(BaseModel):
+    id: str
+    content: str
+    layer: str
+    category: Optional[str] = None
+    importance: float
+    repo_id: Optional[str] = None
+    relevance_score: float
+    relevance_factors: Dict[str, Any] = Field(default_factory=dict)
+
+
+class GraphRecallEdge(BaseModel):
+    id: str
+    source_id: str
+    target_id: str
+    relationship: str
+    strength: float
+    evidence: Optional[RelationshipEvidence] = None
+    reason: str
+    relevance_score: float
+    relevance_factors: Dict[str, Any] = Field(default_factory=dict)
+
+
+class GraphRecallOmission(BaseModel):
+    type: str
+    count: int = 1
+    reason: str
+
+
+class GraphRecallResponse(BaseModel):
+    mode: GraphRecallMode
+    query: Optional[str] = None
+    nodes: List[GraphRecallNode]
+    edges: List[GraphRecallEdge]
+    omitted: List[GraphRecallOmission] = Field(default_factory=list)
+    limits: Dict[str, int]
+    explanation: str
+
+
 class IntentCreate(BaseModel):
     description: str
     priority: int = 1
@@ -163,17 +251,6 @@ class AuditLogEntry(BaseModel):
     target_id: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
-
-
-class RelationshipEvidence(BaseModel):
-    confidence: RelationshipConfidence = "ambiguous"
-    confidence_score: float = Field(default=0.5, ge=0.0, le=1.0)
-    source: Optional[str] = None
-    source_file: Optional[str] = None
-    source_location: Optional[str] = None
-    reason: Optional[str] = None
-    created_by: Optional[str] = None
-    created_at: Optional[datetime] = None
 
 
 class RelationshipCreate(BaseModel):
