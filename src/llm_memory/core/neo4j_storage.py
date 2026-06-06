@@ -48,6 +48,9 @@ class Neo4jStorage(BaseStorage):
     SOURCE_LINK_RELATIONSHIP = "derived_from"
     DEFAULT_AUTO_LINK_LIMIT = 3
     DEFAULT_AUTO_LINK_MIN_SCORE = 0.53
+    RELATIONSHIP_CONFIDENCE_VALUES = {"observed", "inferred", "ambiguous", "manual"}
+    LEGACY_RELATIONSHIP_EVIDENCE_REASON = "Legacy relationship without evidence metadata."
+    UNSPECIFIED_RELATIONSHIP_EVIDENCE_REASON = "Relationship created without evidence metadata."
 
     def __init__(
         self,
@@ -208,6 +211,52 @@ class Neo4jStorage(BaseStorage):
         data.setdefault("status", "active")
         data.setdefault("quality_flags", [])
         return data
+
+    @staticmethod
+    def _format_temporal(value: Any) -> Any:
+        if hasattr(value, "iso_format"):
+            return value.iso_format()
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        return value
+
+    @classmethod
+    def _normalize_relationship_evidence(
+        cls,
+        evidence: Dict[str, Any] = None,
+        *,
+        strength: float = None,
+        created_at: Any = None,
+        legacy: bool = True,
+    ) -> Dict[str, Any]:
+        evidence = evidence or {}
+        confidence = evidence.get("confidence") or "ambiguous"
+        if confidence not in cls.RELATIONSHIP_CONFIDENCE_VALUES:
+            raise ValueError(
+                "Relationship confidence must be one of: "
+                + ", ".join(sorted(cls.RELATIONSHIP_CONFIDENCE_VALUES))
+            )
+
+        score = evidence.get("confidence_score")
+        if score is None:
+            score = strength if strength is not None else 0.5
+
+        default_reason = (
+            cls.LEGACY_RELATIONSHIP_EVIDENCE_REASON
+            if legacy
+            else cls.UNSPECIFIED_RELATIONSHIP_EVIDENCE_REASON
+        )
+
+        return {
+            "confidence": confidence,
+            "confidence_score": clamp_score(score),
+            "source": evidence.get("source") or ("legacy" if legacy else "unspecified"),
+            "source_file": evidence.get("source_file"),
+            "source_location": evidence.get("source_location"),
+            "reason": evidence.get("reason") or default_reason,
+            "created_by": evidence.get("created_by"),
+            "created_at": evidence.get("created_at") or cls._format_temporal(created_at),
+        }
 
     def store_memory(
         self,
@@ -815,12 +864,23 @@ class Neo4jStorage(BaseStorage):
 
     # Relationship Operations
     def add_relationship(
-        self, source_id: str, target_id: str, relationship: str, strength: float = 1.0
+        self,
+        source_id: str,
+        target_id: str,
+        relationship: str,
+        strength: float = 1.0,
+        evidence: Dict[str, Any] = None,
     ) -> str:
         """Create a relationship."""
         rel_type = _normalize_relationship_type(relationship)
         rel_id = self._generate_id(f"{source_id}-{target_id}-{rel_type}")
         auto_rel_type = _normalize_relationship_type(self.AUTO_LINK_RELATIONSHIP)
+        evidence_data = self._normalize_relationship_evidence(
+            evidence,
+            strength=strength,
+            created_at=None,
+            legacy=False,
+        )
 
         with self.driver.session() as session:
             if rel_type != auto_rel_type:
@@ -838,12 +898,28 @@ class Neo4jStorage(BaseStorage):
                 MATCH (a:Memory {{id: $source_id}})
                 MATCH (b:Memory {{id: $target_id}})
                 MERGE (a)-[r:{rel_type}]->(b)
-                SET r.id = $rel_id, r.weight = $strength, r.created_at = datetime()
+                SET r.id = $rel_id,
+                    r.weight = $strength,
+                    r.created_at = coalesce(r.created_at, datetime()),
+                    r.confidence = $confidence,
+                    r.confidence_score = $confidence_score,
+                    r.source = $source,
+                    r.source_file = $source_file,
+                    r.source_location = $source_location,
+                    r.reason = $reason,
+                    r.created_by = $created_by
             """,
                 source_id=source_id,
                 target_id=target_id,
                 rel_id=rel_id,
                 strength=strength,
+                confidence=evidence_data["confidence"],
+                confidence_score=evidence_data["confidence_score"],
+                source=evidence_data["source"],
+                source_file=evidence_data["source_file"],
+                source_location=evidence_data["source_location"],
+                reason=evidence_data["reason"],
+                created_by=evidence_data["created_by"],
             )
         return rel_id
 
@@ -860,7 +936,15 @@ class Neo4jStorage(BaseStorage):
 
         query = f"""
             MATCH (m:Memory {{id: $id}})-[r{rel_clause}]-(related:Memory)
-            RETURN related, type(r) as rel_type, r.weight as strength
+            RETURN related, type(r) as rel_type, r.weight as strength,
+                r.confidence as confidence,
+                r.confidence_score as confidence_score,
+                r.source as source,
+                r.source_file as source_file,
+                r.source_location as source_location,
+                r.reason as reason,
+                r.created_by as created_by,
+                r.created_at as created_at
         """
 
         with self.driver.session() as session:
@@ -874,6 +958,21 @@ class Neo4jStorage(BaseStorage):
                 seen_ids.add(item.get("id"))
                 item["relationship"] = record["rel_type"]
                 item["strength"] = record["strength"]
+                item["relationship_evidence"] = self._normalize_relationship_evidence(
+                    {
+                        "confidence": record.get("confidence"),
+                        "confidence_score": record.get("confidence_score"),
+                        "source": record.get("source"),
+                        "source_file": record.get("source_file"),
+                        "source_location": record.get("source_location"),
+                        "reason": record.get("reason"),
+                        "created_by": record.get("created_by"),
+                        "created_at": record.get("created_at"),
+                    },
+                    strength=record["strength"],
+                    created_at=record.get("created_at"),
+                    legacy=record.get("source") in (None, "legacy"),
+                )
                 items.append(item)
             return items
 
@@ -891,7 +990,11 @@ class Neo4jStorage(BaseStorage):
 
             query += (
                 " RETURN a.id as source, b.id as target, type(r) as type, "
-                "r.weight as weight, r.id as id"
+                "r.weight as weight, r.id as id, "
+                "r.confidence as confidence, r.confidence_score as confidence_score, "
+                "r.source as evidence_source, r.source_file as source_file, "
+                "r.source_location as source_location, r.reason as reason, "
+                "r.created_by as created_by, r.created_at as created_at"
             )
 
             result = session.run(query, params)
@@ -902,6 +1005,21 @@ class Neo4jStorage(BaseStorage):
                     "target_id": rec["target"],
                     "relationship": rec["type"],
                     "strength": rec.get("weight", 1.0),
+                    "evidence": self._normalize_relationship_evidence(
+                        {
+                            "confidence": rec.get("confidence"),
+                            "confidence_score": rec.get("confidence_score"),
+                            "source": rec.get("evidence_source"),
+                            "source_file": rec.get("source_file"),
+                            "source_location": rec.get("source_location"),
+                            "reason": rec.get("reason"),
+                            "created_by": rec.get("created_by"),
+                            "created_at": rec.get("created_at"),
+                        },
+                        strength=rec.get("weight", 1.0),
+                        created_at=rec.get("created_at"),
+                        legacy=rec.get("evidence_source") in (None, "legacy"),
+                    ),
                 }
                 for rec in result
             ]

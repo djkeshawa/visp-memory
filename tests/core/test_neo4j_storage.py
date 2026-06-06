@@ -2,23 +2,28 @@ from llm_memory.core.neo4j_storage import Neo4jStorage
 
 
 class FakeResult:
-    def __init__(self, count):
+    def __init__(self, count, records=None):
         self.count = count
+        self.records = records or []
 
     def single(self):
         return {"c": self.count}
 
+    def __iter__(self):
+        return iter(self.records)
+
 
 class FakeSession:
-    def __init__(self, result_count):
+    def __init__(self, result_count, records=None):
         self.result_count = result_count
+        self.records = records or []
         self.calls = []
 
     def run(self, query, parameters=None, **params):
         merged_params = dict(parameters or {})
         merged_params.update(params)
         self.calls.append((query, merged_params))
-        return FakeResult(self.result_count)
+        return FakeResult(self.result_count, self.records)
 
     def __enter__(self):
         return self
@@ -28,16 +33,16 @@ class FakeSession:
 
 
 class FakeDriver:
-    def __init__(self, result_count):
-        self.session_obj = FakeSession(result_count)
+    def __init__(self, result_count, records=None):
+        self.session_obj = FakeSession(result_count, records)
 
     def session(self):
         return self.session_obj
 
 
-def neo4j_storage_with_delete_count(count):
+def neo4j_storage_with_delete_count(count, records=None):
     storage = Neo4jStorage.__new__(Neo4jStorage)
-    storage.driver = FakeDriver(count)
+    storage.driver = FakeDriver(count, records)
     storage._embedding_fn = None
     storage._embedding_dimension = None
     storage._vector_property = "embedding"
@@ -89,6 +94,56 @@ def test_neo4j_add_relationship_normalizes_safe_relationship_type():
     assert "[r:DEPENDS_ON]" in query
     assert params["source_id"] == "source"
     assert params["target_id"] == "target"
+    assert params["confidence"] == "ambiguous"
+    assert params["confidence_score"] == 1.0
+    assert params["source"] == "unspecified"
+    assert params["source_file"] is None
+    assert params["source_location"] is None
+    assert params["reason"] == "Relationship created without evidence metadata."
+    assert params["created_by"] is None
+
+
+def test_neo4j_add_relationship_persists_evidence_metadata():
+    storage = neo4j_storage_with_delete_count(1)
+
+    storage.add_relationship(
+        "source",
+        "target",
+        "observed in",
+        strength=0.7,
+        evidence={
+            "confidence": "observed",
+            "confidence_score": 0.88,
+            "source": "test",
+            "source_file": "tests/core/test_neo4j_storage.py",
+            "source_location": "test_neo4j_add_relationship_persists_evidence_metadata",
+            "reason": "The test fixture directly asserts the edge evidence.",
+            "created_by": "pytest",
+        },
+    )
+
+    query, params = storage.driver.session_obj.calls[1]
+    assert "[r:OBSERVED_IN]" in query
+    assert params["confidence"] == "observed"
+    assert params["confidence_score"] == 0.88
+    assert params["source"] == "test"
+    assert params["source_file"] == "tests/core/test_neo4j_storage.py"
+    assert params["source_location"] == "test_neo4j_add_relationship_persists_evidence_metadata"
+    assert params["reason"] == "The test fixture directly asserts the edge evidence."
+    assert params["created_by"] == "pytest"
+
+
+def test_neo4j_add_relationship_rejects_unsupported_confidence():
+    storage = neo4j_storage_with_delete_count(1)
+
+    try:
+        storage.add_relationship("source", "target", "related", evidence={"confidence": "trusted"})
+    except ValueError as exc:
+        assert "Relationship confidence" in str(exc)
+    else:
+        raise AssertionError("Expected unsupported confidence to be rejected")
+
+    assert storage.driver.session_obj.calls == []
 
 
 def test_neo4j_get_related_memories_rejects_unsafe_relationship_type():
@@ -102,6 +157,88 @@ def test_neo4j_get_related_memories_rejects_unsafe_relationship_type():
         raise AssertionError("Expected unsafe relationship type to be rejected")
 
     assert storage.driver.session_obj.calls == []
+
+
+def test_neo4j_get_related_memories_includes_evidence_defaults():
+    storage = neo4j_storage_with_delete_count(
+        1,
+        records=[
+            {
+                "related": {"id": "target", "content": "Target memory"},
+                "rel_type": "RELATED_TO",
+                "strength": 0.6,
+                "confidence": None,
+                "confidence_score": None,
+                "source": None,
+                "source_file": None,
+                "source_location": None,
+                "reason": None,
+                "created_by": None,
+                "created_at": "2026-06-06T00:00:00Z",
+            }
+        ],
+    )
+
+    related = storage.get_related_memories("source")
+
+    assert related[0]["relationship_evidence"] == {
+        "confidence": "ambiguous",
+        "confidence_score": 0.6,
+        "source": "legacy",
+        "source_file": None,
+        "source_location": None,
+        "reason": "Legacy relationship without evidence metadata.",
+        "created_by": None,
+        "created_at": "2026-06-06T00:00:00Z",
+    }
+
+
+def test_neo4j_get_all_relationships_includes_evidence_metadata():
+    storage = neo4j_storage_with_delete_count(
+        1,
+        records=[
+            {
+                "id": "rel-1",
+                "source": "source",
+                "target": "target",
+                "type": "RESOLVED_BY",
+                "weight": 0.7,
+                "confidence": "manual",
+                "confidence_score": 2.0,
+                "evidence_source": "api",
+                "source_file": "docs/example.md",
+                "source_location": "L1-L2",
+                "reason": "User linked the two memories.",
+                "created_by": "alice",
+                "created_at": "2026-06-06T00:00:00Z",
+            }
+        ],
+    )
+
+    relationships = storage.get_all_relationships(repo_id="repo-a")
+
+    query, params = storage.driver.session_obj.calls[0]
+    assert "a.repo_id = $repo_id" in query
+    assert params == {"repo_id": "repo-a"}
+    assert relationships == [
+        {
+            "id": "rel-1",
+            "source_id": "source",
+            "target_id": "target",
+            "relationship": "RESOLVED_BY",
+            "strength": 0.7,
+            "evidence": {
+                "confidence": "manual",
+                "confidence_score": 1.0,
+                "source": "api",
+                "source_file": "docs/example.md",
+                "source_location": "L1-L2",
+                "reason": "User linked the two memories.",
+                "created_by": "alice",
+                "created_at": "2026-06-06T00:00:00Z",
+            },
+        }
+    ]
 
 
 def test_neo4j_uses_dimension_specific_vector_property_for_memories():
