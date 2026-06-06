@@ -216,6 +216,9 @@ class LocalStorage(BaseStorage):
     SOURCE_LINK_RELATIONSHIP = "derived_from"
     DEFAULT_AUTO_LINK_LIMIT = 3
     DEFAULT_AUTO_LINK_MIN_SCORE = 0.53
+    RELATIONSHIP_CONFIDENCE_VALUES = {"observed", "inferred", "ambiguous", "manual"}
+    LEGACY_RELATIONSHIP_EVIDENCE_REASON = "Legacy relationship without evidence metadata."
+    UNSPECIFIED_RELATIONSHIP_EVIDENCE_REASON = "Relationship created without evidence metadata."
 
     def __init__(self, data_dir: Path, embedding_fn=None):
         """
@@ -325,11 +328,46 @@ class LocalStorage(BaseStorage):
                     target_id TEXT NOT NULL,
                     relationship TEXT NOT NULL,
                     strength REAL DEFAULT 1.0,
+                    confidence TEXT DEFAULT 'ambiguous',
+                    confidence_score REAL DEFAULT NULL,
+                    source TEXT DEFAULT 'legacy',
+                    source_file TEXT DEFAULT NULL,
+                    source_location TEXT DEFAULT NULL,
+                    reason TEXT DEFAULT 'Legacy relationship without evidence metadata.',
+                    created_by TEXT DEFAULT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (source_id) REFERENCES memories(id),
                     FOREIGN KEY (target_id) REFERENCES memories(id)
                 )
             """)
+
+            relationship_migrations = {
+                "confidence": (
+                    "ALTER TABLE relationships ADD COLUMN confidence TEXT DEFAULT 'ambiguous'"
+                ),
+                "confidence_score": (
+                    "ALTER TABLE relationships ADD COLUMN confidence_score REAL DEFAULT NULL"
+                ),
+                "source": "ALTER TABLE relationships ADD COLUMN source TEXT DEFAULT 'legacy'",
+                "source_file": (
+                    "ALTER TABLE relationships ADD COLUMN source_file TEXT DEFAULT NULL"
+                ),
+                "source_location": (
+                    "ALTER TABLE relationships ADD COLUMN source_location TEXT DEFAULT NULL"
+                ),
+                "reason": (
+                    "ALTER TABLE relationships ADD COLUMN reason TEXT DEFAULT "
+                    "'Legacy relationship without evidence metadata.'"
+                ),
+                "created_by": (
+                    "ALTER TABLE relationships ADD COLUMN created_by TEXT DEFAULT NULL"
+                ),
+            }
+            for column, statement in relationship_migrations.items():
+                try:
+                    conn.execute(f"SELECT {column} FROM relationships LIMIT 1")
+                except sqlite3.OperationalError:
+                    conn.execute(statement)
 
             # Session tracking (for compression)
             conn.execute("""
@@ -1445,7 +1483,12 @@ class LocalStorage(BaseStorage):
             return cursor.rowcount > 0
 
     def add_relationship(
-        self, source_id: str, target_id: str, relationship: str, strength: float = 1.0
+        self,
+        source_id: str,
+        target_id: str,
+        relationship: str,
+        strength: float = 1.0,
+        evidence: Dict[str, Any] = None,
     ) -> str:
         """Add a relationship between memories."""
         source = self._get_memory_row(source_id, track_access=False)
@@ -1456,6 +1499,12 @@ class LocalStorage(BaseStorage):
             raise ValueError("Memory relationships cannot cross repository boundaries")
 
         rel_id = self._generate_id(f"{source_id}-{target_id}-{relationship}")
+        evidence_data = self._normalize_relationship_evidence(
+            evidence,
+            strength=strength,
+            created_at=None,
+            legacy=False,
+        )
 
         with self._get_db() as conn:
             if relationship != self.AUTO_LINK_RELATIONSHIP:
@@ -1479,11 +1528,26 @@ class LocalStorage(BaseStorage):
             conn.execute(
                 """
                 INSERT OR REPLACE INTO relationships (
-                    id, source_id, target_id, relationship, strength
+                    id, source_id, target_id, relationship, strength,
+                    confidence, confidence_score, source, source_file,
+                    source_location, reason, created_by
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-                (rel_id, source_id, target_id, relationship, strength),
+                (
+                    rel_id,
+                    source_id,
+                    target_id,
+                    relationship,
+                    strength,
+                    evidence_data["confidence"],
+                    evidence_data["confidence_score"],
+                    evidence_data["source"],
+                    evidence_data["source_file"],
+                    evidence_data["source_location"],
+                    evidence_data["reason"],
+                    evidence_data["created_by"],
+                ),
             )
             conn.commit()
 
@@ -1494,7 +1558,15 @@ class LocalStorage(BaseStorage):
     ) -> List[Dict[str, Any]]:
         """Get memories related to a given memory."""
         query = """
-            SELECT m.*, r.relationship, r.strength
+            SELECT m.*, r.relationship, r.strength,
+                r.confidence AS relationship_confidence,
+                r.confidence_score AS relationship_confidence_score,
+                r.source AS relationship_evidence_source,
+                r.source_file AS relationship_source_file,
+                r.source_location AS relationship_source_location,
+                r.reason AS relationship_reason,
+                r.created_by AS relationship_created_by,
+                r.created_at AS relationship_created_at
             FROM memories m
             JOIN relationships r ON (m.id = r.target_id OR m.id = r.source_id)
             WHERE (r.source_id = ? OR r.target_id = ?)
@@ -1521,6 +1593,22 @@ class LocalStorage(BaseStorage):
             seen_ids = set()
             for row in cursor.fetchall():
                 item = self._row_to_dict(row)
+                evidence_data = {
+                    "confidence": item.pop("relationship_confidence", None),
+                    "confidence_score": item.pop("relationship_confidence_score", None),
+                    "source": item.pop("relationship_evidence_source", None),
+                    "source_file": item.pop("relationship_source_file", None),
+                    "source_location": item.pop("relationship_source_location", None),
+                    "reason": item.pop("relationship_reason", None),
+                    "created_by": item.pop("relationship_created_by", None),
+                    "created_at": item.pop("relationship_created_at", None),
+                }
+                item["relationship_evidence"] = self._normalize_relationship_evidence(
+                    evidence_data,
+                    strength=item.get("strength"),
+                    created_at=evidence_data["created_at"],
+                    legacy=evidence_data["source"] == "legacy",
+                )
                 if item["id"] in seen_ids:
                     continue
                 seen_ids.add(item["id"])
@@ -1541,7 +1629,7 @@ class LocalStorage(BaseStorage):
 
         with self._get_db() as conn:
             cursor = conn.execute(query, params)
-            return [self._row_to_dict(row) for row in cursor.fetchall()]
+            return [self._relationship_row_to_dict(row) for row in cursor.fetchall()]
 
     def start_session(self) -> str:
         """Start a new session for tracking."""
@@ -1663,6 +1751,67 @@ class LocalStorage(BaseStorage):
             if field in d and d[field]:
                 d[field] = LocalStorage._json_deserialize(d[field])
 
+        return d
+
+    @classmethod
+    def _normalize_relationship_evidence(
+        cls,
+        evidence: Dict[str, Any] = None,
+        *,
+        strength: float = None,
+        created_at: str = None,
+        legacy: bool = True,
+    ) -> Dict[str, Any]:
+        """Return relationship evidence with safe, contract-compatible defaults."""
+        evidence = evidence or {}
+        confidence = evidence.get("confidence") or "ambiguous"
+        if confidence not in cls.RELATIONSHIP_CONFIDENCE_VALUES:
+            raise ValueError(
+                "Relationship confidence must be one of: "
+                + ", ".join(sorted(cls.RELATIONSHIP_CONFIDENCE_VALUES))
+            )
+
+        score = evidence.get("confidence_score")
+        if score is None:
+            score = strength if strength is not None else 0.5
+
+        default_reason = (
+            cls.LEGACY_RELATIONSHIP_EVIDENCE_REASON
+            if legacy
+            else cls.UNSPECIFIED_RELATIONSHIP_EVIDENCE_REASON
+        )
+
+        return {
+            "confidence": confidence,
+            "confidence_score": clamp_score(score),
+            "source": evidence.get("source") or ("legacy" if legacy else "unspecified"),
+            "source_file": evidence.get("source_file"),
+            "source_location": evidence.get("source_location"),
+            "reason": evidence.get("reason") or default_reason,
+            "created_by": evidence.get("created_by"),
+            "created_at": evidence.get("created_at") or created_at,
+        }
+
+    @classmethod
+    def _relationship_row_to_dict(cls, row: sqlite3.Row) -> Dict[str, Any]:
+        """Convert a relationship row to its public shape with nested evidence."""
+        d = dict(row)
+        evidence_data = {
+            "confidence": d.pop("confidence", None),
+            "confidence_score": d.pop("confidence_score", None),
+            "source": d.pop("source", None),
+            "source_file": d.pop("source_file", None),
+            "source_location": d.pop("source_location", None),
+            "reason": d.pop("reason", None),
+            "created_by": d.pop("created_by", None),
+            "created_at": d.get("created_at"),
+        }
+        d["evidence"] = cls._normalize_relationship_evidence(
+            evidence_data,
+            strength=d.get("strength"),
+            created_at=d.get("created_at"),
+            legacy=evidence_data["source"] == "legacy",
+        )
         return d
 
     def append_audit_log(

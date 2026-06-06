@@ -238,17 +238,176 @@ def test_local_storage_auto_links_source_ids(tmp_path):
     )
 
     relationships = storage.get_all_relationships(repo_id="repo-a")
+    relationship = relationships[0]
 
-    assert relationships == [
-        {
-            "id": relationships[0]["id"],
-            "source_id": source_id,
-            "target_id": target_id,
-            "relationship": "derived_from",
-            "strength": 1.0,
-            "created_at": relationships[0]["created_at"],
-        }
-    ]
+    assert len(relationships) == 1
+    assert relationship["source_id"] == source_id
+    assert relationship["target_id"] == target_id
+    assert relationship["relationship"] == "derived_from"
+    assert relationship["strength"] == 1.0
+    assert relationship["evidence"] == {
+        "confidence": "ambiguous",
+        "confidence_score": 1.0,
+        "source": "unspecified",
+        "source_file": None,
+        "source_location": None,
+        "reason": "Relationship created without evidence metadata.",
+        "created_by": None,
+        "created_at": relationship["created_at"],
+    }
+
+
+def test_local_storage_relationship_evidence_round_trips(tmp_path):
+    storage = LocalStorage(tmp_path)
+    source_id = storage.store_memory("Incident was caused by cache expiry", auto_link=False)
+    target_id = storage.store_memory("Fix refreshed the cache before expiry", auto_link=False)
+
+    rel_id = storage.add_relationship(
+        source_id,
+        target_id,
+        "resolved_by",
+        strength=0.75,
+        evidence={
+            "confidence": "observed",
+            "confidence_score": 0.9,
+            "source": "test",
+            "source_file": "tests/core/test_memory.py",
+            "source_location": "test_local_storage_relationship_evidence_round_trips",
+            "reason": "The regression fixture directly links the incident and fix.",
+            "created_by": "pytest",
+        },
+    )
+
+    relationship = storage.get_all_relationships()[0]
+
+    assert relationship["id"] == rel_id
+    assert relationship["evidence"] == {
+        "confidence": "observed",
+        "confidence_score": 0.9,
+        "source": "test",
+        "source_file": "tests/core/test_memory.py",
+        "source_location": "test_local_storage_relationship_evidence_round_trips",
+        "reason": "The regression fixture directly links the incident and fix.",
+        "created_by": "pytest",
+        "created_at": relationship["created_at"],
+    }
+
+    related = storage.get_related_memories(source_id)
+    assert related[0]["relationship_evidence"] == relationship["evidence"]
+
+
+def test_local_storage_relationship_evidence_defaults_and_bounds(tmp_path):
+    storage = LocalStorage(tmp_path)
+    source_id = storage.store_memory("A warning surfaced during release", auto_link=False)
+    target_id = storage.store_memory("The release task reused the warning", auto_link=False)
+
+    storage.add_relationship(
+        source_id,
+        target_id,
+        "related",
+        strength=0.65,
+        evidence={"confidence": "manual", "confidence_score": 2.5},
+    )
+
+    relationship = storage.get_all_relationships()[0]
+
+    assert relationship["evidence"] == {
+        "confidence": "manual",
+        "confidence_score": 1.0,
+        "source": "unspecified",
+        "source_file": None,
+        "source_location": None,
+        "reason": "Relationship created without evidence metadata.",
+        "created_by": None,
+        "created_at": relationship["created_at"],
+    }
+
+    with pytest.raises(ValueError, match="Relationship confidence"):
+        storage.add_relationship(
+            source_id,
+            target_id,
+            "related",
+            evidence={"confidence": "trusted"},
+        )
+
+
+def test_local_storage_relationship_evidence_migration_defaults_old_rows(tmp_path):
+    db_dir = tmp_path / "legacy-relationships"
+    db_dir.mkdir()
+    db_path = db_dir / "memories.db"
+
+    import sqlite3
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE memories (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                layer TEXT NOT NULL DEFAULT 'episodic',
+                category TEXT DEFAULT 'general',
+                importance REAL DEFAULT 0.5,
+                repo_id TEXT DEFAULT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE relationships (
+                id TEXT PRIMARY KEY,
+                source_id TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                relationship TEXT NOT NULL,
+                strength REAL DEFAULT 1.0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO memories (id, content, layer, category, importance, repo_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("source-memory", "Legacy source", "episodic", "general", 0.5, "repo-a"),
+        )
+        conn.execute(
+            """
+            INSERT INTO memories (id, content, layer, category, importance, repo_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("target-memory", "Legacy target", "episodic", "general", 0.5, "repo-a"),
+        )
+        conn.execute(
+            """
+            INSERT INTO relationships (
+                id, source_id, target_id, relationship, strength, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-rel",
+                "source-memory",
+                "target-memory",
+                "related",
+                0.65,
+                "2026-06-06T00:00:00Z",
+            ),
+        )
+
+    storage = LocalStorage(db_dir)
+    relationship = storage.get_all_relationships(repo_id="repo-a")[0]
+
+    assert relationship["id"] == "legacy-rel"
+    assert relationship["evidence"] == {
+        "confidence": "ambiguous",
+        "confidence_score": 0.65,
+        "source": "legacy",
+        "source_file": None,
+        "source_location": None,
+        "reason": "Legacy relationship without evidence metadata.",
+        "created_by": None,
+        "created_at": "2026-06-06T00:00:00Z",
+    }
 
 
 def test_local_storage_auto_links_similar_memories_in_same_repo(tmp_path):
