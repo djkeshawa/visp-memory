@@ -3,7 +3,7 @@
 import type React from "react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { motion, AnimatePresence } from "framer-motion"
-import type { MemoryLayer } from "@/lib/types"
+import type { GraphLink, MemoryLayer, RelationshipEvidence } from "@/lib/types"
 import { AlertTriangle, Search, ZoomIn, ZoomOut, Maximize2, Filter, X, Link2, Clock, Tag } from "lucide-react"
 import { describeApiError, getGraphData } from "@/lib/api"
 
@@ -24,6 +24,8 @@ interface GraphEdge {
   source: string
   target: string
   strength?: number
+  label?: string
+  evidence?: RelationshipEvidence | null
 }
 
 const layerColors: Record<MemoryLayer, { fill: string; glow: string; bg: string }> = {
@@ -85,10 +87,12 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
         }));
 
         // Map API links to GraphEdges
-        const newEdges: GraphEdge[] = data.links.map((l: any) => ({
+        const newEdges: GraphEdge[] = data.links.map((l: GraphLink) => ({
           source: l.source,
           target: l.target,
-          strength: l.value
+          strength: l.value,
+          label: l.label,
+          evidence: l.evidence
         }));
 
         // Calculate connection counts
@@ -556,6 +560,26 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
     return nodes.filter((n) => connected.has(n.id))
   }
 
+  const getConnectedEdges = (nodeId: string) => {
+    return edges.filter((edge) => edge.source === nodeId || edge.target === nodeId)
+  }
+
+  const getNodeLabel = (nodeId: string) => {
+    return nodes.find((node) => node.id === nodeId)?.label || nodeId
+  }
+
+  const describeEvidence = (evidence?: RelationshipEvidence | null) => {
+    if (!evidence) return "No relationship evidence recorded."
+
+    const parts = []
+    if (evidence.confidence) parts.push(evidence.confidence)
+    if (typeof evidence.confidence_score === "number") parts.push(`${Math.round(evidence.confidence_score * 100)}%`)
+    if (evidence.source) parts.push(evidence.source)
+    return parts.length ? parts.join(" · ") : "No relationship evidence recorded."
+  }
+
+  const selectedEdges = selectedNode ? getConnectedEdges(selectedNode.id) : []
+
   if (errorMessage) {
     return (
       <div className="glass flex min-h-[360px] items-center justify-center rounded-xl p-6">
@@ -730,6 +754,32 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
                     </button>
                   ))}
                 </div>
+              </div>
+
+              <div className="mt-4 pt-3 border-t border-white/10">
+                <div className="flex items-center gap-2 mb-2">
+                  <Link2 className="w-3 h-3 text-white/50" />
+                  <span className="text-xs text-white/50">Relationship evidence</span>
+                </div>
+                {selectedEdges.length > 0 ? (
+                  <div className="space-y-2">
+                    {selectedEdges.map((edge) => {
+                      const otherId = edge.source === selectedNode.id ? edge.target : edge.source
+                      return (
+                        <div key={`${edge.source}-${edge.target}-${edge.label || "relationship"}`} className="rounded-lg bg-white/5 p-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate text-xs text-white/70">{getNodeLabel(otherId)}</span>
+                            {edge.label && <span className="shrink-0 text-[10px] uppercase tracking-wide text-white/35">{edge.label}</span>}
+                          </div>
+                          <p className="mt-1 text-xs text-white/50">{describeEvidence(edge.evidence)}</p>
+                          {edge.evidence?.reason && <p className="mt-1 text-xs text-white/40">{edge.evidence.reason}</p>}
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-xs text-white/40">No relationship evidence recorded.</p>
+                )}
               </div>
             </div>
           </motion.div>

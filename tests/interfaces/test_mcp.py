@@ -190,3 +190,42 @@ class TestMCPServer:
                 assert memory_id in preview
         except ImportError:
             pytest.skip("MCP not installed")
+
+    def test_mcp_relevant_memory_formats_relationship_evidence(self):
+        """MCP recall-oriented output includes relationship evidence when available."""
+        from llm_memory.interfaces.mcp import _format_relevant_memory
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = MemoryConfig()
+            config.storage.data_dir = Path(tmpdir)
+            config.embedding.provider = "noop"
+            memory = Memory(config=config)
+
+            source_id = memory.record("Route handlers must validate repository scope")
+            target_id = memory.record("Relationship evidence should be visible to MCP clients")
+            memory._storage.add_relationship(
+                source_id,
+                target_id,
+                "supports",
+                strength=0.9,
+                evidence={
+                    "confidence": "observed",
+                    "confidence_score": 0.95,
+                    "source": "test",
+                    "reason": "The MCP output should explain why this edge is relevant.",
+                },
+            )
+
+            source = memory._storage.get_memory(source_id)
+            result = _format_relevant_memory(
+                {"knowledge": [source], "warnings": [], "history": []}, memory
+            )
+
+        assert "Route handlers must validate repository scope" in result
+        assert (
+            "Relationship evidence (supports -> Relationship evidence should be visible" in result
+        )
+        assert "confidence=observed" in result
+        assert "score=0.95" in result
+        assert "source=test" in result
+        assert "why this edge is relevant" in result

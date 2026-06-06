@@ -11,6 +11,10 @@ import {
     SearchResult,
     Stats,
     ProjectScope,
+    GraphData,
+    GraphLink,
+    GraphNode,
+    RelationshipEvidence,
 } from "./types"
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_LLM_MEMORY_API_URL || ""
@@ -238,9 +242,14 @@ export async function searchMemories(query: string, limit: number = 10, repoId?:
     }))
 }
 
-export async function getGraphData(repoId?: string | null): Promise<any> {
+export async function getGraphData(repoId?: string | null): Promise<GraphData> {
     const res = await request(withQuery("/graph", { repo_id: repoId }), { headers: authHeaders() })
-    return res.json()
+    const data = await res.json()
+
+    return {
+        nodes: Array.isArray(data.nodes) ? data.nodes.map(toGraphNode) : [],
+        links: Array.isArray(data.links) ? data.links.map(toGraphLink) : [],
+    }
 }
 
 export async function createIntent(description: string, priority: number, repoId?: string | null): Promise<Intent> {
@@ -595,6 +604,42 @@ function readString(value: unknown): string | undefined {
     }
 
     return undefined
+}
+
+function toGraphNode(record: Record<string, unknown>): GraphNode {
+    return {
+        id: readString(record.id) ?? "",
+        group: readString(record.group),
+        label: readString(record.label) ?? "",
+        full_label: readString(record.full_label),
+        radius: readNumber(record.radius),
+        layer: (readString(record.layer) as GraphNode["layer"]) ?? "episodic",
+    }
+}
+
+function toGraphLink(record: Record<string, unknown>): GraphLink {
+    return {
+        source: readString(record.source) ?? "",
+        target: readString(record.target) ?? "",
+        value: readNumber(record.value),
+        label: readString(record.label),
+        evidence: readRelationshipEvidence(record.evidence),
+    }
+}
+
+function readRelationshipEvidence(value: unknown): RelationshipEvidence | null {
+    if (!value || typeof value !== "object") return null
+    const record = value as Record<string, unknown>
+    return {
+        confidence: readString(record.confidence) as RelationshipEvidence["confidence"],
+        confidence_score: readNumber(record.confidence_score),
+        source: readString(record.source) ?? null,
+        source_file: readString(record.source_file) ?? null,
+        source_location: readString(record.source_location) ?? null,
+        reason: readString(record.reason) ?? null,
+        created_by: readString(record.created_by) ?? null,
+        created_at: readString(record.created_at) ?? null,
+    }
 }
 
 function readNumber(value: unknown): number | undefined {

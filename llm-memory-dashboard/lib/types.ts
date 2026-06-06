@@ -17,6 +17,41 @@ export interface SearchResult extends Memory {
   similarity?: number
 }
 
+export type RelationshipConfidence = "observed" | "inferred" | "ambiguous" | "manual"
+
+export interface RelationshipEvidence {
+  confidence?: RelationshipConfidence
+  confidence_score?: number
+  source?: string | null
+  source_file?: string | null
+  source_location?: string | null
+  reason?: string | null
+  created_by?: string | null
+  created_at?: string | null
+}
+
+export interface GraphNode {
+  id: string
+  group?: string
+  label: string
+  full_label?: string
+  radius?: number
+  layer: MemoryLayer
+}
+
+export interface GraphLink {
+  source: string
+  target: string
+  value?: number
+  label?: string
+  evidence?: RelationshipEvidence | null
+}
+
+export interface GraphData {
+  nodes: GraphNode[]
+  links: GraphLink[]
+}
+
 export interface Intent {
   id: string
   description: string

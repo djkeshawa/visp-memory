@@ -914,6 +914,7 @@ def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
         for r in results:
             sim = f" (similarity: {r.get('similarity', 0):.2f})" if r.get("similarity") else ""
             output.append(f"- [{r['layer']}/{r.get('category', 'unknown')}]{sim}: {r['content']}")
+            output.extend(_format_related_evidence_lines(r.get("id"), memory))
         return "\n".join(output)
 
     elif name == "memory_remember":
@@ -945,16 +946,19 @@ def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
             output.append("**Warnings:**")
             for w in relevant["warnings"]:
                 output.append(f"  - {w['content']}")
+                output.extend(_format_related_evidence_lines(w.get("id"), memory))
 
         if relevant["knowledge"]:
             output.append("\n**Relevant Knowledge:**")
             for k in relevant["knowledge"][:5]:
                 output.append(f"  - {k['content']}")
+                output.extend(_format_related_evidence_lines(k.get("id"), memory))
 
         if relevant["history"]:
             output.append("\n**Related History:**")
             for h in relevant["history"][:3]:
                 output.append(f"  - {h['content']}")
+                output.extend(_format_related_evidence_lines(h.get("id"), memory))
 
         return "\n".join(output) if output else "No relevant memories found."
 
@@ -1016,22 +1020,78 @@ def _handle_proactive(name: str, args: dict[str, Any], memory: Memory) -> str:
     return f"Unknown proactive tool: {name}"
 
 
-def _format_relevant_memory(relevant: dict[str, list[dict[str, Any]]]) -> str:
+def _format_evidence_value(evidence: dict[str, Any] | None) -> str | None:
+    if not evidence:
+        return None
+
+    parts = []
+    confidence = evidence.get("confidence")
+    if confidence:
+        parts.append(f"confidence={confidence}")
+
+    score = evidence.get("confidence_score")
+    if isinstance(score, (int, float)):
+        parts.append(f"score={score:.2f}")
+
+    source = evidence.get("source")
+    if source:
+        parts.append(f"source={source}")
+
+    reason = evidence.get("reason")
+    if reason:
+        parts.append(f"reason={reason}")
+
+    return "; ".join(parts) if parts else None
+
+
+def _format_related_evidence_lines(memory_id: str | None, memory: Memory) -> list[str]:
+    if not memory_id:
+        return []
+
+    try:
+        related = memory._storage.get_related_memories(memory_id)
+    except Exception as exc:  # pragma: no cover - defensive MCP output guard
+        logger.debug("Could not load related memory evidence for %s: %s", memory_id, exc)
+        return []
+
+    lines = []
+    for item in related[:3]:
+        evidence_text = _format_evidence_value(
+            item.get("relationship_evidence") or item.get("evidence")
+        )
+        if not evidence_text:
+            continue
+        relationship = item.get("relationship", "related")
+        content = str(item.get("content") or item.get("id") or "related memory")
+        snippet = content.replace("\n", " ")[:80]
+        lines.append(f"    Relationship evidence ({relationship} -> {snippet}): {evidence_text}")
+    return lines
+
+
+def _format_relevant_memory(
+    relevant: dict[str, list[dict[str, Any]]], memory: Memory | None = None
+) -> str:
     output = []
     if relevant.get("warnings"):
         output.append("**Warnings:**")
         for w in relevant["warnings"]:
             output.append(f"  - {w['content']}")
+            if memory:
+                output.extend(_format_related_evidence_lines(w.get("id"), memory))
 
     if relevant.get("knowledge"):
         output.append("\n**Relevant Knowledge:**")
         for k in relevant["knowledge"][:8]:
             output.append(f"  - {k['content']}")
+            if memory:
+                output.extend(_format_related_evidence_lines(k.get("id"), memory))
 
     if relevant.get("history"):
         output.append("\n**Related History:**")
         for h in relevant["history"][:5]:
             output.append(f"  - {h['content']}")
+            if memory:
+                output.extend(_format_related_evidence_lines(h.get("id"), memory))
 
     return "\n".join(output) if output else "No relevant memories found."
 
@@ -1054,7 +1114,7 @@ def _handle_workflow(name: str, args: dict[str, Any], memory: Memory) -> str:
         if task or files:
             relevant = memory.relevant_for(task=task, files=files)
             lines.append("\n## Task-Relevant Memory")
-            lines.append(_format_relevant_memory(relevant))
+            lines.append(_format_relevant_memory(relevant, memory))
 
         return "\n".join(lines)
 
@@ -1067,7 +1127,7 @@ def _handle_workflow(name: str, args: dict[str, Any], memory: Memory) -> str:
             header += f"\nFiles: {', '.join(files)}"
         if task:
             header += f"\nTask: {task}"
-        return f"{header}\n\n{_format_relevant_memory(relevant)}"
+        return f"{header}\n\n{_format_relevant_memory(relevant, memory)}"
 
     if name == "memory_after_work":
         repo_id = args.get("repo_id")
