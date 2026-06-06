@@ -217,10 +217,6 @@ export async function getIntents(repoId?: string | null, status: string = "activ
     }))
 }
 
-export async function getActiveIntents(repoId?: string | null): Promise<Intent[]> {
-    return getIntents(repoId, "active")
-}
-
 export async function searchMemories(query: string, limit: number = 10, repoId?: string | null): Promise<SearchResult[]> {
     const res = await request("/recall", {
         method: "POST",

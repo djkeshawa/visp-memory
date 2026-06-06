@@ -8,10 +8,16 @@ import { RecentActivity } from "@/components/dashboard/recent-activity"
 import { QuickActions } from "@/components/dashboard/quick-actions"
 import { SystemStatus } from "@/components/dashboard/system-status"
 import { describeApiError, getStats, getRecentMemories } from "@/lib/api"
-import { mockSystemStatus } from "@/lib/mock-data"
 import { pageTransition } from "@/lib/animations"
 import { useSelectedProjectId } from "@/lib/project-selection"
-import type { Memory, Stats } from "@/lib/types"
+import type { Memory, Stats, SystemStatus as SystemStatusType } from "@/lib/types"
+
+const fallbackSystemStatus: SystemStatusType = {
+  apiServer: "online",
+  vectorDatabase: "ready",
+  embeddings: "active",
+  codexMcp: "available",
+}
 
 function DashboardContent() {
   const selectedRepoId = useSelectedProjectId()
@@ -109,7 +115,7 @@ function DashboardContent() {
         </div>
         <div className="space-y-6">
           <QuickActions />
-          <SystemStatus status={mockSystemStatus} />
+          <SystemStatus status={fallbackSystemStatus} />
         </div>
       </div>
     </motion.div>

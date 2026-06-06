@@ -68,3 +68,5 @@ src/llm_memory/server/static/
 *.whl
 dist-standalone/
 .ruff_cache/
+.visp
+.agents

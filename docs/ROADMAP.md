@@ -62,6 +62,9 @@ The "Killer Feature": A shared server that connects all repositories and team me
 - **Feedback Loops**: Learn which memories are useful based on user feedback.
 - **Multi-Agent Sync**: Protocol for autonomous agents to share and sync context.
 
+The detailed roadmap for graph-informed, evidence-backed memory intelligence is
+tracked in [development/MEMORY_INTELLIGENCE_ROADMAP.md](development/MEMORY_INTELLIGENCE_ROADMAP.md).
+
 ## Maturity Track
 
 Before expanding Phase 4, the project should harden the existing product

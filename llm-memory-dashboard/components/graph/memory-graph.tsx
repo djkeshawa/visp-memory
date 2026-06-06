@@ -62,13 +62,11 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
   const [searchQuery, setSearchQuery] = useState("")
   const [activeFilters, setActiveFilters] = useState<MemoryLayer[]>(["episodic", "semantic", "intent"])
   const [showFilters, setShowFilters] = useState(false)
-  const [loading, setLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   // Fetch Graph Data
   useEffect(() => {
     async function fetchData() {
-      setLoading(true);
       try {
         const data = await getGraphData(repoId);
 
@@ -111,11 +109,9 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
           })),
         );
 
-        setLoading(false);
       } catch (error) {
         console.error("Failed to fetch graph data:", error);
         setErrorMessage(describeApiError(error));
-        setLoading(false);
       }
     }
 
@@ -282,7 +278,6 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
       const midY = (sourceNode.y + targetNode.y) / 2
       const dx = targetNode.x - sourceNode.x
       const dy = targetNode.y - sourceNode.y
-      const offset = Math.sqrt(dx * dx + dy * dy) * 0.1
       const ctrlX = midX - dy * 0.2
       const ctrlY = midY + dx * 0.2
 

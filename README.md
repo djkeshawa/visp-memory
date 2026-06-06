@@ -19,6 +19,7 @@
 | [**docs/deployment/RELEASING.md**](docs/deployment/RELEASING.md) | How to create releases |
 | [**docs/development/ARCHITECTURE.md**](docs/development/ARCHITECTURE.md) | System architecture and core components |
 | [**docs/development/MATURITY_PLAN.md**](docs/development/MATURITY_PLAN.md) | Path from developer preview to production candidate |
+| [**docs/development/MEMORY_INTELLIGENCE_ROADMAP.md**](docs/development/MEMORY_INTELLIGENCE_ROADMAP.md) | Graph-informed roadmap for explainable, evidence-backed memory |
 | [**docs/development/MCP.md**](docs/development/MCP.md) | MCP setup, tools, examples, and verification |
 | [**docs/development/TESTING.md**](docs/development/TESTING.md) | Testing practices and guidelines |
 | [**docs/development/STORAGE.md**](docs/development/STORAGE.md) | Storage backends comparison and configuration |
