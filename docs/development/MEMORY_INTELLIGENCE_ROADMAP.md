@@ -431,6 +431,8 @@ Define the contracts before changing storage.
 Deliverables:
 
 - Relationship metadata schema proposal.
+- Relationship evidence contract in
+  [MEMORY_INTELLIGENCE_CONTRACTS.md](MEMORY_INTELLIGENCE_CONTRACTS.md).
 - Trace recall API/MCP acceptance criteria.
 - Report JSON schema draft.
 - Capture manifest schema draft.
