@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 
 import pytest
 
@@ -162,6 +163,24 @@ async def test_non_admin_user_read_does_not_hang_with_current_user_override(clie
         own_user = await get_without_hanging(client, "/teams/users/alice-id")
         assert own_user.status_code == 200
         assert own_user.json()["id"] == "alice-id"
+    finally:
+        clear_current_user()
+
+
+@pytest.mark.asyncio
+async def test_current_user_override_is_awaitable_for_async_auth_dependency():
+    user = UserContext(
+        user_id="alice-id",
+        username="alice",
+        team_id="team-alpha",
+        is_admin=False,
+    )
+
+    set_current_user(user)
+    try:
+        override = app.dependency_overrides[get_current_user]
+        assert inspect.iscoroutinefunction(override)
+        assert await asyncio.wait_for(override(), timeout=1) == user
     finally:
         clear_current_user()
 
