@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from llm_memory.config import MemoryConfig, ServerConfig
 from llm_memory.core.embeddings import NoOpProvider
 from llm_memory.server import app as server_app
@@ -124,6 +126,49 @@ def test_runtime_status_exposes_non_secret_deployment_fields():
     assert status["embedding_driver_status"] == "disabled"
     assert status["embedding_driver_connected"] is False
     assert "neo4j_password" not in status
+
+
+def test_initialize_storage_uses_arcadedb_backend(tmp_path, monkeypatch):
+    created = {}
+
+    class FakeArcadeDbStorage:
+        def __init__(self, data_dir, embedding_fn=None, embedding_dimension=None):
+            created["data_dir"] = data_dir
+            created["embedding_fn"] = embedding_fn
+            created["embedding_dimension"] = embedding_dimension
+
+    class FakeEmbeddingProvider:
+        dimension = 7
+
+    monkeypatch.setattr(server_app, "ArcadeDbStorage", FakeArcadeDbStorage)
+    config = MemoryConfig()
+    config.storage.backend = "arcadedb"
+    config.storage.data_dir = tmp_path
+
+    storage, backend = server_app.initialize_storage(
+        config,
+        embedding_fn=lambda text: [float(len(text))],
+        embedding_provider=FakeEmbeddingProvider(),
+    )
+
+    assert isinstance(storage, FakeArcadeDbStorage)
+    assert backend == "arcadedb"
+    assert created["data_dir"] == tmp_path
+    assert created["embedding_dimension"] == 7
+
+
+def test_initialize_storage_does_not_fallback_for_arcadedb(tmp_path, monkeypatch):
+    class FailingArcadeDbStorage:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("arcadedb unavailable")
+
+    monkeypatch.setattr(server_app, "ArcadeDbStorage", FailingArcadeDbStorage)
+    config = MemoryConfig()
+    config.storage.backend = "arcadedb"
+    config.storage.data_dir = tmp_path
+
+    with pytest.raises(RuntimeError, match="arcadedb unavailable"):
+        server_app.initialize_storage(config)
 
 
 def test_server_embedding_runtime_marks_default_server_fallback_inactive(monkeypatch):

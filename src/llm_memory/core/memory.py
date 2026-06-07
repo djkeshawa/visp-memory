@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from llm_memory.config import MemoryConfig
+from llm_memory.core.arcadedb_storage import ArcadeDbStorage
 from llm_memory.core.compression import MemoryCompressor, create_llm_compressor
 from llm_memory.core.memory_context import build_context, format_context_text
 from llm_memory.core.memory_import_export import export_memory, import_memories
@@ -95,6 +96,11 @@ class Memory:
                 uri=self.config.storage.neo4j_uri,
                 user=self.config.storage.neo4j_user,
                 password=self.config.storage.neo4j_password,
+                embedding_fn=embedding_fn,
+            )
+        elif self.config.storage.backend == "arcadedb":
+            self._storage = ArcadeDbStorage(
+                self.config.storage.data_dir,
                 embedding_fn=embedding_fn,
             )
         else:

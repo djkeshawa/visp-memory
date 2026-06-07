@@ -17,6 +17,7 @@ except ImportError:
 
 from llm_memory import __version__
 from llm_memory.config import load_config
+from llm_memory.core.arcadedb_storage import ArcadeDbStorage
 from llm_memory.core.neo4j_storage import Neo4jStorage
 from llm_memory.core.reporting import MemoryIntelligenceReporter
 from llm_memory.core.storage import LocalStorage
@@ -205,6 +206,35 @@ def get_runtime_status(config, embedding_provider=None, embedding_status=None):
     return status
 
 
+def initialize_storage(config, embedding_fn=None, embedding_provider=None):
+    """Initialize the configured server storage backend."""
+    if config.storage.backend == "neo4j":
+        try:
+            storage = Neo4jStorage(
+                uri=config.storage.neo4j_uri,
+                user=config.storage.neo4j_user,
+                password=config.storage.neo4j_password,
+                embedding_fn=embedding_fn,
+                embedding_dimension=getattr(embedding_provider, "dimension", None),
+            )
+            logger.info("Initialized Neo4j Storage")
+            return storage, "neo4j"
+        except Exception as e:
+            logger.error(f"Failed to initialize Neo4j, falling back to SQLite: {e}")
+            return LocalStorage(config.storage.data_dir, embedding_fn=embedding_fn), "sqlite"
+
+    if config.storage.backend == "arcadedb":
+        storage = ArcadeDbStorage(
+            config.storage.data_dir,
+            embedding_fn=embedding_fn,
+            embedding_dimension=getattr(embedding_provider, "dimension", None),
+        )
+        logger.info("Initialized ArcadeDB Storage")
+        return storage, "arcadedb"
+
+    return LocalStorage(config.storage.data_dir, embedding_fn=embedding_fn), "sqlite"
+
+
 cors_options = get_cors_options(config)
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -257,23 +287,7 @@ app.add_middleware(
 # Initialize Storage
 embedding_provider, embedding_runtime_status = get_server_embedding_runtime(config)
 embedding_fn = embedding_provider.embed if embedding_provider is not None else None
-effective_storage_backend = "sqlite"
-if config.storage.backend == "neo4j":
-    try:
-        storage = Neo4jStorage(
-            uri=config.storage.neo4j_uri,
-            user=config.storage.neo4j_user,
-            password=config.storage.neo4j_password,
-            embedding_fn=embedding_fn,
-            embedding_dimension=getattr(embedding_provider, "dimension", None),
-        )
-        effective_storage_backend = "neo4j"
-        logger.info("Initialized Neo4j Storage")
-    except Exception as e:
-        logger.error(f"Failed to initialize Neo4j, falling back to SQLite: {e}")
-        storage = LocalStorage(config.storage.data_dir, embedding_fn=embedding_fn)
-else:
-    storage = LocalStorage(config.storage.data_dir, embedding_fn=embedding_fn)
+storage, effective_storage_backend = initialize_storage(config, embedding_fn, embedding_provider)
 
 # Save storage to app state for access in routers
 app.state.storage = storage

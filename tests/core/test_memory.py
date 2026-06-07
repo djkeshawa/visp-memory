@@ -34,6 +34,30 @@ def test_client_mode_does_not_initialize_local_embedding_provider():
     get_embedding_provider.assert_not_called()
 
 
+def test_memory_uses_arcadedb_storage_when_configured(tmp_path, monkeypatch):
+    import llm_memory.core.memory as memory_module
+
+    created = {}
+
+    class FakeArcadeDbStorage:
+        def __init__(self, data_dir, embedding_fn=None):
+            created["data_dir"] = data_dir
+            created["embedding_fn"] = embedding_fn
+
+    monkeypatch.setattr(memory_module, "ArcadeDbStorage", FakeArcadeDbStorage)
+
+    config = MemoryConfig()
+    config.storage.backend = "arcadedb"
+    config.storage.data_dir = tmp_path
+    config.embedding.provider = "noop"
+
+    memory = Memory(config=config)
+
+    assert isinstance(memory._storage, FakeArcadeDbStorage)
+    assert created["data_dir"] == tmp_path
+    assert callable(created["embedding_fn"])
+
+
 def test_local_storage_uses_dimension_specific_vector_collection(tmp_path):
     if not CHROMADB_AVAILABLE:
         pytest.skip("ChromaDB not installed")

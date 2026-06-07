@@ -44,7 +44,7 @@ class StorageConfig(BaseSettings):
 
     data_dir: Path = Path(".llm-memory/data")
     vector_db: Literal["chroma", "memory"] = "chroma"
-    backend: Literal["sqlite", "neo4j"] = "sqlite"  # Default to sqlite for ease of use
+    backend: Literal["sqlite", "arcadedb", "neo4j"] = "sqlite"
 
     # Client-Server Mode
     mode: Literal["local", "client", "server"] = "local"
