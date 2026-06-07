@@ -1,3 +1,4 @@
+import json
 import tempfile
 from pathlib import Path
 from unittest import mock
@@ -77,6 +78,48 @@ class TestMCPServer:
                     "memory_record", {"event": "Test event", "category": "note"}, memory
                 )
                 assert "Recorded" in result
+        except ImportError:
+            pytest.skip("MCP not installed")
+
+    @pytest.mark.asyncio
+    async def test_mcp_feedback_tools_log_inspect_and_reset(self):
+        """MCP feedback tools expose recall utility controls."""
+        try:
+            from llm_memory.interfaces.mcp import MCP_AVAILABLE, handle_tool
+
+            if not MCP_AVAILABLE:
+                pytest.skip("MCP not installed")
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                config = MemoryConfig()
+                config.storage.data_dir = Path(tmpdir)
+                config.embedding.provider = "noop"
+                memory = Memory(config=config)
+                memory_id = memory.record("Fixed authentication bug")
+
+                recall = await handle_tool(
+                    "memory_recall",
+                    {"query": "authentication", "log_utility": True},
+                    memory,
+                )
+                used = await handle_tool(
+                    "memory_feedback_log",
+                    {"memory_id": memory_id, "event_type": "used"},
+                    memory,
+                )
+                inspect = await handle_tool("memory_feedback_inspect", {}, memory)
+                reset = await handle_tool(
+                    "memory_feedback_reset",
+                    {"memory_id": memory_id, "confirm": True},
+                    memory,
+                )
+
+                report = json.loads(inspect)
+
+            assert memory_id in recall
+            assert "Recorded 1 feedback events" in used
+            assert report["summary"]["by_event_type"] == {"surfaced": 1, "used": 1}
+            assert "Deleted 2 feedback events" in reset
         except ImportError:
             pytest.skip("MCP not installed")
 

@@ -6,6 +6,7 @@ that unit tests might miss (e.g., parameter mismatches between layers).
 """
 
 import json
+import re
 import tempfile
 from pathlib import Path
 
@@ -15,6 +16,12 @@ from typer.testing import CliRunner
 from llm_memory.interfaces.cli import app
 
 runner = CliRunner()
+
+
+def _extract_memory_id(output: str) -> str:
+    match = re.search(r"\b[0-9a-f]{16}\b", output)
+    assert match is not None
+    return match.group(0)
 
 
 @pytest.fixture
@@ -352,6 +359,43 @@ class TestCLIRecallCommand:
         result = runner.invoke(app, ["recall", "authentication"])
         assert result.exit_code == 0
         assert "authentication" in result.output.lower()
+
+    def test_recall_can_log_surfaced_feedback(self, cli_env):
+        """Recall can opt into surfaced utility feedback logging."""
+        runner.invoke(app, ["init", "--type", "code"])
+        record = runner.invoke(app, ["record", "Fixed authentication bug"])
+        memory_id = _extract_memory_id(record.output)
+
+        result = runner.invoke(app, ["recall", "authentication", "--log-utility"])
+        inspect = runner.invoke(app, ["feedback", "inspect", "--format", "json"])
+
+        assert result.exit_code == 0
+        assert memory_id in result.output
+        report = json.loads(inspect.output)
+        assert report["summary"]["by_event_type"] == {"surfaced": 1}
+        assert report["signals"][0]["memory_id"] == memory_id
+
+    def test_feedback_log_inspect_and_reset(self, cli_env):
+        """Feedback commands log, inspect, and reset utility signals."""
+        runner.invoke(app, ["init", "--type", "code"])
+        record = runner.invoke(app, ["record", "Fixed authentication bug"])
+        memory_id = _extract_memory_id(record.output)
+
+        logged = runner.invoke(
+            app,
+            ["feedback", "log", "--memory-id", memory_id, "--event", "used"],
+        )
+        inspect = runner.invoke(app, ["feedback", "inspect", "--format", "json"])
+        reset = runner.invoke(app, ["feedback", "reset", "--memory-id", memory_id, "--yes"])
+        empty = runner.invoke(app, ["feedback", "inspect", "--format", "json"])
+
+        assert logged.exit_code == 0
+        assert "Recorded feedback" in logged.output
+        report = json.loads(inspect.output)
+        assert report["summary"]["by_event_type"] == {"used": 1}
+        assert reset.exit_code == 0
+        assert "Deleted 1 feedback events" in reset.output
+        assert json.loads(empty.output)["summary"]["total_events"] == 0
 
     def test_recall_with_layer_filter(self, cli_env):
         """Test recall with layer filter to avoid duplicates."""

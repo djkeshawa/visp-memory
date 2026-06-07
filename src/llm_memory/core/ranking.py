@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 DEFAULT_RECALL_MIN_SCORE = 0.56
+UTILITY_RANKING_LIMIT = 0.08
 _LEXICAL_STOPWORDS = {
     "a",
     "an",
@@ -43,6 +44,16 @@ def clamp_score(value: Any, default: float = 0.0) -> float:
     except (TypeError, ValueError):
         return default
     return max(0.0, min(1.0, score))
+
+
+def utility_rank_adjustment(value: Any) -> float:
+    """Return a bounded utility contribution for ranking."""
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    score = max(-1.0, min(1.0, score))
+    return score * UTILITY_RANKING_LIMIT
 
 
 def normalize_distance_score(distance: Any) -> float:
@@ -159,7 +170,7 @@ def score_memory_result(memory: dict[str, Any], query: str | None = None) -> flo
     else:
         score = importance * 0.70 + recency * 0.30
 
-    return clamp_score(score)
+    return clamp_score(score + utility_rank_adjustment(memory.get("utility_score")))
 
 
 def rank_memory_results(

@@ -310,6 +310,8 @@ class Memory:
         limit: int = 10,
         min_score: float = DEFAULT_RECALL_MIN_SCORE,
         status: str = "active",
+        log_utility: bool = False,
+        task_id: str = None,
     ) -> List[Dict[str, Any]]:
         """
         Search across all memory layers.
@@ -339,7 +341,74 @@ class Memory:
             )
             results.extend(layer_results)
 
-        return rank_memory_results(results, query=query, limit=limit, min_score=min_score)
+        ranked = rank_memory_results(results, query=query, limit=limit, min_score=min_score)
+        if log_utility:
+            for result in ranked:
+                memory_id = result.get("id")
+                if memory_id:
+                    self.record_utility_feedback(
+                        memory_id=memory_id,
+                        event_type="surfaced",
+                        repo_id=search_repo_id,
+                        query=query,
+                        task_id=task_id,
+                        metadata={"source": "recall"},
+                    )
+        return ranked
+
+    def record_utility_feedback(
+        self,
+        memory_id: str,
+        event_type: str,
+        repo_id: str = None,
+        query: str = None,
+        task_id: str = None,
+        outcome: str = None,
+        metadata: Dict[str, Any] = None,
+    ) -> str:
+        """Record a privacy-conscious utility feedback event for a memory."""
+        logger = getattr(self._storage, "log_recall_event", None)
+        if not callable(logger):
+            raise NotImplementedError("Recall utility feedback is not supported by this storage.")
+        return logger(
+            memory_id=memory_id,
+            event_type=event_type,
+            repo_id=repo_id,
+            query=query,
+            task_id=task_id,
+            outcome=outcome,
+            metadata=metadata,
+        )
+
+    def inspect_utility_signals(
+        self,
+        memory_id: str = None,
+        repo_id: str = None,
+        event_type: str = None,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        """Inspect aggregate recall utility signals."""
+        inspector = getattr(self._storage, "inspect_recall_utility", None)
+        if not callable(inspector):
+            raise NotImplementedError("Recall utility inspection is not supported by this storage.")
+        return inspector(
+            memory_id=memory_id,
+            repo_id=repo_id,
+            event_type=event_type,
+            limit=limit,
+        )
+
+    def reset_utility_signals(
+        self,
+        memory_id: str = None,
+        repo_id: str = None,
+        event_type: str = None,
+    ) -> int:
+        """Reset recall utility signals matching optional filters."""
+        resetter = getattr(self._storage, "reset_recall_utility", None)
+        if not callable(resetter):
+            raise NotImplementedError("Recall utility reset is not supported by this storage.")
+        return resetter(memory_id=memory_id, repo_id=repo_id, event_type=event_type)
 
     def graph_neighbors(
         self,

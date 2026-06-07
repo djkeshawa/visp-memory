@@ -635,6 +635,61 @@ class TestSearch:
         stored = memory._storage._get_memory_row(mem_id, track_access=False)
         assert stored["access_count"] == 0
 
+    def test_recall_can_log_surfaced_utility_without_access_metrics(self, memory):
+        """Optional recall feedback logs surfaced memories without explicit access."""
+        mem_id = memory.record("Authentication system updated")
+
+        results = memory.recall("authentication", log_utility=True, task_id="task-1")
+
+        assert results[0]["id"] == mem_id
+        stored = memory._storage._get_memory_row(mem_id, track_access=False)
+        assert stored["access_count"] == 0
+
+        report = memory.inspect_utility_signals(memory_id=mem_id)
+        assert report["summary"]["by_event_type"] == {"surfaced": 1}
+        assert report["signals"][0]["counts"] == {"surfaced": 1}
+        assert report["events"][0]["query_hash"]
+        assert "query" not in report["events"][0]
+        assert report["events"][0]["task_id"] == "task-1"
+
+    def test_utility_feedback_aggregates_sanitizes_and_resets(self, memory):
+        """Utility signals are inspectable, sanitized, and resettable."""
+        mem_id = memory.record("Authentication system updated")
+
+        memory.record_utility_feedback(
+            mem_id,
+            "used",
+            metadata={
+                "source": "test",
+                "prompt": "full prompt should not be stored",
+                "response": "full response should not be stored",
+            },
+        )
+        memory.record_utility_feedback(mem_id, "dismissed")
+        memory.record_utility_feedback(mem_id, "task-linked", task_id="task-1")
+        memory.record_utility_feedback(mem_id, "outcome-linked", outcome="outcome-1")
+
+        report = memory.inspect_utility_signals(memory_id=mem_id)
+
+        assert report["summary"]["total_events"] == 4
+        assert report["signals"][0]["counts"] == {
+            "dismissed": 1,
+            "outcome_linked": 1,
+            "task_linked": 1,
+            "used": 1,
+        }
+        assert report["signals"][0]["utility_rank_adjustment"] != 0
+        assert report["events"][-1]["metadata"] == {"source": "test"}
+        assert report["events"][0]["outcome"] == "outcome-1"
+
+        deleted = memory.reset_utility_signals(memory_id=mem_id, event_type="dismissed")
+        assert deleted == 1
+        report = memory.inspect_utility_signals(memory_id=mem_id)
+        assert "dismissed" not in report["summary"]["by_event_type"]
+
+        assert memory.reset_utility_signals(memory_id=mem_id) == 3
+        assert memory.inspect_utility_signals(memory_id=mem_id)["summary"]["total_events"] == 0
+
     def test_recall_does_not_duplicate_layers(self, memory):
         """Layer fan-out should not duplicate results from the fallback search path."""
         memory.record("Authentication system updated")

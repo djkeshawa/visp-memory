@@ -817,12 +817,24 @@ def recall(
     layer: str = typer.Option(None, "--layer", "-l", help="Filter by layer"),
     repo: str = typer.Option(None, "--repo", "-r", help="Filter by repository"),
     status: str = typer.Option("active", "--status", help="Filter by memory status"),
+    log_utility: bool = typer.Option(False, "--log-utility", help="Log surfaced results"),
+    task_id: str = typer.Option(
+        None, "--task-id", help="Task ID to associate with surfaced results"
+    ),
 ):
     """Search across all memories."""
     memory = get_memory()
 
     layers = [layer] if layer else None
-    results = memory.recall(query, layers=layers, limit=limit, repo_id=repo, status=status)
+    results = memory.recall(
+        query,
+        layers=layers,
+        limit=limit,
+        repo_id=repo,
+        status=status,
+        log_utility=log_utility,
+        task_id=task_id,
+    )
 
     if not results:
         console.print("[yellow]No results found[/yellow]")
@@ -831,6 +843,7 @@ def recall(
     from rich.box import ROUNDED
 
     table = Table(title=f"Search Results for '{query}'", box=ROUNDED)
+    table.add_column("ID", style="dim", width=16)
     table.add_column("Layer", style="cyan", width=10)
     table.add_column("Category", style="green", width=12)
     table.add_column("Content")
@@ -842,7 +855,7 @@ def recall(
         if len(content) > 80:
             content = content[:77] + "..."
 
-        table.add_row(r["layer"], r.get("category", "-"), content, score)
+        table.add_row(r["id"], r["layer"], r.get("category", "-"), content, score)
 
     console.print(table)
 
@@ -1077,6 +1090,8 @@ quality_app = typer.Typer(help="Memory quality management")
 app.add_typer(quality_app, name="quality")
 health_app = typer.Typer(help="Memory health and lifecycle previews")
 app.add_typer(health_app, name="health")
+feedback_app = typer.Typer(help="Recall utility feedback")
+app.add_typer(feedback_app, name="feedback")
 
 
 @health_app.command("decay-preview")
@@ -1107,6 +1122,110 @@ def health_decay_preview(
         halflife_days=halflife_days,
         min_importance=min_importance,
     )
+
+
+@feedback_app.command("log")
+def feedback_log(
+    memory_id: str = typer.Option(..., "--memory-id", help="Memory ID to mark"),
+    event: str = typer.Option(
+        ...,
+        "--event",
+        help="surfaced, used, dismissed, task-linked, or outcome-linked",
+    ),
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository context"),
+    query: str = typer.Option(None, "--query", help="Query to hash for correlation"),
+    task_id: str = typer.Option(None, "--task-id", help="Task ID to associate"),
+    outcome: str = typer.Option(None, "--outcome", help="Outcome ID or label to associate"),
+):
+    """Log a recall utility feedback event."""
+    memory = get_memory()
+    try:
+        event_id = memory.record_utility_feedback(
+            memory_id=memory_id,
+            event_type=event,
+            repo_id=_repo_scope(memory, repo),
+            query=query,
+            task_id=task_id,
+            outcome=outcome,
+            metadata={"source": "cli"},
+        )
+    except (NotImplementedError, ValueError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"[green]Recorded feedback:[/green] {event} for {memory_id}")
+    console.print(f"[dim]ID: {event_id}[/dim]")
+
+
+@feedback_app.command("inspect")
+def feedback_inspect(
+    memory_id: str = typer.Option(None, "--memory-id", help="Filter by memory ID"),
+    event: str = typer.Option(None, "--event", help="Filter by event type"),
+    repo: str = typer.Option(None, "--repo", "-r", help="Filter by repository"),
+    format: str = typer.Option("text", "--format", "-f", help="Output format: text or json"),
+    limit: int = typer.Option(50, "--limit", "-n", min=0, max=500, help="Recent event limit"),
+):
+    """Inspect recall utility signals."""
+    memory = get_memory()
+    report = memory.inspect_utility_signals(
+        memory_id=memory_id,
+        repo_id=_repo_scope(memory, repo),
+        event_type=event,
+        limit=limit,
+    )
+
+    if format.lower() == "json":
+        console.print_json(data=report)
+        return
+
+    summary = report["summary"]
+    console.print(Panel("[bold]Recall Utility Signals[/bold]"))
+    console.print(f"Events: {summary['total_events']}  Memories: {summary['memories']}")
+    if summary["by_event_type"]:
+        console.print("By event: " + ", ".join(
+            f"{event_type}={count}"
+            for event_type, count in sorted(summary["by_event_type"].items())
+        ))
+
+    table = Table()
+    table.add_column("Memory ID", style="dim")
+    table.add_column("Events", justify="right")
+    table.add_column("Utility", justify="right")
+    table.add_column("Rank Adj", justify="right")
+    table.add_column("Counts")
+    for signal in report["signals"]:
+        counts = ", ".join(
+            f"{event_type}={count}" for event_type, count in sorted(signal["counts"].items())
+        )
+        table.add_row(
+            signal["memory_id"],
+            str(signal["total_events"]),
+            f"{signal['utility_score']:.2f}",
+            f"{signal['utility_rank_adjustment']:.3f}",
+            counts,
+        )
+    console.print(table)
+
+
+@feedback_app.command("reset")
+def feedback_reset(
+    memory_id: str = typer.Option(None, "--memory-id", help="Filter by memory ID"),
+    event: str = typer.Option(None, "--event", help="Filter by event type"),
+    repo: str = typer.Option(None, "--repo", "-r", help="Filter by repository"),
+    yes: bool = typer.Option(False, "--yes", help="Confirm reset"),
+):
+    """Reset recall utility signals matching filters."""
+    if not yes:
+        console.print("[yellow]Pass --yes to reset utility signals.[/yellow]")
+        raise typer.Exit(1)
+
+    memory = get_memory()
+    deleted = memory.reset_utility_signals(
+        memory_id=memory_id,
+        repo_id=_repo_scope(memory, repo),
+        event_type=event,
+    )
+    console.print(f"[green]Deleted {deleted} feedback events.[/green]")
 
 
 @quality_app.command("conflicts")

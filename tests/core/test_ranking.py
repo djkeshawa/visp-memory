@@ -1,9 +1,11 @@
 from llm_memory.core.ranking import (
+    UTILITY_RANKING_LIMIT,
     graph_edge_score,
     graph_node_relevance,
     rank_memory_results,
     relationship_score,
     score_memory_result,
+    utility_rank_adjustment,
 )
 
 
@@ -55,6 +57,35 @@ def test_rank_memory_results_filters_below_min_score():
     )
 
     assert ranked == []
+
+
+def test_utility_adjustment_is_bounded():
+    assert utility_rank_adjustment(99) == UTILITY_RANKING_LIMIT
+    assert utility_rank_adjustment(-99) == -UTILITY_RANKING_LIMIT
+
+
+def test_utility_cannot_override_direct_relevance():
+    ranked = rank_memory_results(
+        [
+            {
+                "id": "popular-noise",
+                "content": "database migration complete",
+                "similarity": 0.2,
+                "importance": 0.9,
+                "utility_score": 1.0,
+            },
+            {
+                "id": "direct-match",
+                "content": "authentication token refresh",
+                "similarity": 0.4,
+                "importance": 0.3,
+                "utility_score": -1.0,
+            },
+        ],
+        query="authentication",
+    )
+
+    assert [item["id"] for item in ranked] == ["direct-match", "popular-noise"]
 
 
 def test_relationship_score_requires_more_than_embedding_noise():

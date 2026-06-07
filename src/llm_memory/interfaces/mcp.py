@@ -123,6 +123,15 @@ def create_mcp_server() -> "Server":
                                 "Filter by repository/project ID for isolation (optional)"
                             ),
                         },
+                        "log_utility": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Log surfaced results as recall utility feedback",
+                        },
+                        "task_id": {
+                            "type": "string",
+                            "description": "Optional task ID for surfaced feedback",
+                        },
                     },
                     "required": ["query"],
                 },
@@ -638,6 +647,68 @@ def create_mcp_server() -> "Server":
                     },
                 },
             ),
+            Tool(
+                name="memory_feedback_log",
+                description="Log recall utility feedback for surfaced, used, or dismissed memory.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "memory_id": {"type": "string", "description": "Single memory ID"},
+                        "memory_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Memory IDs to mark",
+                        },
+                        "event_type": {
+                            "type": "string",
+                            "enum": [
+                                "surfaced",
+                                "used",
+                                "dismissed",
+                                "task_linked",
+                                "outcome_linked",
+                                "task-linked",
+                                "outcome-linked",
+                            ],
+                        },
+                        "repo_id": {"type": "string", "description": "Repository/project ID"},
+                        "query": {"type": "string", "description": "Query to hash, not store"},
+                        "task_id": {"type": "string", "description": "Optional task ID"},
+                        "outcome": {"type": "string", "description": "Optional outcome ID/label"},
+                    },
+                    "required": ["event_type"],
+                },
+            ),
+            Tool(
+                name="memory_feedback_inspect",
+                description="Inspect aggregate recall utility feedback signals.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "memory_id": {"type": "string", "description": "Filter by memory ID"},
+                        "repo_id": {"type": "string", "description": "Repository/project ID"},
+                        "event_type": {"type": "string", "description": "Filter by event type"},
+                        "limit": {"type": "integer", "default": 50},
+                    },
+                },
+            ),
+            Tool(
+                name="memory_feedback_reset",
+                description="Reset recall utility feedback signals matching filters.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "memory_id": {"type": "string", "description": "Filter by memory ID"},
+                        "repo_id": {"type": "string", "description": "Repository/project ID"},
+                        "event_type": {"type": "string", "description": "Filter by event type"},
+                        "confirm": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Must be true to reset",
+                        },
+                    },
+                },
+            ),
             # Maintenance
             Tool(
                 name="memory_compress",
@@ -967,7 +1038,11 @@ def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
     """Handle search tools."""
     if name == "memory_recall":
         results = memory.recall(
-            query=args["query"], limit=args.get("limit", 10), repo_id=args.get("repo_id")
+            query=args["query"],
+            limit=args.get("limit", 10),
+            repo_id=args.get("repo_id"),
+            log_utility=args.get("log_utility", False),
+            task_id=args.get("task_id"),
         )
         if not results:
             return "No memories found matching query."
@@ -975,7 +1050,10 @@ def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
         output = [f"Found {len(results)} memories:\n"]
         for r in results:
             sim = f" (similarity: {r.get('similarity', 0):.2f})" if r.get("similarity") else ""
-            output.append(f"- [{r['layer']}/{r.get('category', 'unknown')}]{sim}: {r['content']}")
+            output.append(
+                f"- [{r['id']}] [{r['layer']}/{r.get('category', 'unknown')}]{sim}: "
+                f"{r['content']}"
+            )
             output.extend(_format_related_evidence_lines(r.get("id"), memory))
         return "\n".join(output)
 
@@ -1508,6 +1586,56 @@ def _handle_utility(name: str, args: dict[str, Any], memory: Memory) -> str:
     return f"Unknown utility tool: {name}"
 
 
+def _handle_feedback(name: str, args: dict[str, Any], memory: Memory) -> str:
+    """Handle recall utility feedback tools."""
+    if name == "memory_feedback_log":
+        memory_ids = list(args.get("memory_ids") or [])
+        if args.get("memory_id"):
+            memory_ids.append(args["memory_id"])
+        memory_ids = list(dict.fromkeys(memory_ids))
+        if not memory_ids:
+            return "No memory_id or memory_ids provided."
+
+        event_ids = []
+        for memory_id in memory_ids:
+            event_ids.append(
+                memory.record_utility_feedback(
+                    memory_id=memory_id,
+                    event_type=args["event_type"],
+                    repo_id=args.get("repo_id"),
+                    query=args.get("query"),
+                    task_id=args.get("task_id"),
+                    outcome=args.get("outcome"),
+                    metadata={"source": "mcp"},
+                )
+            )
+        return f"Recorded {len(event_ids)} feedback events: {', '.join(event_ids)}"
+
+    if name == "memory_feedback_inspect":
+        return json.dumps(
+            memory.inspect_utility_signals(
+                memory_id=args.get("memory_id"),
+                repo_id=args.get("repo_id"),
+                event_type=args.get("event_type"),
+                limit=args.get("limit", 50),
+            ),
+            indent=2,
+            default=str,
+        )
+
+    if name == "memory_feedback_reset":
+        if not args.get("confirm", False):
+            return "Set confirm=true to reset recall utility feedback."
+        deleted = memory.reset_utility_signals(
+            memory_id=args.get("memory_id"),
+            repo_id=args.get("repo_id"),
+            event_type=args.get("event_type"),
+        )
+        return f"Deleted {deleted} feedback events."
+
+    return f"Unknown feedback tool: {name}"
+
+
 def _handle_maintenance(name: str, args: dict[str, Any], memory: Memory) -> str:
     """Handle maintenance tools."""
     if name == "memory_compress":
@@ -1571,6 +1699,10 @@ async def handle_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
     # Utility
     if name in ["memory_stats", "memory_list_warnings", "memory_list_intents"]:
         return _handle_utility(name, args, memory)
+
+    # Recall utility feedback
+    if name in ["memory_feedback_log", "memory_feedback_inspect", "memory_feedback_reset"]:
+        return _handle_feedback(name, args, memory)
 
     # Maintenance
     if name in ["memory_compress", "memory_decay", "memory_decay_preview", "memory_clear_goals"]:

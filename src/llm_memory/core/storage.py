@@ -23,6 +23,7 @@ from llm_memory.core.ranking import (
     rank_memory_results,
     relationship_score,
     text_similarity,
+    utility_rank_adjustment,
 )
 
 try:
@@ -36,6 +37,16 @@ except ImportError:
 
 MemoryLayer = Literal["raw", "episodic", "semantic", "intent"]
 MemoryStatus = Literal["active", "pending", "archived", "deleted"]
+RecallEventType = Literal["surfaced", "used", "dismissed", "task_linked", "outcome_linked"]
+
+RECALL_EVENT_WEIGHTS: dict[str, float] = {
+    "surfaced": 0.03,
+    "used": 0.30,
+    "dismissed": -0.25,
+    "task_linked": 0.20,
+    "outcome_linked": 0.25,
+}
+SENSITIVE_RECALL_METADATA_KEYS = {"prompt", "response", "query", "content", "messages"}
 
 
 class BaseStorage(ABC):
@@ -455,6 +466,21 @@ class LocalStorage(BaseStorage):
                 )
             """)
 
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS recall_events (
+                    id TEXT PRIMARY KEY,
+                    memory_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    repo_id TEXT DEFAULT NULL,
+                    query_hash TEXT DEFAULT NULL,
+                    task_id TEXT DEFAULT NULL,
+                    outcome TEXT DEFAULT NULL,
+                    metadata TEXT DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (memory_id) REFERENCES memories(id)
+                )
+            """)
+
             # Indexes
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_layer ON memories(layer)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category)")
@@ -478,6 +504,17 @@ class LocalStorage(BaseStorage):
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_event ON audit_logs(event_type)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_logs(actor_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_repo ON audit_logs(repo_id)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_recall_events_memory "
+                "ON recall_events(memory_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_recall_events_repo ON recall_events(repo_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_recall_events_type "
+                "ON recall_events(event_type)"
+            )
 
             conn.commit()
 
@@ -1151,6 +1188,7 @@ class LocalStorage(BaseStorage):
                 )
             )
 
+        self._attach_recall_utility_scores(results)
         return rank_memory_results(results, query=query, limit=limit)
 
     def _text_search_memories(
@@ -1374,6 +1412,7 @@ class LocalStorage(BaseStorage):
 
         # Delete from SQLite
         with self._get_db() as conn:
+            conn.execute("DELETE FROM recall_events WHERE memory_id = ?", (memory_id,))
             conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
             conn.execute(
                 "DELETE FROM relationships WHERE source_id = ? OR target_id = ?",
@@ -1717,6 +1756,245 @@ class LocalStorage(BaseStorage):
             stats["total_relationships"] = cursor.fetchone()[0]
 
             return stats
+
+    def log_recall_event(
+        self,
+        memory_id: str,
+        event_type: RecallEventType,
+        repo_id: str = None,
+        query: str = None,
+        task_id: str = None,
+        outcome: str = None,
+        metadata: Dict[str, Any] = None,
+    ) -> str:
+        """Record a privacy-conscious recall utility event."""
+        normalized_type = self._normalize_recall_event_type(event_type)
+        memory = self._get_memory_row(memory_id, track_access=False)
+        if not memory:
+            raise ValueError(f"Memory not found: {memory_id}")
+
+        event_id = self._generate_id(f"{memory_id}:{normalized_type}")
+        event_repo_id = repo_id if repo_id is not None else memory.get("repo_id")
+        with self._get_db() as conn:
+            conn.execute(
+                """
+                INSERT INTO recall_events (
+                    id, memory_id, event_type, repo_id, query_hash, task_id,
+                    outcome, metadata, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    memory_id,
+                    normalized_type,
+                    event_repo_id,
+                    self._hash_recall_query(query),
+                    task_id,
+                    outcome,
+                    self._json_serialize(self._sanitize_recall_metadata(metadata)),
+                    datetime.now().isoformat(),
+                ),
+            )
+            conn.commit()
+        return event_id
+
+    def inspect_recall_utility(
+        self,
+        memory_id: str = None,
+        repo_id: str = None,
+        event_type: str = None,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        """Return recall utility signals and recent sanitized events."""
+        where, params = self._recall_event_filters(memory_id, repo_id, event_type)
+        with self._get_db() as conn:
+            count_cursor = conn.execute(
+                f"""
+                SELECT event_type, COUNT(*) AS count
+                FROM recall_events
+                {where}
+                GROUP BY event_type
+                """,
+                params,
+            )
+            by_event_type = {row["event_type"]: row["count"] for row in count_cursor.fetchall()}
+
+            signal_cursor = conn.execute(
+                f"""
+                SELECT memory_id, repo_id, event_type, COUNT(*) AS count,
+                       MAX(created_at) AS last_event_at
+                FROM recall_events
+                {where}
+                GROUP BY memory_id, repo_id, event_type
+                ORDER BY MAX(created_at) DESC
+                """,
+                params,
+            )
+            signals_by_memory: dict[str, dict[str, Any]] = {}
+            for row in signal_cursor.fetchall():
+                signal = signals_by_memory.setdefault(
+                    row["memory_id"],
+                    {
+                        "memory_id": row["memory_id"],
+                        "repo_id": row["repo_id"],
+                        "counts": {},
+                        "total_events": 0,
+                        "last_event_at": row["last_event_at"],
+                    },
+                )
+                signal["counts"][row["event_type"]] = row["count"]
+                signal["total_events"] += row["count"]
+                signal["last_event_at"] = max(
+                    signal["last_event_at"] or "", row["last_event_at"] or ""
+                )
+
+            events_cursor = conn.execute(
+                f"""
+                SELECT id, memory_id, event_type, repo_id, query_hash, task_id,
+                       outcome, metadata, created_at
+                FROM recall_events
+                {where}
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                [*params, max(0, int(limit))],
+            )
+            events = [
+                self._recall_event_row_to_dict(row) for row in events_cursor.fetchall()
+            ]
+
+        signals = []
+        for signal in signals_by_memory.values():
+            utility_score = self._recall_utility_score_from_counts(signal["counts"])
+            signal["utility_score"] = utility_score
+            signal["utility_rank_adjustment"] = utility_rank_adjustment(utility_score)
+            signals.append(signal)
+
+        signals.sort(
+            key=lambda item: (
+                item.get("utility_score", 0.0),
+                item.get("last_event_at") or "",
+            ),
+            reverse=True,
+        )
+        return {
+            "summary": {
+                "total_events": sum(by_event_type.values()),
+                "by_event_type": by_event_type,
+                "memories": len(signals),
+            },
+            "signals": signals,
+            "events": events,
+        }
+
+    def reset_recall_utility(
+        self,
+        memory_id: str = None,
+        repo_id: str = None,
+        event_type: str = None,
+    ) -> int:
+        """Delete recall utility events matching optional filters."""
+        where, params = self._recall_event_filters(memory_id, repo_id, event_type)
+        with self._get_db() as conn:
+            cursor = conn.execute(f"DELETE FROM recall_events {where}", params)
+            conn.commit()
+            return cursor.rowcount
+
+    def _attach_recall_utility_scores(self, memories: List[Dict[str, Any]]) -> None:
+        """Attach aggregate recall utility scores to memory rows in-place."""
+        memory_ids = [memory.get("id") for memory in memories if memory.get("id")]
+        if not memory_ids:
+            return
+
+        placeholders = ", ".join("?" for _ in memory_ids)
+        with self._get_db() as conn:
+            cursor = conn.execute(
+                f"""
+                SELECT memory_id, event_type, COUNT(*) AS count
+                FROM recall_events
+                WHERE memory_id IN ({placeholders})
+                GROUP BY memory_id, event_type
+                """,
+                memory_ids,
+            )
+            counts_by_memory: dict[str, dict[str, int]] = {}
+            for row in cursor.fetchall():
+                counts_by_memory.setdefault(row["memory_id"], {})[row["event_type"]] = row[
+                    "count"
+                ]
+
+        for memory in memories:
+            counts = counts_by_memory.get(memory.get("id"), {})
+            utility_score = self._recall_utility_score_from_counts(counts)
+            memory["utility_score"] = utility_score
+            memory["utility_signal"] = {
+                "counts": counts,
+                "total_events": sum(counts.values()),
+                "rank_adjustment": utility_rank_adjustment(utility_score),
+            }
+
+    @classmethod
+    def _normalize_recall_event_type(cls, event_type: str) -> str:
+        normalized = str(event_type or "").strip().lower().replace("-", "_")
+        if normalized not in RECALL_EVENT_WEIGHTS:
+            allowed = ", ".join(sorted(RECALL_EVENT_WEIGHTS))
+            raise ValueError(f"Invalid recall event type: {event_type}. Expected one of: {allowed}")
+        return normalized
+
+    @classmethod
+    def _recall_utility_score_from_counts(cls, counts: Dict[str, int]) -> float:
+        score = 0.0
+        for event_type, count in counts.items():
+            score += RECALL_EVENT_WEIGHTS.get(event_type, 0.0) * int(count)
+        return max(-1.0, min(1.0, score))
+
+    @classmethod
+    def _sanitize_recall_metadata(cls, metadata: Dict[str, Any] = None) -> Dict[str, Any]:
+        if not isinstance(metadata, dict):
+            return {}
+
+        safe: dict[str, Any] = {}
+        for key, value in metadata.items():
+            normalized_key = str(key).lower()
+            if any(sensitive in normalized_key for sensitive in SENSITIVE_RECALL_METADATA_KEYS):
+                continue
+            if isinstance(value, str) and len(value) > 500:
+                value = f"{value[:500]}..."
+            safe[str(key)] = value
+        return json.loads(json.dumps(safe, default=str))
+
+    @classmethod
+    def _hash_recall_query(cls, query: str = None) -> str | None:
+        if not query:
+            return None
+        return hashlib.sha256(str(query).encode("utf-8")).hexdigest()
+
+    @classmethod
+    def _recall_event_filters(
+        cls,
+        memory_id: str = None,
+        repo_id: str = None,
+        event_type: str = None,
+    ) -> tuple[str, list[Any]]:
+        where = "WHERE 1=1"
+        params: list[Any] = []
+        if memory_id:
+            where += " AND memory_id = ?"
+            params.append(memory_id)
+        if repo_id:
+            where += " AND repo_id = ?"
+            params.append(repo_id)
+        if event_type:
+            where += " AND event_type = ?"
+            params.append(cls._normalize_recall_event_type(event_type))
+        return where, params
+
+    @classmethod
+    def _recall_event_row_to_dict(cls, row: sqlite3.Row) -> Dict[str, Any]:
+        event = dict(row)
+        event["metadata"] = cls._json_deserialize(event.get("metadata") or "{}") or {}
+        return event
 
     def list_project_ids(self) -> List[str]:
         """List distinct repository/project IDs referenced by stored data."""
