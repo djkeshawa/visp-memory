@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { usePathname, useSearchParams } from "next/navigation"
 import { Suspense, useEffect, useState } from "react"
-import { Activity, Brain, LayoutDashboard, Network, Search, Settings, Target } from "lucide-react"
+import { Activity, Brain, ClipboardList, LayoutDashboard, Network, Search, Settings, Target } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { ThemeToggle } from "@/components/ui/theme-toggle"
 import { ProjectSelector } from "@/components/projects/project-selector"
@@ -12,6 +12,7 @@ import { getRuntimeStatus } from "@/lib/api"
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/intelligence", label: "Intelligence", icon: ClipboardList },
   { href: "/graph", label: "Memory Graph", icon: Network },
   { href: "/health", label: "Memory Health", icon: Activity },
   { href: "/recall", label: "Recall", icon: Search },

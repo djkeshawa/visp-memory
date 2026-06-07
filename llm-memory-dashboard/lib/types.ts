@@ -52,6 +52,52 @@ export interface GraphData {
   links: GraphLink[]
 }
 
+export type MemoryIntelligenceReportKind = "stored_fact" | "inferred_recommendation"
+
+export interface MemoryIntelligenceReportItem {
+  type: "memory" | "relationship" | "intent" | "question"
+  id: string
+  title: string
+  reason: string
+  facts: Record<string, unknown>
+}
+
+export interface MemoryIntelligenceReportSection {
+  key: string
+  title: string
+  kind: MemoryIntelligenceReportKind
+  thresholds: Record<string, unknown>
+  items: MemoryIntelligenceReportItem[]
+}
+
+export interface MemoryIntelligenceReport {
+  schemaVersion: string
+  repoId?: string | null
+  asOf?: string | null
+  thresholds: Record<string, unknown>
+  summary: {
+    totalMemories: number
+    totalRelationships: number
+    activeIntents: number
+    nonEmptySections: number
+  }
+  sections: Record<string, MemoryIntelligenceReportSection>
+}
+
+export interface DuplicateCandidate {
+  ids: string[]
+  contents: string[]
+  repoId?: string | null
+  layer: string
+  category?: string | null
+  similarity: number
+  reason: string
+}
+
+export interface QualityDuplicateResponse {
+  candidates: DuplicateCandidate[]
+}
+
 export interface Intent {
   id: string
   description: string

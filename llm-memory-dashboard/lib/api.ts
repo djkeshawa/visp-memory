@@ -15,6 +15,10 @@ import {
     GraphLink,
     GraphNode,
     RelationshipEvidence,
+    MemoryIntelligenceReport,
+    MemoryIntelligenceReportItem,
+    MemoryIntelligenceReportSection,
+    QualityDuplicateResponse,
 } from "./types"
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_LLM_MEMORY_API_URL || ""
@@ -249,6 +253,51 @@ export async function getGraphData(repoId?: string | null): Promise<GraphData> {
     return {
         nodes: Array.isArray(data.nodes) ? data.nodes.map(toGraphNode) : [],
         links: Array.isArray(data.links) ? data.links.map(toGraphLink) : [],
+    }
+}
+
+export async function getMemoryIntelligenceReport(
+    repoId?: string | null,
+    limit: number = 10,
+): Promise<MemoryIntelligenceReport> {
+    const res = await request(
+        withQuery("/reports/memory-intelligence", { repo_id: repoId, limit }),
+        { headers: authHeaders() },
+    )
+    const data = await res.json()
+
+    return parseMemoryIntelligenceReport(data)
+}
+
+export async function getDuplicateCandidates(options: {
+    repoId?: string | null
+    limit?: number
+    layer?: string | null
+    category?: string | null
+} = {}): Promise<QualityDuplicateResponse> {
+    const res = await request(
+        withQuery("/quality/duplicates", {
+            repo_id: options.repoId,
+            limit: options.limit,
+            layer: options.layer,
+            category: options.category,
+        }),
+        { headers: authHeaders() },
+    )
+    const data = await res.json()
+
+    return {
+        candidates: Array.isArray(data.candidates)
+            ? data.candidates.map((item: Record<string, unknown>) => ({
+                ids: readStringArray(item.ids),
+                contents: readStringArray(item.contents),
+                repoId: readString(item.repo_id) ?? null,
+                layer: readString(item.layer) || "unknown",
+                category: readString(item.category) ?? null,
+                similarity: readNumber(item.similarity) ?? 0,
+                reason: readString(item.reason) || "Duplicate candidate.",
+            }))
+            : [],
     }
 }
 
@@ -642,6 +691,70 @@ function readRelationshipEvidence(value: unknown): RelationshipEvidence | null {
     }
 }
 
+function parseMemoryIntelligenceReport(data: Record<string, unknown>): MemoryIntelligenceReport {
+    const summary = readUnknownRecord(data.summary)
+    const rawSections = readUnknownRecord(data.sections)
+    const sections: Record<string, MemoryIntelligenceReportSection> = {}
+
+    for (const [key, value] of Object.entries(rawSections)) {
+        sections[key] = parseReportSection(key, value)
+    }
+
+    return {
+        schemaVersion: readString(data.schema_version) || "unknown",
+        repoId: readString(data.repo_id) ?? null,
+        asOf: readString(data.as_of) ?? null,
+        thresholds: readUnknownRecord(data.thresholds),
+        summary: {
+            totalMemories: readNumber(summary.total_memories) ?? 0,
+            totalRelationships: readNumber(summary.total_relationships) ?? 0,
+            activeIntents: readNumber(summary.active_intents) ?? 0,
+            nonEmptySections: readNumber(summary.non_empty_sections) ?? 0,
+        },
+        sections,
+    }
+}
+
+function parseReportSection(key: string, value: unknown): MemoryIntelligenceReportSection {
+    const record = readUnknownRecord(value)
+    return {
+        key: readString(record.key) || key,
+        title: readString(record.title) || key,
+        kind: parseReportKind(record.kind),
+        thresholds: readUnknownRecord(record.thresholds),
+        items: readReportItems(record.items),
+    }
+}
+
+function parseReportKind(value: unknown): MemoryIntelligenceReportSection["kind"] {
+    const kind = readString(value)
+    if (kind === "stored_fact" || kind === "inferred_recommendation") return kind
+    return "inferred_recommendation"
+}
+
+function readReportItems(value: unknown): MemoryIntelligenceReportItem[] {
+    if (!Array.isArray(value)) return []
+
+    return value.map((item) => {
+        const record = readUnknownRecord(item)
+        return {
+            type: parseReportItemType(record.type),
+            id: readString(record.id) || readString(record.title) || "finding",
+            title: readString(record.title) || readString(record.id) || "Finding",
+            reason: readString(record.reason) || "",
+            facts: readUnknownRecord(record.facts),
+        }
+    })
+}
+
+function parseReportItemType(value: unknown): MemoryIntelligenceReportItem["type"] {
+    const type = readString(value)
+    if (type === "memory" || type === "relationship" || type === "intent" || type === "question") {
+        return type
+    }
+    return "memory"
+}
+
 function readNumber(value: unknown): number | undefined {
     if (typeof value === "number" && Number.isFinite(value)) {
         return value
@@ -657,6 +770,11 @@ function readNumber(value: unknown): number | undefined {
 function readStringArray(value: unknown): string[] {
     if (!Array.isArray(value)) return []
     return value.filter((item): item is string => typeof item === "string" && item.length > 0)
+}
+
+function readUnknownRecord(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+    return value as Record<string, unknown>
 }
 
 function readStringRecord(value: unknown): Record<string, string> {
