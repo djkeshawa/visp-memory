@@ -3,7 +3,7 @@ name: llm-memory
 x-llm-memory-build: &llm-memory-build
   context: .
   args:
-    LLM_MEMORY_EXTRAS: ${LLM_MEMORY_EXTRAS:-api,mcp,neo4j,openai,ollama}
+    LLM_MEMORY_EXTRAS: ${LLM_MEMORY_EXTRAS:-api,mcp,arcadedb,neo4j,openai,ollama}
 
 x-llm-memory-env: &llm-memory-env
   LLM_MEMORY_SERVER_AUTH_ENABLED: ${LLM_MEMORY_SERVER_AUTH_ENABLED:-false}
@@ -29,6 +29,25 @@ services:
     environment:
       <<: *llm-memory-env
       LLM_MEMORY_STORAGE_BACKEND: sqlite
+      LLM_MEMORY_STORAGE_DATA_DIR: /data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/readyz').raise_for_status()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  llm-memory-arcadedb:
+    profiles: ["arcadedb"]
+    build: *llm-memory-build
+    image: ${LLM_MEMORY_IMAGE:-llm-memory:local}
+    ports:
+      - "${LLM_MEMORY_PORT:-8000}:8000"
+    volumes:
+      - llm-memory-arcadedb-data:/data
+    environment:
+      <<: *llm-memory-env
+      LLM_MEMORY_STORAGE_BACKEND: arcadedb
       LLM_MEMORY_STORAGE_DATA_DIR: /data
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/readyz').raise_for_status()"]
@@ -112,6 +131,7 @@ services:
 
 volumes:
   llm-memory-lite-data:
+  llm-memory-arcadedb-data:
   llm-memory-full-data:
   neo4j-data:
   neo4j-logs:

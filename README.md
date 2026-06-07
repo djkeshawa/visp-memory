@@ -90,14 +90,18 @@ pip install https://github.com/djkeshawa/llm-memory/releases/download/v0.1.0/llm
 ### Method 2: Docker
 
 Run the API, dashboard, MCP-capable package, and storage with Docker Compose.
-The `lite` profile uses SQLite and automatic embedding selection. ArcadeDB is an
-optional embedded package extra and does not require a separate Docker service.
-The `full` profile starts Neo4j plus Ollama and pulls `nomic-embed-text`, so
-recall uses real semantic embeddings out of the box.
+The `lite` profile uses SQLite and automatic embedding selection. The
+`arcadedb` profile uses the embedded ArcadeDB graph backend in the app
+container, with no separate database service. The `full` profile starts Neo4j
+plus Ollama and pulls `nomic-embed-text`, so recall uses real semantic
+embeddings out of the box.
 
 ```bash
 # Quick local server + dashboard
 docker compose --profile lite up --build
+
+# Embedded local graph backend, no separate database service
+docker compose --profile arcadedb up --build
 
 # Full graph deployment with Neo4j included
 docker compose --profile full up --build
@@ -115,11 +119,11 @@ LLM_MEMORY_EMBEDDING_PROVIDER=sentence-transformers \
 docker compose --profile full up --build
 ```
 
-To include ArcadeDB in an image without adding a database service:
+The default Docker image includes ArcadeDB Embedded. For a leaner image without
+ArcadeDB, override the extras:
 
 ```bash
-LLM_MEMORY_EXTRAS=api,mcp,arcadedb \
-LLM_MEMORY_STORAGE_BACKEND=arcadedb \
+LLM_MEMORY_EXTRAS=api,mcp,neo4j,openai,ollama \
 docker compose --profile lite up --build
 ```
 

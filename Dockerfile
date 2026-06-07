@@ -42,7 +42,7 @@ COPY --from=python-builder /app/dist/*.whl ./
 
 # Install the runtime server profile. Keep local sentence-transformers out of
 # the default image, but allow it via --build-arg LLM_MEMORY_EXTRAS=...
-ARG LLM_MEMORY_EXTRAS=api,mcp,neo4j,openai,ollama
+ARG LLM_MEMORY_EXTRAS=api,mcp,arcadedb,neo4j,openai,ollama
 RUN pip install --no-cache-dir "$(ls *.whl)[${LLM_MEMORY_EXTRAS}]" && \
     rm *.whl
 
