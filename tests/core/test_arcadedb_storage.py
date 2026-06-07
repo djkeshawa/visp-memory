@@ -26,9 +26,20 @@ class FakeArcadeDbModule:
 class FakeArcadeDb:
     def __init__(self):
         self.commands = []
-        self.memories = {}
-        self.relationships = {}
-        self.sessions = {}
+        self.records = {
+            "Memory": {},
+            "Intent": {},
+            "Session": {},
+            "Repository": {},
+            "User": {},
+            "Team": {},
+            "AuditLog": {},
+            "RecallFeedback": {},
+        }
+        self.edges = {"MemoryRelationship": {}, "RepoDependency": {}, "TeamMember": {}}
+        self.memories = self.records["Memory"]
+        self.relationships = self.edges["MemoryRelationship"]
+        self.sessions = self.records["Session"]
 
     def __enter__(self):
         return self
@@ -44,54 +55,60 @@ class FakeArcadeDb:
         sql = " ".join(sql.split())
         self.commands.append(sql)
         if sql.startswith("CREATE EDGE MemoryRelationship"):
-            fields = _edge_fields(sql)
-            self.relationships[params[2]] = dict(zip(fields, params[2:]))
+            self._create_edge("MemoryRelationship", sql, params)
+            return None
+        if sql.startswith("CREATE EDGE RepoDependency"):
+            self._create_edge("RepoDependency", sql, params)
+            return None
+        if sql.startswith("CREATE EDGE TeamMember"):
+            self._create_edge("TeamMember", sql, params)
             return None
         if sql.startswith("CREATE "):
             return None
-        if sql.startswith("INSERT INTO Memory SET"):
+        if sql.startswith("INSERT INTO "):
+            type_name = sql.split()[2]
             fields = _insert_fields(sql)
-            self.memories[params[0]] = dict(zip(fields, params))
+            self.records[type_name][params[0]] = dict(zip(fields, params))
             return None
-        if sql.startswith("UPDATE Memory SET"):
+        if sql.startswith("UPDATE "):
+            type_name = sql.split()[1]
             fields = _update_fields(sql)
-            memory_id = params[-1]
-            if memory_id in self.memories:
-                self.memories[memory_id].update(dict(zip(fields, params[:-1])))
+            record_id = params[-1]
+            if record_id in self.records[type_name]:
+                self.records[type_name][record_id].update(dict(zip(fields, params[:-1])))
             return None
-        if sql.startswith("DELETE FROM Memory WHERE id = ?"):
-            self.memories.pop(params[0], None)
-            return None
-        if sql.startswith("INSERT INTO Session SET"):
-            fields = _insert_fields(sql)
-            self.sessions[params[0]] = dict(zip(fields, params))
-            return None
-        if sql.startswith("UPDATE Session"):
-            session_id = params[-1]
-            if session_id in self.sessions:
-                self.sessions[session_id].update(
-                    {"summary": params[0], "memory_ids": params[1], "ended_at": params[2]}
-                )
+        if sql.startswith("DELETE FROM "):
+            type_name = sql.split()[2]
+            self.records[type_name].pop(params[0], None)
             return None
         raise AssertionError(f"Unhandled SQL command: {sql}")
 
     def query(self, language, sql, *params):
         assert language == "sql"
         sql = " ".join(sql.split())
-        if sql == "SELECT FROM Memory WHERE id = ?":
-            memory = self.memories.get(params[0])
-            return [memory] if memory else []
-        if sql == "SELECT FROM MemoryRelationship":
-            return list(self.relationships.values())
-        if sql.startswith("SELECT FROM Memory"):
-            return self._query_memories(sql, params)
+        if sql.startswith("SELECT FROM "):
+            type_name = sql.split()[2]
+            if type_name in self.edges:
+                return list(self.edges[type_name].values())
+            if sql == f"SELECT FROM {type_name} WHERE id = ?":
+                record = self.records[type_name].get(params[0])
+                return [record] if record else []
+            return self._query_records(type_name, sql, params)
         raise AssertionError(f"Unhandled SQL query: {sql}")
 
-    def _query_memories(self, sql, params):
-        rows = list(self.memories.values())
+    def _create_edge(self, edge_type, sql, params):
+        fields = _edge_fields(sql)
+        values = params[2:]
+        edge_id = values[0]
+        self.edges[edge_type][edge_id] = dict(zip(fields, values))
+
+    def _query_records(self, type_name, sql, params):
+        rows = list(self.records[type_name].values())
         param_index = 0
-        for field in ("layer", "repo_id", "category", "status"):
-            if f"{field} = ?" in sql:
+        where_match = re.search(r" WHERE (.*?) ORDER BY ", sql)
+        if where_match:
+            for condition in where_match.group(1).split(" AND "):
+                field = condition.split(" = ?", 1)[0]
                 expected = params[param_index]
                 rows = [row for row in rows if row.get(field) == expected]
                 param_index += 1
@@ -350,6 +367,115 @@ def test_arcadedb_relationships_reject_missing_or_cross_repo_memories(fake_arcad
 
     with pytest.raises(ValueError, match="must both exist"):
         storage.add_relationship(source_id, "missing", "related_to")
+
+
+def test_arcadedb_intents_stats_and_project_ids(fake_arcadedb, tmp_path):
+    storage = ArcadeDbStorage(tmp_path)
+    storage.store_memory("Repo memory", repo_id="repo-a")
+
+    intent_id = storage.set_intent(
+        "Ship ArcadeDB backend",
+        priority=5,
+        context={"phase": "storage"},
+        repo_id="repo-intent",
+    )
+
+    intents = storage.get_active_intents(repo_id="repo-intent")
+    assert intents[0]["id"] == intent_id
+    assert intents[0]["context"] == {"phase": "storage"}
+
+    assert storage.update_intent(intent_id, priority=7, context={"phase": "graph"}) is True
+    assert storage.get_active_intents(repo_id="repo-intent")[0]["priority"] == 7
+
+    stats = storage.get_stats()
+    assert stats["active_intents"] == 1
+    assert storage.list_project_ids() == ["repo-a", "repo-intent"]
+
+    assert storage.complete_intent(intent_id) is True
+    assert storage.get_active_intents(repo_id="repo-intent") == []
+
+
+def test_arcadedb_repositories_dependencies_users_and_teams(fake_arcadedb, tmp_path):
+    storage = ArcadeDbStorage(tmp_path)
+
+    storage.store_repository(
+        {
+            "id": "repo-a",
+            "name": "Repo A",
+            "tech_stack": ["python"],
+            "metadata": {"critical": True},
+        }
+    )
+    storage.store_repository({"id": "repo-b", "name": "Repo B"})
+
+    with pytest.raises(ValueError, match="Repository already exists: repo-a"):
+        storage.store_repository({"id": "repo-a", "name": "Replacement"})
+
+    assert storage.get_repository("repo-a")["tech_stack"] == ["python"]
+    assert [repo["id"] for repo in storage.list_repositories()] == ["repo-a", "repo-b"]
+
+    dependency_id = storage.add_repo_dependency(
+        "repo-a", "repo-b", "runtime", version="1.0", notes="uses API"
+    )
+    assert dependency_id
+    assert storage.get_repo_dependencies("repo-a") == [
+        {"target_id": "repo-b", "type": "runtime", "version": "1.0", "notes": "uses API"}
+    ]
+
+    with pytest.raises(ValueError, match="Repository not found: missing"):
+        storage.add_repo_dependency("missing", "repo-b", "runtime")
+
+    storage.store_user({"id": "alice", "username": "alice", "metadata": {"role": "dev"}})
+    storage.store_team({"id": "team-a", "name": "Team A", "metadata": {"tier": "platform"}})
+
+    with pytest.raises(ValueError, match="User already exists: alice"):
+        storage.store_user({"id": "alice", "username": "renamed"})
+    with pytest.raises(ValueError, match="Team already exists: team-a"):
+        storage.store_team({"id": "team-a", "name": "Replacement"})
+
+    assert storage.add_team_member("team-a", "alice") is True
+    assert storage.add_team_member("team-a", "missing") is False
+    assert storage.get_user("alice")["metadata"] == {"role": "dev"}
+    assert storage.get_user_teams("alice")[0]["metadata"] == {"tier": "platform"}
+
+
+def test_arcadedb_audit_and_recall_feedback(fake_arcadedb, tmp_path):
+    storage = ArcadeDbStorage(tmp_path)
+    memory_id = storage.store_memory("ArcadeDB recall signal", repo_id="repo-a")
+
+    audit_id = storage.append_audit_log(
+        "memory.created",
+        actor_id="alice",
+        repo_id="repo-a",
+        target_type="memory",
+        target_id=memory_id,
+        metadata={"safe": True},
+    )
+    audit = storage.list_audit_logs(actor_id="alice")[0]
+    assert audit["id"] == audit_id
+    assert audit["metadata"] == {"safe": True}
+
+    event_id = storage.log_recall_event(
+        memory_id,
+        "used",
+        query="What backend should I use?",
+        task_id="T004",
+        metadata={"prompt": "secret prompt", "safe": "kept"},
+    )
+    assert event_id
+
+    utility = storage.inspect_recall_utility(memory_id=memory_id)
+    assert utility["summary"]["total_events"] == 1
+    assert utility["summary"]["by_event_type"] == {"used": 1}
+    assert utility["signals"][0]["utility_score"] > 0
+    assert utility["events"][0]["metadata"] == {"safe": "kept"}
+    assert utility["events"][0]["query_hash"]
+
+    assert storage.reset_recall_utility(memory_id=memory_id) == 1
+    assert storage.inspect_recall_utility(memory_id=memory_id)["summary"]["total_events"] == 0
+
+    with pytest.raises(ValueError, match="Memory not found"):
+        storage.log_recall_event("missing", "used")
 
 
 def test_real_arcadedb_memory_smoke_skips_without_extra(tmp_path):

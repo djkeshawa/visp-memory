@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from llm_memory.core.ranking import rank_memory_results, text_similarity
+from llm_memory.core.ranking import rank_memory_results, text_similarity, utility_rank_adjustment
 from llm_memory.core.storage import BaseStorage, LocalStorage, MemoryLayer, MemoryStatus
 
 ARCADEDB_INSTALL_MESSAGE = (
@@ -43,6 +43,8 @@ class ArcadeDbStorage(BaseStorage):
     ]
     EDGE_TYPES = ["MemoryRelationship", "RepoDependency", "TeamMember"]
     MEMORY_RELATIONSHIP_EDGE = "MemoryRelationship"
+    REPO_DEPENDENCY_EDGE = "RepoDependency"
+    TEAM_MEMBER_EDGE = "TeamMember"
     MEMORY_JSON_FIELDS = {"tags", "metadata", "source_ids", "quality_flags"}
     MEMORY_FIELDS = [
         "id",
@@ -79,6 +81,57 @@ class ArcadeDbStorage(BaseStorage):
         "created_by",
         "created_at",
     ]
+    INTENT_FIELDS = [
+        "id",
+        "description",
+        "priority",
+        "context",
+        "repo_id",
+        "status",
+        "created_at",
+        "updated_at",
+    ]
+    REPOSITORY_FIELDS = ["id", "name", "url", "description", "tech_stack", "team_id", "metadata"]
+    USER_FIELDS = ["id", "username", "email", "display_name", "metadata"]
+    TEAM_FIELDS = ["id", "name", "description", "metadata"]
+    AUDIT_FIELDS = [
+        "id",
+        "event_type",
+        "actor_id",
+        "repo_id",
+        "target_type",
+        "target_id",
+        "metadata",
+        "created_at",
+    ]
+    RECALL_EVENT_FIELDS = [
+        "id",
+        "memory_id",
+        "event_type",
+        "repo_id",
+        "query_hash",
+        "task_id",
+        "outcome",
+        "metadata",
+        "created_at",
+    ]
+    REPO_DEPENDENCY_FIELDS = [
+        "id",
+        "source_repo_id",
+        "target_repo_id",
+        "type",
+        "version",
+        "notes",
+    ]
+    TEAM_MEMBER_FIELDS = ["id", "team_id", "user_id"]
+    RECORD_JSON_FIELDS = {
+        "Intent": {"context"},
+        "Repository": {"tech_stack", "metadata"},
+        "User": {"metadata"},
+        "Team": {"metadata"},
+        "AuditLog": {"metadata"},
+        "RecallFeedback": {"metadata"},
+    }
 
     def __init__(
         self,
@@ -153,6 +206,24 @@ class ArcadeDbStorage(BaseStorage):
         memory.setdefault("quality_flags", [])
         memory.setdefault("access_count", 0)
         return memory
+
+    @classmethod
+    def _record_to_dict(
+        cls, record, fields: List[str], json_fields: set[str] = None
+    ) -> Dict[str, Any]:
+        json_fields = json_fields or set()
+        item = {
+            field: cls._record_get(record, field)
+            for field in fields
+            if cls._record_get(record, field) is not None
+        }
+        for field in json_fields:
+            if field in item:
+                parsed = cls._json_deserialize(item[field])
+                if parsed is None:
+                    parsed = [] if field == "tech_stack" else {}
+                item[field] = parsed
+        return item
 
     @classmethod
     def _relationship_record_to_dict(cls, record) -> Dict[str, Any]:
@@ -233,6 +304,123 @@ class ArcadeDbStorage(BaseStorage):
         with self._database() as db:
             rows = self._rows(db.query("sql", query, *params))
         return [self._memory_record_to_dict(row) for row in rows]
+
+    def _insert_record(
+        self,
+        type_name: str,
+        record: Dict[str, Any],
+        fields: List[str],
+        json_fields: set[str] = None,
+    ) -> None:
+        json_fields = json_fields or set()
+        field_names = [field for field in fields if field in record]
+        assignments = ", ".join(f"{field} = ?" for field in field_names)
+        values = [
+            self._json_serialize(record[field]) if field in json_fields else record[field]
+            for field in field_names
+        ]
+        with self._database() as db:
+            with db.transaction():
+                db.command("sql", f"INSERT INTO {type_name} SET {assignments}", *values)
+
+    def _update_record(
+        self,
+        type_name: str,
+        record_id: str,
+        updates: Dict[str, Any],
+        json_fields: set[str] = None,
+    ) -> bool:
+        if self._get_record(type_name, record_id) is None:
+            return False
+        json_fields = json_fields or set()
+        field_names = [field for field, value in updates.items() if value is not None]
+        if not field_names:
+            return False
+        assignments = ", ".join(f"{field} = ?" for field in field_names)
+        values = [
+            self._json_serialize(updates[field]) if field in json_fields else updates[field]
+            for field in field_names
+        ]
+        with self._database() as db:
+            with db.transaction():
+                db.command(
+                    "sql",
+                    f"UPDATE {type_name} SET {assignments} WHERE id = ?",
+                    *values,
+                    record_id,
+                )
+        return True
+
+    def _get_record(self, type_name: str, record_id: str):
+        with self._database() as db:
+            rows = self._rows(db.query("sql", f"SELECT FROM {type_name} WHERE id = ?", record_id))
+        return rows[0] if rows else None
+
+    def _list_records(
+        self,
+        type_name: str,
+        fields: List[str],
+        *,
+        json_fields: set[str] = None,
+        filters: Dict[str, Any] = None,
+        limit: int = 100000,
+        order_by: str = "created_at DESC",
+    ) -> List[Dict[str, Any]]:
+        query = f"SELECT FROM {type_name}"
+        params = []
+        conditions = []
+        for field, value in (filters or {}).items():
+            if value is not None:
+                conditions.append(f"{field} = ?")
+                params.append(value)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += f" ORDER BY {order_by} LIMIT ?"
+        params.append(limit)
+        with self._database() as db:
+            rows = self._rows(db.query("sql", query, *params))
+        return [self._record_to_dict(row, fields, json_fields or set()) for row in rows]
+
+    def _delete_records(self, type_name: str, filters: Dict[str, Any]) -> int:
+        records = self._list_records(type_name, ["id"], filters=filters, order_by="id ASC")
+        with self._database() as db:
+            with db.transaction():
+                for record in records:
+                    db.command("sql", f"DELETE FROM {type_name} WHERE id = ?", record["id"])
+        return len(records)
+
+    def _create_edge(
+        self,
+        edge_type: str,
+        source_type: str,
+        source_id: str,
+        target_type: str,
+        target_id: str,
+        record: Dict[str, Any],
+        fields: List[str],
+    ) -> None:
+        field_names = [field for field in fields if field in record]
+        assignments = ", ".join(f"{field} = ?" for field in field_names)
+        values = [record[field] for field in field_names]
+        with self._database() as db:
+            with db.transaction():
+                db.command(
+                    "sql",
+                    f"""
+                    CREATE EDGE {edge_type}
+                    FROM (SELECT FROM {source_type} WHERE id = ?)
+                    TO (SELECT FROM {target_type} WHERE id = ?)
+                    SET {assignments}
+                    """,
+                    source_id,
+                    target_id,
+                    *values,
+                )
+
+    def _list_edge_records(self, edge_type: str, fields: List[str]) -> List[Dict[str, Any]]:
+        with self._database() as db:
+            rows = self._rows(db.query("sql", f"SELECT FROM {edge_type}"))
+        return [self._record_to_dict(row, fields) for row in rows]
 
     def _not_implemented(self):
         raise NotImplementedError(
@@ -430,18 +618,63 @@ class ArcadeDbStorage(BaseStorage):
         context: Dict[str, Any] = None,
         repo_id: str = None,
     ) -> str:
-        self._not_implemented()
+        intent_id = self._generate_id(description)
+        now = datetime.now().isoformat()
+        self._insert_record(
+            "Intent",
+            {
+                "id": intent_id,
+                "description": description,
+                "priority": priority,
+                "context": context or {},
+                "repo_id": repo_id,
+                "status": "active",
+                "created_at": now,
+                "updated_at": now,
+            },
+            self.INTENT_FIELDS,
+            self.RECORD_JSON_FIELDS["Intent"],
+        )
+        return intent_id
 
     def get_active_intents(
         self, repo_id: str = None, status: str = "active"
     ) -> List[Dict[str, Any]]:
-        self._not_implemented()
+        filters = {}
+        if status and status != "all":
+            filters["status"] = status
+        if repo_id:
+            filters["repo_id"] = repo_id
+        intents = self._list_records(
+            "Intent",
+            self.INTENT_FIELDS,
+            json_fields=self.RECORD_JSON_FIELDS["Intent"],
+            filters=filters,
+            order_by="priority DESC",
+        )
+        intents.sort(
+            key=lambda item: (item.get("priority") or 0, item.get("created_at") or ""),
+            reverse=True,
+        )
+        return intents
 
     def complete_intent(self, intent_id: str) -> bool:
-        self._not_implemented()
+        return self.update_intent(intent_id, status="completed")
 
     def update_intent(self, intent_id: str, **kwargs) -> bool:
-        self._not_implemented()
+        updates = {
+            key: kwargs[key]
+            for key in ("description", "priority", "status", "context")
+            if key in kwargs and kwargs[key] is not None
+        }
+        if updates:
+            updates["updated_at"] = datetime.now().isoformat()
+        return self._update_record(
+            "Intent",
+            intent_id,
+            updates,
+            json_fields=self.RECORD_JSON_FIELDS["Intent"],
+        )
 
     def add_relationship(
         self,
@@ -596,54 +829,342 @@ class ArcadeDbStorage(BaseStorage):
             "memories_by_layer": by_layer,
             "memories_by_category": by_category,
             "total_memories": len(memories),
-            "active_intents": 0,
-            "total_relationships": 0,
+            "active_intents": len(self.get_active_intents(repo_id=repo_id)),
+            "total_relationships": len(self.get_all_relationships(repo_id=repo_id)),
         }
 
     def store_repository(self, repo: Dict[str, Any]) -> str:
-        self._not_implemented()
+        repo_id = repo.get("id") or self._generate_id(repo["name"])
+        if self.get_repository(repo_id) is not None:
+            raise ValueError(f"Repository already exists: {repo_id}")
+        self._insert_record(
+            "Repository",
+            {
+                "id": repo_id,
+                "name": repo["name"],
+                "url": repo.get("url"),
+                "description": repo.get("description"),
+                "tech_stack": repo.get("tech_stack", []),
+                "team_id": repo.get("team_id"),
+                "metadata": repo.get("metadata", {}),
+            },
+            self.REPOSITORY_FIELDS,
+            self.RECORD_JSON_FIELDS["Repository"],
+        )
+        return repo_id
 
     def get_repository(self, repo_id: str) -> Optional[Dict[str, Any]]:
-        self._not_implemented()
+        record = self._get_record("Repository", repo_id)
+        if record is None:
+            return None
+        return self._record_to_dict(
+            record,
+            self.REPOSITORY_FIELDS,
+            self.RECORD_JSON_FIELDS["Repository"],
+        )
 
     def list_repositories(self, team_id: str = None) -> List[Dict[str, Any]]:
-        self._not_implemented()
+        filters = {"team_id": team_id} if team_id else None
+        return self._list_records(
+            "Repository",
+            self.REPOSITORY_FIELDS,
+            json_fields=self.RECORD_JSON_FIELDS["Repository"],
+            filters=filters,
+            order_by="name ASC",
+        )
 
     def list_project_ids(self) -> List[str]:
         memories = self.list_memories(status="all", limit=100000)
-        return sorted(
-            {
-                str(memory["repo_id"])
-                for memory in memories
-                if memory.get("repo_id") not in (None, "")
-            }
+        repo_ids = {
+            str(memory["repo_id"]) for memory in memories if memory.get("repo_id") not in (None, "")
+        }
+        repo_ids.update(
+            intent["repo_id"]
+            for intent in self.get_active_intents(status="all")
+            if intent.get("repo_id") not in (None, "")
         )
+        repo_ids.update(repo["id"] for repo in self.list_repositories() if repo.get("id"))
+        return sorted(repo_ids)
 
     def add_repo_dependency(
         self, source_id: str, target_id: str, dep_type: str, version: str = None, notes: str = None
     ) -> str:
-        self._not_implemented()
+        if self.get_repository(source_id) is None:
+            raise ValueError(f"Repository not found: {source_id}")
+        if self.get_repository(target_id) is None:
+            raise ValueError(f"Repository not found: {target_id}")
+        dependency_id = self._generate_id(f"{source_id}-{target_id}-{dep_type}")
+        self._create_edge(
+            self.REPO_DEPENDENCY_EDGE,
+            "Repository",
+            source_id,
+            "Repository",
+            target_id,
+            {
+                "id": dependency_id,
+                "source_repo_id": source_id,
+                "target_repo_id": target_id,
+                "type": dep_type,
+                "version": version,
+                "notes": notes,
+            },
+            self.REPO_DEPENDENCY_FIELDS,
+        )
+        return dependency_id
 
     def get_repo_dependencies(self, repo_id: str) -> List[Dict[str, Any]]:
-        self._not_implemented()
+        return [
+            {
+                "target_id": dependency.get("target_repo_id"),
+                "type": dependency.get("type"),
+                "version": dependency.get("version"),
+                "notes": dependency.get("notes"),
+            }
+            for dependency in self._list_edge_records(
+                self.REPO_DEPENDENCY_EDGE, self.REPO_DEPENDENCY_FIELDS
+            )
+            if dependency.get("source_repo_id") == repo_id
+        ]
 
     def store_user(self, user: Dict[str, Any]) -> str:
-        self._not_implemented()
+        user_id = user["id"]
+        if self.get_user(user_id) is not None:
+            raise ValueError(f"User already exists: {user_id}")
+        self._insert_record(
+            "User",
+            {
+                "id": user_id,
+                "username": user["username"],
+                "email": user.get("email"),
+                "display_name": user.get("display_name"),
+                "metadata": user.get("metadata", {}),
+            },
+            self.USER_FIELDS,
+            self.RECORD_JSON_FIELDS["User"],
+        )
+        return user_id
 
     def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
-        self._not_implemented()
+        record = self._get_record("User", user_id)
+        if record is None:
+            return None
+        return self._record_to_dict(record, self.USER_FIELDS, self.RECORD_JSON_FIELDS["User"])
 
     def store_team(self, team: Dict[str, Any]) -> str:
-        self._not_implemented()
+        team_id = team["id"]
+        if self.get_team(team_id) is not None:
+            raise ValueError(f"Team already exists: {team_id}")
+        self._insert_record(
+            "Team",
+            {
+                "id": team_id,
+                "name": team["name"],
+                "description": team.get("description"),
+                "metadata": team.get("metadata", {}),
+            },
+            self.TEAM_FIELDS,
+            self.RECORD_JSON_FIELDS["Team"],
+        )
+        return team_id
 
     def get_team(self, team_id: str) -> Optional[Dict[str, Any]]:
-        self._not_implemented()
+        record = self._get_record("Team", team_id)
+        if record is None:
+            return None
+        return self._record_to_dict(record, self.TEAM_FIELDS, self.RECORD_JSON_FIELDS["Team"])
 
     def add_team_member(self, team_id: str, user_id: str) -> bool:
-        self._not_implemented()
+        if self.get_team(team_id) is None or self.get_user(user_id) is None:
+            return False
+        membership_id = self._generate_id(f"{team_id}-{user_id}")
+        self._create_edge(
+            self.TEAM_MEMBER_EDGE,
+            "Team",
+            team_id,
+            "User",
+            user_id,
+            {"id": membership_id, "team_id": team_id, "user_id": user_id},
+            self.TEAM_MEMBER_FIELDS,
+        )
+        return True
 
     def get_user_teams(self, user_id: str) -> List[Dict[str, Any]]:
-        self._not_implemented()
+        teams = []
+        seen_ids = set()
+        for membership in self._list_edge_records(self.TEAM_MEMBER_EDGE, self.TEAM_MEMBER_FIELDS):
+            if membership.get("user_id") != user_id:
+                continue
+            team_id = membership.get("team_id")
+            if not team_id or team_id in seen_ids:
+                continue
+            team = self.get_team(team_id)
+            if team is not None:
+                teams.append(team)
+                seen_ids.add(team_id)
+        return teams
+
+    def append_audit_log(
+        self,
+        event_type: str,
+        actor_id: str = None,
+        repo_id: str = None,
+        target_type: str = None,
+        target_id: str = None,
+        metadata: Dict[str, Any] = None,
+    ) -> str:
+        audit_id = self._generate_id(f"{event_type}:{target_id or ''}")
+        self._insert_record(
+            "AuditLog",
+            {
+                "id": audit_id,
+                "event_type": event_type,
+                "actor_id": actor_id,
+                "repo_id": repo_id,
+                "target_type": target_type,
+                "target_id": target_id,
+                "metadata": metadata or {},
+                "created_at": datetime.now().isoformat(),
+            },
+            self.AUDIT_FIELDS,
+            self.RECORD_JSON_FIELDS["AuditLog"],
+        )
+        return audit_id
+
+    def list_audit_logs(
+        self,
+        actor_id: str = None,
+        repo_id: str = None,
+        event_type: str = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        return self._list_records(
+            "AuditLog",
+            self.AUDIT_FIELDS,
+            json_fields=self.RECORD_JSON_FIELDS["AuditLog"],
+            filters={"actor_id": actor_id, "repo_id": repo_id, "event_type": event_type},
+            limit=limit,
+            order_by="created_at DESC",
+        )
+
+    def log_recall_event(
+        self,
+        memory_id: str,
+        event_type: str,
+        repo_id: str = None,
+        query: str = None,
+        task_id: str = None,
+        outcome: str = None,
+        metadata: Dict[str, Any] = None,
+    ) -> str:
+        memory = self._query_memory(memory_id)
+        if memory is None:
+            raise ValueError(f"Memory not found: {memory_id}")
+        memory_data = self._memory_record_to_dict(memory)
+        normalized_type = LocalStorage._normalize_recall_event_type(event_type)
+        event_id = self._generate_id(f"{memory_id}:{normalized_type}")
+        self._insert_record(
+            "RecallFeedback",
+            {
+                "id": event_id,
+                "memory_id": memory_id,
+                "event_type": normalized_type,
+                "repo_id": repo_id if repo_id is not None else memory_data.get("repo_id"),
+                "query_hash": LocalStorage._hash_recall_query(query),
+                "task_id": task_id,
+                "outcome": outcome,
+                "metadata": LocalStorage._sanitize_recall_metadata(metadata),
+                "created_at": datetime.now().isoformat(),
+            },
+            self.RECALL_EVENT_FIELDS,
+            self.RECORD_JSON_FIELDS["RecallFeedback"],
+        )
+        return event_id
+
+    def inspect_recall_utility(
+        self,
+        memory_id: str = None,
+        repo_id: str = None,
+        event_type: str = None,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        filters = {
+            "memory_id": memory_id,
+            "repo_id": repo_id,
+            "event_type": LocalStorage._normalize_recall_event_type(event_type)
+            if event_type
+            else None,
+        }
+        events = self._list_records(
+            "RecallFeedback",
+            self.RECALL_EVENT_FIELDS,
+            json_fields=self.RECORD_JSON_FIELDS["RecallFeedback"],
+            filters=filters,
+            limit=limit,
+            order_by="created_at DESC",
+        )
+        all_events = self._list_records(
+            "RecallFeedback",
+            self.RECALL_EVENT_FIELDS,
+            json_fields=self.RECORD_JSON_FIELDS["RecallFeedback"],
+            filters=filters,
+            limit=100000,
+            order_by="created_at DESC",
+        )
+        by_event_type: dict[str, int] = {}
+        signals_by_memory: dict[str, dict[str, Any]] = {}
+        for event in all_events:
+            event_type_value = event.get("event_type")
+            by_event_type[event_type_value] = by_event_type.get(event_type_value, 0) + 1
+            signal = signals_by_memory.setdefault(
+                event["memory_id"],
+                {
+                    "memory_id": event["memory_id"],
+                    "repo_id": event.get("repo_id"),
+                    "counts": {},
+                    "total_events": 0,
+                    "last_event_at": event.get("created_at"),
+                },
+            )
+            signal["counts"][event_type_value] = signal["counts"].get(event_type_value, 0) + 1
+            signal["total_events"] += 1
+            signal["last_event_at"] = max(
+                signal.get("last_event_at") or "", event.get("created_at") or ""
+            )
+
+        signals = []
+        for signal in signals_by_memory.values():
+            utility_score = LocalStorage._recall_utility_score_from_counts(signal["counts"])
+            signal["utility_score"] = utility_score
+            signal["utility_rank_adjustment"] = utility_rank_adjustment(utility_score)
+            signals.append(signal)
+        signals.sort(
+            key=lambda item: (item.get("utility_score", 0.0), item.get("last_event_at") or ""),
+            reverse=True,
+        )
+        return {
+            "summary": {
+                "total_events": sum(by_event_type.values()),
+                "by_event_type": by_event_type,
+                "memories": len(signals),
+            },
+            "signals": signals,
+            "events": events,
+        }
+
+    def reset_recall_utility(
+        self,
+        memory_id: str = None,
+        repo_id: str = None,
+        event_type: str = None,
+    ) -> int:
+        filters = {
+            "memory_id": memory_id,
+            "repo_id": repo_id,
+            "event_type": LocalStorage._normalize_recall_event_type(event_type)
+            if event_type
+            else None,
+        }
+        return self._delete_records("RecallFeedback", filters)
 
 
 __all__ = [
