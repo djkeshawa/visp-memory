@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
+from llm_memory.capture.git import CaptureManifest
+
 REDACTED_SECRET = "***REDACTED***"
 _SENSITIVE_CONFIG_KEYS = {
     "api_key",
@@ -63,6 +65,7 @@ def export_memory(memory: Any, path: Path = None) -> Dict[str, Any]:
         },
         "intents": memory._storage.get_active_intents(repo_id=repo_id),
         "stats": memory.stats(),
+        "capture_manifest": CaptureManifest(memory).to_export(),
     }
 
     if path:
@@ -128,6 +131,14 @@ def _validate_import_data(data: Any) -> Dict[str, Any]:
     for index, item in enumerate(intents):
         _validate_intent_item(item, f"intents[{index}]")
 
+    capture_manifest = data.get("capture_manifest")
+    if capture_manifest is not None:
+        _require_dict(capture_manifest, "capture_manifest")
+        _validate_optional_type(capture_manifest, "entries", dict, "capture_manifest")
+        _validate_optional_type(
+            capture_manifest, "capture_version", str, "capture_manifest"
+        )
+
     return data
 
 
@@ -164,3 +175,6 @@ def import_memories(memory: Any, path: Path) -> None:
             context=intent.get("context", {}),
             repo_id=intent.get("repo_id") or memory.config.repo_id,
         )
+
+    if data.get("capture_manifest"):
+        CaptureManifest(memory).replace(data["capture_manifest"])

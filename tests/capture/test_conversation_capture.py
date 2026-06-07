@@ -80,6 +80,34 @@ def test_conversation_capture_parsing(mock_memory):
         )
 
 
+def test_conversation_capture_skips_unchanged_text(mock_memory, tmp_path):
+    mock_memory.config.storage.data_dir = tmp_path / "memory"
+    mock_memory.decision.return_value = "decision-1"
+    mock_memory.learn.return_value = "learning-1"
+    mock_memory.record.return_value = "bug-1"
+    mock_memory.intent.set_goal.return_value = "task-1"
+
+    mock_client = Mock()
+    mock_client.completion.return_value = """
+    {
+      "decisions": [{"what": "Use Redis", "why": "Speed"}],
+      "learnings": [],
+      "bugs": [],
+      "tasks": []
+    }
+    """
+
+    with patch("llm_memory.capture.conversation.create_llm_client", return_value=mock_client):
+        capturer = ConversationCapture(mock_memory)
+        first = capturer.parse_text("same log", source="chat.json", dry_run=False)
+        mock_memory.decision.reset_mock()
+        second = capturer.parse_text("same log", source="chat.json", dry_run=False)
+
+    assert first["capture_manifest"]["status"] == "changed"
+    assert second["capture_manifest"]["status"] == "unchanged"
+    mock_memory.decision.assert_not_called()
+
+
 def test_conversation_capture_config_error(mock_memory):
     # Unset provider
     mock_memory.config.capture.llm_provider = None

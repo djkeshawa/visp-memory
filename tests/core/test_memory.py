@@ -892,6 +892,29 @@ class TestImportExport:
         assert "embedding" not in exported_memory
         assert "embedding_1536" not in exported_memory
 
+    def test_export_import_preserves_capture_manifest(self, tmp_path):
+        from llm_memory.capture.git import CaptureManifest, capture_content_hash
+
+        source_config = MemoryConfig(project_name="manifest-export", repo_id="repo-a")
+        source_config.storage.data_dir = tmp_path / "source"
+        source_config.embedding.provider = "noop"
+        source = Memory(config=source_config)
+        content_hash = capture_content_hash({"source": "abc"})
+        CaptureManifest(source).record("git_commit", "abc", content_hash, ["mem-1"])
+
+        export_file = tmp_path / "manifest-export.json"
+        source.export(export_file)
+
+        target_config = MemoryConfig(project_name="manifest-import", repo_id="repo-a")
+        target_config.storage.data_dir = tmp_path / "target"
+        target_config.embedding.provider = "noop"
+        target = Memory(config=target_config)
+        target.import_memories(export_file)
+
+        status, entry = CaptureManifest(target).check("git_commit", "abc", content_hash)
+        assert status == "unchanged"
+        assert entry["output_memory_ids"] == ["mem-1"]
+
     def test_import_uses_configured_repo_when_export_has_no_repo_id(self, tmp_path):
         source_config = MemoryConfig(project_name="export-test", repo_id="source-repo")
         source_config.storage.data_dir = tmp_path / "source"

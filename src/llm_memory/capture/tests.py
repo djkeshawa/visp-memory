@@ -8,6 +8,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import List
 
+from llm_memory.capture.git import CaptureManifest, capture_content_hash
+
 
 class TestCapture:
     """
@@ -34,6 +36,13 @@ class TestCapture:
         path = Path(report_path)
         if not path.exists():
             raise FileNotFoundError(f"Report not found: {report_path}")
+
+        content_hash = capture_content_hash(path.read_text())
+        manifest = CaptureManifest(self.memory)
+        status, _entry = manifest.check("test_report", str(path), content_hash)
+        if status == "unchanged":
+            self.last_manifest_report = CaptureManifest.status_report(["unchanged"])
+            return []
 
         try:
             tree = ET.parse(path)
@@ -88,4 +97,6 @@ class TestCapture:
                         # Also potentially warn if it seems fragile
                         # self.memory.warn(file, f"Test {name} is failing: {msg}")
 
+        manifest.record("test_report", str(path), content_hash, memory_ids, status=status)
+        self.last_manifest_report = CaptureManifest.status_report([status])
         return memory_ids

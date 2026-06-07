@@ -12,6 +12,8 @@ Supports:
 - Historical sync
 """
 
+import hashlib
+import json
 import re
 from datetime import datetime
 from enum import Enum
@@ -24,6 +26,124 @@ try:
     GIT_AVAILABLE = True
 except ImportError:
     GIT_AVAILABLE = False
+
+
+CAPTURE_MANIFEST_VERSION = "1"
+
+
+def capture_content_hash(value: Any) -> str:
+    """Return a deterministic hash for capture source content."""
+    payload = json.dumps(value, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+class CaptureManifest:
+    """Persist capture freshness state without requiring a storage migration."""
+
+    def __init__(self, memory):
+        self.memory = memory
+        self.path = self._resolve_path(memory)
+        self.data = self._load()
+
+    def check(
+        self, source_type: str, source_identity: str, content_hash: str
+    ) -> tuple[str, dict[str, Any] | None]:
+        entry = self.data["entries"].get(self._key(source_type, source_identity))
+        if not entry:
+            return "changed", None
+        if entry.get("content_hash") == content_hash:
+            entry["status"] = "unchanged"
+            self._write()
+            return "unchanged", entry
+        return "changed", entry
+
+    def record(
+        self,
+        source_type: str,
+        source_identity: str,
+        content_hash: str,
+        output_memory_ids: list[str],
+        status: str = "changed",
+    ) -> dict[str, Any]:
+        entry = {
+            "source_type": source_type,
+            "source_identity": source_identity,
+            "content_hash": content_hash,
+            "last_captured_at": datetime.now().isoformat(),
+            "output_memory_ids": output_memory_ids,
+            "capture_version": CAPTURE_MANIFEST_VERSION,
+            "status": status,
+        }
+        self.data["entries"][self._key(source_type, source_identity)] = entry
+        self._write()
+        return entry
+
+    def to_export(self) -> dict[str, Any]:
+        return {
+            "capture_version": self.data.get("capture_version", CAPTURE_MANIFEST_VERSION),
+            "entries": self.data.get("entries", {}),
+            "summary": self.summary(),
+        }
+
+    def replace(self, data: dict[str, Any]) -> None:
+        self.data = {
+            "capture_version": data.get("capture_version", CAPTURE_MANIFEST_VERSION),
+            "entries": data.get("entries", {}),
+        }
+        self._write()
+
+    def summary(self) -> dict[str, int]:
+        counts = {"changed": 0, "unchanged": 0, "stale": 0}
+        for entry in self.data.get("entries", {}).values():
+            status = entry.get("status")
+            if status in counts:
+                counts[status] += 1
+        counts["entries"] = len(self.data.get("entries", {}))
+        return counts
+
+    @staticmethod
+    def status_report(statuses: list[str]) -> dict[str, int]:
+        counts = {"changed": 0, "unchanged": 0, "stale": 0}
+        for status in statuses:
+            if status in counts:
+                counts[status] += 1
+        return counts
+
+    @staticmethod
+    def _key(source_type: str, source_identity: str) -> str:
+        return f"{source_type}:{source_identity}"
+
+    @staticmethod
+    def _resolve_path(memory) -> Path | None:
+        storage = getattr(getattr(memory, "config", None), "storage", None)
+        data_dir = getattr(storage, "data_dir", None)
+        if data_dir is None:
+            return None
+        try:
+            return Path(data_dir) / "capture_manifest.json"
+        except TypeError:
+            return None
+
+    def _load(self) -> dict[str, Any]:
+        if self.path and self.path.exists():
+            try:
+                data = json.loads(self.path.read_text())
+                if isinstance(data, dict) and isinstance(data.get("entries", {}), dict):
+                    return {
+                        "capture_version": data.get(
+                            "capture_version", CAPTURE_MANIFEST_VERSION
+                        ),
+                        "entries": data.get("entries", {}),
+                    }
+            except json.JSONDecodeError:
+                pass
+        return {"capture_version": CAPTURE_MANIFEST_VERSION, "entries": {}}
+
+    def _write(self) -> None:
+        if self.path is None:
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(self.data, indent=2, sort_keys=True, default=str))
 
 
 class CommitType(str, Enum):
@@ -109,6 +229,18 @@ class GitCapture:
 
         # Calculate importance based on size and type
         importance = self._calculate_commit_importance(commit, category)
+        manifest = CaptureManifest(self.memory)
+        content_hash = capture_content_hash(
+            {
+                "message": message,
+                "author": commit.author.name,
+                "date": commit.committed_datetime.isoformat(),
+                "diff_summary": diff_summary,
+            }
+        )
+        status, _entry = manifest.check("git_commit", commit.hexsha, content_hash)
+        if status == "unchanged":
+            return None
 
         # Record the memory
         memory_id = self.memory.record(
@@ -125,6 +257,7 @@ class GitCapture:
             },
             tags=["git", "auto-captured"],
         )
+        manifest.record("git_commit", commit.hexsha, content_hash, [memory_id], status=status)
 
         return memory_id
 
@@ -158,6 +291,14 @@ class GitCapture:
         summary = self._summarize_branch_work(commits, branch)
 
         # Record the merge
+        manifest = CaptureManifest(self.memory)
+        content_hash = capture_content_hash(
+            {"branch": branch, "merge_commit": merge_commit.hexsha, "summary": summary}
+        )
+        status, _entry = manifest.check("git_merge", merge_commit.hexsha, content_hash)
+        if status == "unchanged":
+            return None
+
         memory_id = self.memory.record(
             event=f"Merged branch '{branch}': {summary}",
             category="feature_added",
@@ -169,6 +310,7 @@ class GitCapture:
             },
             tags=["git", "merge", "auto-captured"],
         )
+        manifest.record("git_merge", merge_commit.hexsha, content_hash, [memory_id], status=status)
 
         return memory_id
 
@@ -185,6 +327,7 @@ class GitCapture:
             List of created memory IDs
         """
         memory_ids = []
+        statuses = []
 
         # Build git log arguments
         kwargs = {"max_count": limit}
@@ -204,11 +347,15 @@ class GitCapture:
                 memory_id = self.on_commit(commit.hexsha)
                 if memory_id:
                     memory_ids.append(memory_id)
+                    statuses.append("changed")
+                else:
+                    statuses.append("unchanged")
             except Exception as e:
                 # Log but don't fail on individual commits
                 print(f"Warning: Failed to capture {commit.hexsha[:7]}: {e}")
                 continue
 
+        self.last_manifest_report = CaptureManifest.status_report(statuses)
         return memory_ids
 
     def install_hooks(self) -> Dict[str, bool]:

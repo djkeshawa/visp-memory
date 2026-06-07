@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from llm_memory.capture.git import CaptureManifest, capture_content_hash
 from llm_memory.core.llm import LLMClient, create_llm_client
 from llm_memory.core.memory import Memory
 
@@ -60,6 +61,22 @@ class ConversationCapture:
         self, text: str, source: str = "conversation", dry_run: bool = False
     ) -> Dict[str, Any]:
         """Parse conversation text and record memories."""
+        manifest = CaptureManifest(self.memory)
+        content_hash = capture_content_hash({"source": source, "text": text})
+        status, entry = manifest.check("conversation", source, content_hash)
+        if status == "unchanged" and not dry_run:
+            return {
+                "decisions": 0,
+                "learnings": 0,
+                "bugs": 0,
+                "tasks": 0,
+                "raw": {},
+                "capture_manifest": {
+                    "status": "unchanged",
+                    "output_memory_ids": entry.get("output_memory_ids", []) if entry else [],
+                },
+            }
+
         client = self._get_client()
 
         system_prompt = """You are a Memory Extraction System.
@@ -112,33 +129,37 @@ If nothing relevant is found for a category, return an empty list.
 
             # Record Memories
             repo_id = self.memory.config.repo_id
+            output_memory_ids = []
 
             for d in data.get("decisions", []):
-                self.memory.decision(
+                memory_id = self.memory.decision(
                     what=d["what"],
                     why=d.get("why", "Unknown"),
                     alternatives=d.get("alternatives"),
                     repo_id=repo_id,
                 )
+                output_memory_ids.append(str(memory_id))
 
             for learning in data.get("learnings", []):
-                self.memory.learn(
+                memory_id = self.memory.learn(
                     knowledge=learning["knowledge"],
                     category=learning.get("category", "fact"),
                     importance=learning.get("importance", 0.5),
                     repo_id=repo_id,
                 )
+                output_memory_ids.append(str(memory_id))
 
             for b in data.get("bugs", []):
-                self.memory.record(
+                memory_id = self.memory.record(
                     event=f"Bug: {b['description']}",
                     category="bug",
                     metadata={"cause": b.get("cause"), "fix": b.get("fix")},
                     repo_id=repo_id,
                 )
+                output_memory_ids.append(str(memory_id))
 
             for task in data.get("tasks", []):
-                self.memory.intent.set_goal(
+                memory_id = self.memory.intent.set_goal(
                     goal=task["description"],
                     repo_id=repo_id,
                     context={
@@ -147,6 +168,13 @@ If nothing relevant is found for a category, return an empty list.
                         "status": task.get("status", "todo"),
                     },
                 )
+                output_memory_ids.append(str(memory_id))
+
+            manifest.record("conversation", source, content_hash, output_memory_ids, status=status)
+            summary["capture_manifest"] = {
+                "status": status,
+                "output_memory_ids": output_memory_ids,
+            }
 
             return summary
 
