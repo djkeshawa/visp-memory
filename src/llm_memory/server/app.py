@@ -18,6 +18,7 @@ except ImportError:
 from llm_memory import __version__
 from llm_memory.config import load_config
 from llm_memory.core.neo4j_storage import Neo4jStorage
+from llm_memory.core.reporting import MemoryIntelligenceReporter
 from llm_memory.core.storage import LocalStorage
 from llm_memory.recall.graph import GraphRecall
 from llm_memory.server.auth import UserContext, get_current_user
@@ -42,6 +43,7 @@ from llm_memory.server.schemas import (
     GraphRecallResponse,
     GraphTraceRequest,
     GraphWhyRelevantRequest,
+    MemoryIntelligenceReportResponse,
 )
 
 # Configure logging
@@ -456,6 +458,42 @@ async def graph_recall_why_relevant(
         limit=payload.limit,
     )
     return _filter_graph_recall_result(result, user)
+
+
+@app.get(
+    "/reports/memory-intelligence",
+    response_model=MemoryIntelligenceReportResponse,
+    tags=["reports"],
+)
+async def memory_intelligence_report(
+    repo_id: str = None,
+    limit: int = 10,
+    user: UserContext = Depends(get_current_user),
+):
+    """Return deterministic memory intelligence report JSON."""
+    report_repo_id = _require_graph_repo_access(repo_id, user)
+    return MemoryIntelligenceReporter(app.state.storage).generate(
+        repo_id=report_repo_id,
+        limit=limit,
+    )
+
+
+@app.get("/reports/memory-intelligence/text", tags=["reports"])
+async def memory_intelligence_report_text(
+    repo_id: str = None,
+    limit: int = 10,
+    user: UserContext = Depends(get_current_user),
+):
+    """Return deterministic memory intelligence report text."""
+    report_repo_id = _require_graph_repo_access(repo_id, user)
+    report = MemoryIntelligenceReporter(app.state.storage).generate(
+        repo_id=report_repo_id,
+        limit=limit,
+    )
+    return Response(
+        MemoryIntelligenceReporter.format_text(report),
+        media_type="text/plain",
+    )
 
 
 @app.head("/favicon.ico", include_in_schema=False)

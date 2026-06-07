@@ -148,6 +148,35 @@ class GraphRecallResponse(BaseModel):
     explanation: str
 
 
+ReportItemType = Literal["memory", "relationship", "intent", "question"]
+ReportKind = Literal["stored_fact", "inferred_recommendation"]
+
+
+class MemoryIntelligenceReportItem(BaseModel):
+    type: ReportItemType
+    id: str
+    title: str
+    reason: str
+    facts: Dict[str, Any] = Field(default_factory=dict)
+
+
+class MemoryIntelligenceReportSection(BaseModel):
+    key: str
+    title: str
+    kind: ReportKind
+    thresholds: Dict[str, Any] = Field(default_factory=dict)
+    items: List[MemoryIntelligenceReportItem] = Field(default_factory=list)
+
+
+class MemoryIntelligenceReportResponse(BaseModel):
+    schema_version: str
+    repo_id: Optional[str] = None
+    as_of: Optional[datetime] = None
+    thresholds: Dict[str, Any] = Field(default_factory=dict)
+    summary: Dict[str, int] = Field(default_factory=dict)
+    sections: Dict[str, MemoryIntelligenceReportSection]
+
+
 class IntentCreate(BaseModel):
     description: str
     priority: int = 1

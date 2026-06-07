@@ -912,3 +912,49 @@ async def test_graph_recall_trace_endpoint_returns_evidence(client):
     assert data["edges"][0]["relationship"] == "supports"
     assert data["edges"][0]["evidence"]["confidence"] == "observed"
     assert data["edges"][0]["reason"] == "The source memory supports the repository scope evidence."
+
+
+@pytest.mark.asyncio
+async def test_memory_intelligence_report_endpoint_returns_public_contract(client):
+    headers = {"X-API-KEY": "test_key"}
+    await client.post(
+        "/memories",
+        json={
+            "content": "High impact API memory",
+            "repo_id": "repo-a",
+            "importance": 0.9,
+        },
+        headers=headers,
+    )
+    await client.post(
+        "/memories",
+        json={
+            "content": "API fragile warning",
+            "repo_id": "repo-a",
+            "layer": "semantic",
+            "category": "fragile_area",
+        },
+        headers=headers,
+    )
+
+    response = await client.get("/reports/memory-intelligence?repo_id=repo-a", headers=headers)
+
+    assert response.status_code == 200
+    report = response.json()
+    assert report["schema_version"] == "1.0"
+    assert report["summary"]["total_memories"] == 2
+    assert report["thresholds"]["high_impact_importance"] == 0.75
+    assert report["sections"]["high_impact_memories"]["kind"] == "stored_fact"
+    assert report["sections"]["fragile_areas"]["items"]
+    assert report["sections"]["suggested_questions"]["kind"] == "inferred_recommendation"
+
+
+@pytest.mark.asyncio
+async def test_memory_intelligence_report_text_endpoint(client):
+    headers = {"X-API-KEY": "test_key"}
+
+    response = await client.get("/reports/memory-intelligence/text", headers=headers)
+
+    assert response.status_code == 200
+    assert "Memory Intelligence Report" in response.text
+    assert "Thresholds" in response.text

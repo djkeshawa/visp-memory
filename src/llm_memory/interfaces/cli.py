@@ -30,6 +30,7 @@ from rich.table import Table
 
 from llm_memory import Memory, MemoryConfig, __version__
 from llm_memory.config import load_config
+from llm_memory.core.reporting import MemoryIntelligenceReporter
 
 app = typer.Typer(
     name="llm-memory", help="Human-inspired memory system for LLMs", no_args_is_help=True
@@ -975,6 +976,24 @@ def stats():
         console.print("\n[bold]By Category:[/bold]")
         for cat, count in list(s["memories_by_category"].items())[:10]:
             console.print(f"  {cat}: {count}")
+
+
+@app.command("report")
+def memory_report(
+    format: str = typer.Option("text", "--format", "-f", help="Output format: text or json"),
+    repo: str = typer.Option(None, "--repo", "-r", help="Filter by repository"),
+    limit: int = typer.Option(10, "--limit", "-n", help="Maximum findings per section"),
+):
+    """Generate a deterministic memory intelligence report."""
+    memory = get_memory()
+    reporter = MemoryIntelligenceReporter(memory._storage)
+    report = reporter.generate(repo_id=_repo_scope(memory, repo), limit=limit)
+
+    if format.lower() == "json":
+        console.print_json(data=report)
+        return
+
+    console.print(Markdown(MemoryIntelligenceReporter.format_text(report)))
 
 
 @app.command()

@@ -1131,3 +1131,60 @@ class TestGraphRecall:
 
         assert {node["id"] for node in result["nodes"]} == {"a", "b"}
         assert result["edges"][0]["reason"] == "Portable API methods are sufficient."
+
+
+class TestMemoryIntelligenceReport:
+    """Tests for deterministic memory intelligence reporting."""
+
+    def test_report_handles_empty_database(self, tmp_path):
+        from llm_memory.core.reporting import MemoryIntelligenceReporter
+
+        config = MemoryConfig(project_name="empty-report", repo_id="repo-a")
+        config.storage.data_dir = tmp_path / "data"
+        config.embedding.provider = "noop"
+        memory = Memory(config=config)
+
+        report = MemoryIntelligenceReporter(memory._storage).generate(repo_id="repo-a")
+
+        assert report["summary"]["total_memories"] == 0
+        assert report["summary"]["total_relationships"] == 0
+        assert report["thresholds"]["high_impact_importance"] == 0.75
+        assert report["sections"]["high_impact_memories"]["items"] == []
+        assert report["sections"]["suggested_questions"]["items"]
+        assert "No findings." in MemoryIntelligenceReporter.format_text(report)
+
+    def test_report_sections_are_stable_and_distinguish_inferences(self, tmp_path):
+        from llm_memory.core.reporting import MemoryIntelligenceReporter
+
+        config = MemoryConfig(project_name="report", repo_id="repo-a")
+        config.storage.data_dir = tmp_path / "data"
+        config.embedding.provider = "noop"
+        memory = Memory(config=config)
+
+        high_id = memory.record("High impact migration decision", importance=0.9)
+        warning_id = memory.warn("auth.py", "Fragile token refresh path")
+        related_id = memory.record("Related implementation context")
+        memory._storage.add_relationship(
+            high_id,
+            related_id,
+            "related",
+            strength=0.4,
+            evidence={
+                "confidence": "ambiguous",
+                "confidence_score": 0.3,
+                "reason": "Similarity was weak and needs confirmation.",
+            },
+        )
+
+        report = MemoryIntelligenceReporter(memory._storage).generate(repo_id="repo-a")
+
+        assert report["sections"]["high_impact_memories"]["kind"] == "stored_fact"
+        assert report["sections"]["ambiguous_relationships"]["kind"] == (
+            "inferred_recommendation"
+        )
+        assert report["sections"]["high_impact_memories"]["items"][0]["id"] == high_id
+        assert report["sections"]["ambiguous_relationships"]["items"][0]["reason"] == (
+            "Similarity was weak and needs confirmation."
+        )
+        assert report["sections"]["isolated_warnings"]["items"][0]["id"] == warning_id
+        assert report["sections"]["suggested_questions"]["items"]

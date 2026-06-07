@@ -145,6 +145,31 @@ class TestCLIBasicCommands:
         assert "Memory Statistics" in result.output
         assert "Total Memories" in result.output
 
+    def test_report_command_outputs_json_contract(self, cli_env):
+        """Report command exposes stable JSON sections."""
+        runner.invoke(app, ["init", "--type", "code", "--repo", "repo-a"])
+        runner.invoke(app, ["record", "High impact CLI memory", "--importance", "0.9"])
+        runner.invoke(app, ["warn", "auth.py", "CLI fragile auth warning"])
+
+        result = runner.invoke(app, ["report", "--format", "json"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["schema_version"] == "1.0"
+        assert "high_impact_memories" in data["sections"]
+        assert "suggested_questions" in data["sections"]
+        assert data["sections"]["high_impact_memories"]["kind"] == "stored_fact"
+
+    def test_report_command_outputs_text(self, cli_env):
+        """Report command exposes readable text output."""
+        runner.invoke(app, ["init", "--type", "code"])
+
+        result = runner.invoke(app, ["report"])
+
+        assert result.exit_code == 0
+        assert "Memory Intelligence Report" in result.output
+        assert "Thresholds" in result.output
+
     def test_goal_command(self, cli_env):
         """Test setting a goal (was broken with repo_id parameter)."""
         runner.invoke(app, ["init", "--type", "code"])
