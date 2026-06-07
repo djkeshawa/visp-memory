@@ -67,7 +67,13 @@ const { chromium } = require('@playwright/test');
 (async () => {
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-  const pages = ['/dashboard', '/dashboard/recall', '/dashboard/intents', '/dashboard/graph'];
+  const pages = [
+    '/dashboard',
+    '/dashboard/intelligence',
+    '/dashboard/recall',
+    '/dashboard/intents',
+    '/dashboard/graph',
+  ];
   for (const path of pages) {
     await page.goto(process.env.LLM_MEMORY_SMOKE_URL + path, { waitUntil: 'networkidle' });
     const text = await page.locator('body').innerText();

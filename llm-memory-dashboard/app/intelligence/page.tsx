@@ -5,13 +5,13 @@ import type React from "react"
 import { motion } from "framer-motion"
 import {
   AlertTriangle,
+  CircleHelp,
   ClipboardList,
   Copy,
   GitBranch,
   Network,
   RefreshCw,
   ShieldAlert,
-  ThumbsUp,
   Timer,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -34,6 +34,14 @@ import type {
   RelationshipEvidence,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
+
+const FINDING_LIST_LIMIT = 6
+const REPORT_SECTION_EXCLUSIONS = new Set(["suggested_questions", "stale_intents", "contradiction_candidates"])
+
+type DisplayFinding = MemoryIntelligenceReportItem & {
+  sectionKey?: string
+  sectionTitle?: string
+}
 
 function IntelligenceContent() {
   const selectedRepoId = useSelectedProjectId()
@@ -74,14 +82,27 @@ function IntelligenceContent() {
   const reportFindings = useMemo(() => {
     if (!report) return []
     return Object.entries(report.sections)
-      .filter(([key]) => key !== "suggested_questions")
-      .flatMap(([, section]) => section.items)
+      .filter(([key]) => !REPORT_SECTION_EXCLUSIONS.has(key))
+      .flatMap(([key, section]) =>
+        section.items.map((item) => ({
+          ...item,
+          sectionKey: key,
+          sectionTitle: section.title,
+        })),
+      )
   }, [report])
 
   const staleIntents = report?.sections.stale_intents?.items ?? []
   const conflictCandidates = report?.sections.contradiction_candidates?.items ?? []
+  const suggestedQuestions = report?.sections.suggested_questions?.items ?? []
   const freshnessCandidates = (freshness?.candidates ?? []).filter((item) => item.risk !== "stable")
-  const utilitySignals: MemoryIntelligenceReportItem[] = []
+  const qualityFindingCount =
+    reportFindings.length +
+    staleIntents.length +
+    conflictCandidates.length +
+    suggestedQuestions.length +
+    duplicates.length +
+    freshnessCandidates.length
 
   return (
     <motion.div initial="initial" animate="animate" variants={pageTransition} className="space-y-8">
@@ -129,13 +150,13 @@ function IntelligenceContent() {
         />
         <Metric
           title="Quality Findings"
-          value={reportFindings.length + duplicates.length + freshnessCandidates.length}
+          value={qualityFindingCount}
           icon={<ShieldAlert className="h-4 w-4" />}
         />
       </div>
 
       <div className="grid gap-5 lg:grid-cols-2">
-        <Panel title="Reports" icon={<ClipboardList className="h-4 w-4" />}>
+        <Panel title="Key Findings" icon={<ClipboardList className="h-4 w-4" />}>
           <FindingList
             items={reportFindings}
             isLoading={isLoading}
@@ -167,11 +188,12 @@ function IntelligenceContent() {
           />
         </Panel>
 
-        <Panel title="Utility" icon={<ThumbsUp className="h-4 w-4" />}>
+        <Panel title="Suggested Questions" icon={<CircleHelp className="h-4 w-4" />}>
           <FindingList
-            items={utilitySignals}
+            items={suggestedQuestions}
             isLoading={isLoading}
-            emptyLabel="No recall utility feedback returned."
+            emptyLabel="No suggested questions returned."
+            itemLabel="questions"
           />
         </Panel>
 
@@ -211,19 +233,28 @@ function FindingList({
   items,
   isLoading,
   emptyLabel,
+  itemLabel = "findings",
 }: {
-  items: MemoryIntelligenceReportItem[]
+  items: DisplayFinding[]
   isLoading: boolean
   emptyLabel: string
+  itemLabel?: string
 }) {
   if (isLoading) return <LoadingRows />
   if (!items.length) return <EmptyState label={emptyLabel} />
 
+  const visibleItems = items.slice(0, FINDING_LIST_LIMIT)
+
   return (
     <div className="divide-y divide-border">
-      {items.slice(0, 6).map((item) => (
-        <div key={`${item.type}:${item.id}`} className="p-4">
+      {visibleItems.map((item) => (
+        <div key={`${item.sectionKey ?? "section"}:${item.type}:${item.id}`} className="p-4">
           <div className="flex flex-wrap items-center gap-2">
+            {item.sectionTitle ? (
+              <span className="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
+                {item.sectionTitle}
+              </span>
+            ) : null}
             <span className="rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
               {item.type}
             </span>
@@ -234,6 +265,7 @@ function FindingList({
           <FactList facts={item.facts} />
         </div>
       ))}
+      <ListCount visible={visibleItems.length} total={items.length} label={itemLabel} />
     </div>
   )
 }
@@ -242,9 +274,11 @@ function GraphEvidenceList({ links, isLoading }: { links: GraphLink[]; isLoading
   if (isLoading) return <LoadingRows />
   if (!links.length) return <EmptyState label="No graph evidence returned." />
 
+  const visibleLinks = links.slice(0, FINDING_LIST_LIMIT)
+
   return (
     <div className="divide-y divide-border">
-      {links.slice(0, 6).map((link) => (
+      {visibleLinks.map((link) => (
         <div key={`${link.source}:${link.target}:${link.label}`} className="p-4">
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
@@ -257,6 +291,7 @@ function GraphEvidenceList({ links, isLoading }: { links: GraphLink[]; isLoading
           <EvidenceSummary evidence={link.evidence} />
         </div>
       ))}
+      <ListCount visible={visibleLinks.length} total={links.length} label="links" />
     </div>
   )
 }
@@ -265,9 +300,11 @@ function DuplicateList({ candidates, isLoading }: { candidates: DuplicateCandida
   if (isLoading) return <LoadingRows />
   if (!candidates.length) return <EmptyState label="No duplicate candidates returned." />
 
+  const visibleCandidates = candidates.slice(0, FINDING_LIST_LIMIT)
+
   return (
     <div className="divide-y divide-border">
-      {candidates.slice(0, 6).map((candidate) => (
+      {visibleCandidates.map((candidate) => (
         <div key={candidate.ids.join(":")} className="p-4">
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
@@ -281,6 +318,7 @@ function DuplicateList({ candidates, isLoading }: { candidates: DuplicateCandida
           <p className="mt-1 text-sm text-muted-foreground">{candidate.reason}</p>
         </div>
       ))}
+      <ListCount visible={visibleCandidates.length} total={candidates.length} label="candidates" />
     </div>
   )
 }
@@ -289,9 +327,11 @@ function FreshnessList({ candidates, isLoading }: { candidates: DecayPreviewItem
   if (isLoading) return <LoadingRows />
   if (!candidates.length) return <EmptyState label="No stale freshness candidates returned." />
 
+  const visibleCandidates = candidates.slice(0, FINDING_LIST_LIMIT)
+
   return (
     <div className="divide-y divide-border">
-      {candidates.slice(0, 6).map((candidate) => (
+      {visibleCandidates.map((candidate) => (
         <div key={candidate.memoryId} className="p-4">
           <div className="flex flex-wrap items-center gap-2">
             <span className={cn("rounded-full px-2.5 py-0.5 text-xs font-medium", riskClass(candidate.risk))}>
@@ -303,6 +343,17 @@ function FreshnessList({ candidates, isLoading }: { candidates: DecayPreviewItem
           <p className="mt-1 text-sm text-muted-foreground">{candidate.reason}</p>
         </div>
       ))}
+      <ListCount visible={visibleCandidates.length} total={candidates.length} label="memories" />
+    </div>
+  )
+}
+
+function ListCount({ visible, total, label }: { visible: number; total: number; label: string }) {
+  if (total <= visible) return null
+
+  return (
+    <div className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
+      Showing {visible} of {total} {label}.
     </div>
   )
 }
