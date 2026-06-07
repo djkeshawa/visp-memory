@@ -1,5 +1,7 @@
 from llm_memory.core.ranking import (
+    CONTEXT_RANKING_LIMIT,
     UTILITY_RANKING_LIMIT,
+    context_rank_adjustment,
     graph_edge_score,
     graph_node_relevance,
     rank_memory_results,
@@ -86,6 +88,35 @@ def test_utility_cannot_override_direct_relevance():
     )
 
     assert [item["id"] for item in ranked] == ["direct-match", "popular-noise"]
+
+
+def test_context_adjustment_is_bounded_and_explained():
+    factors = {
+        "session": {"score": 1.0, "reason": "session"},
+        "task": {"score": 1.0, "reason": "task"},
+        "file": {"score": 1.0, "reason": "file"},
+        "repo": {"score": 1.0, "reason": "repo"},
+        "dependency": {"score": 1.0, "reason": "dependency"},
+        "constraint": {"score": 1.0, "reason": "constraint"},
+        "active_intent": {"score": 1.0, "reason": "intent"},
+    }
+
+    ranked = rank_memory_results(
+        [
+            {
+                "id": "contextual",
+                "content": "auth refresh",
+                "similarity": 0.3,
+                "importance": 0.5,
+                "ranking_factors": factors,
+            }
+        ],
+        query="auth",
+    )
+
+    assert context_rank_adjustment(factors) == CONTEXT_RANKING_LIMIT
+    assert ranked[0]["ranking_explanation"]
+    assert any("active_intent" in item for item in ranked[0]["ranking_explanation"])
 
 
 def test_relationship_score_requires_more_than_embedding_noise():

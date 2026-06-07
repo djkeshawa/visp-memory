@@ -8,6 +8,16 @@ from typing import Any
 
 DEFAULT_RECALL_MIN_SCORE = 0.56
 UTILITY_RANKING_LIMIT = 0.08
+CONTEXT_RANKING_LIMIT = 0.12
+CONTEXT_FACTOR_WEIGHTS = {
+    "session": 0.03,
+    "task": 0.04,
+    "file": 0.05,
+    "repo": 0.02,
+    "dependency": 0.03,
+    "constraint": 0.03,
+    "active_intent": 0.05,
+}
 _LEXICAL_STOPWORDS = {
     "a",
     "an",
@@ -54,6 +64,22 @@ def utility_rank_adjustment(value: Any) -> float:
         return 0.0
     score = max(-1.0, min(1.0, score))
     return score * UTILITY_RANKING_LIMIT
+
+
+def context_rank_adjustment(factors: Any) -> float:
+    """Return a bounded ranking contribution from contextual recall factors."""
+    if not isinstance(factors, dict):
+        return 0.0
+
+    adjustment = 0.0
+    for factor, details in factors.items():
+        weight = CONTEXT_FACTOR_WEIGHTS.get(factor, 0.0)
+        if isinstance(details, dict):
+            score = details.get("score", 0.0)
+        else:
+            score = details
+        adjustment += weight * clamp_score(score)
+    return min(CONTEXT_RANKING_LIMIT, adjustment)
 
 
 def normalize_distance_score(distance: Any) -> float:
@@ -170,7 +196,30 @@ def score_memory_result(memory: dict[str, Any], query: str | None = None) -> flo
     else:
         score = importance * 0.70 + recency * 0.30
 
-    return clamp_score(score + utility_rank_adjustment(memory.get("utility_score")))
+    return clamp_score(
+        score
+        + utility_rank_adjustment(memory.get("utility_score"))
+        + context_rank_adjustment(memory.get("ranking_factors"))
+    )
+
+
+def explain_ranking_factors(memory: dict[str, Any]) -> list[str]:
+    """Format contextual ranking factors for API/MCP clients."""
+    factors = memory.get("ranking_factors")
+    if not isinstance(factors, dict):
+        return []
+
+    explanations = []
+    for name, details in sorted(factors.items()):
+        if isinstance(details, dict):
+            score = clamp_score(details.get("score", 0.0))
+            reason = details.get("reason") or "matched recall context"
+        else:
+            score = clamp_score(details)
+            reason = "matched recall context"
+        adjustment = CONTEXT_FACTOR_WEIGHTS.get(name, 0.0) * score
+        explanations.append(f"{name}: +{adjustment:.3f} ({reason})")
+    return explanations
 
 
 def rank_memory_results(
@@ -193,6 +242,9 @@ def rank_memory_results(
 
         scored = dict(memory)
         scored["relevance_score"] = score_memory_result(scored, query=query)
+        explanation = explain_ranking_factors(scored)
+        if explanation:
+            scored["ranking_explanation"] = explanation
         if min_score is not None and scored["relevance_score"] < clamp_score(min_score):
             continue
         ranked.append(scored)

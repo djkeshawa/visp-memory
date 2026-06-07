@@ -690,6 +690,67 @@ class TestSearch:
         assert memory.reset_utility_signals(memory_id=mem_id) == 3
         assert memory.inspect_utility_signals(memory_id=mem_id)["summary"]["total_events"] == 0
 
+    def test_recall_uses_and_exposes_intent_aware_factors(self, memory):
+        """Contextual recall factors influence ordering and are exposed."""
+        memory.goal(
+            "Stabilize auth refresh rollout",
+            constraints=["No breaking API"],
+            repo_id="app",
+        )
+        memory.working_on("Fix auth refresh flow", files=["auth/refresh.py"], repo_id="app")
+        target = memory.record(
+            "Auth refresh fix for auth/refresh.py in session s-1 uses api-client "
+            "and respects No breaking API",
+            importance=0.2,
+            repo_id="app",
+            context={"files": ["auth/refresh.py"], "session_id": "s-1"},
+        )
+        other = memory.record(
+            "Auth cache note",
+            importance=0.9,
+            repo_id="app",
+        )
+
+        results = memory.recall(
+            "auth refresh",
+            repo_id="app",
+            task="Fix auth refresh flow",
+            files=["auth/refresh.py"],
+            session_id="s-1",
+            dependencies=["api-client"],
+            constraints=["No breaking API"],
+            min_score=0.0,
+            limit=2,
+        )
+
+        assert [result["id"] for result in results] == [target, other]
+        factors = results[0]["ranking_factors"]
+        assert set(factors) == {
+            "active_intent",
+            "constraint",
+            "dependency",
+            "file",
+            "repo",
+            "session",
+            "task",
+        }
+        assert any("file" in item for item in results[0]["ranking_explanation"])
+
+    def test_proactive_file_recall_exposes_file_ranking_factor(self, memory):
+        """Proactive recall annotates surfaced memories with context factors."""
+        from llm_memory.recall.proactive import ProactiveRecall
+
+        memory.working_on("Fix auth refresh flow", files=["auth/refresh.py"])
+        memory.record(
+            "Fixed bug in auth/refresh.py",
+            category="bug_fixed",
+            context={"files": ["auth/refresh.py"]},
+        )
+
+        result = ProactiveRecall(memory).on_file_open("auth/refresh.py")
+
+        assert result["bugs"][0]["ranking_factors"]["file"]["score"] == 1.0
+
     def test_recall_does_not_duplicate_layers(self, memory):
         """Layer fan-out should not duplicate results from the fallback search path."""
         memory.record("Authentication system updated")

@@ -132,6 +132,29 @@ def create_mcp_server() -> "Server":
                             "type": "string",
                             "description": "Optional task ID for surfaced feedback",
                         },
+                        "task": {
+                            "type": "string",
+                            "description": "Current task text for intent-aware ranking",
+                        },
+                        "files": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Files in the current work context",
+                        },
+                        "session_id": {
+                            "type": "string",
+                            "description": "Session ID for ranking context",
+                        },
+                        "constraints": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Current constraints for ranking context",
+                        },
+                        "dependencies": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Relevant repo/package dependencies",
+                        },
                     },
                     "required": ["query"],
                 },
@@ -1043,6 +1066,11 @@ def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
             repo_id=args.get("repo_id"),
             log_utility=args.get("log_utility", False),
             task_id=args.get("task_id"),
+            task=args.get("task"),
+            files=args.get("files"),
+            session_id=args.get("session_id"),
+            constraints=args.get("constraints"),
+            dependencies=args.get("dependencies"),
         )
         if not results:
             return "No memories found matching query."
@@ -1054,6 +1082,7 @@ def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
                 f"- [{r['id']}] [{r['layer']}/{r.get('category', 'unknown')}]{sim}: "
                 f"{r['content']}"
             )
+            output.extend(_format_ranking_factor_lines(r))
             output.extend(_format_related_evidence_lines(r.get("id"), memory))
         return "\n".join(output)
 
@@ -1206,6 +1235,13 @@ def _format_related_evidence_lines(memory_id: str | None, memory: Memory) -> lis
         snippet = content.replace("\n", " ")[:80]
         lines.append(f"    Relationship evidence ({relationship} -> {snippet}): {evidence_text}")
     return lines
+
+
+def _format_ranking_factor_lines(memory: dict[str, Any]) -> list[str]:
+    explanation = memory.get("ranking_explanation") or []
+    if not explanation:
+        return []
+    return [f"    Ranking factors: {'; '.join(explanation)}"]
 
 
 def _format_relevant_memory(

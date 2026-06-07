@@ -55,6 +55,7 @@ class ProactiveRecall:
             Dict with 'warnings', 'bugs', 'decisions', 'knowledge' keys
         """
         file_path = self._normalize_path(file_path)
+        repo_id = self.memory.config.repo_id
 
         results = {
             "warnings": [],
@@ -66,29 +67,66 @@ class ProactiveRecall:
 
         # Get file-specific warnings
         warnings = self.memory.semantic.get_warnings(file_path)
-        results["warnings"] = warnings
+        results["warnings"] = self.memory.rank_with_context(
+            warnings,
+            query=file_path,
+            repo_id=repo_id,
+            files=[file_path],
+            limit=len(warnings) or None,
+            min_score=None,
+        )
 
         # Search for bugs in this file
+        bug_query = f"file:{file_path} bug"
         bug_results = self.memory.episodic.search(
-            query=f"file:{file_path} bug", category="bug_fixed", limit=5
+            query=bug_query, category="bug_fixed", limit=5
         )
-        results["bugs"] = bug_results
+        results["bugs"] = self.memory.rank_with_context(
+            bug_results,
+            query=bug_query,
+            repo_id=repo_id,
+            files=[file_path],
+            limit=5,
+            min_score=None,
+        )
 
         # Search for decisions affecting this file
         decision_results = self.memory.episodic.search(
             query=file_path, category="architecture_decision", limit=3
         )
-        results["decisions"] = decision_results
+        results["decisions"] = self.memory.rank_with_context(
+            decision_results,
+            query=file_path,
+            repo_id=repo_id,
+            files=[file_path],
+            limit=3,
+            min_score=None,
+        )
 
         # Get general knowledge about this file/module
         knowledge_results = self.memory.semantic.relevant_for(files=[file_path], limit=5)
-        results["knowledge"] = knowledge_results
+        results["knowledge"] = self.memory.rank_with_context(
+            knowledge_results,
+            query=file_path,
+            repo_id=repo_id,
+            files=[file_path],
+            limit=5,
+            min_score=None,
+        )
 
         # Get recent changes to this file (from git capture)
         recent = self.memory.episodic.search(query=file_path, limit=3)
-        results["recent_changes"] = [
+        recent_changes = [
             r for r in recent if file_path.lower() in r.get("content", "").lower()
         ]
+        results["recent_changes"] = self.memory.rank_with_context(
+            recent_changes,
+            query=file_path,
+            repo_id=repo_id,
+            files=[file_path],
+            limit=3,
+            min_score=None,
+        )
 
         return results
 
@@ -120,6 +158,8 @@ class ProactiveRecall:
         query = " ".join(query_parts)
 
         # Search for similar bugs and known issues
+        repo_id = self.memory.config.repo_id
+        files = [self._normalize_path(file_path)] if file_path else None
         similar_bugs = self.memory.episodic.search(query=query, category="bug_fixed", limit=limit)
 
         similar_issues = self.memory.semantic.search(
@@ -129,10 +169,15 @@ class ProactiveRecall:
         # Combine and deduplicate
         all_results = similar_bugs + similar_issues
 
-        # Sort by similarity and limit
-        all_results.sort(key=lambda x: x.get("similarity", 0), reverse=True)
-
-        return all_results[:limit]
+        return self.memory.rank_with_context(
+            all_results,
+            query=query,
+            repo_id=repo_id,
+            task=error_type,
+            files=files,
+            limit=limit,
+            min_score=None,
+        )
 
     def on_directory(
         self, dir_path: str, recursive: bool = False
@@ -151,6 +196,7 @@ class ProactiveRecall:
             Aggregated context for directory
         """
         dir_path = self._normalize_path(dir_path)
+        repo_id = self.memory.config.repo_id
 
         results = {"warnings": [], "conventions": [], "patterns": [], "recent_activity": []}
 
@@ -162,21 +208,49 @@ class ProactiveRecall:
             if dir_path in w.get("content", "").lower()
             or dir_path in str(w.get("metadata", {}).get("applies_to", []))
         ]
-        results["warnings"] = dir_warnings
+        results["warnings"] = self.memory.rank_with_context(
+            dir_warnings,
+            query=dir_path,
+            repo_id=repo_id,
+            files=[dir_path],
+            limit=len(dir_warnings) or None,
+            min_score=None,
+        )
 
         # Get conventions for this directory
         all_conventions = self.memory.semantic.get_conventions()
         dir_conventions = [c for c in all_conventions if dir_path in c.get("content", "").lower()]
-        results["conventions"] = dir_conventions
+        results["conventions"] = self.memory.rank_with_context(
+            dir_conventions,
+            query=dir_path,
+            repo_id=repo_id,
+            files=[dir_path],
+            limit=len(dir_conventions) or None,
+            min_score=None,
+        )
 
         # Search for patterns in this directory
         pattern_results = self.memory.semantic.search(query=dir_path, category="pattern", limit=10)
-        results["patterns"] = pattern_results
+        results["patterns"] = self.memory.rank_with_context(
+            pattern_results,
+            query=dir_path,
+            repo_id=repo_id,
+            files=[dir_path],
+            limit=10,
+            min_score=None,
+        )
 
         # Get recent activity in this directory
         recent = self.memory.episodic.recent(limit=20)
         dir_recent = [r for r in recent if dir_path in r.get("content", "").lower()]
-        results["recent_activity"] = dir_recent[:5]
+        results["recent_activity"] = self.memory.rank_with_context(
+            dir_recent,
+            query=dir_path,
+            repo_id=repo_id,
+            files=[dir_path],
+            limit=5,
+            min_score=None,
+        )
 
         return results
 

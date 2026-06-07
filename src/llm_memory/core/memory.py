@@ -8,6 +8,7 @@ The unified interface for LLM memory, bringing together:
 - Compression (memory consolidation)
 """
 
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -16,7 +17,7 @@ from llm_memory.core.compression import MemoryCompressor, create_llm_compressor
 from llm_memory.core.memory_context import build_context, format_context_text
 from llm_memory.core.memory_import_export import export_memory, import_memories
 from llm_memory.core.neo4j_storage import Neo4jStorage
-from llm_memory.core.ranking import DEFAULT_RECALL_MIN_SCORE, rank_memory_results
+from llm_memory.core.ranking import DEFAULT_RECALL_MIN_SCORE, rank_memory_results, text_similarity
 from llm_memory.core.remote_storage import RemoteStorage
 from llm_memory.core.repository import RepositoryManager
 from llm_memory.core.storage import LocalStorage
@@ -312,6 +313,11 @@ class Memory:
         status: str = "active",
         log_utility: bool = False,
         task_id: str = None,
+        task: str = None,
+        files: List[str] = None,
+        session_id: str = None,
+        constraints: List[str] = None,
+        dependencies: List[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Search across all memory layers.
@@ -341,7 +347,18 @@ class Memory:
             )
             results.extend(layer_results)
 
-        ranked = rank_memory_results(results, query=query, limit=limit, min_score=min_score)
+        ranked = self.rank_with_context(
+            results,
+            query=query,
+            repo_id=search_repo_id,
+            task=task,
+            files=files,
+            session_id=session_id,
+            constraints=constraints,
+            dependencies=dependencies,
+            limit=limit,
+            min_score=min_score,
+        )
         if log_utility:
             for result in ranked:
                 memory_id = result.get("id")
@@ -355,6 +372,208 @@ class Memory:
                         metadata={"source": "recall"},
                     )
         return ranked
+
+    def rank_with_context(
+        self,
+        memories: List[Dict[str, Any]],
+        query: str = None,
+        repo_id: str = None,
+        task: str = None,
+        files: List[str] = None,
+        session_id: str = None,
+        constraints: List[str] = None,
+        dependencies: List[str] = None,
+        limit: int = None,
+        min_score: float = None,
+        include_active_intents: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """Rank memory rows with intent-aware contextual factors attached."""
+        context = self._build_recall_factor_context(
+            repo_id=repo_id,
+            task=task,
+            files=files,
+            session_id=session_id,
+            constraints=constraints,
+            dependencies=dependencies,
+            include_active_intents=include_active_intents,
+        )
+        annotated = []
+        for memory in memories:
+            item = dict(memory)
+            factors = self._recall_ranking_factors(item, context)
+            if factors:
+                item["ranking_factors"] = factors
+            annotated.append(item)
+        return rank_memory_results(annotated, query=query, limit=limit, min_score=min_score)
+
+    def _build_recall_factor_context(
+        self,
+        repo_id: str = None,
+        task: str = None,
+        files: List[str] = None,
+        session_id: str = None,
+        constraints: List[str] = None,
+        dependencies: List[str] = None,
+        include_active_intents: bool = True,
+    ) -> Dict[str, Any]:
+        active_intents = self.intent.get_active(repo_id=repo_id) if include_active_intents else []
+        current_task = (
+            self.intent.get_working_on(repo_id=repo_id) if include_active_intents else None
+        )
+        task_text = task or self._intent_task_text(current_task)
+        file_values = self._context_values(files)
+        if not file_values and current_task:
+            current_context = current_task.get("context") or {}
+            if isinstance(current_context, dict):
+                file_values = self._context_values(current_context.get("files"))
+
+        constraint_values = self._context_values(constraints)
+        if include_active_intents:
+            constraint_values.extend(self._context_values(self.intent.get_constraints(repo_id=repo_id)))
+
+        dependency_values = self._context_values(dependencies)
+        if repo_id:
+            try:
+                dependency_values.extend(
+                    dep.target_repo_id for dep in self.repos.get_dependencies(repo_id)
+                )
+            except (NotImplementedError, ValueError):
+                pass
+
+        return {
+            "repo_id": repo_id,
+            "task": task_text,
+            "files": self._unique_values(file_values),
+            "session_id": session_id,
+            "constraints": self._unique_values(constraint_values),
+            "dependencies": self._unique_values(dependency_values),
+            "active_intents": active_intents,
+        }
+
+    def _recall_ranking_factors(
+        self, memory: Dict[str, Any], context: Dict[str, Any]
+    ) -> Dict[str, Dict[str, Any]]:
+        text = self._recall_factor_text(memory)
+        factors: Dict[str, Dict[str, Any]] = {}
+
+        session_id = context.get("session_id")
+        if session_id and self._context_value_matches(text, session_id):
+            factors["session"] = {"score": 1.0, "reason": f"matched session {session_id}"}
+
+        task = context.get("task")
+        if task:
+            score = text_similarity(task, text)
+            if score > 0:
+                factors["task"] = {"score": score, "reason": "matched current task"}
+
+        file_score, file_reason = self._file_factor(text, context.get("files") or [])
+        if file_score > 0:
+            factors["file"] = {"score": file_score, "reason": file_reason}
+
+        repo_id = context.get("repo_id")
+        if repo_id and memory.get("repo_id") == repo_id:
+            factors["repo"] = {"score": 1.0, "reason": f"matched repo {repo_id}"}
+
+        dep_score, dep_reason = self._dependency_factor(
+            memory, text, context.get("dependencies") or []
+        )
+        if dep_score > 0:
+            factors["dependency"] = {"score": dep_score, "reason": dep_reason}
+
+        constraint_score = self._best_text_factor(context.get("constraints") or [], text)
+        if constraint_score > 0:
+            factors["constraint"] = {
+                "score": constraint_score,
+                "reason": "matched active constraint",
+            }
+
+        intent_score = self._active_intent_factor(context.get("active_intents") or [], text)
+        if intent_score > 0:
+            factors["active_intent"] = {
+                "score": intent_score,
+                "reason": "matched active intent",
+            }
+
+        return factors
+
+    @staticmethod
+    def _context_values(values: Any) -> List[str]:
+        if values is None:
+            return []
+        if isinstance(values, str):
+            return [values] if values else []
+        if isinstance(values, (list, tuple, set)):
+            return [str(value) for value in values if value]
+        return [str(values)]
+
+    @staticmethod
+    def _unique_values(values: List[str]) -> List[str]:
+        return list(dict.fromkeys(value for value in values if value))
+
+    @staticmethod
+    def _intent_task_text(intent: Dict[str, Any] = None) -> str | None:
+        if not intent:
+            return None
+        description = str(intent.get("description") or "")
+        return description.replace("WORKING ON: ", "", 1) if description else None
+
+    @staticmethod
+    def _recall_factor_text(memory: Dict[str, Any]) -> str:
+        parts = [
+            memory.get("content"),
+            memory.get("category"),
+            memory.get("repo_id"),
+            memory.get("layer"),
+        ]
+        for field in ("metadata", "tags", "source_ids"):
+            value = memory.get(field)
+            if value:
+                parts.append(json.dumps(value, sort_keys=True, default=str))
+        return " ".join(str(part) for part in parts if part).lower().replace("\\", "/")
+
+    @staticmethod
+    def _context_value_matches(text: str, value: str) -> bool:
+        return str(value).lower().replace("\\", "/") in text
+
+    @classmethod
+    def _file_factor(cls, text: str, files: List[str]) -> tuple[float, str | None]:
+        for file_path in files:
+            normalized = str(file_path).lower().replace("\\", "/")
+            if normalized and normalized in text:
+                return 1.0, f"matched file {file_path}"
+            basename = Path(normalized).name
+            if basename and basename in text:
+                return 0.6, f"matched file name {basename}"
+        return 0.0, None
+
+    @classmethod
+    def _dependency_factor(
+        cls, memory: Dict[str, Any], text: str, dependencies: List[str]
+    ) -> tuple[float, str | None]:
+        memory_repo = memory.get("repo_id")
+        for dependency in dependencies:
+            dep = str(dependency)
+            normalized = dep.lower()
+            if memory_repo == dep:
+                return 1.0, f"matched dependency repo {dep}"
+            if normalized and normalized in text:
+                return 0.7, f"mentioned dependency {dep}"
+        return 0.0, None
+
+    @staticmethod
+    def _best_text_factor(values: List[str], text: str) -> float:
+        return max((text_similarity(value, text) for value in values), default=0.0)
+
+    @classmethod
+    def _active_intent_factor(cls, intents: List[Dict[str, Any]], text: str) -> float:
+        values = []
+        for intent in intents:
+            values.append(str(intent.get("description") or ""))
+            context = intent.get("context") or {}
+            if isinstance(context, dict):
+                values.extend(cls._context_values(context.get("constraints")))
+                values.extend(cls._context_values(context.get("files")))
+        return cls._best_text_factor(values, text)
 
     def record_utility_feedback(
         self,

@@ -124,6 +124,45 @@ class TestMCPServer:
             pytest.skip("MCP not installed")
 
     @pytest.mark.asyncio
+    async def test_mcp_recall_outputs_ranking_factors(self):
+        """MCP recall exposes intent-aware ranking explanations."""
+        try:
+            from llm_memory.interfaces.mcp import MCP_AVAILABLE, handle_tool
+
+            if not MCP_AVAILABLE:
+                pytest.skip("MCP not installed")
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                config = MemoryConfig()
+                config.storage.data_dir = Path(tmpdir)
+                config.embedding.provider = "noop"
+                memory = Memory(config=config)
+                memory.goal("Stabilize auth refresh", constraints=["No breaking API"])
+                memory_id = memory.record(
+                    "Auth refresh fix in auth/refresh.py respects No breaking API",
+                    context={"files": ["auth/refresh.py"], "session_id": "session-1"},
+                )
+
+                result = await handle_tool(
+                    "memory_recall",
+                    {
+                        "query": "auth refresh",
+                        "task": "Fix auth refresh",
+                        "files": ["auth/refresh.py"],
+                        "session_id": "session-1",
+                        "constraints": ["No breaking API"],
+                    },
+                    memory,
+                )
+
+            assert memory_id in result
+            assert "Ranking factors:" in result
+            assert "file:" in result
+            assert "active_intent:" in result
+        except ImportError:
+            pytest.skip("MCP not installed")
+
+    @pytest.mark.asyncio
     async def test_mcp_remember_returns_latest_memory(self):
         """MCP remember tool returns the newest active memory."""
         try:
