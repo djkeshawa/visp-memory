@@ -23,6 +23,7 @@
 | [**docs/development/MCP.md**](docs/development/MCP.md) | MCP setup, tools, examples, and verification |
 | [**docs/development/TESTING.md**](docs/development/TESTING.md) | Testing practices and guidelines |
 | [**docs/development/STORAGE.md**](docs/development/STORAGE.md) | Storage backends comparison and configuration |
+| [**scripts/evaluate_agent_ab.py**](scripts/evaluate_agent_ab.py) | Deterministic A/B benchmark for memory-assisted agent behavior |
 
 ---
 
@@ -235,6 +236,72 @@ Generate a compact project context for pasting into an assistant:
 ```bash
 llm-memory context
 ```
+
+---
+
+## 🧪 Evaluate Agent Usefulness
+
+LLM Memory includes deterministic evaluation scripts so you can measure whether
+memory actually improves an agent workflow before wiring in a live model. These
+benchmarks use isolated SQLite stores and noop embeddings by default, so they do
+not require network access or API keys.
+
+### Agent A/B Benchmark
+
+Compare the same coding-agent tasks with memory disabled vs memory-grounded
+context:
+
+```bash
+python3 scripts/evaluate_agent_ab.py
+python3 scripts/evaluate_agent_ab.py --json
+```
+
+Example output:
+
+```text
+Agent memory A/B evaluation
+Mode: deterministic_agent_proxy
+Cases: 5
+
+No memory:
+  task_success_rate: 0%
+  risky_action_rate: 100%
+
+With memory:
+  task_success_rate: 100%
+  risky_action_rate: 0%
+  citation_coverage_rate: 100%
+  labelled_relevance_score: 100%
+
+Risk reduction: 100% points (100% relative)
+Token proxy delta: +25.4 mean words/case
+Latency delta: +2.5 ms/case
+```
+
+Use this when you want a repeatable signal that project memory can surface
+guardrails, cite relevant facts, abstain on unknown secrets, and avoid risky
+agent actions. It is a deterministic proxy, not a full live-LLM coding benchmark.
+
+### Grounding And Intelligence Checks
+
+Run the companion evaluations for hallucination-risk reduction and graph/report
+quality:
+
+```bash
+# Measures unsupported/false-answer reduction from memory grounding
+python3 scripts/evaluate_hallucination.py --json
+
+# Measures recall precision, evidence paths, stale intent surfacing, and report sections
+python3 scripts/evaluate_memory_intelligence.py --json
+
+# Measures storage/recall/import/export performance
+python3 scripts/benchmark_memory.py --items 100 --json
+```
+
+For a stronger live-agent study, reuse the same case set with your model runner:
+run each task once without memory context and once after calling `llm-memory
+recall`, MCP `memory_before_change`, or `/ai/ask`; then score task success,
+wrong edits avoided, citation coverage, token use, and latency.
 
 ---
 
