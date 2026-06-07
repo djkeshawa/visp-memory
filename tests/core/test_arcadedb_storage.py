@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from llm_memory import Memory
 from llm_memory.config import MemoryConfig
 from llm_memory.core.arcadedb_storage import (
     ARCADEDB_INSTALL_MESSAGE,
@@ -476,6 +477,137 @@ def test_arcadedb_audit_and_recall_feedback(fake_arcadedb, tmp_path):
 
     with pytest.raises(ValueError, match="Memory not found"):
         storage.log_recall_event("missing", "used")
+
+
+def test_arcadedb_graph_recall_uses_public_memory_contract(fake_arcadedb, tmp_path):
+    config = MemoryConfig(project_name="arcadedb-graph", repo_id="repo-a")
+    config.storage.backend = "arcadedb"
+    config.storage.data_dir = tmp_path / "data"
+    config.embedding.provider = "noop"
+    memory = Memory(config=config)
+
+    source_id = memory._storage.store_memory(
+        "ArcadeDB graph recall auth route memory",
+        repo_id="repo-a",
+        importance=0.9,
+        auto_link=False,
+    )
+    target_id = memory._storage.store_memory(
+        "Repository scope evidence explains access controls",
+        repo_id="repo-a",
+        importance=0.8,
+        auto_link=False,
+    )
+    memory._storage.add_relationship(
+        source_id,
+        target_id,
+        "supports",
+        strength=0.84,
+        evidence={
+            "confidence": "observed",
+            "confidence_score": 0.92,
+            "source": "pytest",
+            "source_file": "tests/core/test_arcadedb_storage.py",
+            "source_location": "test_arcadedb_graph_recall_uses_public_memory_contract",
+            "reason": "ArcadeDB relationship evidence supports graph recall.",
+            "created_by": "codex",
+        },
+    )
+
+    trace = memory.graph_trace(
+        "arcadedb graph recall auth route memory",
+        repo_id="repo-a",
+        depth=1,
+        token_budget=1000,
+        limit=2,
+    )
+
+    assert trace["mode"] == "trace"
+    assert {node["id"] for node in trace["nodes"]} >= {source_id, target_id}
+    assert trace["edges"][0]["relationship"] == "supports"
+    assert trace["edges"][0]["reason"] == "ArcadeDB relationship evidence supports graph recall."
+    assert trace["edges"][0]["evidence"] == {
+        "confidence": "observed",
+        "confidence_score": 0.92,
+        "source": "pytest",
+        "source_file": "tests/core/test_arcadedb_storage.py",
+        "source_location": "test_arcadedb_graph_recall_uses_public_memory_contract",
+        "reason": "ArcadeDB relationship evidence supports graph recall.",
+        "created_by": "codex",
+        "created_at": trace["edges"][0]["evidence"]["created_at"],
+    }
+    assert all("relevance_factors" in node for node in trace["nodes"])
+    assert trace["edges"][0]["relevance_factors"]["edge_score"] > 0
+
+    path = memory.graph_path(source_id, target_id, repo_id="repo-a", max_hops=1)
+    assert path["mode"] == "path"
+    assert [edge["relationship"] for edge in path["edges"]] == ["supports"]
+
+    why = memory.graph_why_relevant(
+        "arcadedb graph recall auth route memory",
+        target_id,
+        repo_id="repo-a",
+        depth=1,
+    )
+    assert why["mode"] == "why_relevant"
+    assert why["edges"][0]["reason"] == "ArcadeDB relationship evidence supports graph recall."
+
+
+def test_arcadedb_memory_intelligence_report_uses_public_storage_contract(
+    fake_arcadedb, tmp_path
+):
+    from llm_memory.core.reporting import MemoryIntelligenceReporter
+
+    config = MemoryConfig(project_name="arcadedb-report", repo_id="repo-a")
+    config.storage.backend = "arcadedb"
+    config.storage.data_dir = tmp_path / "data"
+    config.embedding.provider = "noop"
+    memory = Memory(config=config)
+
+    high_id = memory._storage.store_memory(
+        "High impact ArcadeDB migration decision",
+        repo_id="repo-a",
+        importance=0.91,
+        auto_link=False,
+    )
+    related_id = memory._storage.store_memory(
+        "ArcadeDB report relationship context",
+        repo_id="repo-a",
+        importance=0.6,
+        auto_link=False,
+    )
+    warning_id = memory._storage.store_memory(
+        "WARNING [arcadedb]: Embedded graph backend needs careful packaging",
+        layer="semantic",
+        category="fragile_area",
+        repo_id="repo-a",
+        importance=0.8,
+        auto_link=False,
+    )
+    memory._storage.add_relationship(
+        high_id,
+        related_id,
+        "related",
+        strength=0.4,
+        evidence={
+            "confidence": "ambiguous",
+            "confidence_score": 0.3,
+            "source": "pytest",
+            "reason": "Relationship needs confirmation before relying on graph recall.",
+        },
+    )
+
+    report = MemoryIntelligenceReporter(memory._storage).generate(repo_id="repo-a")
+
+    assert report["schema_version"] == "1.0"
+    assert report["summary"]["total_memories"] == 3
+    assert report["summary"]["total_relationships"] == 1
+    assert report["sections"]["high_impact_memories"]["items"][0]["id"] == high_id
+    assert report["sections"]["ambiguous_relationships"]["items"][0]["reason"] == (
+        "Relationship needs confirmation before relying on graph recall."
+    )
+    assert report["sections"]["isolated_warnings"]["items"][0]["id"] == warning_id
+    assert report["sections"]["suggested_questions"]["kind"] == "inferred_recommendation"
 
 
 def test_real_arcadedb_memory_smoke_skips_without_extra(tmp_path):
