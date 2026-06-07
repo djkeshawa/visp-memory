@@ -40,6 +40,11 @@ class FakeDriver:
         return self.session_obj
 
 
+class FakeNeo4jDateTime:
+    def iso_format(self):
+        return "2026-06-06T00:00:00+00:00"
+
+
 def neo4j_storage_with_delete_count(count, records=None):
     storage = Neo4jStorage.__new__(Neo4jStorage)
     storage.driver = FakeDriver(count, records)
@@ -239,6 +244,33 @@ def test_neo4j_get_all_relationships_includes_evidence_metadata():
             },
         }
     ]
+
+
+def test_neo4j_get_all_relationships_formats_driver_datetime_evidence():
+    storage = neo4j_storage_with_delete_count(
+        1,
+        records=[
+            {
+                "id": "rel-1",
+                "source": "source",
+                "target": "target",
+                "type": "RESOLVED_BY",
+                "weight": 0.7,
+                "confidence": "observed",
+                "confidence_score": 0.8,
+                "evidence_source": "api",
+                "source_file": None,
+                "source_location": None,
+                "reason": "Driver temporal values should be API serializable.",
+                "created_by": "alice",
+                "created_at": FakeNeo4jDateTime(),
+            }
+        ],
+    )
+
+    relationship = storage.get_all_relationships(repo_id="repo-a")[0]
+
+    assert relationship["evidence"]["created_at"] == "2026-06-06T00:00:00+00:00"
 
 
 def test_neo4j_uses_dimension_specific_vector_property_for_memories():

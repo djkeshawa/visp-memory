@@ -247,6 +247,10 @@ class Neo4jStorage(BaseStorage):
             else cls.UNSPECIFIED_RELATIONSHIP_EVIDENCE_REASON
         )
 
+        evidence_created_at = evidence.get("created_at")
+        if evidence_created_at is None:
+            evidence_created_at = created_at
+
         return {
             "confidence": confidence,
             "confidence_score": clamp_score(score),
@@ -255,7 +259,7 @@ class Neo4jStorage(BaseStorage):
             "source_location": evidence.get("source_location"),
             "reason": evidence.get("reason") or default_reason,
             "created_by": evidence.get("created_by"),
-            "created_at": evidence.get("created_at") or cls._format_temporal(created_at),
+            "created_at": cls._format_temporal(evidence_created_at),
         }
 
     def store_memory(
