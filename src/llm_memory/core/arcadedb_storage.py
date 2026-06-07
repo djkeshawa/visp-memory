@@ -31,6 +31,18 @@ class ArcadeDbStorage(BaseStorage):
 
     MEMORY_TYPE = "Memory"
     SESSION_TYPE = "Session"
+    VERTEX_TYPES = [
+        "Memory",
+        "Intent",
+        "Session",
+        "Repository",
+        "User",
+        "Team",
+        "AuditLog",
+        "RecallFeedback",
+    ]
+    EDGE_TYPES = ["MemoryRelationship", "RepoDependency", "TeamMember"]
+    MEMORY_RELATIONSHIP_EDGE = "MemoryRelationship"
     MEMORY_JSON_FIELDS = {"tags", "metadata", "source_ids", "quality_flags"}
     MEMORY_FIELDS = [
         "id",
@@ -52,6 +64,21 @@ class ArcadeDbStorage(BaseStorage):
         "approved_at",
         "archived_at",
     ]
+    RELATIONSHIP_FIELDS = [
+        "id",
+        "source_id",
+        "target_id",
+        "relationship",
+        "strength",
+        "confidence",
+        "confidence_score",
+        "source",
+        "source_file",
+        "source_location",
+        "reason",
+        "created_by",
+        "created_at",
+    ]
 
     def __init__(
         self,
@@ -72,8 +99,10 @@ class ArcadeDbStorage(BaseStorage):
     def _init_schema(self) -> None:
         with self._database() as db:
             with db.transaction():
-                db.command("sql", f"CREATE VERTEX TYPE {self.MEMORY_TYPE} IF NOT EXISTS")
-                db.command("sql", f"CREATE DOCUMENT TYPE {self.SESSION_TYPE} IF NOT EXISTS")
+                for vertex_type in self.VERTEX_TYPES:
+                    db.command("sql", f"CREATE VERTEX TYPE {vertex_type} IF NOT EXISTS")
+                for edge_type in self.EDGE_TYPES:
+                    db.command("sql", f"CREATE EDGE TYPE {edge_type} IF NOT EXISTS")
 
     @staticmethod
     def _json_serialize(data: Any) -> str:
@@ -124,6 +153,31 @@ class ArcadeDbStorage(BaseStorage):
         memory.setdefault("quality_flags", [])
         memory.setdefault("access_count", 0)
         return memory
+
+    @classmethod
+    def _relationship_record_to_dict(cls, record) -> Dict[str, Any]:
+        relationship = {
+            field: cls._record_get(record, field)
+            for field in cls.RELATIONSHIP_FIELDS
+            if cls._record_get(record, field) is not None
+        }
+        evidence_data = {
+            "confidence": relationship.pop("confidence", None),
+            "confidence_score": relationship.pop("confidence_score", None),
+            "source": relationship.pop("source", None),
+            "source_file": relationship.pop("source_file", None),
+            "source_location": relationship.pop("source_location", None),
+            "reason": relationship.pop("reason", None),
+            "created_by": relationship.pop("created_by", None),
+            "created_at": relationship.get("created_at"),
+        }
+        relationship["evidence"] = LocalStorage._normalize_relationship_evidence(
+            evidence_data,
+            strength=relationship.get("strength"),
+            created_at=relationship.get("created_at"),
+            legacy=evidence_data["source"] == "legacy",
+        )
+        return relationship
 
     def _query_memory(self, memory_id: str):
         with self._database() as db:
@@ -390,14 +444,93 @@ class ArcadeDbStorage(BaseStorage):
         self._not_implemented()
 
     def add_relationship(
-        self, source_id: str, target_id: str, relationship: str, strength: float = 1.0
+        self,
+        source_id: str,
+        target_id: str,
+        relationship: str,
+        strength: float = 1.0,
+        evidence: Dict[str, Any] = None,
     ) -> str:
-        self._not_implemented()
+        source = self._query_memory(source_id)
+        target = self._query_memory(target_id)
+        if source is None or target is None:
+            raise ValueError("Relationship source and target memories must both exist")
+        source_memory = self._memory_record_to_dict(source)
+        target_memory = self._memory_record_to_dict(target)
+        if source_memory.get("repo_id") != target_memory.get("repo_id"):
+            raise ValueError("Memory relationships cannot cross repository boundaries")
+
+        relationship_id = self._generate_id(f"{source_id}-{target_id}-{relationship}")
+        created_at = datetime.now().isoformat()
+        evidence_data = LocalStorage._normalize_relationship_evidence(
+            evidence,
+            strength=strength,
+            created_at=created_at,
+            legacy=False,
+        )
+
+        with self._database() as db:
+            with db.transaction():
+                db.command(
+                    "sql",
+                    f"""
+                    CREATE EDGE {self.MEMORY_RELATIONSHIP_EDGE}
+                    FROM (SELECT FROM {self.MEMORY_TYPE} WHERE id = ?)
+                    TO (SELECT FROM {self.MEMORY_TYPE} WHERE id = ?)
+                    SET id = ?, source_id = ?, target_id = ?, relationship = ?,
+                    strength = ?, confidence = ?, confidence_score = ?, source = ?,
+                    source_file = ?, source_location = ?, reason = ?, created_by = ?,
+                    created_at = ?
+                    """,
+                    source_id,
+                    target_id,
+                    relationship_id,
+                    source_id,
+                    target_id,
+                    relationship,
+                    strength,
+                    evidence_data["confidence"],
+                    evidence_data["confidence_score"],
+                    evidence_data["source"],
+                    evidence_data["source_file"],
+                    evidence_data["source_location"],
+                    evidence_data["reason"],
+                    evidence_data["created_by"],
+                    evidence_data["created_at"],
+                )
+
+        return relationship_id
 
     def get_related_memories(
         self, memory_id: str, relationship: str = None
     ) -> List[Dict[str, Any]]:
-        self._not_implemented()
+        source = self._query_memory(memory_id)
+        if source is None:
+            return []
+        source_memory = self._memory_record_to_dict(source)
+        related = []
+        seen_ids = set()
+        for edge in self.get_all_relationships(repo_id=source_memory.get("repo_id")):
+            if relationship and edge.get("relationship") != relationship:
+                continue
+            if edge.get("source_id") == memory_id:
+                related_id = edge.get("target_id")
+            elif edge.get("target_id") == memory_id:
+                related_id = edge.get("source_id")
+            else:
+                continue
+            if not related_id or related_id in seen_ids:
+                continue
+            record = self._query_memory(related_id)
+            if record is None:
+                continue
+            memory = self._memory_record_to_dict(record)
+            memory["relationship"] = edge.get("relationship")
+            memory["strength"] = edge.get("strength")
+            memory["relationship_evidence"] = edge.get("evidence")
+            related.append(memory)
+            seen_ids.add(related_id)
+        return related
 
     def start_session(self) -> str:
         session_id = self._generate_id("session")
@@ -430,7 +563,24 @@ class ArcadeDbStorage(BaseStorage):
                 )
 
     def get_all_relationships(self, repo_id: str = None) -> List[Dict[str, Any]]:
-        self._not_implemented()
+        with self._database() as db:
+            rows = self._rows(db.query("sql", f"SELECT FROM {self.MEMORY_RELATIONSHIP_EDGE}"))
+
+        relationships = [self._relationship_record_to_dict(row) for row in rows]
+        if not repo_id:
+            return relationships
+
+        filtered = []
+        for relationship in relationships:
+            source = self._query_memory(relationship.get("source_id"))
+            target = self._query_memory(relationship.get("target_id"))
+            if source is None or target is None:
+                continue
+            source_memory = self._memory_record_to_dict(source)
+            target_memory = self._memory_record_to_dict(target)
+            if source_memory.get("repo_id") == repo_id and target_memory.get("repo_id") == repo_id:
+                filtered.append(relationship)
+        return filtered
 
     def get_stats(self, repo_id: str = None) -> Dict[str, Any]:
         memories = self.list_memories(repo_id=repo_id, status="active", limit=100000)

@@ -25,7 +25,9 @@ class FakeArcadeDbModule:
 
 class FakeArcadeDb:
     def __init__(self):
+        self.commands = []
         self.memories = {}
+        self.relationships = {}
         self.sessions = {}
 
     def __enter__(self):
@@ -40,6 +42,11 @@ class FakeArcadeDb:
     def command(self, language, sql, *params):
         assert language == "sql"
         sql = " ".join(sql.split())
+        self.commands.append(sql)
+        if sql.startswith("CREATE EDGE MemoryRelationship"):
+            fields = _edge_fields(sql)
+            self.relationships[params[2]] = dict(zip(fields, params[2:]))
+            return None
         if sql.startswith("CREATE "):
             return None
         if sql.startswith("INSERT INTO Memory SET"):
@@ -74,6 +81,8 @@ class FakeArcadeDb:
         if sql == "SELECT FROM Memory WHERE id = ?":
             memory = self.memories.get(params[0])
             return [memory] if memory else []
+        if sql == "SELECT FROM MemoryRelationship":
+            return list(self.relationships.values())
         if sql.startswith("SELECT FROM Memory"):
             return self._query_memories(sql, params)
         raise AssertionError(f"Unhandled SQL query: {sql}")
@@ -103,6 +112,11 @@ def _insert_fields(sql):
 
 def _update_fields(sql):
     body = sql.split(" SET ", 1)[1].split(" WHERE ", 1)[0]
+    return [part.split(" = ?", 1)[0].strip() for part in body.split(",")]
+
+
+def _edge_fields(sql):
+    body = sql.split(" SET ", 1)[1]
     return [part.split(" = ?", 1)[0].strip() for part in body.split(",")]
 
 
@@ -234,6 +248,108 @@ def test_arcadedb_get_collection_is_none_for_conservative_vector_v1(fake_arcaded
     storage = ArcadeDbStorage(tmp_path)
 
     assert storage.get_collection("semantic") is None
+
+
+def test_arcadedb_schema_uses_stable_vertex_and_edge_types(fake_arcadedb, tmp_path):
+    ArcadeDbStorage(tmp_path)
+
+    commands = fake_arcadedb.db.commands
+
+    for vertex_type in (
+        "Memory",
+        "Intent",
+        "Session",
+        "Repository",
+        "User",
+        "Team",
+        "AuditLog",
+        "RecallFeedback",
+    ):
+        assert f"CREATE VERTEX TYPE {vertex_type} IF NOT EXISTS" in commands
+
+    for edge_type in ("MemoryRelationship", "RepoDependency", "TeamMember"):
+        assert f"CREATE EDGE TYPE {edge_type} IF NOT EXISTS" in commands
+
+
+def test_arcadedb_relationships_store_kind_as_property_and_round_trip_evidence(
+    fake_arcadedb, tmp_path
+):
+    storage = ArcadeDbStorage(tmp_path)
+    source_id = storage.store_memory("ArcadeDB selected for local graph", repo_id="repo-a")
+    target_id = storage.store_memory("Neo4j remains the mature team backend", repo_id="repo-a")
+    other_repo_id = storage.store_memory("Other repo memory", repo_id="repo-b")
+
+    relationship_id = storage.add_relationship(
+        source_id,
+        target_id,
+        "supports'; DROP EDGE TYPE Unsafe",
+        strength=0.82,
+        evidence={
+            "confidence": "manual",
+            "confidence_score": 0.91,
+            "source": "test",
+            "source_file": "plan.md",
+            "source_location": "REQ003",
+            "reason": "The plan requires stable edge types.",
+            "created_by": "pytest",
+        },
+    )
+
+    create_edge_commands = [
+        command
+        for command in fake_arcadedb.db.commands
+        if command.startswith("CREATE EDGE MemoryRelationship")
+    ]
+    assert len(create_edge_commands) == 1
+    assert "DROP EDGE TYPE Unsafe" not in create_edge_commands[0]
+
+    stored_edge = fake_arcadedb.db.relationships[relationship_id]
+    assert stored_edge["relationship"] == "supports'; DROP EDGE TYPE Unsafe"
+    assert stored_edge["source_id"] == source_id
+    assert stored_edge["target_id"] == target_id
+
+    relationships = storage.get_all_relationships(repo_id="repo-a")
+    assert relationships == [
+        {
+            "id": relationship_id,
+            "source_id": source_id,
+            "target_id": target_id,
+            "relationship": "supports'; DROP EDGE TYPE Unsafe",
+            "strength": 0.82,
+            "created_at": relationships[0]["created_at"],
+            "evidence": {
+                "confidence": "manual",
+                "confidence_score": 0.91,
+                "source": "test",
+                "source_file": "plan.md",
+                "source_location": "REQ003",
+                "reason": "The plan requires stable edge types.",
+                "created_by": "pytest",
+                "created_at": relationships[0]["created_at"],
+            },
+        }
+    ]
+
+    assert storage.get_all_relationships(repo_id="repo-b") == []
+
+    related = storage.get_related_memories(source_id)
+    assert [item["id"] for item in related] == [target_id]
+    assert related[0]["relationship"] == "supports'; DROP EDGE TYPE Unsafe"
+    assert related[0]["relationship_evidence"]["source_file"] == "plan.md"
+
+    assert storage.get_related_memories(other_repo_id) == []
+
+
+def test_arcadedb_relationships_reject_missing_or_cross_repo_memories(fake_arcadedb, tmp_path):
+    storage = ArcadeDbStorage(tmp_path)
+    source_id = storage.store_memory("Source", repo_id="repo-a")
+    target_id = storage.store_memory("Target", repo_id="repo-b")
+
+    with pytest.raises(ValueError, match="cannot cross repository"):
+        storage.add_relationship(source_id, target_id, "related_to")
+
+    with pytest.raises(ValueError, match="must both exist"):
+        storage.add_relationship(source_id, "missing", "related_to")
 
 
 def test_real_arcadedb_memory_smoke_skips_without_extra(tmp_path):
