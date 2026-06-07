@@ -80,6 +80,9 @@ pip install llm-memory[all]
 # Lean local install without local embedding model dependencies
 pip install llm-memory[api,mcp]
 
+# Local embedded graph backend without Docker/Neo4j
+pip install "llm-memory[arcadedb,api,mcp]"
+
 # From GitHub Release (direct download)
 pip install https://github.com/djkeshawa/llm-memory/releases/download/v0.1.0/llm_memory-0.1.0-py3-none-any.whl
 ```
@@ -87,9 +90,10 @@ pip install https://github.com/djkeshawa/llm-memory/releases/download/v0.1.0/llm
 ### Method 2: Docker
 
 Run the API, dashboard, MCP-capable package, and storage with Docker Compose.
-The `lite` profile uses SQLite and automatic embedding selection. The `full`
-profile starts Neo4j plus Ollama and pulls `nomic-embed-text`, so recall uses
-real semantic embeddings out of the box.
+The `lite` profile uses SQLite and automatic embedding selection. ArcadeDB is an
+optional embedded package extra and does not require a separate Docker service.
+The `full` profile starts Neo4j plus Ollama and pulls `nomic-embed-text`, so
+recall uses real semantic embeddings out of the box.
 
 ```bash
 # Quick local server + dashboard
@@ -109,6 +113,14 @@ they make the image much larger:
 LLM_MEMORY_EXTRAS=api,mcp,neo4j,local-embeddings \
 LLM_MEMORY_EMBEDDING_PROVIDER=sentence-transformers \
 docker compose --profile full up --build
+```
+
+To include ArcadeDB in an image without adding a database service:
+
+```bash
+LLM_MEMORY_EXTRAS=api,mcp,arcadedb \
+LLM_MEMORY_STORAGE_BACKEND=arcadedb \
+docker compose --profile lite up --build
 ```
 
 ### Method 3: Standalone Executable
@@ -140,8 +152,39 @@ rm -rf ~/.llm-memory
 | Dependency | Version | Required | Installation |
 |------------|---------|----------|--------------|
 | **Python** | 3.10+ | Yes | [python.org](https://www.python.org/downloads/) |
+| **ArcadeDB Embedded** | 26.4.x | Optional local graph backend | `pip install "llm-memory[arcadedb,api,mcp]"` |
 | **Neo4j** | 5.15+ | For team/graph deployments | See below |
 | **Node.js** | 18+ | For dashboard dev | [nodejs.org](https://nodejs.org/) |
+
+### Storage Backends
+
+SQLite is the default because it has the smallest local install. ArcadeDB is the
+local-first embedded graph option. Neo4j remains the mature external graph
+backend for shared/team deployments.
+
+| Backend | Set `LLM_MEMORY_STORAGE_BACKEND` | Install | Requires separate service | Best for |
+|---------|----------------------------------|---------|---------------------------|----------|
+| SQLite | `sqlite` or unset | `llm-memory[api,mcp]` | No | Smallest local install |
+| ArcadeDB | `arcadedb` | `llm-memory[arcadedb,api,mcp]` | No | Local embedded graph storage |
+| Neo4j | `neo4j` | `llm-memory[neo4j,api,mcp]` | Yes | Mature shared/team graph deployment |
+
+ArcadeDB stores structured graph data under
+`$LLM_MEMORY_STORAGE_DATA_DIR/arcadedb` and keeps vector behavior conservative
+for v1 by using the existing Chroma/text fallback path rather than native
+ArcadeDB vector indexes.
+
+```bash
+# SQLite default
+llm-memory init --type code
+
+# ArcadeDB local graph backend
+export LLM_MEMORY_STORAGE_BACKEND=arcadedb
+llm-memory init --type code
+llm-memory serve
+
+# Equivalent one-shot server start
+LLM_MEMORY_STORAGE_BACKEND=arcadedb llm-memory serve
+```
 
 ### Neo4j Setup
 
@@ -174,6 +217,7 @@ docker run -d \
 Set these before running LLM Memory:
 
 ```bash
+export LLM_MEMORY_STORAGE_BACKEND="sqlite"
 export NEO4J_URI="bolt://localhost:7687"
 export NEO4J_USER="neo4j"
 export NEO4J_PASSWORD="your-password"
@@ -181,6 +225,8 @@ export NEO4J_PASSWORD="your-password"
 
 | Variable | Description | Default |
 |----------|-------------|---------|
+| `LLM_MEMORY_STORAGE_BACKEND` | Storage backend: `sqlite`, `arcadedb`, or `neo4j` | `sqlite` |
+| `LLM_MEMORY_STORAGE_DATA_DIR` | Local storage root for SQLite/ArcadeDB files | `~/.llm-memory` |
 | `NEO4J_URI` | Neo4j connection URI | `bolt://localhost:7687` |
 | `NEO4J_USER` | Neo4j username | `neo4j` |
 | `NEO4J_PASSWORD` | Neo4j password | **Required** |
@@ -235,6 +281,18 @@ Generate a compact project context for pasting into an assistant:
 
 ```bash
 llm-memory context
+```
+
+### Migrate Between Backends
+
+No automatic backend migration runs in v1. Use the existing export/import flow:
+
+```bash
+LLM_MEMORY_STORAGE_BACKEND=sqlite llm-memory export memory.json
+LLM_MEMORY_STORAGE_BACKEND=arcadedb llm-memory import memory.json
+
+# Or migrate into Neo4j after starting/configuring Neo4j
+LLM_MEMORY_STORAGE_BACKEND=neo4j llm-memory import memory.json
 ```
 
 ---
@@ -296,6 +354,7 @@ python3 scripts/evaluate_memory_intelligence.py --json
 
 # Measures storage/recall/import/export performance
 python3 scripts/benchmark_memory.py --items 100 --json
+python3 scripts/benchmark_memory.py --backend arcadedb --items 100 --json
 ```
 
 For a stronger live-agent study, reuse the same case set with your model runner:

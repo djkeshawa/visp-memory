@@ -18,9 +18,9 @@ from llm_memory import Memory, MemoryConfig
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark LLM Memory core operations.")
     parser.add_argument("--items", type=int, default=100, help="Number of memories to create.")
-    parser.add_argument("--backend", choices=("sqlite", "neo4j"), default="sqlite")
+    parser.add_argument("--backend", choices=("sqlite", "arcadedb", "neo4j"), default="sqlite")
     parser.add_argument("--repo-id", default="benchmark-repo")
-    parser.add_argument("--data-dir", type=Path, default=None, help="SQLite data directory.")
+    parser.add_argument("--data-dir", type=Path, default=None, help="Storage data directory.")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
     return parser.parse_args()
 

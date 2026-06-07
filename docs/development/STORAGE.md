@@ -9,6 +9,7 @@ This document covers storage backend implementation, configuration, and migratio
 LLM Memory supports multiple storage backends through a unified `BaseStorage` interface:
 
 - **LocalStorage** - SQLite + ChromaDB/local vector storage (default, single-user)
+- **ArcadeDbStorage** - ArcadeDB Embedded local graph storage (optional, experimental)
 - **Neo4jStorage** - Graph database with vector search (recommended for teams)
 - **RemoteStorage** - Client for remote API server
 
@@ -18,15 +19,98 @@ All backends implement the same interface, allowing transparent switching.
 
 ## Storage Backend Comparison
 
-| Feature | LocalStorage | Neo4jStorage | RemoteStorage |
-|---------|-------------|--------------|---------------|
-| **Storage** | SQLite + ChromaDB | Neo4j Graph DB | HTTP API Client |
-| **Vector Search** | ChromaDB | Neo4j Vector Index | Server-side |
-| **Relationships** | Limited | Native Graphs | Server-side |
-| **Multi-user** | No | Yes | Yes |
-| **Requires Server** | No | Yes (Neo4j) | Yes (FastAPI) |
-| **Best For** | Local dev | Production, teams | Remote access |
-| **Status** | **Default** | Production target | Experimental |
+| Feature | SQLite `sqlite` | ArcadeDB `arcadedb` | Neo4j `neo4j` | Remote client |
+|---------|-----------------|----------------------|---------------|---------------|
+| **Storage** | SQLite + ChromaDB | ArcadeDB Embedded graph files | Neo4j Graph DB | HTTP API Client |
+| **Vector Search** | ChromaDB/text fallback | ChromaDB/text fallback for v1 | Neo4j Vector Index | Server-side |
+| **Relationships** | Structured SQLite rows | Stable graph vertices/edges | Native Graphs | Server-side |
+| **Multi-user** | No | No | Yes | Yes |
+| **Requires Server** | No | No | Yes (Neo4j) | Yes (FastAPI) |
+| **Install** | `llm-memory[api,mcp]` | `llm-memory[arcadedb,api,mcp]` | `llm-memory[neo4j,api,mcp]` | `llm-memory[mcp]` |
+| **Best For** | Smallest local install | Local embedded graph storage | Mature shared/team graph deployment | Remote access |
+| **Status** | **Default** | Experimental v1 | Production target | Experimental |
+
+Backend selection uses:
+
+```bash
+export LLM_MEMORY_STORAGE_BACKEND=sqlite    # default
+export LLM_MEMORY_STORAGE_BACKEND=arcadedb  # embedded local graph backend
+export LLM_MEMORY_STORAGE_BACKEND=neo4j     # external graph backend
+```
+
+KuzuDB is intentionally not used because the upstream repository is
+archived/read-only. ArcadeDB Embedded Python is the selected v1 local graph
+candidate because it runs in-process, installs as an optional package extra, and
+does not require Docker or a separate server.
+
+---
+
+## ArcadeDbStorage (Optional Local Graph)
+
+### Overview
+
+ArcadeDB Embedded stores structured records as local graph data while preserving
+the same public storage shapes used by SQLite, Neo4j, the API, MCP tools,
+dashboard, reports, import, and export.
+
+**Advantages:**
+- Runs in-process with `pip install "llm-memory[arcadedb,api,mcp]"`
+- No Docker container or external database service
+- Stores graph records under `<data_dir>/arcadedb`
+- Uses stable vertex and edge types with relationship kind as a property
+- Keeps v1 vector behavior conservative through the existing Chroma/text
+  fallback path
+
+**Limitations:**
+- Experimental v1 backend
+- Not the recommended shared/team backend
+- Native ArcadeDB vector indexes are deferred until the structured graph backend
+  is stable
+
+### Installation
+
+```bash
+pip install "llm-memory[arcadedb,api,mcp]"
+```
+
+Lean installs that do not need ArcadeDB should use:
+
+```bash
+pip install "llm-memory[api,mcp]"
+```
+
+### Configuration
+
+```bash
+export LLM_MEMORY_STORAGE_BACKEND=arcadedb
+export LLM_MEMORY_STORAGE_DATA_DIR=~/.llm-memory
+llm-memory init --type code
+```
+
+Server example:
+
+```bash
+LLM_MEMORY_STORAGE_BACKEND=arcadedb llm-memory serve
+```
+
+Config file:
+
+```yaml
+storage:
+  backend: arcadedb
+  data_dir: ~/.llm-memory
+```
+
+### Schema Model
+
+ArcadeDB uses stable graph types:
+
+- Vertex types: `Memory`, `Intent`, `Session`, `Repository`, `User`, `Team`,
+  `AuditLog`, `RecallFeedback`
+- Edge types: `MemoryRelationship`, `RepoDependency`, `TeamMember`
+
+Relationship kinds such as `supports`, `derived_from`, or `related` are stored
+as edge properties. They are not interpolated into dynamic edge type names.
 
 ---
 
@@ -248,14 +332,14 @@ SET m.accessed_at = coalesce(m.accessed_at, datetime())
 # Dedup with specific content
 llm-memory dedup --content "duplicate text"
 
-# Or use LocalStorage for full batch dedup
-export LLM_MEMORY_STORAGE_BACKEND=local
+# Or use SQLite for full batch dedup
+export LLM_MEMORY_STORAGE_BACKEND=sqlite
 llm-memory dedup
 ```
 
 ---
 
-## LocalStorage (Legacy)
+## SQLite LocalStorage (Default)
 
 ### Overview
 
@@ -279,7 +363,7 @@ SQLite-based storage with ChromaDB for vector embeddings.
 
 ```yaml
 storage:
-  backend: local
+  backend: sqlite
   data_dir: ~/.llm-memory
 ```
 
@@ -376,48 +460,30 @@ memory = Memory(config)
 
 ## Migration Guide
 
-### From LocalStorage to Neo4j
+No automatic backend migration runs in v1. Use the existing export/import flow
+so users explicitly choose the source and target backend.
 
-#### 1. Export from LocalStorage
-
-```python
-from llm_memory import Memory
-from llm_memory.core.config import MemoryConfig, StorageConfig
-
-# Load from local
-local_config = MemoryConfig(
-    storage=StorageConfig(backend="local", data_dir="~/.llm-memory")
-)
-local_memory = Memory(local_config)
-
-# Get all memories
-all_memories = local_memory.storage.get_all_memories()
-```
-
-#### 2. Import to Neo4j
-
-```python
-# Connect to Neo4j
-neo4j_config = MemoryConfig(
-    storage=StorageConfig(
-        backend="neo4j",
-        neo4j_uri="bolt://localhost:7687",
-        neo4j_password="password"
-    )
-)
-neo4j_memory = Memory(neo4j_config)
-
-# Import memories
-for layer, memories in all_memories.items():
-    for memory_data in memories:
-        neo4j_memory.storage.store_memory(layer, memory_data)
-```
-
-#### 3. Migration Script
+### SQLite to ArcadeDB
 
 ```bash
-# Use built-in migration (future feature)
-llm-memory migrate --from local --to neo4j
+LLM_MEMORY_STORAGE_BACKEND=sqlite llm-memory export memory.json
+LLM_MEMORY_STORAGE_BACKEND=arcadedb llm-memory import memory.json
+```
+
+### SQLite or ArcadeDB to Neo4j
+
+Start Neo4j and set `NEO4J_URI`, `NEO4J_USER`, and `NEO4J_PASSWORD`, then:
+
+```bash
+LLM_MEMORY_STORAGE_BACKEND=sqlite llm-memory export memory.json
+LLM_MEMORY_STORAGE_BACKEND=neo4j llm-memory import memory.json
+```
+
+To migrate from ArcadeDB to SQLite, reverse the backend values:
+
+```bash
+LLM_MEMORY_STORAGE_BACKEND=arcadedb llm-memory export memory.json
+LLM_MEMORY_STORAGE_BACKEND=sqlite llm-memory import memory.json
 ```
 
 ---
@@ -579,6 +645,13 @@ repeatable numbers:
 ```bash
 python scripts/benchmark_memory.py --items 1000
 python scripts/benchmark_memory.py --items 1000 --json
+```
+
+For ArcadeDB:
+
+```bash
+pip install "llm-memory[arcadedb,api,mcp]"
+python scripts/benchmark_memory.py --backend arcadedb --items 100 --json
 ```
 
 For Neo4j:

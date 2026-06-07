@@ -131,6 +131,12 @@ docker run -p 8000:8000 \
   -e NEO4J_URI=bolt://neo4j:7687 \
   -e NEO4J_PASSWORD=mypassword \
   llm-memory:latest
+
+# With embedded ArcadeDB graph storage
+docker run -p 8000:8000 \
+  -e LLM_MEMORY_STORAGE_BACKEND=arcadedb \
+  -v ~/.llm-memory:/home/llmuser/.llm-memory \
+  llm-memory:latest
 ```
 
 ### Docker Compose
@@ -138,7 +144,7 @@ docker run -p 8000:8000 \
 The repository includes `docker-compose.yml` with two deployment profiles:
 
 ```bash
-# SQLite-backed local deployment
+# SQLite-backed local deployment; this remains the default lite profile
 docker compose --profile lite up --build
 
 # Full graph deployment with Neo4j included
@@ -146,6 +152,15 @@ docker compose --profile full up --build
 ```
 
 Both profiles expose the API/dashboard at `http://localhost:8000/dashboard`.
+ArcadeDB is an optional embedded package extra. It can be included in an image
+without adding a separate Compose service:
+
+```bash
+LLM_MEMORY_EXTRAS=api,mcp,arcadedb \
+LLM_MEMORY_STORAGE_BACKEND=arcadedb \
+docker compose --profile lite up --build
+```
+
 The full profile starts Neo4j 5 plus Ollama, pulls `nomic-embed-text`, and
 configures `LLM_MEMORY_STORAGE_BACKEND=neo4j`, `NEO4J_URI=bolt://neo4j:7687`,
 `OLLAMA_HOST=http://ollama:11434`, and persistent volumes automatically.
@@ -153,7 +168,8 @@ Override `NEO4J_PASSWORD`, `LLM_MEMORY_PORT`, or `LLM_MEMORY_REPO_ID` in your
 shell or `.env` file.
 
 The default image includes API, MCP, Neo4j driver, OpenAI embeddings, and Ollama
-embeddings. `LLM_MEMORY_EMBEDDING_PROVIDER=auto` prefers OpenAI when
+embeddings. Add `arcadedb` to `LLM_MEMORY_EXTRAS` when you want the local
+embedded graph backend. `LLM_MEMORY_EMBEDDING_PROVIDER=auto` prefers OpenAI when
 `OPENAI_API_KEY` or `EMBEDDING_API_KEY` is set, then Ollama when `OLLAMA_HOST`
 is available. Local sentence-transformer embeddings are optional because they
 add large model/runtime dependencies:
