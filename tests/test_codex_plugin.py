@@ -1,7 +1,11 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
+
+from llm_memory.hooks.codex import CodexAdapter
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1] / "plugins" / "llm-memory"
+DOCS_ROOT = Path(__file__).resolve().parents[1] / "docs"
 
 
 def test_codex_plugin_manifest_is_local_first():
@@ -43,3 +47,45 @@ def test_codex_plugin_skills_cover_required_workflows():
     assert "memory_remember" in skills["llm-memory-recall"]
     assert "Do not require cloud AI credentials" in skills["llm-memory-recall"]
     assert "Never print API keys" in skills["llm-memory-diagnostics"]
+
+
+def test_codex_generated_guidance_is_scoped_and_current(tmp_path):
+    memory = SimpleNamespace(config=SimpleNamespace(repo_id="repo-a"))
+    guidance = CodexAdapter(memory, project_root=tmp_path)._workflow_instructions()
+
+    assert "llm-memory remember --repo repo-a" in guidance
+    assert 'llm-memory recall "<task>" --repo repo-a' in guidance
+    assert "llm-memory inject --file <path> --task" in guidance
+    assert "memory_remember" in guidance
+    assert "memory_recall" in guidance
+    assert "memory_file_context" in guidance
+    assert "memory_after_work" in guidance
+    assert "repo `repo-a`" in guidance
+    assert "Do not print secrets" in guidance
+    assert len([line for line in guidance.splitlines() if line.startswith("- ")]) <= 6
+
+
+def test_memory_governance_docs_cover_required_topics():
+    guidance = (DOCS_ROOT / "development" / "ASSISTANT_GUIDANCE.md").read_text()
+    governance = (DOCS_ROOT / "development" / "MEMORY_GOVERNANCE.md").read_text()
+    release = (DOCS_ROOT / "deployment" / "RELEASE_CHECKLIST.md").read_text()
+    combined = f"{guidance}\n{governance}".lower()
+
+    for phrase in [
+        "stored data",
+        "secrets risk",
+        "provider boundaries",
+        "local and server modes",
+        "retention and deletion",
+        "auth defaults",
+        "team access",
+        "safe capture",
+    ]:
+        assert phrase in combined
+
+    assert "llm-memory remember" in guidance
+    assert "llm-memory recall" in guidance
+    assert "memory_after_work" in guidance
+    assert "python3 -m pytest tests/server/test_auth.py tests/server/test_collaboration.py" in (
+        governance + release
+    )

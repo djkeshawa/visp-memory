@@ -26,6 +26,12 @@ release is repeatable from a clean checkout.
    - `python -m build --wheel`
    - `twine check dist/*` when `twine` is installed
 
+   Security and scoped-access checks are mandatory release-gate coverage:
+
+   ```bash
+   python3 -m pytest tests/server/test_auth.py tests/server/test_collaboration.py
+   ```
+
 3. Check dependency advisories.
 
    ```bash

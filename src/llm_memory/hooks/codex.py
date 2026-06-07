@@ -127,13 +127,17 @@ Run `llm-memory hooks update codex` to populate current memory context.
 
 Use llm-memory as the persistent project memory for this repository.
 
-- Before changing code, call the MCP memory context/recall tools for the task and files.
-- Before editing fragile files, check file-specific memory warnings.
-- After work, record important bug fixes, release decisions, conventions, and fragile areas.
-- Recall quality comes from the configured llm-memory server embedding provider; this MCP
-  client does not generate local embeddings.
-- Keep memory scoped to repo `{self.repo_id}` unless intentionally recording cross-project
-  knowledge.
+- Before changing code, run `llm-memory remember --repo {self.repo_id}` or call
+  MCP `memory_remember`, then run `llm-memory recall "<task>" --repo {self.repo_id}`
+  or call MCP `memory_recall`.
+- For file-specific risk, call MCP `memory_file_context` or run
+  `llm-memory inject --file <path> --task "<task>"`.
+- After meaningful work, record bug fixes, decisions, conventions, fragile areas,
+  and follow-up goals with `llm-memory record`, `llm-memory decision`,
+  `llm-memory learn`, or MCP `memory_after_work`.
+- Keep memory scoped to repo `{self.repo_id}` unless intentionally recording
+  cross-project knowledge.
+- Do not print secrets, prompts, responses, API keys, or unrelated repo/team memory.
 """
 
     def _install_codex_config(self) -> bool:
