@@ -18,9 +18,28 @@ class FakeArcadeDbModule:
     def __init__(self):
         self.db = FakeArcadeDb()
         self.paths = []
+        self.created_paths = []
+        self.opened_paths = []
+        self.existing_paths = set()
+
+    def database_exists(self, path):
+        return Path(path) in self.existing_paths
 
     def create_database(self, path):
-        self.paths.append(Path(path))
+        db_path = Path(path)
+        if db_path in self.existing_paths:
+            raise AssertionError(f"Database already exists: {db_path}")
+        self.paths.append(db_path)
+        self.created_paths.append(db_path)
+        self.existing_paths.add(db_path)
+        return self.db
+
+    def open_database(self, path):
+        db_path = Path(path)
+        if db_path not in self.existing_paths:
+            raise AssertionError(f"Database does not exist: {db_path}")
+        self.paths.append(db_path)
+        self.opened_paths.append(db_path)
         return self.db
 
 
@@ -192,9 +211,19 @@ def test_arcadedb_storage_uses_configured_data_dir(monkeypatch, tmp_path):
     storage = ArcadeDbStorage(tmp_path)
 
     assert storage.data_dir == tmp_path / "arcadedb"
-    assert storage.data_dir.exists()
+    assert storage.data_dir.parent.exists()
     assert storage._arcadedb is driver
     assert driver.paths[-1] == tmp_path / "arcadedb"
+
+
+def test_arcadedb_storage_opens_existing_database_after_initial_create(fake_arcadedb, tmp_path):
+    storage = ArcadeDbStorage(tmp_path)
+
+    storage.store_memory("ArcadeDB opens existing embedded database", repo_id="repo-a")
+
+    assert fake_arcadedb.created_paths == [tmp_path / "arcadedb"]
+    assert fake_arcadedb.opened_paths
+    assert fake_arcadedb.opened_paths[-1] == tmp_path / "arcadedb"
 
 
 def test_arcadedb_memory_crud_list_search_stats_and_projects(fake_arcadedb, tmp_path):

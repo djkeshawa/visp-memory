@@ -132,6 +132,14 @@ class ArcadeDbStorage(BaseStorage):
         "AuditLog": {"metadata"},
         "RecallFeedback": {"metadata"},
     }
+    RECORD_FIELDS = {
+        "Intent": INTENT_FIELDS,
+        "Repository": REPOSITORY_FIELDS,
+        "User": USER_FIELDS,
+        "Team": TEAM_FIELDS,
+        "AuditLog": AUDIT_FIELDS,
+        "RecallFeedback": RECALL_EVENT_FIELDS,
+    }
 
     def __init__(
         self,
@@ -141,13 +149,16 @@ class ArcadeDbStorage(BaseStorage):
     ):
         self._arcadedb = load_arcadedb_driver()
         self.data_dir = Path(data_dir) / "arcadedb"
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.data_dir.parent.mkdir(parents=True, exist_ok=True)
         self._embedding_fn = embedding_fn
         self._embedding_dimension = embedding_dimension
         self._init_schema()
 
     def _database(self):
-        return self._arcadedb.create_database(str(self.data_dir))
+        database_path = str(self.data_dir)
+        if self._arcadedb.database_exists(database_path):
+            return self._arcadedb.open_database(database_path)
+        return self._arcadedb.create_database(database_path)
 
     def _init_schema(self) -> None:
         with self._database() as db:
@@ -255,7 +266,7 @@ class ArcadeDbStorage(BaseStorage):
             rows = self._rows(
                 db.query("sql", f"SELECT FROM {self.MEMORY_TYPE} WHERE id = ?", memory_id)
             )
-        return rows[0] if rows else None
+            return self._memory_record_to_dict(rows[0]) if rows else None
 
     def _query_memories(
         self,
@@ -303,7 +314,7 @@ class ArcadeDbStorage(BaseStorage):
 
         with self._database() as db:
             rows = self._rows(db.query("sql", query, *params))
-        return [self._memory_record_to_dict(row) for row in rows]
+            return [self._memory_record_to_dict(row) for row in rows]
 
     def _insert_record(
         self,
@@ -354,7 +365,13 @@ class ArcadeDbStorage(BaseStorage):
     def _get_record(self, type_name: str, record_id: str):
         with self._database() as db:
             rows = self._rows(db.query("sql", f"SELECT FROM {type_name} WHERE id = ?", record_id))
-        return rows[0] if rows else None
+            if not rows:
+                return None
+            return self._record_to_dict(
+                rows[0],
+                self.RECORD_FIELDS.get(type_name, ["id"]),
+                self.RECORD_JSON_FIELDS.get(type_name, set()),
+            )
 
     def _list_records(
         self,
@@ -379,7 +396,7 @@ class ArcadeDbStorage(BaseStorage):
         params.append(limit)
         with self._database() as db:
             rows = self._rows(db.query("sql", query, *params))
-        return [self._record_to_dict(row, fields, json_fields or set()) for row in rows]
+            return [self._record_to_dict(row, fields, json_fields or set()) for row in rows]
 
     def _delete_records(self, type_name: str, filters: Dict[str, Any]) -> int:
         records = self._list_records(type_name, ["id"], filters=filters, order_by="id ASC")
@@ -420,7 +437,7 @@ class ArcadeDbStorage(BaseStorage):
     def _list_edge_records(self, edge_type: str, fields: List[str]) -> List[Dict[str, Any]]:
         with self._database() as db:
             rows = self._rows(db.query("sql", f"SELECT FROM {edge_type}"))
-        return [self._record_to_dict(row, fields) for row in rows]
+            return [self._record_to_dict(row, fields) for row in rows]
 
     def _not_implemented(self):
         raise NotImplementedError(
@@ -798,8 +815,7 @@ class ArcadeDbStorage(BaseStorage):
     def get_all_relationships(self, repo_id: str = None) -> List[Dict[str, Any]]:
         with self._database() as db:
             rows = self._rows(db.query("sql", f"SELECT FROM {self.MEMORY_RELATIONSHIP_EDGE}"))
-
-        relationships = [self._relationship_record_to_dict(row) for row in rows]
+            relationships = [self._relationship_record_to_dict(row) for row in rows]
         if not repo_id:
             return relationships
 
