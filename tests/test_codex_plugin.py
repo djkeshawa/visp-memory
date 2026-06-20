@@ -25,7 +25,9 @@ def test_codex_plugin_declares_mcp_server():
     assert server["command"] == "python3"
     assert server["args"] == ["-m", "llm_memory.interfaces.mcp"]
     assert server["env"]["LLM_MEMORY_STORAGE_MODE"] == "client"
-    assert server["env"]["LLM_MEMORY_STORAGE_SERVER_URL"] == "http://127.0.0.1:8001"
+    # Must match the server's default port (8000) used by config / `serve` /
+    # the Codex adapter default, so the plugin connects out of the box.
+    assert server["env"]["LLM_MEMORY_STORAGE_SERVER_URL"] == "http://127.0.0.1:8000"
     assert server["env"]["LLM_MEMORY_REPO_ID"] == "llm-memory"
     assert server["env"]["LLM_MEMORY_EMBEDDING_PROVIDER"] == "noop"
 

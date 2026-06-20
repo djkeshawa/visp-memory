@@ -124,6 +124,33 @@ class TestMCPServer:
             pytest.skip("MCP not installed")
 
     @pytest.mark.asyncio
+    async def test_mcp_clear_goals_requires_confirmation(self):
+        """memory_clear_goals must not wipe goals without confirm=true."""
+        try:
+            from llm_memory.interfaces.mcp import MCP_AVAILABLE, handle_tool
+
+            if not MCP_AVAILABLE:
+                pytest.skip("MCP not installed")
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                config = MemoryConfig()
+                config.storage.data_dir = Path(tmpdir)
+                config.embedding.provider = "noop"
+                memory = Memory(config=config)
+                memory.goal("Ship the release")
+
+                guarded = await handle_tool("memory_clear_goals", {}, memory)
+                assert "confirm=true" in guarded
+
+                # The goal must still exist, so confirming now clears exactly one.
+                cleared = await handle_tool(
+                    "memory_clear_goals", {"confirm": True}, memory
+                )
+                assert "Cleared 1 goals" in cleared
+        except ImportError:
+            pytest.skip("MCP not installed")
+
+    @pytest.mark.asyncio
     async def test_mcp_recall_outputs_ranking_factors(self):
         """MCP recall exposes intent-aware ranking explanations."""
         try:

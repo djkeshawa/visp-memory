@@ -261,7 +261,7 @@ cd llm-memory-standalone
 # Start server
 ./start-server.sh
 # or manually:
-./llm-memory server --port 8000
+./llm-memory serve --port 8000
 ```
 
 ### Size Optimization

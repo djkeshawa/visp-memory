@@ -34,6 +34,10 @@ const layerColors: Record<MemoryLayer, { fill: string; glow: string; bg: string 
   intent: { fill: "#fbbf24", glow: "rgba(251, 191, 36, 0.6)", bg: "rgba(251, 191, 36, 0.1)" },
 }
 
+// The server's layer set is broader than the dashboard's (e.g. "raw"), so look
+// up colors defensively to avoid crashing on an unmapped layer value.
+const getLayerColors = (layer: string) => layerColors[layer as MemoryLayer] ?? layerColors.episodic
+
 interface Particle {
   edgeIndex: number
   progress: number
@@ -79,7 +83,8 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
           layer: n.layer as MemoryLayer,
           description: n.full_label, // Use full content as description
           connections: 0, // Will calculate below
-          createdAt: "2024-01-01", // Placeholder or fetch from metadata if available
+          // createdAt intentionally omitted: the graph API does not return it,
+          // so we do not fabricate a date (the detail panel hides it when absent).
           x: Math.random() * 800,
           y: Math.random() * 600,
           vx: 0,
@@ -316,7 +321,7 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
     // Draw nodes
     for (const node of nodes) {
       const isFiltered = filteredNodeIds.has(node.id)
-      const colors = layerColors[node.layer]
+      const colors = getLayerColors(node.layer)
       const isHovered = hoveredNode === node.id
       const isSelected = selectedNode?.id === node.id
       const isConnected =
@@ -397,7 +402,7 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
     // Minimap nodes
     for (const node of nodes) {
       if (!filteredNodeIds.has(node.id)) continue
-      const colors = layerColors[node.layer]
+      const colors = getLayerColors(node.layer)
       const mx = minimapX + node.x * minimapScale
       const my = minimapY + node.y * minimapScale
 
@@ -698,7 +703,7 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
             exit={{ opacity: 0, x: 20 }}
             className="absolute top-16 right-4 w-72 rounded-xl bg-black/70 backdrop-blur-md border border-white/10 overflow-hidden"
           >
-            <div className="h-1" style={{ backgroundColor: layerColors[selectedNode.layer].fill }} />
+            <div className="h-1" style={{ backgroundColor: getLayerColors(selectedNode.layer).fill }} />
             <div className="p-4">
               <div className="flex items-start justify-between mb-3">
                 <div>
@@ -706,8 +711,8 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
                   <span
                     className="text-xs px-2 py-0.5 rounded-full capitalize"
                     style={{
-                      backgroundColor: layerColors[selectedNode.layer].bg,
-                      color: layerColors[selectedNode.layer].fill,
+                      backgroundColor: getLayerColors(selectedNode.layer).bg,
+                      color: getLayerColors(selectedNode.layer).fill,
                     }}
                   >
                     {selectedNode.layer}
@@ -748,7 +753,7 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
                       key={node.id}
                       onClick={() => setSelectedNode(node)}
                       className="text-xs px-2 py-1 rounded bg-white/5 hover:bg-white/10 transition-colors"
-                      style={{ color: layerColors[node.layer].fill }}
+                      style={{ color: getLayerColors(node.layer).fill }}
                     >
                       {node.label}
                     </button>

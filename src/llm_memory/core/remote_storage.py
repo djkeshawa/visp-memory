@@ -26,7 +26,13 @@ class RemoteStorageError(RuntimeError):
 class RemoteStorage(BaseStorage):
     """Storage client that connects to a remote Central Memory Server."""
 
-    def __init__(self, server_url: str, api_key: str = None, jwt_token: str = None):
+    def __init__(
+        self,
+        server_url: str,
+        api_key: str = None,
+        jwt_token: str = None,
+        timeout: float = 30.0,
+    ):
         """
         Initialize remote storage client.
 
@@ -34,6 +40,8 @@ class RemoteStorage(BaseStorage):
             server_url: Base URL of the server (e.g., http://localhost:8000)
             api_key: Optional API key for authentication
             jwt_token: Optional JWT token for Bearer authentication (takes precedence)
+            timeout: Per-request timeout (seconds) applied to every call so a
+                hung endpoint cannot stall the client indefinitely.
         """
         if not REQUESTS_AVAILABLE:
             raise ImportError(
@@ -43,6 +51,7 @@ class RemoteStorage(BaseStorage):
         self.server_url = server_url.rstrip("/")
         self.api_key = api_key
         self.jwt_token = jwt_token
+        self.timeout = timeout
         self.session = requests.Session()
 
         # Set authentication headers
@@ -51,11 +60,58 @@ class RemoteStorage(BaseStorage):
         elif api_key:
             self.session.headers.update({"X-API-Key": api_key})
 
-        # Test connection
+        # Warn if credentials would be sent over cleartext to a non-local host.
+        if (jwt_token or api_key) and self.server_url.startswith("http://"):
+            host = self.server_url.split("://", 1)[-1].split("/")[0].split(":")[0]
+            if host not in ("localhost", "127.0.0.1", "::1"):
+                logger.warning(
+                    "Sending credentials over cleartext HTTP to %s; use https:// to "
+                    "protect the api_key/jwt_token.",
+                    self.server_url,
+                )
+
+        # Wrap session.request once so every call gets a default timeout and so
+        # transport errors / auth / 5xx responses are logged centrally — even
+        # when an individual read method masks the failure as an empty result.
+        self._install_request_guard()
+
+        # Test connection (and surface auth failures up front).
         try:
-            self.session.get(f"{self.server_url}/")
-        except requests.RequestException as e:
-            logger.warning(f"Could not connect to memory server at {server_url}: {e}")
+            probe = self.session.get(f"{self.server_url}/")
+            if probe.status_code in (401, 403):
+                logger.warning(
+                    "Authentication to memory server at %s failed (HTTP %s); "
+                    "check api_key/jwt_token.",
+                    self.server_url,
+                    probe.status_code,
+                )
+        except requests.RequestException:
+            # The request guard already logged the transport failure (with URL);
+            # the probe is best-effort and must not fail client construction.
+            pass
+
+    def _install_request_guard(self) -> None:
+        """Inject a default timeout and centralized failure logging into the session."""
+        original_request = self.session.request
+        timeout = self.timeout
+
+        def guarded_request(method, url, **kwargs):
+            kwargs.setdefault("timeout", timeout)
+            try:
+                response = original_request(method, url, **kwargs)
+            except requests.RequestException as exc:
+                logger.warning("Remote request %s %s failed: %s", method, url, exc)
+                raise
+            if response.status_code >= 500 or response.status_code in (401, 403):
+                logger.warning(
+                    "Remote request %s %s returned HTTP %s",
+                    method,
+                    url,
+                    response.status_code,
+                )
+            return response
+
+        self.session.request = guarded_request
 
     def store_memory(
         self, content: str, layer: MemoryLayer = "episodic", repo_id: str = None, **kwargs

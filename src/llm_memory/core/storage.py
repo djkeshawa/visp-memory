@@ -8,6 +8,7 @@ Combines:
 
 import hashlib
 import json
+import logging
 import re
 import sqlite3
 from abc import ABC, abstractmethod
@@ -33,6 +34,9 @@ try:
     CHROMADB_AVAILABLE = True
 except ImportError:
     CHROMADB_AVAILABLE = False
+
+
+logger = logging.getLogger(__name__)
 
 
 MemoryLayer = Literal["raw", "episodic", "semantic", "intent"]
@@ -259,6 +263,10 @@ class LocalStorage(BaseStorage):
     def _init_sqlite(self):
         """Initialize SQLite schema."""
         with self._get_db() as conn:
+            # Enable WAL once: it persists in the database file header, so every
+            # later connection inherits it (readers do not block writers).
+            conn.execute("PRAGMA journal_mode=WAL")
+
             # Main memories table
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS memories (
@@ -520,10 +528,21 @@ class LocalStorage(BaseStorage):
 
     @contextmanager
     def _get_db(self):
-        """Get SQLite connection context."""
-        conn = sqlite3.connect(self.db_path)
+        """Get SQLite connection context.
+
+        Each connection is configured for safe concurrent multi-client access
+        (server / MCP): WAL journaling so readers do not block writers, a busy
+        timeout so competing writers wait instead of raising "database is
+        locked", and foreign-key enforcement so referential integrity is
+        actually honored.
+        """
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
         try:
+            # busy_timeout and foreign_keys are per-connection settings; WAL is a
+            # persistent database-level setting applied once in _init_sqlite.
+            conn.execute("PRAGMA busy_timeout=30000")
+            conn.execute("PRAGMA foreign_keys=ON")
             yield conn
         finally:
             conn.close()
@@ -934,7 +953,8 @@ class LocalStorage(BaseStorage):
         if embedding is None and self._embedding_fn is not None:
             try:
                 embedding = self._embedding_fn(content)
-            except Exception:
+            except Exception as exc:
+                logger.warning("Embedding computation failed for new memory: %s", exc)
                 embedding = None
 
         # Store in SQLite
@@ -984,7 +1004,20 @@ class LocalStorage(BaseStorage):
             if embedding is not None:
                 add_kwargs["embeddings"] = [embedding]
 
-            collection.upsert(**add_kwargs)
+            # The SQLite row is already committed above. If the vector write
+            # fails we keep the structured row (it is the source of truth) but
+            # log loudly so the divergence is visible; rebuild_embedding_index
+            # / inspect_embedding_index can reconcile the stale vector index.
+            try:
+                collection.upsert(**add_kwargs)
+            except Exception as exc:
+                logger.warning(
+                    "Vector upsert failed for memory %s; SQLite row persisted but the "
+                    "vector index is now stale (run rebuild_embedding_index to "
+                    "reconcile): %s",
+                    memory_id,
+                    exc,
+                )
 
         self._auto_link_memory(
             memory_id=memory_id,
@@ -1129,7 +1162,9 @@ class LocalStorage(BaseStorage):
             if collection is None:
                 continue
 
-            # Build where clause
+            # Build where clause. Filtering status at the vector layer (rather
+            # than only post-fetch in Python) ensures active matches ranked
+            # beyond the top-N non-active hits are not silently dropped.
             where = {}
             if category:
                 where["category"] = category
@@ -1137,6 +1172,8 @@ class LocalStorage(BaseStorage):
                 where["repo_id"] = repo_id
             if min_importance > 0:
                 where["importance"] = {"$gte": min_importance}
+            if status and status != "all":
+                where["status"] = status
 
             try:
                 query_kwargs = {
@@ -1170,9 +1207,10 @@ class LocalStorage(BaseStorage):
                             memory["similarity"] = similarity
                             results.append(memory)
 
-            except Exception:
-                # Collection might be empty
-                pass
+            except Exception as exc:
+                # Collection might be empty / not yet populated; fall back to
+                # text search below. Logged at debug to avoid noise.
+                logger.debug("Vector search failed on layer %s: %s", search_layer, exc)
 
         if len(results) < limit:
             results.extend(
@@ -1395,11 +1433,21 @@ class LocalStorage(BaseStorage):
                             if self._embedding_fn is not None:
                                 try:
                                     update_kwargs["embeddings"] = [self._embedding_fn(content)]
-                                except Exception:
-                                    pass
+                                except Exception as exc:
+                                    logger.warning(
+                                        "Embedding computation failed during update of "
+                                        "memory %s: %s",
+                                        memory_id,
+                                        exc,
+                                    )
                         collection.update(**update_kwargs)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.warning(
+                            "Vector update failed for memory %s; vector index may be "
+                            "stale (run rebuild_embedding_index to reconcile): %s",
+                            memory_id,
+                            exc,
+                        )
 
         return updated
 
@@ -1410,14 +1458,16 @@ class LocalStorage(BaseStorage):
         if not memory:
             return False
 
-        # Delete from SQLite
+        # Delete from SQLite. Child rows (which carry FK references to
+        # memories.id) must be removed before the parent row so that
+        # foreign_keys=ON enforcement does not reject the parent delete.
         with self._get_db() as conn:
             conn.execute("DELETE FROM recall_events WHERE memory_id = ?", (memory_id,))
-            conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
             conn.execute(
                 "DELETE FROM relationships WHERE source_id = ? OR target_id = ?",
                 (memory_id, memory_id),
             )
+            conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
             conn.commit()
 
         # Delete from vector DB
@@ -1425,8 +1475,13 @@ class LocalStorage(BaseStorage):
         if collection:
             try:
                 collection.delete(ids=[memory_id])
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "Vector delete failed for memory %s; an orphaned vector may remain "
+                    "(run rebuild_embedding_index to reconcile): %s",
+                    memory_id,
+                    exc,
+                )
 
         return True
 

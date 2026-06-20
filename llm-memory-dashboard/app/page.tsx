@@ -16,7 +16,6 @@ const fallbackSystemStatus: SystemStatusType = {
   apiServer: "online",
   vectorDatabase: "ready",
   embeddings: "active",
-  codexMcp: "available",
 }
 
 function DashboardContent() {

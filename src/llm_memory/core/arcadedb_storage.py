@@ -1,11 +1,14 @@
 """ArcadeDB storage backend."""
 
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from llm_memory.core.ranking import rank_memory_results, text_similarity, utility_rank_adjustment
 from llm_memory.core.storage import BaseStorage, LocalStorage, MemoryLayer, MemoryStatus
+
+logger = logging.getLogger(__name__)
 
 ARCADEDB_INSTALL_MESSAGE = (
     "ArcadeDB storage requires the optional ArcadeDB extra. "
@@ -152,6 +155,16 @@ class ArcadeDbStorage(BaseStorage):
         self.data_dir.parent.mkdir(parents=True, exist_ok=True)
         self._embedding_fn = embedding_fn
         self._embedding_dimension = embedding_dimension
+        # ArcadeDB search is lexical (keyword) only — embeddings are not indexed.
+        # Surface that explicitly so an operator who configured a real vector
+        # provider knows vector recall is unavailable on this backend.
+        embedding_owner = getattr(embedding_fn, "__self__", None)
+        owner_name = embedding_owner.__class__.__name__.lower() if embedding_owner else ""
+        if embedding_fn is not None and owner_name != "noopprovider":
+            logger.warning(
+                "ArcadeDB backend performs lexical (keyword) search only; the configured "
+                "embedding provider will not be used for vector recall."
+            )
         self._init_schema()
 
     def _database(self):
@@ -438,11 +451,6 @@ class ArcadeDbStorage(BaseStorage):
         with self._database() as db:
             rows = self._rows(db.query("sql", f"SELECT FROM {edge_type}"))
             return [self._record_to_dict(row, fields) for row in rows]
-
-    def _not_implemented(self):
-        raise NotImplementedError(
-            "This ArcadeDB storage operation is implemented in a later ArcadeDB feature task."
-        )
 
     def store_memory(
         self,

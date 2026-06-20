@@ -1250,6 +1250,7 @@ def check_conflicts(
             console.print("[green]No conflicts detected.[/green]")
     except Exception as e:
         console.print(f"[red]Error checking conflicts:[/red] {e}")
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -1683,6 +1684,7 @@ def add_dependency(
         console.print(f"[green]Added dependency:[/green] {source} -> {target} ({type})")
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
 
 
 @repo_app.command("context")
@@ -1773,6 +1775,7 @@ def add_team_member(
         console.print(f"[green]Added {user} to team {team}[/green]")
     else:
         console.print("[red]Failed to add member (check IDs)[/red]")
+        raise typer.Exit(1)
 
 
 @team_app.command("list")
@@ -1786,7 +1789,7 @@ def list_user_teams(
         # Check if we have a config user (only in authenticated contexts)
         # For local, this might be ambiguous. Let's warn.
         console.print("[yellow]Please provide specific user ID for local mode[/yellow]")
-        return
+        raise typer.Exit(1)
 
     teams = memory.teams.get_user_teams(user)
 
@@ -2034,11 +2037,12 @@ def serve(
     port: int = typer.Option(8000, "--port", "-p", help="Port to bind"),
     reload: bool = typer.Option(False, "--reload", help="Enable auto-reload"),
 ):
-    """Run the MCP or Central Memory Server."""
-    # Note: Currently this command is ambiguous between MCP and FastAPI
-    # Once we switch to client-server, this will run the FastAPI server
-    # For now, let's make it run the FastAPI skeleton if requested, or MCP by default?
-    # Actually, let's keep it specific.
+    """Run the Central Memory Server (FastAPI REST API).
+
+    This serves the HTTP API and dashboard. To run the MCP stdio server for an
+    assistant, use the separate ``llm-memory-mcp`` console script instead.
+    """
+    _validate_server_auth_config()
 
     console.print(f"[green]Starting Central Memory Server at http://{host}:{port}[/green]")
     try:
@@ -2048,6 +2052,35 @@ def serve(
     except ImportError:
         console.print("[red]uvicorn not installed.[/red]")
         console.print("Install with: [bold]pip install llm-memory[api][/bold]")
+        raise typer.Exit(1)
+
+
+def _validate_server_auth_config() -> None:
+    """Fail fast with an actionable error if auth is enabled but unusable.
+
+    With ``auth_enabled`` on (the default) and no JWT secret, API keys, or
+    anonymous access configured, no request could ever authenticate, leaving
+    the server effectively locked. Surface that at startup rather than as
+    opaque 401s for every caller.
+    """
+    config = load_config()
+    server = config.server
+    has_credentials = (
+        bool(server.jwt_secret)
+        or bool(server.api_keys)
+        or bool(getattr(config.storage, "api_key", None))
+        or server.allow_anonymous
+    )
+    if server.auth_enabled and not has_credentials:
+        console.print(
+            "[red]Authentication is enabled but no credentials are configured, so no "
+            "request could be authenticated.[/red]\n"
+            "Configure one of the following before starting the server:\n"
+            "  - [bold]LLM_MEMORY_JWT_SECRET[/bold] for JWT auth\n"
+            "  - [bold]LLM_MEMORY_SERVER_API_KEYS[/bold] for API-key auth\n"
+            "  - [bold]LLM_MEMORY_SERVER_ALLOW_ANONYMOUS=true[/bold] for open/anonymous mode\n"
+            "  - [bold]LLM_MEMORY_SERVER_AUTH_ENABLED=false[/bold] to disable auth for local use"
+        )
         raise typer.Exit(1)
 
 

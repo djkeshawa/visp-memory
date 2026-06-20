@@ -38,7 +38,7 @@ export function QuickActions() {
       setContent("")
       setCategory("note")
       setIsDialogOpen(false)
-      window.location.reload() // Simple reload to refresh lists
+      router.refresh() // Refresh server data without a full page reload
     } catch (error) {
       console.error("Failed to create memory", error)
       setErrorMessage(describeApiError(error))

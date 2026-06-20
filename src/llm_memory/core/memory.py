@@ -9,6 +9,7 @@ The unified interface for LLM memory, bringing together:
 """
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -27,6 +28,8 @@ from llm_memory.layers.episodic import EpisodeCategory, EpisodicMemory
 from llm_memory.layers.intent import IntentMemory, IntentPriority
 from llm_memory.layers.semantic import KnowledgeCategory, SemanticMemory
 from llm_memory.quality.dedup import Deduplicator
+
+logger = logging.getLogger(__name__)
 
 
 class Memory:
@@ -213,23 +216,45 @@ class Memory:
         except ValueError:
             cat = category
 
-        # Check for conflicts if enabled
-        if kwargs.get("detect_conflicts", False) or self.config.quality.conflict_detection:
-            conflict = self.check_conflict(knowledge, layer="semantic")
-            if conflict:
-                # Store conflict info in metadata
-                kwargs.setdefault("metadata", {})
-                kwargs["metadata"]["conflict"] = conflict
-                # Could assume we want to proceed but mark it,
-                # or raise error. For now, we proceed and tag.
+        # `detect_conflicts` is a control flag for this method only; it must not
+        # be forwarded to establish() (which does not accept it).
+        detect = kwargs.pop("detect_conflicts", False)
 
-        return self.semantic.establish(
+        conflict = None
+        if detect or self.config.quality.conflict_detection:
+            conflict = self.check_conflict(knowledge, layer="semantic")
+
+        memory_id = self.semantic.establish(
             knowledge=knowledge,
             category=cat,
             importance=importance,
             repo_id=repo_id or self.config.repo_id,
             **kwargs,
         )
+
+        # Record contradictions as explicit graph relationships rather than as
+        # opaque metadata: this keeps conflicting knowledge discoverable through
+        # the relationship graph instead of silently co-existing, and avoids
+        # passing an unsupported `metadata=` kwarg into establish().
+        if conflict and conflict.get("conflicting_ids"):
+            reason = conflict.get("reason", "Detected contradictory knowledge")
+            for conflicting_id in conflict["conflicting_ids"]:
+                try:
+                    self._storage.add_relationship(
+                        memory_id,
+                        conflicting_id,
+                        "contradicts",
+                        evidence={"reason": reason, "source": "conflict_detection"},
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to link contradiction %s -> %s: %s",
+                        memory_id,
+                        conflicting_id,
+                        exc,
+                    )
+
+        return memory_id
 
     def check_conflict(self, content: str, layer: str = "semantic") -> Optional[Dict[str, Any]]:
         """
@@ -592,10 +617,14 @@ class Memory:
         metadata: Dict[str, Any] = None,
     ) -> str:
         """Record a privacy-conscious utility feedback event for a memory."""
-        logger = getattr(self._storage, "log_recall_event", None)
-        if not callable(logger):
-            raise NotImplementedError("Recall utility feedback is not supported by this storage.")
-        return logger(
+        log_event = getattr(self._storage, "log_recall_event", None)
+        if not callable(log_event):
+            backend = type(self._storage).__name__
+            raise NotImplementedError(
+                f"Recall utility feedback is not supported by the {backend} backend; "
+                "use local SQLite storage for this feature."
+            )
+        return log_event(
             memory_id=memory_id,
             event_type=event_type,
             repo_id=repo_id,
@@ -615,7 +644,11 @@ class Memory:
         """Inspect aggregate recall utility signals."""
         inspector = getattr(self._storage, "inspect_recall_utility", None)
         if not callable(inspector):
-            raise NotImplementedError("Recall utility inspection is not supported by this storage.")
+            backend = type(self._storage).__name__
+            raise NotImplementedError(
+                f"Recall utility inspection is not supported by the {backend} backend; "
+                "use local SQLite storage for this feature."
+            )
         return inspector(
             memory_id=memory_id,
             repo_id=repo_id,
@@ -632,7 +665,11 @@ class Memory:
         """Reset recall utility signals matching optional filters."""
         resetter = getattr(self._storage, "reset_recall_utility", None)
         if not callable(resetter):
-            raise NotImplementedError("Recall utility reset is not supported by this storage.")
+            backend = type(self._storage).__name__
+            raise NotImplementedError(
+                f"Recall utility reset is not supported by the {backend} backend; "
+                "use local SQLite storage for this feature."
+            )
         return resetter(memory_id=memory_id, repo_id=repo_id, event_type=event_type)
 
     def graph_neighbors(

@@ -64,6 +64,8 @@ plan/
 # Build artifacts
 src/llm_memory/server/static/
 *.spec.log
+# ArcadeDB embedded driver writes rotating logs here at runtime
+log/
 *.tar.gz
 *.whl
 dist-standalone/

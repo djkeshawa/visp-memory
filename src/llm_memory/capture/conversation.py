@@ -150,10 +150,12 @@ If nothing relevant is found for a category, return an empty list.
                 output_memory_ids.append(str(memory_id))
 
             for b in data.get("bugs", []):
+                # episodic.record() accepts `context` (not `metadata`), and
+                # "bug_found" is the valid EpisodeCategory for a discovered bug.
                 memory_id = self.memory.record(
                     event=f"Bug: {b['description']}",
-                    category="bug",
-                    metadata={"cause": b.get("cause"), "fix": b.get("fix")},
+                    category="bug_found",
+                    context={"cause": b.get("cause"), "fix": b.get("fix")},
                     repo_id=repo_id,
                 )
                 output_memory_ids.append(str(memory_id))
