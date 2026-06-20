@@ -4,11 +4,12 @@ MCP (Model Context Protocol) Server for LLM Memory.
 Exposes the memory system as MCP tools that LLMs can call directly.
 
 Usage:
-    # Run as standalone server
-    python -m llm_memory.interfaces.mcp
+    # Run the MCP stdio server (the `serve` command runs the FastAPI/REST
+    # server instead — it is NOT the MCP server).
+    llm-memory-mcp
 
-    # Or use the CLI
-    llm-memory serve
+    # Or run the module directly
+    python -m llm_memory.interfaces.mcp
 
 Configuration for Claude Desktop (claude_desktop_config.json):
     {
@@ -26,7 +27,7 @@ Or with uvx:
       "mcpServers": {
         "llm-memory": {
           "command": "uvx",
-          "args": ["llm-memory", "serve"],
+          "args": ["--from", "llm-memory", "llm-memory-mcp"],
           "cwd": "/path/to/your/project"
         }
       }
@@ -554,6 +555,7 @@ def create_mcp_server() -> "Server":
                             "default": 0.5,
                             "description": "Priority to fix (0.0-1.0)",
                         },
+                        "repo_id": {"type": "string", "description": "Repository/project ID"},
                     },
                     "required": ["issue"],
                 },
@@ -770,8 +772,17 @@ def create_mcp_server() -> "Server":
             ),
             Tool(
                 name="memory_clear_goals",
-                description="Clear all active goals.",
-                inputSchema={"type": "object", "properties": {}},
+                description="Clear all active goals. Destructive: requires confirm=true.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "confirm": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Must be true to clear all active goals",
+                        },
+                    },
+                },
             ),
         ]
 
@@ -1686,6 +1697,8 @@ def _handle_maintenance(name: str, args: dict[str, Any], memory: Memory) -> str:
         return _format_decay_preview(args, memory)
 
     elif name == "memory_clear_goals":
+        if not args.get("confirm", False):
+            return "Set confirm=true to clear all active goals."
         cleared = memory.intent.clear_all()
         return f"Cleared {cleared} goals."
 

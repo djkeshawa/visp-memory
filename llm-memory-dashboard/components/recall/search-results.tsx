@@ -57,7 +57,7 @@ export function SearchResults({ results, query }: SearchResultsProps) {
       <div className="glass rounded-xl overflow-hidden">
         <motion.div className="divide-y divide-border" variants={staggerContainer} initial="hidden" animate="visible">
           {results.map((memory) => {
-            const config = layerConfig[memory.layer]
+            const config = layerConfig[memory.layer] ?? layerConfig.episodic
             const Icon = config.icon
 
             return (

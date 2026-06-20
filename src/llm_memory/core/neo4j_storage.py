@@ -577,6 +577,25 @@ class Neo4jStorage(BaseStorage):
             )
             return [self._node_to_dict(dict(record["m"])) for record in result]
 
+    # Fields a caller may update. Property names are interpolated into Cypher,
+    # so this allowlist prevents property-name injection via arbitrary kwargs.
+    _UPDATABLE_FIELDS = frozenset(
+        {
+            "content",
+            "importance",
+            "tags",
+            "metadata",
+            "status",
+            "category",
+            "approved_by",
+            "approved_at",
+            "archived_at",
+            "source",
+            "quality_flags",
+            "accessed_at",
+        }
+    )
+
     def update_memory(self, memory_id: str, **kwargs) -> bool:
         """Update properties."""
         clauses = []
@@ -584,10 +603,11 @@ class Neo4jStorage(BaseStorage):
         content = kwargs.get("content")
 
         for k, v in kwargs.items():
+            if k not in self._UPDATABLE_FIELDS:
+                logger.warning("Ignoring unsupported memory update field: %s", k)
+                continue
             if k == "metadata":
                 v = self._json_serialize(v)
-            if k == "tags":
-                v = v  # List is fine
 
             clauses.append(f"SET m.{k} = ${k}")
             params[k] = v
@@ -613,8 +633,10 @@ class Neo4jStorage(BaseStorage):
                         vector_property=self._vector_property,
                         embedding=embedding,
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to update vector property for memory %s: %s", memory_id, exc
+                    )
             return updated
 
     def inspect_embedding_index(

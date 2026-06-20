@@ -12,6 +12,7 @@ from llm_memory.core.indexing import (
     to_plain_dict,
 )
 from llm_memory.server.auth import UserContext, get_current_user
+from llm_memory.server.authorization import require_admin
 from llm_memory.server.routers.platform import append_audit_event
 from llm_memory.server.schemas import (
     EmbeddingIndexStatus,
@@ -225,7 +226,9 @@ async def test_provider_connection(
     user: UserContext = Depends(get_current_user),
 ):
     """Perform a live non-secret provider connection test."""
-    del user
+    # Live connection tests consume provider resources and probe outbound
+    # connectivity; restrict to administrators.
+    require_admin(user)
     provider = provider.lower()
     if provider not in PROVIDER_NAMES:
         raise HTTPException(
@@ -333,6 +336,9 @@ async def reindex_embedding_index(
     user: UserContext = Depends(get_current_user),
 ):
     """Dry-run or rebuild active embedding vectors for a scoped set of memories."""
+    # Rebuilding the embedding index mutates stored vectors; require an
+    # administrator (a dry-run is also gated since it scans all matched rows).
+    require_admin(user)
     result = rebuild_embedding_index(
         request.app.state.storage,
         scope=ReindexScope(

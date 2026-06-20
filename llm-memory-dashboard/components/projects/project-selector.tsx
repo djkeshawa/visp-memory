@@ -71,7 +71,6 @@ export function ProjectSelector() {
       <select
         value={selectedRepoId || projects[0]?.id || ""}
         onChange={(event) => selectProject(event.target.value)}
-        onInput={(event) => selectProject(event.currentTarget.value)}
         disabled={projects.length === 0}
         className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none transition-colors focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:opacity-60"
       >

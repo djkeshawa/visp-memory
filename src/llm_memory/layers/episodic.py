@@ -250,6 +250,21 @@ class EpisodicMemory(BaseMemoryLayer):
             repo_id=repo_id,
         )
 
-    def get_uncompressed(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """Get episodic memories that haven't been compressed yet."""
-        return self.list_items(layer="episodic", limit=limit, order_by="created_at ASC")
+    def get_uncompressed(self, limit: int = 50, repo_id: str = None) -> List[Dict[str, Any]]:
+        """Get episodic memories that haven't been compressed yet.
+
+        Excludes episodes already compressed into semantic knowledge (marked via
+        ``metadata.compressed_to``) and honors repository scoping. Over-fetches
+        before filtering so up to ``limit`` genuinely-uncompressed episodes are
+        returned.
+        """
+        episodes = self.list_items(
+            layer="episodic",
+            limit=max(limit * 4, limit),
+            order_by="created_at ASC",
+            repo_id=repo_id,
+        )
+        uncompressed = [
+            ep for ep in episodes if not (ep.get("metadata") or {}).get("compressed_to")
+        ]
+        return uncompressed[:limit]

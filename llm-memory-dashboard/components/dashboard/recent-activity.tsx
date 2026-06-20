@@ -51,7 +51,7 @@ export function RecentActivity({ memories }: RecentActivityProps) {
         ) : null}
 
         {memories.map((memory) => {
-          const config = layerConfig[memory.layer]
+          const config = layerConfig[memory.layer] ?? layerConfig.episodic
           const Icon = config.icon
 
           return (

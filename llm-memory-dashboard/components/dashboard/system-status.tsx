@@ -16,7 +16,6 @@ const statusConfig = {
   syncing: { color: "bg-intent", label: "Syncing" },
   active: { color: "bg-success", label: "Active" },
   inactive: { color: "bg-muted-foreground", label: "Inactive" },
-  available: { color: "bg-success", label: "Available" },
 }
 
 export function SystemStatus({ status: initialStatus }: SystemStatusProps) {
@@ -35,7 +34,6 @@ export function SystemStatus({ status: initialStatus }: SystemStatusProps) {
         apiServer: "online",
         vectorDatabase: runtime.storageReady === false ? "offline" : "ready",
         embeddings: embeddingHealthStatus(runtime),
-        codexMcp: "available",
         runtime,
       })
     } catch (e) {
@@ -43,7 +41,6 @@ export function SystemStatus({ status: initialStatus }: SystemStatusProps) {
         apiServer: "offline",
         vectorDatabase: "offline",
         embeddings: "inactive",
-        codexMcp: "inactive",
       })
     }
   }
@@ -57,7 +54,6 @@ export function SystemStatus({ status: initialStatus }: SystemStatusProps) {
       status: status.vectorDatabase,
     },
     { label: "Embeddings", status: status.embeddings },
-    { label: "Codex MCP", status: status.codexMcp },
   ]
 
   return (

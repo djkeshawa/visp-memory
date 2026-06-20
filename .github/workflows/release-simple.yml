@@ -85,7 +85,9 @@ jobs:
 
       - name: Verify package
         run: |
-          pip install dist/*.whl
+          # Install with the [api] extra: the verify step imports
+          # llm_memory.server.app, which requires FastAPI (api-extra only).
+          pip install "$(ls dist/*.whl)[api]"
           python3 -c "from llm_memory.server.app import app; print('✓ Package imports successfully')"
           python3 -c "from pathlib import Path; import llm_memory.server.app as app_module; static_dir = Path(app_module.__file__).parent / 'static'; print(f'✓ Static files: {len(list(static_dir.rglob(\"*\")))} files')"
 

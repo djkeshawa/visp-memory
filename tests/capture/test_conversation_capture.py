@@ -66,8 +66,10 @@ def test_conversation_capture_parsing(mock_memory):
         mock_memory.record.assert_called()
         call_args = mock_memory.record.call_args[1]
         assert "Bug: Race condition" == call_args["event"]
-        assert "bug" == call_args["category"]
-        assert call_args["metadata"]["cause"] == "No lock"
+        # "bug_found" is a valid EpisodeCategory and the cause/fix detail is
+        # passed via `context` (episodic.record has no `metadata` kwarg).
+        assert "bug_found" == call_args["category"]
+        assert call_args["context"]["cause"] == "No lock"
 
         mock_memory.intent.set_goal.assert_called_with(
             goal="Refactor auth",

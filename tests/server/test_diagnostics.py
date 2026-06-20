@@ -7,6 +7,20 @@ from llm_memory.core.indexing import ReindexResult
 from llm_memory.server.app import app
 
 
+def test_require_admin_blocks_non_admin_and_allows_admin():
+    from fastapi import HTTPException
+
+    from llm_memory.server.auth import UserContext
+    from llm_memory.server.authorization import require_admin
+
+    with pytest.raises(HTTPException) as exc:
+        require_admin(UserContext(user_id="u", username="u", is_admin=False))
+    assert exc.value.status_code == 403
+
+    # An administrator passes without raising.
+    require_admin(UserContext(user_id="a", username="a", is_admin=True))
+
+
 @pytest.mark.asyncio
 async def test_provider_diagnostics_requires_auth(client):
     response = await client.get("/diagnostics/providers")

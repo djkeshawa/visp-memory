@@ -11,6 +11,20 @@ def _get_repository(storage: Any, repo_id: Optional[str]) -> Optional[dict[str, 
     return storage.get_repository(repo_id)
 
 
+def require_admin(user: UserContext) -> None:
+    """Require an administrative principal for global or destructive operations.
+
+    In local mode (auth disabled) get_current_user returns an admin context, so
+    this is a no-op there; with auth enabled, anonymous and ordinary team users
+    are rejected.
+    """
+    if not user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator privileges are required for this operation",
+        )
+
+
 def require_repo_scope_access(storage: Any, repo_id: Optional[str], user: UserContext) -> None:
     """Hide registered repositories outside the current non-admin user's team."""
     if user.is_admin:

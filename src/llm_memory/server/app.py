@@ -306,15 +306,6 @@ app.include_router(teams.router)
 app.include_router(relationships.router)
 app.include_router(diagnostics.router)
 
-# Optional routers for Phase 3.4+ (to be implemented)
-try:
-    from llm_memory.server.routers import analysis
-
-    if hasattr(analysis, "router"):
-        app.include_router(analysis.router)
-except ImportError:
-    pass
-
 
 @app.get("/", tags=["system"])
 async def root(repo_id: str = None):

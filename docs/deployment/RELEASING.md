@@ -64,11 +64,14 @@ git push origin v0.2.0
 
 ### 4. Wait for GitHub Actions
 
-The workflow `.github/workflows/release-simple.yml` will automatically:
+The tag push triggers `.github/workflows/build-release.yml`, which will:
 - Build the frontend (Next.js)
 - Create the Python wheel with embedded frontend
 - Create a GitHub Release
 - Upload the wheel file as an asset
+
+(`.github/workflows/release-simple.yml` is a manual, wheel-only path triggered
+via "Run workflow" / `workflow_dispatch`; it does **not** run on tag push.)
 
 Check progress at: `https://github.com/yourusername/llm-memory/actions`
 
@@ -146,9 +149,12 @@ For the full manual checklist, see [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
 
 ## GitHub Actions Workflow
 
-The release workflow (`.github/workflows/release-simple.yml`) runs automatically when:
+The tag-triggered release workflow is `.github/workflows/build-release.yml`. It runs when:
 - A tag starting with `v` is pushed (e.g., `v0.1.0`)
-- Manually triggered via "Run workflow" button
+
+A separate workflow, `.github/workflows/release-simple.yml`, is a manual,
+wheel-only path triggered via the "Run workflow" button (`workflow_dispatch`)
+and does **not** run on tag push.
 
 **What it does:**
 

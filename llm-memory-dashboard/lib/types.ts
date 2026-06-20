@@ -215,6 +215,5 @@ export interface SystemStatus {
   apiServer: "online" | "offline"
   vectorDatabase: "ready" | "syncing" | "offline"
   embeddings: "active" | "inactive" | "offline"
-  codexMcp: "available" | "inactive"
   runtime?: RuntimeStatus
 }

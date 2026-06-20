@@ -1250,6 +1250,7 @@ def check_conflicts(
             console.print("[green]No conflicts detected.[/green]")
     except Exception as e:
         console.print(f"[red]Error checking conflicts:[/red] {e}")
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -1683,6 +1684,7 @@ def add_dependency(
         console.print(f"[green]Added dependency:[/green] {source} -> {target} ({type})")
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
 
 
 @repo_app.command("context")
@@ -1773,6 +1775,7 @@ def add_team_member(
         console.print(f"[green]Added {user} to team {team}[/green]")
     else:
         console.print("[red]Failed to add member (check IDs)[/red]")
+        raise typer.Exit(1)
 
 
 @team_app.command("list")
@@ -1786,7 +1789,7 @@ def list_user_teams(
         # Check if we have a config user (only in authenticated contexts)
         # For local, this might be ambiguous. Let's warn.
         console.print("[yellow]Please provide specific user ID for local mode[/yellow]")
-        return
+        raise typer.Exit(1)
 
     teams = memory.teams.get_user_teams(user)
 
@@ -2034,11 +2037,12 @@ def serve(
     port: int = typer.Option(8000, "--port", "-p", help="Port to bind"),
     reload: bool = typer.Option(False, "--reload", help="Enable auto-reload"),
 ):
-    """Run the MCP or Central Memory Server."""
-    # Note: Currently this command is ambiguous between MCP and FastAPI
-    # Once we switch to client-server, this will run the FastAPI server
-    # For now, let's make it run the FastAPI skeleton if requested, or MCP by default?
-    # Actually, let's keep it specific.
+    """Run the Central Memory Server (FastAPI REST API).
+
+    This serves the HTTP API and dashboard. To run the MCP stdio server for an
+    assistant, use the separate ``llm-memory-mcp`` console script instead.
+    """
+    _ensure_serveable_auth_config(host)
 
     console.print(f"[green]Starting Central Memory Server at http://{host}:{port}[/green]")
     try:
@@ -2049,6 +2053,58 @@ def serve(
         console.print("[red]uvicorn not installed.[/red]")
         console.print("Install with: [bold]pip install llm-memory[api][/bold]")
         raise typer.Exit(1)
+
+
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _ensure_serveable_auth_config(host: str) -> None:
+    """Keep ``serve`` usable out of the box without exposing an open public server.
+
+    With auth enabled (the default) and no JWT secret, API keys, or anonymous
+    access configured, no request could authenticate. For a loopback bind we
+    start in open local mode (anonymous) with a warning so the documented quick
+    start and standalone ``start-server.sh`` work without setup; for a
+    non-loopback bind we refuse, since that would expose an unauthenticated
+    server on a reachable interface.
+    """
+    config = load_config()
+    server = config.server
+    has_credentials = (
+        bool(server.jwt_secret)
+        or bool(server.api_keys)
+        or bool(getattr(config.storage, "api_key", None))
+        or server.allow_anonymous
+    )
+    if not (server.auth_enabled and not has_credentials):
+        return
+
+    if host in _LOOPBACK_HOSTS:
+        console.print(
+            "[yellow]Auth is enabled but no credentials are configured; starting in open "
+            "local mode (anonymous access) on the loopback interface.[/yellow]\n"
+            "Set [bold]LLM_MEMORY_JWT_SECRET[/bold] or [bold]LLM_MEMORY_SERVER_API_KEYS[/bold] "
+            "for authenticated use, or [bold]LLM_MEMORY_SERVER_AUTH_ENABLED=false[/bold] to "
+            "silence this."
+        )
+        # The FastAPI app reads config via load_config(); enabling anonymous here
+        # (and for the reload subprocess, which inherits the environment) makes the
+        # local server usable without committing credentials.
+        os.environ["LLM_MEMORY_SERVER_ALLOW_ANONYMOUS"] = "true"
+        return
+
+    console.print(
+        f"[red]Refusing to start: authentication is enabled but no credentials are configured, "
+        f"and the server would bind to a non-loopback interface ({host}), exposing an "
+        f"unauthenticated server.[/red]\n"
+        "Configure one of the following first:\n"
+        "  - [bold]LLM_MEMORY_JWT_SECRET[/bold] for JWT auth\n"
+        "  - [bold]LLM_MEMORY_SERVER_API_KEYS[/bold] for API-key auth\n"
+        "  - [bold]LLM_MEMORY_SERVER_ALLOW_ANONYMOUS=true[/bold] to intentionally allow anonymous\n"
+        "  - [bold]LLM_MEMORY_SERVER_AUTH_ENABLED=false[/bold] to disable auth\n"
+        "Or bind to 127.0.0.1 for local-only use."
+    )
+    raise typer.Exit(1)
 
 
 # =============================================================================

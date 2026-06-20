@@ -12,7 +12,9 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 def text(path: Path) -> str:
     if not path.exists():
         raise SystemExit(f"Missing workflow: {path.relative_to(ROOT)}")
-    return path.read_text()
+    # Workflows contain UTF-8 (e.g. ✓); read explicitly so this passes on
+    # platforms whose default encoding is not UTF-8 (e.g. Windows cp1252).
+    return path.read_text(encoding="utf-8")
 
 
 def has_tag_push_trigger(content: str) -> bool:

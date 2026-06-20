@@ -53,7 +53,7 @@ if [ ! -d "$HOME/.llm-memory" ]; then
 fi
 
 # Start server
-./llm-memory server --port 8000
+./llm-memory serve --port 8000
 EOF
 
 chmod +x "$DIST_DIR/start-server.sh"
