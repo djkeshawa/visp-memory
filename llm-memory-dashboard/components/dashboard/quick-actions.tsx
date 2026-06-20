@@ -19,7 +19,12 @@ import { Textarea } from "@/components/ui/textarea"
 import { createMemory, describeApiError } from "@/lib/api"
 import { useRouter } from "next/navigation"
 
-export function QuickActions() {
+interface QuickActionsProps {
+  /** Called after a memory is created so the parent can refetch its data. */
+  onMemoryCreated?: () => void
+}
+
+export function QuickActions({ onMemoryCreated }: QuickActionsProps = {}) {
   const router = useRouter()
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [content, setContent] = useState("")
@@ -38,7 +43,9 @@ export function QuickActions() {
       setContent("")
       setCategory("note")
       setIsDialogOpen(false)
-      router.refresh() // Refresh server data without a full page reload
+      // The dashboard fetches its data client-side, so trigger the parent's
+      // refetch (router.refresh() would not re-run that client fetch).
+      onMemoryCreated?.()
     } catch (error) {
       console.error("Failed to create memory", error)
       setErrorMessage(describeApiError(error))

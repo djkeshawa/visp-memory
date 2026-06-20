@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import sqlite3
+import uuid
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from datetime import datetime
@@ -887,9 +888,17 @@ class LocalStorage(BaseStorage):
 
     @staticmethod
     def _generate_id(content: str) -> str:
-        """Generate unique ID for content."""
+        """Generate a unique ID.
+
+        Includes a random nonce in addition to the timestamp so that rapid
+        successive calls with identical content (which can share a microsecond
+        timestamp, especially under WAL's faster writes) do not collide on the
+        truncated hash. IDs are not content-addressed, so the extra entropy is
+        behavior-preserving.
+        """
         timestamp = datetime.now().isoformat()
-        return hashlib.sha256(f"{content}{timestamp}".encode()).hexdigest()[:16]
+        nonce = uuid.uuid4().hex
+        return hashlib.sha256(f"{content}{timestamp}{nonce}".encode()).hexdigest()[:16]
 
     @staticmethod
     def _json_serialize(data: Any) -> str:
@@ -1331,7 +1340,11 @@ class LocalStorage(BaseStorage):
         if order_by not in allowed_order_by:
             order_by = "created_at DESC"
 
-        query += f" ORDER BY {order_by} LIMIT ?"
+        # Deterministic tiebreaker on insertion order (rowid) so rows that share
+        # a timestamp/importance are not returned in arbitrary order, which makes
+        # "latest"-style queries (limit=1) flaky under same-microsecond writes.
+        tiebreak = "rowid ASC" if order_by.endswith("ASC") else "rowid DESC"
+        query += f" ORDER BY {order_by}, {tiebreak} LIMIT ?"
         params.append(limit)
 
         with self._get_db() as conn:
@@ -1910,7 +1923,7 @@ class LocalStorage(BaseStorage):
                        outcome, metadata, created_at
                 FROM recall_events
                 {where}
-                ORDER BY created_at DESC
+                ORDER BY created_at DESC, rowid DESC
                 LIMIT ?
                 """,
                 [*params, max(0, int(limit))],

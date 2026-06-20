@@ -2042,7 +2042,7 @@ def serve(
     This serves the HTTP API and dashboard. To run the MCP stdio server for an
     assistant, use the separate ``llm-memory-mcp`` console script instead.
     """
-    _validate_server_auth_config()
+    _ensure_serveable_auth_config(host)
 
     console.print(f"[green]Starting Central Memory Server at http://{host}:{port}[/green]")
     try:
@@ -2055,13 +2055,18 @@ def serve(
         raise typer.Exit(1)
 
 
-def _validate_server_auth_config() -> None:
-    """Fail fast with an actionable error if auth is enabled but unusable.
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
-    With ``auth_enabled`` on (the default) and no JWT secret, API keys, or
-    anonymous access configured, no request could ever authenticate, leaving
-    the server effectively locked. Surface that at startup rather than as
-    opaque 401s for every caller.
+
+def _ensure_serveable_auth_config(host: str) -> None:
+    """Keep ``serve`` usable out of the box without exposing an open public server.
+
+    With auth enabled (the default) and no JWT secret, API keys, or anonymous
+    access configured, no request could authenticate. For a loopback bind we
+    start in open local mode (anonymous) with a warning so the documented quick
+    start and standalone ``start-server.sh`` work without setup; for a
+    non-loopback bind we refuse, since that would expose an unauthenticated
+    server on a reachable interface.
     """
     config = load_config()
     server = config.server
@@ -2071,17 +2076,35 @@ def _validate_server_auth_config() -> None:
         or bool(getattr(config.storage, "api_key", None))
         or server.allow_anonymous
     )
-    if server.auth_enabled and not has_credentials:
+    if not (server.auth_enabled and not has_credentials):
+        return
+
+    if host in _LOOPBACK_HOSTS:
         console.print(
-            "[red]Authentication is enabled but no credentials are configured, so no "
-            "request could be authenticated.[/red]\n"
-            "Configure one of the following before starting the server:\n"
-            "  - [bold]LLM_MEMORY_JWT_SECRET[/bold] for JWT auth\n"
-            "  - [bold]LLM_MEMORY_SERVER_API_KEYS[/bold] for API-key auth\n"
-            "  - [bold]LLM_MEMORY_SERVER_ALLOW_ANONYMOUS=true[/bold] for open/anonymous mode\n"
-            "  - [bold]LLM_MEMORY_SERVER_AUTH_ENABLED=false[/bold] to disable auth for local use"
+            "[yellow]Auth is enabled but no credentials are configured; starting in open "
+            "local mode (anonymous access) on the loopback interface.[/yellow]\n"
+            "Set [bold]LLM_MEMORY_JWT_SECRET[/bold] or [bold]LLM_MEMORY_SERVER_API_KEYS[/bold] "
+            "for authenticated use, or [bold]LLM_MEMORY_SERVER_AUTH_ENABLED=false[/bold] to "
+            "silence this."
         )
-        raise typer.Exit(1)
+        # The FastAPI app reads config via load_config(); enabling anonymous here
+        # (and for the reload subprocess, which inherits the environment) makes the
+        # local server usable without committing credentials.
+        os.environ["LLM_MEMORY_SERVER_ALLOW_ANONYMOUS"] = "true"
+        return
+
+    console.print(
+        f"[red]Refusing to start: authentication is enabled but no credentials are configured, "
+        f"and the server would bind to a non-loopback interface ({host}), exposing an "
+        f"unauthenticated server.[/red]\n"
+        "Configure one of the following first:\n"
+        "  - [bold]LLM_MEMORY_JWT_SECRET[/bold] for JWT auth\n"
+        "  - [bold]LLM_MEMORY_SERVER_API_KEYS[/bold] for API-key auth\n"
+        "  - [bold]LLM_MEMORY_SERVER_ALLOW_ANONYMOUS=true[/bold] to intentionally allow anonymous\n"
+        "  - [bold]LLM_MEMORY_SERVER_AUTH_ENABLED=false[/bold] to disable auth\n"
+        "Or bind to 127.0.0.1 for local-only use."
+    )
+    raise typer.Exit(1)
 
 
 # =============================================================================

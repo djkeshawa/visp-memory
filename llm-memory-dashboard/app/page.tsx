@@ -1,6 +1,6 @@
 "use client"
 
-import { Suspense, useEffect, useState } from "react"
+import { Suspense, useCallback, useEffect, useState } from "react"
 import { motion } from "framer-motion"
 import { AlertTriangle, Database, Target, Brain, Share2 } from "lucide-react"
 import { AnimatedStatsCard } from "@/components/dashboard/animated-stats-card"
@@ -25,26 +25,27 @@ function DashboardContent() {
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
 
-  useEffect(() => {
-    async function fetchData() {
-      setIsLoading(true)
-      try {
-        const [statsData, memoriesData] = await Promise.all([
-          getStats(selectedRepoId),
-          getRecentMemories(8, selectedRepoId),
-        ])
-        setStats(statsData)
-        setMemories(memoriesData)
-        setLoadError(null)
-      } catch (error) {
-        console.error("Failed to fetch dashboard data:", error)
-        setLoadError(describeLoadError(error))
-      } finally {
-        setIsLoading(false)
-      }
+  const fetchData = useCallback(async () => {
+    setIsLoading(true)
+    try {
+      const [statsData, memoriesData] = await Promise.all([
+        getStats(selectedRepoId),
+        getRecentMemories(8, selectedRepoId),
+      ])
+      setStats(statsData)
+      setMemories(memoriesData)
+      setLoadError(null)
+    } catch (error) {
+      console.error("Failed to fetch dashboard data:", error)
+      setLoadError(describeLoadError(error))
+    } finally {
+      setIsLoading(false)
     }
-    fetchData()
   }, [selectedRepoId])
+
+  useEffect(() => {
+    fetchData()
+  }, [fetchData])
 
   const displayStats = stats || {
     totalMemories: 0,
@@ -113,7 +114,7 @@ function DashboardContent() {
           <RecentActivity memories={memories} />
         </div>
         <div className="space-y-6">
-          <QuickActions />
+          <QuickActions onMemoryCreated={fetchData} />
           <SystemStatus status={fallbackSystemStatus} />
         </div>
       </div>

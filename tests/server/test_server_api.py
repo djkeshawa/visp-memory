@@ -684,11 +684,28 @@ async def test_recall_rejects_invalid_payloads(client, payload):
     assert response.status_code == 422
 
 
+def _iter_registered_routes(routes):
+    """Flatten app routes across Starlette versions.
+
+    Newer Starlette stores each included router as an opaque ``_IncludedRouter``
+    whose sub-routes live on ``.original_router.routes`` (instead of flattening
+    them into ``app.router.routes`` as older versions did). Recurse so route
+    enumeration works on both layouts.
+    """
+    for route in routes:
+        included = getattr(route, "original_router", None)
+        if included is not None:
+            yield from _iter_registered_routes(included.routes)
+        else:
+            yield route
+
+
 def test_relationships_post_route_registered_once():
     matching_routes = [
         route
-        for route in app.router.routes
-        if route.path == "/relationships" and "POST" in (getattr(route, "methods", set()) or set())
+        for route in _iter_registered_routes(app.router.routes)
+        if getattr(route, "path", None) == "/relationships"
+        and "POST" in (getattr(route, "methods", set()) or set())
     ]
 
     assert len(matching_routes) == 1

@@ -720,5 +720,50 @@ class TestCLIDiagnostics:
         assert payload["result"]["connected"] is False
 
 
+def _unconfigured_auth_config():
+    from llm_memory.config import MemoryConfig
+
+    config = MemoryConfig()
+    config.server.auth_enabled = True
+    config.server.jwt_secret = ""
+    config.server.api_keys = []
+    config.server.allow_anonymous = False
+    config.storage.api_key = None
+    return config
+
+
+def test_serve_loopback_starts_in_open_local_mode(monkeypatch):
+    """A loopback bind with no credentials must remain usable (anonymous), not exit."""
+    import os
+
+    import llm_memory.interfaces.cli as cli_module
+
+    monkeypatch.setattr(cli_module, "load_config", _unconfigured_auth_config)
+    monkeypatch.delenv("LLM_MEMORY_SERVER_ALLOW_ANONYMOUS", raising=False)
+    try:
+        cli_module._ensure_serveable_auth_config("127.0.0.1")
+        assert os.environ.get("LLM_MEMORY_SERVER_ALLOW_ANONYMOUS") == "true"
+    finally:
+        os.environ.pop("LLM_MEMORY_SERVER_ALLOW_ANONYMOUS", None)
+
+
+def test_serve_public_bind_refuses_without_credentials(monkeypatch):
+    """A non-loopback bind with no credentials must refuse to expose an open server."""
+    import os
+
+    import typer
+
+    import llm_memory.interfaces.cli as cli_module
+
+    monkeypatch.setattr(cli_module, "load_config", _unconfigured_auth_config)
+    monkeypatch.delenv("LLM_MEMORY_SERVER_ALLOW_ANONYMOUS", raising=False)
+    try:
+        with pytest.raises(typer.Exit):
+            cli_module._ensure_serveable_auth_config("0.0.0.0")
+        assert os.environ.get("LLM_MEMORY_SERVER_ALLOW_ANONYMOUS") is None
+    finally:
+        os.environ.pop("LLM_MEMORY_SERVER_ALLOW_ANONYMOUS", None)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
