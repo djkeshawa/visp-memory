@@ -441,7 +441,7 @@ class Neo4jStorage(BaseStorage):
             result = session.run(
                 """
                 MATCH (m:Memory {id: $id})
-                SET m.access_count = m.access_count + 1, m.accessed_at = datetime()
+                SET m.access_count = coalesce(m.access_count, 0) + 1, m.accessed_at = datetime()
                 RETURN m
             """,
                 id=memory_id,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -9,6 +10,25 @@ from typing import Any
 DEFAULT_RECALL_MIN_SCORE = 0.56
 UTILITY_RANKING_LIMIT = 0.08
 CONTEXT_RANKING_LIMIT = 0.12
+# Ceiling on the *combined* positive boost from all secondary signals (utility +
+# context + activation). Individually each is small, but their sum (up to 0.26) could
+# otherwise let a weakly-relevant-but-popular memory edge out a strong direct match.
+# Capping the total keeps the core invariant intact: secondary signals tune ties, they
+# never override direct query relevance. Negative utility (dismissals) is not capped.
+TOTAL_ADJUSTMENT_LIMIT = 0.15
+# Retrieval-induced strengthening ("use it or lose it"): memories that are actually
+# retrieved accumulate access count, and frequently-retrieved memories should be a
+# little easier to recall next time. This mirrors ACT-R base-level activation and the
+# recency/frequency model used by human-memory agents. The contribution is small and
+# strictly bounded so it tunes ties without ever overriding direct query relevance.
+ACTIVATION_RANKING_LIMIT = 0.06
+ACTIVATION_SATURATION = 20.0
+# Spaced-repetition decay (MemoryBank's R = e^(-t/S), S grows with each recall): repeated
+# use flattens a memory's forgetting curve. We model strength S as a function of access
+# count and stretch the half-life accordingly, so a frequently-used memory fades far more
+# slowly than a one-off note. access_count == 0 leaves the base half-life unchanged, so
+# never-used memories decay exactly as before (backward compatible).
+DECAY_STRENGTH_FACTOR = 1.0
 CONTEXT_FACTOR_WEIGHTS = {
     "session": 0.03,
     "task": 0.04,
@@ -80,6 +100,66 @@ def context_rank_adjustment(factors: Any) -> float:
             score = details
         adjustment += weight * clamp_score(score)
     return min(CONTEXT_RANKING_LIMIT, adjustment)
+
+
+def activation_rank_adjustment(access_count: Any) -> float:
+    """Return a bounded recall boost from how often a memory has been retrieved.
+
+    Uses a saturating logarithm so the first few retrievals matter most and the
+    contribution levels off, preventing a runaway popularity bias. Always
+    non-negative and capped at ``ACTIVATION_RANKING_LIMIT``.
+    """
+    try:
+        count = float(access_count)
+    except (TypeError, ValueError):
+        return 0.0
+    if count <= 0:
+        return 0.0
+    normalized = math.log1p(count) / math.log1p(ACTIVATION_SATURATION)
+    return ACTIVATION_RANKING_LIMIT * min(1.0, normalized)
+
+
+def effective_halflife_days(halflife_days: Any, access_count: Any = 0) -> float:
+    """Return a decay half-life stretched by how often a memory has been recalled.
+
+    Models memory strength growing with use (spaced repetition): the more a memory is
+    retrieved, the slower it forgets. Never falls below the base half-life.
+    """
+    try:
+        base = max(1.0, float(halflife_days))
+    except (TypeError, ValueError):
+        base = 1.0
+    try:
+        count = max(0.0, float(access_count))
+    except (TypeError, ValueError):
+        count = 0.0
+    return base * (1.0 + DECAY_STRENGTH_FACTOR * math.log1p(count))
+
+
+def projected_importance(
+    importance: Any,
+    age_days: Any,
+    halflife_days: Any,
+    access_count: Any = 0,
+    min_importance: float = 0.0,
+) -> float:
+    """Project a memory's importance after exponential, use-aware decay.
+
+    Combines the two spaced-repetition effects: idle time (``age_days``) drives
+    exponential forgetting, while ``access_count`` stretches the half-life so used
+    memories persist. Floored at ``min_importance``.
+    """
+    try:
+        current = float(importance)
+    except (TypeError, ValueError):
+        current = 0.5
+    try:
+        age = max(0.0, float(age_days))
+    except (TypeError, ValueError):
+        age = 0.0
+    half = effective_halflife_days(halflife_days, access_count)
+    factor = 0.5 ** (age / half)
+    return max(float(min_importance), current * factor)
 
 
 def normalize_distance_score(distance: Any) -> float:
@@ -196,11 +276,14 @@ def score_memory_result(memory: dict[str, Any], query: str | None = None) -> flo
     else:
         score = importance * 0.70 + recency * 0.30
 
-    return clamp_score(
-        score
-        + utility_rank_adjustment(memory.get("utility_score"))
+    adjustment = (
+        utility_rank_adjustment(memory.get("utility_score"))
         + context_rank_adjustment(memory.get("ranking_factors"))
+        + activation_rank_adjustment(memory.get("access_count"))
     )
+    # Cap the combined *positive* boost; leave penalties (negative utility) intact.
+    adjustment = min(adjustment, TOTAL_ADJUSTMENT_LIMIT)
+    return clamp_score(score + adjustment)
 
 
 def explain_ranking_factors(memory: dict[str, Any]) -> list[str]:

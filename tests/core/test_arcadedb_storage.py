@@ -92,10 +92,15 @@ class FakeArcadeDb:
             return None
         if sql.startswith("UPDATE "):
             type_name = sql.split()[1]
-            fields = _update_fields(sql)
             record_id = params[-1]
             if record_id in self.records[type_name]:
-                self.records[type_name][record_id].update(dict(zip(fields, params[:-1])))
+                record = self.records[type_name][record_id]
+                param_values = iter(params[:-1])
+                for field, spec in _update_assignments(sql):
+                    if spec == "increment":
+                        record[field] = int(record.get(field) or 0) + 1
+                    else:
+                        record[field] = next(param_values)
             return None
         if sql.startswith("DELETE FROM "):
             type_name = sql.split()[2]
@@ -147,9 +152,23 @@ def _insert_fields(sql):
     return [part.split(" = ?", 1)[0].strip() for part in body.split(",")]
 
 
-def _update_fields(sql):
+def _update_assignments(sql):
+    """Parse an UPDATE SET clause into (field, spec) pairs.
+
+    spec is "param" for `field = ?` (consumes a positional parameter) or "increment"
+    for an atomic `field = field + 1` self-increment.
+    """
     body = sql.split(" SET ", 1)[1].split(" WHERE ", 1)[0]
-    return [part.split(" = ?", 1)[0].strip() for part in body.split(",")]
+    assignments = []
+    for part in body.split(","):
+        field, _, expr = part.partition(" = ")
+        field = field.strip()
+        expr = expr.strip()
+        if expr == f"{field} + 1":
+            assignments.append((field, "increment"))
+        else:
+            assignments.append((field, "param"))
+    return assignments
 
 
 def _edge_fields(sql):
@@ -506,6 +525,25 @@ def test_arcadedb_audit_and_recall_feedback(fake_arcadedb, tmp_path):
 
     with pytest.raises(ValueError, match="Memory not found"):
         storage.log_recall_event("missing", "used")
+
+
+def test_arcadedb_reinforces_on_use_in_parity_with_local(fake_arcadedb, tmp_path):
+    # Backend parity: a used memory must strengthen (access_count++) just like SQLite,
+    # while a merely-surfaced one must not.
+    storage = ArcadeDbStorage(tmp_path)
+    memory_id = storage.store_memory("ArcadeDB reinforce signal")
+
+    def access_count() -> int:
+        record = storage._memory_record_to_dict(storage._query_memory(memory_id))
+        return int(record.get("access_count") or 0)
+
+    assert access_count() == 0
+    storage.log_recall_event(memory_id, "used")
+    assert access_count() == 1
+    storage.log_recall_event(memory_id, "surfaced")
+    assert access_count() == 1  # surfaced/dismissed do not reinforce
+    storage.log_recall_event(memory_id, "task_linked")
+    assert access_count() == 2
 
 
 def test_arcadedb_graph_recall_uses_public_memory_contract(fake_arcadedb, tmp_path):

@@ -991,6 +991,47 @@ def stats():
             console.print(f"  {cat}: {count}")
 
 
+@app.command("tokens")
+def tokens(
+    format: str = typer.Option("text", "--format", "-f", help="Output format: text or json"),
+    repo: str = typer.Option(None, "--repo", "-r", help="Filter by repository"),
+):
+    """Show how many tokens the memory layer saves (consolidation + context compactness)."""
+    memory = get_memory()
+    report = memory.token_efficiency(repo_id=_repo_scope(memory, repo))
+
+    if format.lower() == "json":
+        console.print_json(data=report)
+        return
+
+    console.print(Panel("[bold]Token Efficiency[/bold]"))
+
+    consolidation = report["consolidation"]
+    context = report["context"]
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", justify="right")
+    table.add_row(
+        f"Consolidation savings ({consolidation['consolidations']} compressions)",
+        f"{consolidation['saved_tokens']} tokens ({consolidation['ratio'] * 100:.0f}%)",
+    )
+    table.add_row(
+        "Context compactness vs full store",
+        f"{context['compactness_ratio'] * 100:.0f}% "
+        f"({context['context_tokens']} vs {context['full_store_tokens']} tokens)",
+    )
+    console.print(table)
+    console.print(
+        f"\n[green]Estimated tokens saved (auditable consolidation): "
+        f"{report['total_saved_tokens']}[/green]"
+    )
+    console.print(
+        "[dim]Consolidation savings are derived from compression lineage (token counts are "
+        "estimates). Context compactness is descriptive only and is not counted as saved.[/dim]"
+    )
+
+
 @app.command("report")
 def memory_report(
     format: str = typer.Option("text", "--format", "-f", help="Output format: text or json"),

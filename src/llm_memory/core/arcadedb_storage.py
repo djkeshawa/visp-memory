@@ -6,7 +6,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from llm_memory.core.ranking import rank_memory_results, text_similarity, utility_rank_adjustment
-from llm_memory.core.storage import BaseStorage, LocalStorage, MemoryLayer, MemoryStatus
+from llm_memory.core.storage import (
+    REINFORCING_RECALL_EVENTS,
+    BaseStorage,
+    LocalStorage,
+    MemoryLayer,
+    MemoryStatus,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1102,6 +1108,20 @@ class ArcadeDbStorage(BaseStorage):
             self.RECALL_EVENT_FIELDS,
             self.RECORD_JSON_FIELDS["RecallFeedback"],
         )
+        # Retrieval-induced strengthening, kept in parity with LocalStorage so the
+        # activation boost and spaced-repetition decay behave the same across backends.
+        # Increment in SQL (not read-modify-write) so concurrent use events cannot lose
+        # an update, matching SQLite's `access_count = access_count + 1`.
+        if normalized_type in REINFORCING_RECALL_EVENTS:
+            with self._database() as db:
+                with db.transaction():
+                    db.command(
+                        "sql",
+                        f"UPDATE {self.MEMORY_TYPE} "
+                        "SET access_count = access_count + 1, accessed_at = ? WHERE id = ?",
+                        datetime.now().isoformat(),
+                        memory_id,
+                    )
         return event_id
 
     def inspect_recall_utility(

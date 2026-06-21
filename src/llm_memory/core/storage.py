@@ -51,6 +51,12 @@ RECALL_EVENT_WEIGHTS: dict[str, float] = {
     "task_linked": 0.20,
     "outcome_linked": 0.25,
 }
+# Events that signal a memory was actually *used* (not merely surfaced) trigger
+# retrieval reinforcement: the memory's access count grows and its last-access time
+# refreshes. This strengthens future recall (via base-level activation) and resets
+# decay, implementing the "use it or lose it" principle. Surfaced/dismissed events
+# deliberately do not reinforce, to avoid popularity bias from mere exposure.
+REINFORCING_RECALL_EVENTS = frozenset({"used", "task_linked", "outcome_linked"})
 SENSITIVE_RECALL_METADATA_KEYS = {"prompt", "response", "query", "content", "messages"}
 
 
@@ -1864,6 +1870,17 @@ class LocalStorage(BaseStorage):
                     datetime.now().isoformat(),
                 ),
             )
+            if normalized_type in REINFORCING_RECALL_EVENTS:
+                # Retrieval-induced strengthening: a used memory becomes easier to
+                # recall and resets its decay clock.
+                conn.execute(
+                    """
+                    UPDATE memories
+                    SET access_count = access_count + 1, accessed_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (memory_id,),
+                )
             conn.commit()
         return event_id
 

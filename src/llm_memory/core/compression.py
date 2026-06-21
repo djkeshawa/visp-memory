@@ -14,7 +14,9 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
+from llm_memory.core.ranking import projected_importance
 from llm_memory.core.storage import BaseStorage
+from llm_memory.core.tokens import compute_savings
 
 COMPRESSION_PROMPT_HEADER = (
     "Compress these {count} related memories into a single piece of actionable "
@@ -115,6 +117,12 @@ class MemoryCompressor:
             all_tags.update(ep.get("tags", []))
         all_tags.add("compressed")
 
+        # Measure the token savings of this consolidation: many detailed episodic
+        # memories collapse into one compact semantic memory. This is an auditable,
+        # source-grounded figure (we hold both the originals and the result), so it
+        # is recorded on the memory for later token-efficiency reporting.
+        savings = compute_savings(contents, compressed)
+
         # Store semantic memory
         semantic_id = self.storage.store_memory(
             content=compressed,
@@ -125,6 +133,7 @@ class MemoryCompressor:
             metadata={
                 "compressed_from": len(episodes),
                 "compressed_at": datetime.now().isoformat(),
+                "token_savings": savings.as_dict(),
             },
             source_ids=source_ids,
         )
@@ -318,6 +327,8 @@ class MemoryCompressor:
         if not compressed:
             return None
 
+        savings = compute_savings(contents, compressed)
+
         # Store principle
         principle_id = self.storage.store_memory(
             content=compressed,
@@ -329,6 +340,7 @@ class MemoryCompressor:
                 "compressed_from": len(memories),
                 "level": 2,
                 "compressed_at": datetime.now().isoformat(),
+                "token_savings": savings.as_dict(),
             },
             source_ids=source_ids,
         )
@@ -422,10 +434,12 @@ class MemoryCompressor:
         """
         Decay importance of old, rarely-accessed memories.
 
-        Mimics how human memories fade if not reinforced.
+        Mimics how human memories fade if not reinforced. The decay half-life is
+        stretched by how often a memory has been recalled (spaced repetition), so
+        frequently-used memories fade far more slowly than one-off notes.
 
         Args:
-            halflife_days: Days for importance to halve
+            halflife_days: Base days for importance to halve (before use-based stretch)
             min_importance: Floor for importance decay
 
         Returns:
@@ -456,12 +470,23 @@ class MemoryCompressor:
                 if age_days < 1:
                     continue
 
-                # Exponential decay
-                decay_factor = 0.5 ** (age_days / halflife_days)
-                new_importance = max(min_importance, mem["importance"] * decay_factor)
+                # Null-safe: some backends/legacy rows may omit importance.
+                try:
+                    current = float(mem.get("importance", 0.5))
+                except (TypeError, ValueError):
+                    current = 0.5
+
+                # Use-aware exponential decay: more recalls -> slower forgetting.
+                new_importance = projected_importance(
+                    importance=current,
+                    age_days=age_days,
+                    halflife_days=halflife_days,
+                    access_count=mem.get("access_count", 0),
+                    min_importance=min_importance,
+                )
 
                 # Only update if significant change
-                if mem["importance"] - new_importance > 0.05:
+                if current - new_importance > 0.05:
                     self.storage.update_memory(mem["id"], importance=new_importance)
                     decayed += 1
 
