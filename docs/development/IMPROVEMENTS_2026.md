@@ -64,8 +64,9 @@ Every advertised MCP tool definition costs context tokens in *every* session. Th
 surface is ~3,000 tokens of schema before any work begins.
 
 - `LLM_MEMORY_MCP_PROFILE=core|full` (default `full` for compatibility). `core` advertises
-  the everyday recall-before-work / record-after-work loop (15/34 tools), saving
-  **~1,400 tokens per session (~46% of tool-schema overhead)**. Hidden tools still work if
+  the everyday recall-before-work / record-after-work loop including the feedback tool the
+  reinforcement loop needs (16/34 tools), saving **~1,250 tokens per session (~41% of
+  tool-schema overhead)**. Hidden tools still work if
   called by name.
 
 ### 3.3 Retrieval-induced reinforcement ("use it or lose it")

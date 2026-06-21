@@ -95,6 +95,9 @@ CORE_TOOL_NAMES = frozenset(
         "memory_goal",
         "memory_working_on",
         "memory_done",
+        # Feedback — required for the reinforcement loop ("use it or lose it"): without
+        # this tool a core-profile client can only emit non-reinforcing "surfaced" events.
+        "memory_feedback_log",
     }
 )
 

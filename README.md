@@ -419,7 +419,7 @@ Every advertised MCP tool definition costs context tokens in *every* session. Se
 | `full` (default) | All tools | You want every advanced/maintenance tool available |
 | `core` | The everyday recall-before-work / record-after-work loop | You want the leanest context footprint |
 
-The `core` profile roughly halves tool-schema overhead (~1,400 fewer tokens per
+The `core` profile cuts tool-schema overhead by roughly 40% (~1,250 fewer tokens per
 session in a typical setup). Hidden tools still work if a client calls them by name;
 the profile only changes what is advertised.
 

@@ -1110,15 +1110,15 @@ class ArcadeDbStorage(BaseStorage):
         )
         # Retrieval-induced strengthening, kept in parity with LocalStorage so the
         # activation boost and spaced-repetition decay behave the same across backends.
+        # Increment in SQL (not read-modify-write) so concurrent use events cannot lose
+        # an update, matching SQLite's `access_count = access_count + 1`.
         if normalized_type in REINFORCING_RECALL_EVENTS:
-            access_count = int(memory_data.get("access_count") or 0) + 1
             with self._database() as db:
                 with db.transaction():
                     db.command(
                         "sql",
                         f"UPDATE {self.MEMORY_TYPE} "
-                        "SET access_count = ?, accessed_at = ? WHERE id = ?",
-                        access_count,
+                        "SET access_count = access_count + 1, accessed_at = ? WHERE id = ?",
                         datetime.now().isoformat(),
                         memory_id,
                     )
