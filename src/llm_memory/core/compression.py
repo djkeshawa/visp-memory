@@ -52,13 +52,23 @@ class MemoryCompressor:
         self.storage = storage
         self._llm_compress = llm_compress_fn
 
-    def _parse_datetime(self, dt_str: str) -> datetime:
-        """Parse datetime string, handling both timezone-aware and naive formats."""
+    def _parse_datetime(self, dt_str: Optional[str]) -> Optional[datetime]:
+        """Parse datetime string, handling both timezone-aware and naive formats.
+
+        Returns None when the input is falsy (missing/None/empty) or otherwise
+        unparseable, so callers can skip rows that can't be dated instead of
+        crashing.
+        """
         from datetime import timezone
 
-        # Remove 'Z' suffix and parse
-        dt_str = dt_str.replace("Z", "+00:00")
-        dt = datetime.fromisoformat(dt_str)
+        if not dt_str:
+            return None
+
+        try:
+            # Remove 'Z' suffix and parse
+            dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
         # If naive, make it UTC-aware
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
@@ -369,12 +379,15 @@ class MemoryCompressor:
         from datetime import timezone
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=age_days)
-        old_episodes = [
-            ep
-            for ep in episodes
-            if not ep.get("metadata", {}).get("compressed_to")
-            and self._parse_datetime(ep["created_at"]) < cutoff
-        ]
+
+        def _is_old_uncompressed(ep: Dict[str, Any]) -> bool:
+            if ep.get("metadata", {}).get("compressed_to"):
+                return False
+            created = self._parse_datetime(ep.get("created_at"))
+            # Skip episodes we can't date rather than crashing on them.
+            return created is not None and created < cutoff
+
+        old_episodes = [ep for ep in episodes if _is_old_uncompressed(ep)]
 
         if len(old_episodes) >= min_episodes:
             # Group by category
@@ -439,14 +452,18 @@ class MemoryCompressor:
             memories = self.storage.list_memories(layer=layer, limit=1000)
 
             for mem in memories:
-                # Calculate age since last access. Use `or` (not dict.get default) so an
-                # explicit accessed_at=None still falls back to created_at; skip rows with
-                # no usable timestamp rather than crashing in _parse_datetime.
-                raw_accessed = mem.get("accessed_at") or mem.get("created_at")
-                if not raw_accessed:
-                    continue
-                accessed = self._parse_datetime(raw_accessed)
+                # Calculate age since last access. Coalesce explicitly: a row
+                # may carry accessed_at=None (key present but null), in which
+                # case dict.get would return None instead of the created_at
+                # fallback.
+                accessed = self._parse_datetime(
+                    mem.get("accessed_at") or mem.get("created_at")
+                )
                 from datetime import timezone
+
+                # Skip rows we can't date rather than crashing on them.
+                if accessed is None:
+                    continue
 
                 age_days = (datetime.now(timezone.utc) - accessed).days
 
