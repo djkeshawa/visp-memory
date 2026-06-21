@@ -36,6 +36,7 @@ Or with uvx:
 
 import json
 import logging
+import os
 from datetime import datetime
 from typing import Any
 
@@ -58,10 +59,59 @@ except ImportError:
     MCP_AVAILABLE = False
 
 from llm_memory import Memory
+from llm_memory.core.ranking import projected_importance
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("llm-memory-mcp")
+
+# Every MCP tool definition (name + description + input schema) is loaded into the
+# assistant's context on every session. With the full surface that is several
+# thousand tokens of overhead before any work begins - at odds with this project's
+# token-efficiency goal. The "core" profile exposes only the tools an assistant
+# needs for the everyday recall-before-work / record-after-work loop, roughly
+# halving that overhead, while "full" keeps every advanced and maintenance tool.
+# Hidden tools remain fully functional if a client calls them by name; the profile
+# only controls what is advertised. Default is "full" for backward compatibility.
+CORE_TOOL_NAMES = frozenset(
+    {
+        # Context & search
+        "memory_context",
+        "memory_recall",
+        "memory_trace",
+        # Proactive recall
+        "memory_file_context",
+        "memory_find_error",
+        # Recall-before-work / record-after-work loop
+        "memory_session_start",
+        "memory_before_change",
+        "memory_after_work",
+        # Capture primitives
+        "memory_record",
+        "memory_decision",
+        "memory_learn",
+        "memory_warn",
+        # Intent
+        "memory_goal",
+        "memory_working_on",
+        "memory_done",
+    }
+)
+
+VALID_MCP_PROFILES = frozenset({"core", "full"})
+
+
+def _resolve_tool_profile() -> str:
+    """Return the configured MCP tool profile ("core" or "full")."""
+    profile = os.environ.get("LLM_MEMORY_MCP_PROFILE", "full").strip().lower()
+    return profile if profile in VALID_MCP_PROFILES else "full"
+
+
+def _filter_tools_by_profile(tools: list["Tool"], profile: str) -> list["Tool"]:
+    """Restrict advertised tools to the active profile."""
+    if profile == "full":
+        return tools
+    return [tool for tool in tools if tool.name in CORE_TOOL_NAMES]
 
 
 def create_mcp_server() -> "Server":
@@ -78,8 +128,8 @@ def create_mcp_server() -> "Server":
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
-        """List all available memory tools."""
-        return [
+        """List available memory tools, scoped to the active profile."""
+        all_tools = [
             # Context & Search
             Tool(
                 name="memory_context",
@@ -785,6 +835,12 @@ def create_mcp_server() -> "Server":
                 },
             ),
         ]
+        profile = _resolve_tool_profile()
+        tools = _filter_tools_by_profile(all_tools, profile)
+        logger.info(
+            "Advertising %d/%d MCP tools (profile=%s)", len(tools), len(all_tools), profile
+        )
+        return tools
 
     # =========================================================================
     # Tool Handlers
@@ -1571,7 +1627,13 @@ def _format_decay_preview(args: dict[str, Any], memory: Memory) -> str:
         current = float(item.get("importance", 0.5) or 0.0)
         accessed = _parse_memory_datetime(item.get("accessed_at") or item.get("created_at"))
         age_days = max(0.0, (now - accessed).total_seconds() / 86400)
-        projected = max(min_importance, current * (0.5 ** (age_days / halflife_days)))
+        projected = projected_importance(
+            importance=current,
+            age_days=age_days,
+            halflife_days=halflife_days,
+            access_count=item.get("access_count", 0),
+            min_importance=min_importance,
+        )
         decay_amount = max(0.0, current - projected)
         if current <= min_importance + 0.001:
             risk = "at_floor"

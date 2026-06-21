@@ -287,6 +287,17 @@ Generate a compact project context for pasting into an assistant:
 llm-memory context
 ```
 
+### 5. Measure Token Savings
+
+See how many tokens your memory layer saves — auditable consolidation savings
+(many episodic memories compressed into compact semantic knowledge) plus context
+compactness (injected context vs. the full active store):
+
+```bash
+llm-memory tokens
+llm-memory tokens --format json
+```
+
 ### Migrate Between Backends
 
 No automatic backend migration runs in v1. Use the existing export/import flow:
@@ -397,6 +408,32 @@ Add to your `claude_desktop_config.json`:
 - `memory_session_start`: Start a Codex-style work session with project context.
 - `memory_before_change`: Recall relevant warnings before editing files.
 - `memory_after_work`: Record useful end-of-work memory.
+
+### Tool Profiles (Token Efficiency)
+
+Every advertised MCP tool definition costs context tokens in *every* session. Set
+`LLM_MEMORY_MCP_PROFILE` to control how many tools are exposed:
+
+| Profile | Tools | Use when |
+|---------|-------|----------|
+| `full` (default) | All tools | You want every advanced/maintenance tool available |
+| `core` | The everyday recall-before-work / record-after-work loop | You want the leanest context footprint |
+
+The `core` profile roughly halves tool-schema overhead (~1,400 fewer tokens per
+session in a typical setup). Hidden tools still work if a client calls them by name;
+the profile only changes what is advertised.
+
+```json
+{
+  "mcpServers": {
+    "llm-memory": {
+      "command": "llm-memory-mcp",
+      "args": [],
+      "env": { "LLM_MEMORY_MCP_PROFILE": "core" }
+    }
+  }
+}
+```
 
 ### Codex Workflow
 

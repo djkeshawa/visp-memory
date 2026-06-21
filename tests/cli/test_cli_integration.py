@@ -152,6 +152,34 @@ class TestCLIBasicCommands:
         assert "Memory Statistics" in result.output
         assert "Total Memories" in result.output
 
+    def test_tokens_command_outputs_json_contract(self, cli_env):
+        """Tokens command exposes a stable token-efficiency JSON contract."""
+        runner.invoke(app, ["init", "--type", "code"])
+        runner.invoke(app, ["record", "Investigated a flaky test in detail"])
+
+        result = runner.invoke(app, ["tokens", "--format", "json"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert set(data) == {
+            "repo_id",
+            "consolidation",
+            "context",
+            "total_saved_tokens",
+        }
+        assert {"saved_tokens", "ratio", "consolidations"} <= set(data["consolidation"])
+        assert {"context_tokens", "full_store_tokens"} <= set(data["context"])
+        assert data["total_saved_tokens"] >= 0
+
+    def test_tokens_command_outputs_text(self, cli_env):
+        """Tokens command exposes readable text output."""
+        runner.invoke(app, ["init", "--type", "code"])
+
+        result = runner.invoke(app, ["tokens"])
+
+        assert result.exit_code == 0
+        assert "Token Efficiency" in result.output
+
     def test_report_command_outputs_json_contract(self, cli_env):
         """Report command exposes stable JSON sections."""
         runner.invoke(app, ["init", "--type", "code", "--repo", "repo-a"])

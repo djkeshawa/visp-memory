@@ -508,6 +508,25 @@ def test_arcadedb_audit_and_recall_feedback(fake_arcadedb, tmp_path):
         storage.log_recall_event("missing", "used")
 
 
+def test_arcadedb_reinforces_on_use_in_parity_with_local(fake_arcadedb, tmp_path):
+    # Backend parity: a used memory must strengthen (access_count++) just like SQLite,
+    # while a merely-surfaced one must not.
+    storage = ArcadeDbStorage(tmp_path)
+    memory_id = storage.store_memory("ArcadeDB reinforce signal")
+
+    def access_count() -> int:
+        record = storage._memory_record_to_dict(storage._query_memory(memory_id))
+        return int(record.get("access_count") or 0)
+
+    assert access_count() == 0
+    storage.log_recall_event(memory_id, "used")
+    assert access_count() == 1
+    storage.log_recall_event(memory_id, "surfaced")
+    assert access_count() == 1  # surfaced/dismissed do not reinforce
+    storage.log_recall_event(memory_id, "task_linked")
+    assert access_count() == 2
+
+
 def test_arcadedb_graph_recall_uses_public_memory_contract(fake_arcadedb, tmp_path):
     config = MemoryConfig(project_name="arcadedb-graph", repo_id="repo-a")
     config.storage.backend = "arcadedb"

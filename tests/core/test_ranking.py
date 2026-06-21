@@ -1,9 +1,13 @@
 from llm_memory.core.ranking import (
+    ACTIVATION_RANKING_LIMIT,
     CONTEXT_RANKING_LIMIT,
     UTILITY_RANKING_LIMIT,
+    activation_rank_adjustment,
     context_rank_adjustment,
+    effective_halflife_days,
     graph_edge_score,
     graph_node_relevance,
+    projected_importance,
     rank_memory_results,
     relationship_score,
     score_memory_result,
@@ -88,6 +92,149 @@ def test_utility_cannot_override_direct_relevance():
     )
 
     assert [item["id"] for item in ranked] == ["direct-match", "popular-noise"]
+
+
+def test_activation_adjustment_is_bounded_and_non_negative():
+    assert activation_rank_adjustment(0) == 0.0
+    assert activation_rank_adjustment(None) == 0.0
+    assert activation_rank_adjustment(-5) == 0.0
+    assert activation_rank_adjustment(1) > 0.0
+    # Saturates at the cap for very frequently retrieved memories.
+    assert activation_rank_adjustment(10_000) == ACTIVATION_RANKING_LIMIT
+    # Monotonic in access count up to saturation.
+    assert activation_rank_adjustment(2) > activation_rank_adjustment(1)
+
+
+def test_frequently_used_memory_outranks_equal_peer():
+    ranked = rank_memory_results(
+        [
+            {
+                "id": "cold",
+                "content": "authentication token refresh",
+                "similarity": 0.4,
+                "importance": 0.5,
+                "access_count": 0,
+            },
+            {
+                "id": "reinforced",
+                "content": "authentication token refresh",
+                "similarity": 0.4,
+                "importance": 0.5,
+                "access_count": 12,
+            },
+        ],
+        query="authentication token",
+    )
+
+    assert [item["id"] for item in ranked] == ["reinforced", "cold"]
+
+
+def test_total_adjustment_cap_is_load_bearing(monkeypatch):
+    import llm_memory.core.ranking as ranking_module
+
+    maxed_factors = {
+        "session": {"score": 1.0},
+        "task": {"score": 1.0},
+        "file": {"score": 1.0},
+        "repo": {"score": 1.0},
+        "dependency": {"score": 1.0},
+        "constraint": {"score": 1.0},
+        "active_intent": {"score": 1.0},
+    }
+    # Noise: base 0.175, with all secondary signals maxed (uncapped boost 0.26).
+    # Match: a strong vector hit with NO lexical overlap, base ~0.41 — deliberately
+    # between the capped (0.325) and uncapped (0.435) noise scores, so the cap decides.
+    memories = [
+        {
+            "id": "noise-with-everything",
+            "content": "database migration complete",
+            "similarity": 0.2,
+            "importance": 0.5,
+            "utility_score": 1.0,
+            "access_count": 9999,
+            "ranking_factors": maxed_factors,
+        },
+        {
+            "id": "vector-match",
+            "content": "vector embedding pipeline",  # no overlap with the query terms
+            "similarity": 0.7,
+            "importance": 0.4,
+        },
+    ]
+    query = "authentication token"
+
+    # With the cap in force, the strong direct match wins.
+    ranked = rank_memory_results([dict(m) for m in memories], query=query)
+    assert ranked[0]["id"] == "vector-match"
+
+    # Remove the cap: the stacked weak signals now flip the order — proving the cap binds.
+    monkeypatch.setattr(ranking_module, "TOTAL_ADJUSTMENT_LIMIT", 999.0)
+    ranked_uncapped = rank_memory_results([dict(m) for m in memories], query=query)
+    assert ranked_uncapped[0]["id"] == "noise-with-everything"
+
+
+def test_activation_applies_on_no_query_importance_branch():
+    ranked = rank_memory_results(
+        [
+            {"id": "cold", "content": "x", "importance": 0.5, "access_count": 0},
+            {"id": "warm", "content": "x", "importance": 0.5, "access_count": 12},
+        ],
+        query=None,
+    )
+    assert [item["id"] for item in ranked] == ["warm", "cold"]
+
+
+def test_projected_importance_handles_negative_and_nonnumeric_inputs():
+    assert projected_importance(-0.5, age_days=1, halflife_days=30) >= 0.0
+    assert effective_halflife_days(30, "not-a-number") == 30
+    assert effective_halflife_days(30, -3) == 30  # negative use count treated as zero
+
+
+def test_activation_cannot_override_direct_relevance():
+    ranked = rank_memory_results(
+        [
+            {
+                "id": "popular-noise",
+                "content": "database migration complete",
+                "similarity": 0.2,
+                "importance": 0.5,
+                "access_count": 9999,
+            },
+            {
+                "id": "direct-match",
+                "content": "authentication token refresh",
+                "similarity": 0.4,
+                "importance": 0.5,
+                "access_count": 0,
+            },
+        ],
+        query="authentication",
+    )
+
+    assert [item["id"] for item in ranked] == ["direct-match", "popular-noise"]
+
+
+def test_effective_halflife_grows_with_use_and_floors_at_base():
+    base = effective_halflife_days(30, 0)
+    used = effective_halflife_days(30, 10)
+    assert base == 30  # never-used memory keeps the base half-life (backward compatible)
+    assert used > base  # repeated use stretches the half-life
+    # Bad inputs degrade gracefully to the base.
+    assert effective_halflife_days(30, None) == 30
+    assert effective_halflife_days(None, 5) >= 1.0
+
+
+def test_projected_importance_used_memory_decays_slower():
+    fresh_unused = projected_importance(0.8, age_days=60, halflife_days=30, access_count=0)
+    fresh_used = projected_importance(0.8, age_days=60, halflife_days=30, access_count=15)
+    assert fresh_used > fresh_unused  # spaced repetition flattens the curve
+    assert fresh_unused < 0.8  # still decays
+
+
+def test_projected_importance_respects_floor_and_zero_age():
+    assert projected_importance(0.05, age_days=10_000, halflife_days=30, min_importance=0.1) == 0.1
+    # No elapsed time means no decay.
+    assert projected_importance(0.7, age_days=0, halflife_days=30) == 0.7
 
 
 def test_context_adjustment_is_bounded_and_explained():

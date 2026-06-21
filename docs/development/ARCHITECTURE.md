@@ -456,12 +456,45 @@ All memories have 16-character SHA256-based IDs generated from `content + timest
 
 Over time, unused memories decrease in importance via exponential decay (configurable halflife). This prevents context pollution with outdated information.
 
+### Retrieval-Induced Reinforcement ("use it or lose it")
+
+Mirroring how human memory strengthens what is actually retrieved, a memory that is
+*used* (not merely surfaced) is reinforced: its `access_count` increments and its
+`accessed_at` refreshes. Reinforcement is triggered by the positive recall-utility
+events (`used`, `task_linked`, `outcome_linked`) in `storage.log_recall_event`.
+Two effects follow:
+
+- **Slower decay** — decay measures idle time from `accessed_at`, so a used memory's
+  decay clock resets (`t ← 0`), and its `access_count` stretches the decay half-life
+  via a saturating function (`ranking.effective_halflife_days`; spaced-repetition dynamics
+  inspired by MemoryBank), so frequently-used memories fade far more slowly.
+- **Easier recall** — `access_count` feeds a bounded base-level *activation* factor in
+  ranking (`ranking.activation_rank_adjustment`, capped at `ACTIVATION_RANKING_LIMIT`),
+  so frequently-useful memories surface a little higher. Mere surfacing or dismissal
+  does **not** reinforce, which avoids popularity bias from exposure.
+
 ### Search & Recall
 
 - Uses vector embeddings for semantic search
-- Combines similarity scores with importance ratings
-- Results sorted by relevance: `similarity * 0.6 + importance * 0.4`
+- Canonical relevance blends similarity, lexical overlap, importance, and recency
+  (`ranking.score_memory_result`), with small bounded adjustments for utility feedback,
+  intent-aware context factors, and base-level activation (frequency of use)
+- All adjustments are strictly bounded so they tune ties without ever overriding direct
+  query relevance
 - Cross-layer search supported via `Memory.recall()`
+
+### Token Efficiency
+
+The whole value proposition is replacing file reads with compact memory, so that
+saving is made measurable (`core/tokens.py`, `Memory.token_efficiency()`, the
+`llm-memory tokens` CLI):
+
+- **Consolidation savings** — when compression collapses many episodic memories into
+  one semantic memory, the token delta is recorded on the resulting memory's metadata
+  (`token_savings`). This is an auditable, source-grounded figure.
+- **Context compactness** — the injected project context versus the full active store.
+- The MCP tool surface is itself token-aware: `LLM_MEMORY_MCP_PROFILE=core` advertises
+  only the everyday tools, roughly halving per-session tool-schema overhead.
 
 ### Context Generation
 

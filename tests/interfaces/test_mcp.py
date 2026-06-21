@@ -373,3 +373,80 @@ class TestMCPServer:
         assert source_id in result
         assert target_id in result
         assert "Relationship reason appears in MCP trace output." in result
+
+
+class TestMCPToolProfile:
+    """Tests for the configurable MCP tool surface (token-efficiency profiles)."""
+
+    def test_resolve_profile_defaults_to_full(self, monkeypatch):
+        from llm_memory.interfaces.mcp import _resolve_tool_profile
+
+        monkeypatch.delenv("LLM_MEMORY_MCP_PROFILE", raising=False)
+        assert _resolve_tool_profile() == "full"
+
+    def test_resolve_profile_honors_core(self, monkeypatch):
+        from llm_memory.interfaces.mcp import _resolve_tool_profile
+
+        monkeypatch.setenv("LLM_MEMORY_MCP_PROFILE", "Core")
+        assert _resolve_tool_profile() == "core"
+
+    def test_resolve_profile_falls_back_on_unknown(self, monkeypatch):
+        from llm_memory.interfaces.mcp import _resolve_tool_profile
+
+        monkeypatch.setenv("LLM_MEMORY_MCP_PROFILE", "tiny")
+        assert _resolve_tool_profile() == "full"
+
+    def test_resolve_profile_trims_whitespace_and_handles_empty(self, monkeypatch):
+        from llm_memory.interfaces.mcp import _resolve_tool_profile
+
+        monkeypatch.setenv("LLM_MEMORY_MCP_PROFILE", "  core  ")
+        assert _resolve_tool_profile() == "core"
+
+        monkeypatch.setenv("LLM_MEMORY_MCP_PROFILE", "")
+        assert _resolve_tool_profile() == "full"
+
+    def test_filter_core_is_strict_subset_of_full(self):
+        from types import SimpleNamespace
+
+        from llm_memory.interfaces.mcp import (
+            CORE_TOOL_NAMES,
+            _filter_tools_by_profile,
+        )
+
+        catalog = [
+            SimpleNamespace(name=name)
+            for name in [*CORE_TOOL_NAMES, "memory_stats", "memory_decay", "memory_path"]
+        ]
+
+        full = _filter_tools_by_profile(catalog, "full")
+        core = _filter_tools_by_profile(catalog, "core")
+
+        assert len(full) == len(catalog)
+        assert {tool.name for tool in core} == set(CORE_TOOL_NAMES)
+        assert len(core) < len(full)
+
+    @pytest.mark.asyncio
+    async def test_every_core_tool_name_is_routable(self):
+        """Guard against typos: each advertised core tool must reach a handler."""
+        from llm_memory.interfaces.mcp import (
+            CORE_TOOL_NAMES,
+            MCP_AVAILABLE,
+            handle_tool,
+        )
+
+        if not MCP_AVAILABLE:
+            pytest.skip("MCP not installed")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = MemoryConfig()
+            config.storage.data_dir = Path(tmpdir)
+            config.embedding.provider = "noop"
+            memory = Memory(config=config)
+
+            for name in CORE_TOOL_NAMES:
+                try:
+                    result = await handle_tool(name, {}, memory)
+                except Exception:
+                    # Reached a handler that requires arguments; the name is valid.
+                    continue
+                assert not result.startswith("Unknown tool"), name

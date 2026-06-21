@@ -799,6 +799,7 @@ class Memory:
         include_knowledge: bool = True,
         include_intent: bool = True,
         format: str = "text",
+        repo_id: str = None,
     ) -> Any:
         """
         Generate full context for an LLM.
@@ -811,6 +812,7 @@ class Memory:
             include_knowledge: Include semantic knowledge
             include_intent: Include current intents/goals
             format: "text" for human-readable, "json" for structured
+            repo_id: Repository scope (defaults to the configured repo_id)
 
         Returns:
             Context string or dict depending on format
@@ -820,6 +822,7 @@ class Memory:
             include_history=include_history,
             include_knowledge=include_knowledge,
             include_intent=include_intent,
+            repo_id=repo_id,
         )
 
         if format == "json":
@@ -876,6 +879,76 @@ class Memory:
     def stats(self) -> Dict[str, Any]:
         """Get memory statistics."""
         return self._storage.get_stats(repo_id=self.config.repo_id)
+
+    def token_efficiency(self, repo_id: str = None) -> Dict[str, Any]:
+        """Quantify how the memory layer reduces tokens.
+
+        The core promise of LLM Memory is that a small, pre-formed context lets an
+        assistant skip re-reading files and re-deriving knowledge every session.
+        This method reports two distinct signals and is careful not to conflate them:
+
+        - ``consolidation``: source-backed savings from compressing many episodic
+          memories into compact semantic knowledge. Both the originals and the result
+          are held, so the saving is directly derived from compression lineage (token
+          counts are estimates, but the delta is not hypothetical). This is the only
+          figure counted as "saved".
+        - ``context``: a descriptive *compactness ratio* of the injected project context
+          versus the full active store. This is informational (an assistant would not
+          dump the whole store), so it is reported but NOT added to ``saved_tokens``.
+
+        Returns a structured, JSON-serializable summary. ``saved_tokens`` is
+        conservative (never negative) so the system does not overclaim.
+        """
+        from llm_memory.core.tokens import TokenSavings, estimate_total_tokens
+
+        def _as_int(value: Any) -> int:
+            try:
+                return max(0, int(value or 0))
+            except (TypeError, ValueError):
+                return 0
+
+        repo_id = repo_id or self.config.repo_id
+
+        semantic = self._storage.list_memories(
+            layer="semantic", repo_id=repo_id, status="active", limit=10000
+        )
+        source_tokens = 0
+        result_tokens = 0
+        consolidations = 0
+        for memory in semantic:
+            savings = (memory.get("metadata") or {}).get("token_savings")
+            if not isinstance(savings, dict):
+                continue
+            source_tokens += _as_int(savings.get("source_tokens"))
+            result_tokens += _as_int(savings.get("result_tokens"))
+            consolidations += 1
+        consolidation = TokenSavings(source_tokens, result_tokens).as_dict()
+        consolidation["consolidations"] = consolidations
+
+        episodic = self._storage.list_memories(
+            layer="episodic", repo_id=repo_id, status="active", limit=10000
+        )
+        context_tokens = estimate_total_tokens([self.context(format="text", repo_id=repo_id)])
+        full_store_tokens = estimate_total_tokens(
+            [m.get("content", "") for m in episodic] + [m.get("content", "") for m in semantic]
+        )
+        compactness_ratio = (
+            round(1.0 - (context_tokens / full_store_tokens), 4) if full_store_tokens > 0 else 0.0
+        )
+        context = {
+            "context_tokens": context_tokens,
+            "full_store_tokens": full_store_tokens,
+            "compactness_ratio": max(0.0, compactness_ratio),
+        }
+
+        return {
+            "repo_id": repo_id,
+            "consolidation": consolidation,
+            "context": context,
+            # Only auditable consolidation savings count as "saved"; context compactness
+            # is descriptive and intentionally excluded to avoid overclaiming.
+            "total_saved_tokens": consolidation["saved_tokens"],
+        }
 
     # =========================================================================
     # Import/Export

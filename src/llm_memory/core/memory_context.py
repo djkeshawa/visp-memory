@@ -11,10 +11,11 @@ def build_context(
     include_history: bool,
     include_knowledge: bool,
     include_intent: bool,
+    repo_id: str = None,
 ) -> Dict[str, Any]:
     """Build structured context from a Memory instance."""
     context: Dict[str, Any] = {}
-    repo_id = memory.config.repo_id
+    repo_id = repo_id if repo_id is not None else memory.config.repo_id
 
     if include_intent:
         intent_summary = memory.intent.summarize(repo_id=repo_id)
