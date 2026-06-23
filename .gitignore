@@ -40,6 +40,8 @@ htmlcov/
 .llm-memory/data/
 *.db
 chroma_db/
+# Local docker-compose secrets (use .env.example as the template)
+.env
 
 # OS
 .DS_Store
