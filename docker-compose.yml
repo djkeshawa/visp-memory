@@ -93,14 +93,29 @@ services:
     build: *llm-memory-build
     image: ${LLM_MEMORY_IMAGE:-llm-memory:local}
     container_name: llm-memory-dashboard
+    # `depends_on` (below) only orders `compose up` -- it is NOT honored on Docker's
+    # post-reboot auto-restart. If this server starts before Neo4j is accepting bolt
+    # connections, initialize_storage() silently falls back to an empty SQLite DB and
+    # never retries. Block startup until Neo4j is reachable so that can't happen.
+    command:
+      - sh
+      - -ec
+      - |
+        echo "Waiting for Neo4j to accept connections..."
+        until python -c "import os; from neo4j import GraphDatabase; GraphDatabase.driver(os.environ.get('NEO4J_URI','bolt://neo4j:7687'), auth=(os.environ.get('NEO4J_USER','neo4j'), os.environ['NEO4J_PASSWORD'])).verify_connectivity()" 2>/dev/null; do
+          sleep 2
+        done
+        echo "Neo4j is ready -- starting server."
+        exec uvicorn llm_memory.server.app:app --host 0.0.0.0 --port 8000
     ports:
       - "${LLM_MEMORY_PORT:-8000}:8000"
     volumes:
       - llm-memory-dashboard-data:/data
     environment:
       <<: *llm-memory-env
-      # Match the repo namespace the Claude MCP writes to (claude_desktop_config.json
-      # uses LLM_MEMORY_REPO_ID=default), so the dashboard shows the same memories.
+      # Landing project for the dashboard (memories are namespaced by repo_id). Set
+      # this in .env to your active project, e.g. LLM_MEMORY_REPO_ID=novel; other
+      # projects stay selectable from the dashboard's repo dropdown.
       LLM_MEMORY_REPO_ID: ${LLM_MEMORY_REPO_ID:-default}
       LLM_MEMORY_STORAGE_BACKEND: neo4j
       LLM_MEMORY_STORAGE_DATA_DIR: /data
