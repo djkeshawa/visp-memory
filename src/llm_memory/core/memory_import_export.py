@@ -69,7 +69,7 @@ def export_memory(memory: Any, path: Path = None) -> Dict[str, Any]:
     }
 
     if path:
-        Path(path).write_text(json.dumps(export_data, indent=2, default=str))
+        Path(path).write_text(json.dumps(export_data, indent=2, default=str), encoding="utf-8")
 
     return export_data
 
@@ -144,7 +144,7 @@ def _validate_import_data(data: Any) -> Dict[str, Any]:
 
 def import_memories(memory: Any, path: Path) -> None:
     """Import memories from a JSON export into a Memory instance."""
-    data = _validate_import_data(json.loads(Path(path).read_text()))
+    data = _validate_import_data(json.loads(Path(path).read_text(encoding="utf-8")))
 
     for mem in data.get("memories", {}).get("episodic", []):
         memory._storage.store_memory(

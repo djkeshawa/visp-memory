@@ -74,35 +74,36 @@ class GenericAdapter(LLMToolAdapter):
                 # Create it with markers
                 self._ensure_directory(self.context_file)
                 self.context_file.write_text(
-                    f"{self.injection_marker} START\n\n{self.injection_marker} END\n"
+                    f"{self.injection_marker} START\n\n{self.injection_marker} END\n",
+                    encoding="utf-8",
                 )
                 results["injection_markers"] = True
             else:
                 # Check if markers exist
-                content = self.context_file.read_text()
+                content = self.context_file.read_text(encoding="utf-8")
                 if self.injection_marker in content:
                     results["injection_markers"] = True
                 else:
                     # Add markers
                     if self.append_mode:
-                        with self.context_file.open("a") as f:
+                        with self.context_file.open("a", encoding="utf-8") as f:
                             f.write(f"\n\n{self.injection_marker} START\n\n")
                             f.write(f"{self.injection_marker} END\n")
                     else:
                         # Insert at top
-                        existing = self.context_file.read_text()
+                        existing = self.context_file.read_text(encoding="utf-8")
                         new_content = (
                             f"{self.injection_marker} START\n\n"
                             f"{self.injection_marker} END\n\n"
                             f"{existing}"
                         )
-                        self.context_file.write_text(new_content)
+                        self.context_file.write_text(new_content, encoding="utf-8")
                     results["injection_markers"] = True
         else:
             # Standalone file mode
             if not self.context_file.exists():
                 self._ensure_directory(self.context_file)
-                self.context_file.write_text("# LLM Memory Context\n\n")
+                self.context_file.write_text("# LLM Memory Context\n\n", encoding="utf-8")
                 results["context_file"] = True
             else:
                 results["context_file"] = True  # Already exists
@@ -121,7 +122,7 @@ class GenericAdapter(LLMToolAdapter):
         if self.injection_marker:
             # Remove injected section
             if self.context_file.exists():
-                content = self.context_file.read_text()
+                content = self.context_file.read_text(encoding="utf-8")
 
                 # Find and remove marked section
                 start_marker = f"{self.injection_marker} START"
@@ -133,7 +134,7 @@ class GenericAdapter(LLMToolAdapter):
                     after = content.split(end_marker)[1] if end_marker in content else ""
 
                     new_content = before + after
-                    self.context_file.write_text(new_content.strip() + "\n")
+                    self.context_file.write_text(new_content.strip() + "\n", encoding="utf-8")
                     results["injection_removed"] = True
                 else:
                     results["injection_removed"] = False  # Not found
@@ -175,7 +176,7 @@ class GenericAdapter(LLMToolAdapter):
             if not self.context_file.exists():
                 self.install()
 
-            content = self.context_file.read_text()
+            content = self.context_file.read_text(encoding="utf-8")
 
             start_marker = f"{self.injection_marker} START"
             end_marker = f"{self.injection_marker} END"
@@ -187,14 +188,14 @@ class GenericAdapter(LLMToolAdapter):
 
                 new_content = f"{before}{start_marker}\n\n{full_context}\n{end_marker}{after}"
 
-                self.context_file.write_text(new_content)
+                self.context_file.write_text(new_content, encoding="utf-8")
                 return True
             else:
                 # Markers not found - can't inject
                 return False
         else:
             # Standalone mode - replace entire file
-            self.context_file.write_text(full_context)
+            self.context_file.write_text(full_context, encoding="utf-8")
             return True
 
     def get_context_file_path(self) -> Path:

@@ -174,7 +174,7 @@ class RemoteStorage(BaseStorage):
         """Update a memory."""
         try:
             response = self.session.patch(f"{self.server_url}/memories/{memory_id}", json=kwargs)
-            return response.status_code == 200
+            return 200 <= response.status_code < 300
         except requests.RequestException:
             return False
 
@@ -182,7 +182,7 @@ class RemoteStorage(BaseStorage):
         """Delete a memory."""
         try:
             response = self.session.delete(f"{self.server_url}/memories/{memory_id}")
-            return response.status_code == 200
+            return 200 <= response.status_code < 300
         except requests.RequestException:
             return False
 
@@ -261,7 +261,7 @@ class RemoteStorage(BaseStorage):
         """Mark intent as complete."""
         try:
             response = self.session.post(f"{self.server_url}/intents/{intent_id}/complete")
-            return response.status_code == 200
+            return 200 <= response.status_code < 300
         except requests.RequestException:
             return False
 
@@ -272,7 +272,7 @@ class RemoteStorage(BaseStorage):
             return False
         try:
             response = self.session.patch(f"{self.server_url}/intents/{intent_id}", json=payload)
-            return response.status_code == 200
+            return 200 <= response.status_code < 300
         except requests.RequestException:
             return False
 
@@ -446,7 +446,7 @@ class RemoteStorage(BaseStorage):
         try:
             payload = {"user_id": user_id}
             response = self.session.post(f"{self.server_url}/teams/{team_id}/members", json=payload)
-            return response.status_code == 200
+            return 200 <= response.status_code < 300
         except requests.RequestException:
             return False
 

@@ -267,8 +267,8 @@ class SemanticMemory(BaseMemoryLayer):
             results = [
                 r
                 for r in results
-                if area in r.get("metadata", {}).get("applies_to", [])
-                or area.lower() in r["content"].lower()
+                if area in ((r.get("metadata") or {}).get("applies_to") or [])
+                or area.lower() in (r.get("content") or "").lower()
             ]
 
         return results

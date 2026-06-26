@@ -196,6 +196,9 @@ class ProactiveRecall:
             Aggregated context for directory
         """
         dir_path = self._normalize_path(dir_path)
+        # ``_normalize_path`` preserves case, but content/metadata are matched
+        # case-insensitively, so compare against a lowercased key.
+        dir_key = dir_path.lower()
         repo_id = self.memory.config.repo_id
 
         results = {"warnings": [], "conventions": [], "patterns": [], "recent_activity": []}
@@ -205,8 +208,8 @@ class ProactiveRecall:
         dir_warnings = [
             w
             for w in all_warnings
-            if dir_path in w.get("content", "").lower()
-            or dir_path in str(w.get("metadata", {}).get("applies_to", []))
+            if dir_key in w.get("content", "").lower()
+            or dir_key in str((w.get("metadata") or {}).get("applies_to", [])).lower()
         ]
         results["warnings"] = self.memory.rank_with_context(
             dir_warnings,
@@ -219,7 +222,7 @@ class ProactiveRecall:
 
         # Get conventions for this directory
         all_conventions = self.memory.semantic.get_conventions()
-        dir_conventions = [c for c in all_conventions if dir_path in c.get("content", "").lower()]
+        dir_conventions = [c for c in all_conventions if dir_key in c.get("content", "").lower()]
         results["conventions"] = self.memory.rank_with_context(
             dir_conventions,
             query=dir_path,
@@ -242,7 +245,7 @@ class ProactiveRecall:
 
         # Get recent activity in this directory
         recent = self.memory.episodic.recent(limit=20)
-        dir_recent = [r for r in recent if dir_path in r.get("content", "").lower()]
+        dir_recent = [r for r in recent if dir_key in r.get("content", "").lower()]
         results["recent_activity"] = self.memory.rank_with_context(
             dir_recent,
             query=dir_path,

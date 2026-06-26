@@ -195,15 +195,17 @@ class Deduplicator:
         if target_content:
             self.storage.update_memory(primary_id, content=target_content)
 
-        # Merge metadata/stats from others
-        merged_source_ids = primary_mem.get("source_ids", [])
+        # Merge provenance from the duplicates into the primary. ``update_memory``
+        # exposes no ``source_ids`` parameter, so the merged provenance is preserved
+        # inside metadata rather than being silently dropped.
+        merged_source_ids = list(primary_mem.get("source_ids") or [])
 
         for oid in others:
             mem = self.storage.get_memory(oid)
             if not mem:
                 continue
 
-            # Add as source
+            # Record the duplicate (and its own sources) as provenance.
             merged_source_ids.append(oid)
             if mem.get("source_ids"):
                 merged_source_ids.extend(mem["source_ids"])
@@ -211,8 +213,19 @@ class Deduplicator:
             # Delete the duplicate
             self.storage.delete_memory(oid)
 
-        # Update primary with merged sources
-        self.storage.update_memory(primary_id, metadata={"merged_count": len(others)})
+        # De-duplicate while preserving order, dropping any self-reference.
+        deduped_source_ids = [
+            sid for sid in dict.fromkeys(merged_source_ids) if sid and sid != primary_id
+        ]
+
+        # Merge into the primary's existing metadata instead of replacing it, so
+        # prior keys (applies_to, established_at, compressed_from, ...) survive.
+        merged_metadata = {
+            **(primary_mem.get("metadata") or {}),
+            "merged_count": len(others),
+            "merged_source_ids": deduped_source_ids,
+        }
+        self.storage.update_memory(primary_id, metadata=merged_metadata)
 
         return primary_id
 

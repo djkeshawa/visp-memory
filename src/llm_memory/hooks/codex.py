@@ -111,14 +111,14 @@ Run `llm-memory hooks update codex` to populate current memory context.
 
         if not self.context_file.exists():
             self._ensure_directory(self.context_file)
-            self.context_file.write_text(instructions)
+            self.context_file.write_text(instructions, encoding="utf-8")
             return True
 
-        content = self.context_file.read_text()
+        content = self.context_file.read_text(encoding="utf-8")
         if f"{AGENTS_MARKER} START" in content and f"{AGENTS_MARKER} END" in content:
             return True
 
-        with self.context_file.open("a") as f:
+        with self.context_file.open("a", encoding="utf-8") as f:
             f.write("\n\n" + instructions.replace("# AGENTS.md\n\n", ""))
         return True
 
@@ -146,44 +146,46 @@ Use llm-memory as the persistent project memory for this repository.
             return True
 
         self._ensure_directory(self.config_path)
-        content = self.config_path.read_text() if self.config_path.exists() else ""
+        content = self.config_path.read_text(encoding="utf-8") if self.config_path.exists() else ""
         new_content = self._replace_marked_block(content, block)
         if new_content is None:
             return False
 
-        self.config_path.write_text(new_content)
+        self.config_path.write_text(new_content, encoding="utf-8")
         return True
 
     def _remove_agents_instructions(self) -> bool:
         if self.dry_run or not self.context_file.exists():
             return True
 
-        content = self.context_file.read_text()
+        content = self.context_file.read_text(encoding="utf-8")
         new_content = self._remove_marked_section(
             content, f"{AGENTS_MARKER} START", f"{AGENTS_MARKER} END"
         )
         if new_content == content:
             return True
 
-        self.context_file.write_text(new_content.strip() + "\n")
+        self.context_file.write_text(new_content.strip() + "\n", encoding="utf-8")
         return True
 
     def _remove_codex_config(self) -> bool:
         if self.dry_run or not self.config_path.exists():
             return True
 
-        content = self.config_path.read_text()
+        content = self.config_path.read_text(encoding="utf-8")
         new_content = self._remove_marked_section(
             content, f"# BEGIN {CODEX_MARKER}", f"# END {CODEX_MARKER}"
         )
-        self.config_path.write_text(new_content.strip() + ("\n" if new_content.strip() else ""))
+        self.config_path.write_text(
+            new_content.strip() + ("\n" if new_content.strip() else ""), encoding="utf-8"
+        )
         return True
 
     def _replace_agents_block(self, generated: str) -> bool:
         if self.dry_run:
             return True
 
-        content = self.context_file.read_text()
+        content = self.context_file.read_text(encoding="utf-8")
         start_marker = f"{AGENTS_MARKER} START"
         end_marker = f"{AGENTS_MARKER} END"
         if start_marker not in content or end_marker not in content:
@@ -191,7 +193,9 @@ Use llm-memory as the persistent project memory for this repository.
 
         before = content.split(start_marker)[0]
         after = content.split(end_marker)[1]
-        self.context_file.write_text(f"{before}{start_marker}\n\n{generated}\n{end_marker}{after}")
+        self.context_file.write_text(
+            f"{before}{start_marker}\n\n{generated}\n{end_marker}{after}", encoding="utf-8"
+        )
         return True
 
     def _replace_marked_block(self, content: str, block: str) -> str | None:

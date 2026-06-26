@@ -248,9 +248,15 @@ async def update_memory(
     if "metadata" in update_data and not user.is_admin:
         metadata = dict(update_data["metadata"] or {})
         existing_metadata = mem.get("metadata") or {}
+        # Non-admins may never set ownership/scope fields. Pin them to the record's
+        # existing values, and strip them entirely when absent so a caller cannot
+        # introduce a team_id/author_id (which drives record visibility) on a record
+        # that derived its scope from the repo.
         for reserved_key in ("author_id", "team_id"):
             if reserved_key in existing_metadata:
                 metadata[reserved_key] = existing_metadata[reserved_key]
+            else:
+                metadata.pop(reserved_key, None)
         update_data["metadata"] = metadata
     if update_data.get("status") == "active" and mem.get("status") == "pending":
         update_data["approved_by"] = user.user_id

@@ -12,7 +12,10 @@ from llm_memory.server.app import app
 
 @pytest_asyncio.fixture
 async def client():
-    with tempfile.TemporaryDirectory() as tmpdir:
+    # ignore_cleanup_errors: on Windows the SQLite WAL sidecar files can briefly
+    # hold a handle on memories.db when the temp dir is torn down, which would
+    # otherwise raise a spurious PermissionError after the test has passed.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         app.state.storage = LocalStorage(Path(tmpdir))
 
         config = MemoryConfig()

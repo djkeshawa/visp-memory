@@ -93,6 +93,39 @@ def test_decay_uses_created_at_when_accessed_at_key_absent():
     assert storage.updates[0]["id"] == "no-accessed-key"
 
 
+def test_auto_compress_tolerates_present_but_none_metadata():
+    """auto_compress must not crash on rows whose metadata is present-but-None.
+
+    ``dict.get("metadata", {})`` returns ``None`` (not ``{}``) when the key exists
+    with a null value, so the metadata filters used to raise
+    ``AttributeError: 'NoneType' object has no attribute 'get'``.
+    """
+    rows = [
+        {
+            "id": "ep-old",
+            "layer": "episodic",
+            "content": "Something happened",
+            "category": "note",
+            "created_at": _iso_days_ago(365),
+            "metadata": None,  # used to crash in the Level-1 uncompressed filter
+        },
+        {
+            "id": "sem-fact",
+            "layer": "semantic",
+            "content": "A fact",
+            "category": "fact",
+            "metadata": None,  # used to crash in the Level-2 facts filter
+        },
+    ]
+    storage = _FakeStorage(rows)
+
+    # A single old episode / single fact is below the compression thresholds, so
+    # nothing is consolidated, but the metadata-reading filters still run on every row.
+    created = MemoryCompressor(storage).auto_compress()
+
+    assert created == []
+
+
 def test_parse_datetime_returns_none_for_falsy_or_garbage():
     compressor = MemoryCompressor(_FakeStorage([]))
 

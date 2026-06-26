@@ -53,7 +53,7 @@ Context is automatically updated below.
 
 ---
 """
-            self.context_file.write_text(initial_content)
+            self.context_file.write_text(initial_content, encoding="utf-8")
             results["aider_file_created"] = True
 
         return results
@@ -102,7 +102,7 @@ llm-memory hooks update aider
 ```
 """
 
-        self.context_file.write_text(formatted_context)
+        self.context_file.write_text(formatted_context, encoding="utf-8")
         return True
 
     def _get_timestamp(self) -> str:

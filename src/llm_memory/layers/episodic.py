@@ -242,9 +242,11 @@ class EpisodicMemory(BaseMemoryLayer):
         self, limit: int = 20, category: EpisodeCategory = None, repo_id: str = None
     ) -> List[Dict[str, Any]]:
         """Get recent episodic memories."""
+        # Accept both an EpisodeCategory enum and a plain string, matching ``search``.
+        category_value = category.value if isinstance(category, EpisodeCategory) else category
         return self.list_items(
             layer="episodic",
-            category=category.value if category else None,
+            category=category_value,
             limit=limit,
             order_by="created_at DESC",
             repo_id=repo_id,

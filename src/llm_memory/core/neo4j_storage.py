@@ -1276,7 +1276,10 @@ class Neo4jStorage(BaseStorage):
     def add_repo_dependency(
         self, source_id: str, target_id: str, dep_type: str, version: str = None, notes: str = None
     ) -> str:
-        rel_type = dep_type.upper()
+        # Validate/normalize before interpolating into Cypher: ``dep_type`` is the
+        # relationship type and cannot be parameterized, so an unsanitized value is a
+        # Cypher-injection vector (and hyphen/space variants would be invalid syntax).
+        rel_type = _normalize_relationship_type(dep_type)
         rel_id = self._generate_id(f"{source_id}-{target_id}-{rel_type}")
 
         with self.driver.session() as session:
