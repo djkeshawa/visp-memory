@@ -143,7 +143,7 @@ class MemoryCompressor:
             self.storage.update_memory(
                 ep["id"],
                 metadata={
-                    **ep.get("metadata", {}),
+                    **(ep.get("metadata") or {}),
                     "compressed_to": semantic_id,
                     "compressed_at": datetime.now().isoformat(),
                 },
@@ -381,7 +381,7 @@ class MemoryCompressor:
         cutoff = datetime.now(timezone.utc) - timedelta(days=age_days)
 
         def _is_old_uncompressed(ep: Dict[str, Any]) -> bool:
-            if ep.get("metadata", {}).get("compressed_to"):
+            if (ep.get("metadata") or {}).get("compressed_to"):
                 return False
             created = self._parse_datetime(ep.get("created_at"))
             # Skip episodes we can't date rather than crashing on them.
@@ -411,7 +411,7 @@ class MemoryCompressor:
         facts = [
             m
             for m in semantic
-            if m.get("category") != "principle" and m.get("metadata", {}).get("level", 1) == 1
+            if m.get("category") != "principle" and (m.get("metadata") or {}).get("level", 1) == 1
         ]
 
         # Cluster them (naive approach: group by auto-extracted topics/tags would be better)

@@ -127,7 +127,7 @@ class CaptureManifest:
     def _load(self) -> dict[str, Any]:
         if self.path and self.path.exists():
             try:
-                data = json.loads(self.path.read_text())
+                data = json.loads(self.path.read_text(encoding="utf-8"))
                 if isinstance(data, dict) and isinstance(data.get("entries", {}), dict):
                     return {
                         "capture_version": data.get(
@@ -143,7 +143,9 @@ class CaptureManifest:
         if self.path is None:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.data, indent=2, sort_keys=True, default=str))
+        self.path.write_text(
+            json.dumps(self.data, indent=2, sort_keys=True, default=str), encoding="utf-8"
+        )
 
 
 class CommitType(str, Enum):
@@ -369,8 +371,8 @@ class GitCapture:
         Returns:
             Dict mapping hook name to success status
         """
-        hooks_dir = self.repo.git_dir / "hooks"
-        hooks_dir = Path(hooks_dir)
+        # ``Repo.git_dir`` is a ``str`` in GitPython, so wrap it before using ``/``.
+        hooks_dir = Path(self.repo.git_dir) / "hooks"
         hooks_dir.mkdir(exist_ok=True)
 
         results = {}
@@ -402,7 +404,7 @@ class GitCapture:
 
             if hook_path.exists():
                 # Check if it's our hook
-                content = hook_path.read_text()
+                content = hook_path.read_text(encoding="utf-8")
                 if "llm-memory capture" in content:
                     hook_path.unlink()
                     results[hook_name] = True
@@ -567,7 +569,7 @@ class GitCapture:
         try:
             # If hook exists, check if it's ours
             if hook_path.exists():
-                existing = hook_path.read_text()
+                existing = hook_path.read_text(encoding="utf-8")
                 if "llm-memory capture" in existing:
                     # Already installed
                     return True
@@ -577,7 +579,7 @@ class GitCapture:
                     hook_path.rename(backup)
 
             # Write hook
-            hook_path.write_text(script)
+            hook_path.write_text(script, encoding="utf-8")
             hook_path.chmod(0o755)  # Make executable
 
             return True

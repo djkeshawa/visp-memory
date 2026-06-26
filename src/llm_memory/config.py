@@ -210,7 +210,7 @@ class MemoryConfig(BaseSettings):
         if not path.exists():
             return cls()
 
-        content = path.read_text()
+        content = path.read_text(encoding="utf-8")
 
         if path.suffix in (".yaml", ".yml"):
             try:
@@ -325,7 +325,7 @@ class MemoryConfig(BaseSettings):
         else:
             content = json.dumps(data, indent=2)
 
-        path.write_text(content)
+        path.write_text(content, encoding="utf-8")
 
 
 def load_config(start_dir: Path = None) -> "MemoryConfig":

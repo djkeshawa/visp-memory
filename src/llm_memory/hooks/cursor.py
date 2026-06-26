@@ -58,7 +58,7 @@ Memory context is automatically injected below:
 
 # LLM-MEMORY END
 """
-            self.context_file.write_text(initial_content)
+            self.context_file.write_text(initial_content, encoding="utf-8")
             results["cursorrules_created"] = True
 
         return results
@@ -89,7 +89,7 @@ Last updated: {self._get_timestamp()}
         if not self.context_file.exists():
             self.install()
 
-        content = self.context_file.read_text()
+        content = self.context_file.read_text(encoding="utf-8")
 
         start_marker = "# LLM-MEMORY START"
         end_marker = "# LLM-MEMORY END"
@@ -100,7 +100,7 @@ Last updated: {self._get_timestamp()}
 
             new_content = f"{before}{start_marker}\n\n{formatted_context}\n{end_marker}{after}"
 
-            self.context_file.write_text(new_content)
+            self.context_file.write_text(new_content, encoding="utf-8")
             return True
         else:
             return False

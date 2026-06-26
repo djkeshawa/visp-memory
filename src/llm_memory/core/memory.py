@@ -74,8 +74,14 @@ class Memory:
 
         # Initialize embedding provider for local/server storage. Client-mode MCP delegates
         # storage and embedding work to the configured memory server.
+        #
+        # An explicit "none" provider disables embeddings entirely (embedding_fn stays
+        # None) so backends use keyword/text search. This is distinct from "noop", which
+        # yields a constant vector — fine for ChromaDB-managed embeddings, but on backends
+        # that run their own vector index (e.g. Neo4j) a constant vector makes every result
+        # score identically, so "none" is the correct way to turn vector search off.
         embedding_fn = None
-        if self.config.storage.mode != "client":
+        if self.config.storage.mode != "client" and self.config.embedding.provider != "none":
             try:
                 from llm_memory.core.embeddings import get_embedding_provider
 

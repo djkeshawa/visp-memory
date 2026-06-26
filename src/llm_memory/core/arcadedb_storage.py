@@ -518,20 +518,24 @@ class ArcadeDbStorage(BaseStorage):
         if record is None:
             return None
 
-        memory = self._memory_record_to_dict(record)
-        access_count = int(memory.get("access_count") or 0) + 1
+        # ``_query_memory`` already returns a normalized dict; reuse it directly.
+        memory = record
+        # Increment in SQL (not read-modify-write) so concurrent reads cannot lose an
+        # update, matching ``log_recall_event`` and the SQLite backend.
         accessed_at = datetime.now().isoformat()
         with self._database() as db:
             with db.transaction():
                 db.command(
                     "sql",
-                    f"UPDATE {self.MEMORY_TYPE} SET access_count = ?, accessed_at = ? WHERE id = ?",
-                    access_count,
+                    f"UPDATE {self.MEMORY_TYPE} "
+                    "SET access_count = access_count + 1, accessed_at = ? WHERE id = ?",
                     accessed_at,
                     memory_id,
                 )
 
-        memory["access_count"] = access_count
+        # Reflect the post-increment state in the returned dict (best-effort; the
+        # authoritative count lives in the store).
+        memory["access_count"] = int(memory.get("access_count") or 0) + 1
         memory["accessed_at"] = accessed_at
         return memory
 

@@ -83,7 +83,7 @@ llm-memory warn "area" "warning"
 
 <!-- LLM-MEMORY --> END
 """
-            self.context_file.write_text(initial_content)
+            self.context_file.write_text(initial_content, encoding="utf-8")
             results["claude_md_created"] = True
 
         return results
@@ -116,7 +116,7 @@ llm-memory warn "area" "warning"
             self.install()
 
         # Use parent's injection logic
-        content = self.context_file.read_text()
+        content = self.context_file.read_text(encoding="utf-8")
 
         start_marker = "<!-- LLM-MEMORY --> START"
         end_marker = "<!-- LLM-MEMORY --> END"
@@ -127,7 +127,7 @@ llm-memory warn "area" "warning"
 
             new_content = f"{before}{start_marker}\n\n{formatted_context}{end_marker}{after}"
 
-            self.context_file.write_text(new_content)
+            self.context_file.write_text(new_content, encoding="utf-8")
             return True
         else:
             return False

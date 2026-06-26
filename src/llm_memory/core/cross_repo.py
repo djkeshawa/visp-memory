@@ -11,6 +11,25 @@ from typing import Any, Dict, List, Optional
 
 from llm_memory.core.repository import RepositoryManager
 from llm_memory.core.storage import BaseStorage
+from llm_memory.layers.semantic import KnowledgeCategory
+
+# Categories that represent warnings/cautions worth surfacing across repos.
+# Memories created via ``semantic.warn`` use FRAGILE_AREA (and are tagged "warning");
+# KNOWN_ISSUE/GOTCHA are the other caution categories. The plain "warning"/"error"
+# strings are free-form categories callers may assign directly.
+_WARNING_CATEGORIES = frozenset(
+    {
+        KnowledgeCategory.FRAGILE_AREA.value,
+        KnowledgeCategory.KNOWN_ISSUE.value,
+        KnowledgeCategory.GOTCHA.value,
+        "warning",
+        "error",
+    }
+)
+# Free-form category strings used to flag breaking / cross-repo-impacting changes.
+# These are not part of the KnowledgeCategory enum; they mirror the convention used
+# by ``core.reporting``.
+_BREAKING_CATEGORIES = frozenset({"breaking_change", "cross_repo_risk"})
 
 
 class CrossRepoContext:
@@ -44,9 +63,16 @@ class CrossRepoContext:
             mems = self.storage.list_memories(repo_id=rid, limit=50)
             all_memories.extend(mems)
 
-        # Filter by category
-        warnings = [m for m in all_memories if m.get("category") in ["warning", "error"]]
-        breaking = [m for m in all_memories if m.get("category") == "breaking_change"]
+        # Filter by category. Warnings are stored under the semantic warning
+        # categories (and tagged "warning"), not under the literal "warning"/"error"
+        # category strings the system never assigns.
+        def _is_warning(memory: Dict[str, Any]) -> bool:
+            if memory.get("category") in _WARNING_CATEGORIES:
+                return True
+            return "warning" in (memory.get("tags") or [])
+
+        warnings = [m for m in all_memories if _is_warning(m)]
+        breaking = [m for m in all_memories if m.get("category") in _BREAKING_CATEGORIES]
         knowledge = [m for m in all_memories if m.get("layer") == "semantic"]
 
         return {
