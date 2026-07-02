@@ -398,12 +398,17 @@ class Neo4jStorage(BaseStorage):
         for source_id in source_ids:
             if source_id == memory_id:
                 continue
-            self.add_relationship(
-                source_id=source_id,
-                target_id=memory_id,
-                relationship=self.SOURCE_LINK_RELATIONSHIP,
-                strength=1.0,
-            )
+            try:
+                self.add_relationship(
+                    source_id=source_id,
+                    target_id=memory_id,
+                    relationship=self.SOURCE_LINK_RELATIONSHIP,
+                    strength=1.0,
+                )
+            except ValueError:
+                # Source IDs can come from imports or legacy data. Invalid cross-repo or
+                # missing sources should not block storing the memory itself.
+                continue
 
         if not enabled or limit <= 0:
             return
@@ -429,12 +434,15 @@ class Neo4jStorage(BaseStorage):
             if score < threshold:
                 continue
 
-            self.add_relationship(
-                source_id=memory_id,
-                target_id=candidate_id,
-                relationship=self.AUTO_LINK_RELATIONSHIP,
-                strength=score,
-            )
+            try:
+                self.add_relationship(
+                    source_id=memory_id,
+                    target_id=candidate_id,
+                    relationship=self.AUTO_LINK_RELATIONSHIP,
+                    strength=score,
+                )
+            except ValueError:
+                continue
 
             created += 1
             if created >= limit:
@@ -498,6 +506,9 @@ class Neo4jStorage(BaseStorage):
         # (canonical SQLite behavior: search only episodic/semantic/intent). An explicit
         # ``layer='raw'`` request is still honored. list_memories keeps all layers.
         exclude_raw = layer is None
+        # Over-fetch factor for the vector path so post-filtering still returns up to
+        # ``limit`` results (the fallback text query applies LIMIT $limit in-query).
+        vector_limit = max(limit * 5, 50)
 
         fallback_cypher = """
             MATCH (m:Memory)
@@ -519,9 +530,13 @@ class Neo4jStorage(BaseStorage):
             )
             cypher = fallback_cypher
         else:
-            # Vector Search
+            # Vector Search. queryNodes returns the k nearest nodes and the post-hoc
+            # WHERE (layer/raw/repo/category/status/importance) can discard some of them,
+            # so over-fetch candidates and re-apply $limit after filtering — otherwise a
+            # page of nearest nodes that are all excluded (e.g. all 'raw') would yield
+            # nothing even when non-raw matches exist further down the index.
             cypher = f"""
-                CALL db.index.vector.queryNodes('{self._vector_index}', $limit, $embedding)
+                CALL db.index.vector.queryNodes('{self._vector_index}', $vector_limit, $embedding)
                 YIELD node, score
                 WHERE ($layer IS NULL OR node.layer = $layer)
                 AND (NOT $exclude_raw OR node.layer IS NULL OR node.layer <> 'raw')
@@ -534,6 +549,8 @@ class Neo4jStorage(BaseStorage):
                 )
                 AND node.importance >= $min_importance
                 RETURN node as m, score
+                ORDER BY score DESC
+                LIMIT $limit
             """
 
         try:
@@ -542,6 +559,7 @@ class Neo4jStorage(BaseStorage):
                 query=query,
                 embedding=embedding,
                 limit=limit,
+                vector_limit=vector_limit,
                 layer=layer,
                 exclude_raw=exclude_raw,
                 repo_id=repo_id,
@@ -558,6 +576,7 @@ class Neo4jStorage(BaseStorage):
                 query=query,
                 embedding=None,
                 limit=limit,
+                vector_limit=vector_limit,
                 layer=layer,
                 exclude_raw=exclude_raw,
                 repo_id=repo_id,

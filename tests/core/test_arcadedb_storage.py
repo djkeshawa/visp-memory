@@ -133,6 +133,15 @@ class FakeArcadeDb:
         where_match = re.search(r" WHERE (.*?) ORDER BY ", sql)
         if where_match:
             for condition in where_match.group(1).split(" AND "):
+                condition = condition.strip()
+                if condition == "(layer IS NULL OR layer <> 'raw')":
+                    # Paramless literal filter (exclude_raw); consumes no parameter.
+                    rows = [
+                        row
+                        for row in rows
+                        if row.get("layer") is None or row.get("layer") != "raw"
+                    ]
+                    continue
                 field = condition.split(" = ?", 1)[0]
                 expected = params[param_index]
                 rows = [row for row in rows if row.get(field) == expected]

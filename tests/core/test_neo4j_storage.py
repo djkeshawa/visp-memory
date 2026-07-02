@@ -413,6 +413,26 @@ def test_neo4j_add_relationship_rejects_cross_repo_memories():
     assert relationship_write_calls(storage) == []
 
 
+def test_neo4j_auto_link_skips_invalid_source_ids_without_failing_store():
+    # Regression: add_relationship now raises for missing/cross-repo pairs, but a bad
+    # source id (e.g. from an import) must not fail the store — the auto-link path skips
+    # it, matching the SQLite backend.
+    storage = neo4j_storage_with_delete_count(1)
+    # The new memory exists; the provenance sources are missing / cross-repo.
+    set_memory_repo_ids(storage, {"new-mem": "repo-a", "other-repo-src": "repo-b"})
+
+    storage._auto_link_memory(
+        memory_id="new-mem",
+        content="hello world",
+        repo_id="repo-a",
+        source_ids=["ghost-src", "other-repo-src"],
+        enabled=False,  # skip the similarity-candidate pass; exercise only source links
+    )
+
+    # No relationship was written for either invalid source, and nothing raised.
+    assert relationship_write_calls(storage) == []
+
+
 def test_neo4j_get_stats_includes_memories_by_category():
     storage = neo4j_storage_with_delete_count(4)
     session = storage.driver.session_obj
