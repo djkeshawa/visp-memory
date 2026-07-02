@@ -16,7 +16,6 @@ from llm_memory.hooks.base import _replace_between_markers
 from llm_memory.hooks.claude_code import ClaudeCodeAdapter
 from llm_memory.hooks.generic import GenericAdapter
 
-
 STUB_CONTEXT = "STUBBED-MEMORY-CONTEXT-BODY"
 
 

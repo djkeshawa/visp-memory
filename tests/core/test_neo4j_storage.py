@@ -385,7 +385,10 @@ def test_neo4j_store_memory_accepts_valid_layers():
         )
         assert memory_id
         # The MERGE ran and the layer label was applied.
-        assert any(f"SET m:{layer.capitalize()}" in query for query, _ in storage.driver.session_obj.calls)
+        label = layer.capitalize()
+        assert any(
+            f"SET m:{label}" in query for query, _ in storage.driver.session_obj.calls
+        )
 
 
 def test_neo4j_add_relationship_rejects_missing_memory():
