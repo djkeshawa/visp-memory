@@ -30,6 +30,7 @@ from rich.table import Table
 
 from llm_memory import Memory, MemoryConfig, __version__
 from llm_memory.config import load_config
+from llm_memory.core.ranking import projected_importance
 from llm_memory.core.reporting import MemoryIntelligenceReporter
 
 app = typer.Typer(
@@ -135,7 +136,13 @@ def _memory_decay_preview(
         current = float(item.get("importance", 0.5) or 0.0)
         accessed = _parse_cli_datetime(item.get("accessed_at") or item.get("created_at"))
         age_days = max(0.0, (now - accessed).total_seconds() / 86400)
-        projected = max(min_importance, current * (0.5 ** (age_days / effective_halflife_days)))
+        projected = projected_importance(
+            importance=current,
+            age_days=age_days,
+            halflife_days=effective_halflife_days,
+            access_count=item.get("access_count", 0),
+            min_importance=min_importance,
+        )
         decay_amount = max(0.0, current - projected)
 
         if current <= min_importance + 0.001:
@@ -1954,7 +1961,11 @@ def hooks_install(
 
     console.print(f"{'Previewing' if dry_run else 'Installing'} {tool} integration...")
 
-    results = adapter.install()
+    try:
+        results = adapter.install()
+    except (OSError, UnicodeError) as e:
+        console.print(f"[red]Error:[/red] failed to install {tool} integration: {e}")
+        raise typer.Exit(1)
 
     for component, success in results.items():
         if success:
@@ -1993,7 +2004,11 @@ def hooks_uninstall(
 
     console.print(f"{'Previewing removal of' if dry_run else 'Uninstalling'} {tool} integration...")
 
-    results = adapter.uninstall()
+    try:
+        results = adapter.uninstall()
+    except (OSError, UnicodeError) as e:
+        console.print(f"[red]Error:[/red] failed to uninstall {tool} integration: {e}")
+        raise typer.Exit(1)
 
     for component, success in results.items():
         if success:
@@ -2032,13 +2047,18 @@ def hooks_update(
 
     console.print(f"Updating {tool} context...")
 
-    success = adapter.update_context(files=files, task=task)
+    try:
+        success = adapter.update_context(files=files, task=task)
+    except (OSError, UnicodeError) as e:
+        console.print(f"[red]Error:[/red] failed to update {tool} context: {e}")
+        raise typer.Exit(1)
 
     if success:
         console.print("[green]✓ Context updated[/green]")
         console.print(f"File: {adapter.get_context_file_path()}")
     else:
         console.print("[red]✗ Failed to update context[/red]")
+        raise typer.Exit(1)
 
 
 @hooks_app.command("list")

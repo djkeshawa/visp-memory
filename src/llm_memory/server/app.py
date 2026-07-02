@@ -4,6 +4,7 @@ FastAPI Server Entry Point
 
 import logging
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -268,11 +269,28 @@ def dashboard_file_path(full_path: str) -> Path:
     return static_root / "index.html"
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan: release storage resources on shutdown.
+
+    The Neo4j driver (and other backends) hold connection pools that must be
+    closed to avoid leaking connections when the server stops.
+    """
+    yield
+    storage = getattr(app.state, "storage", None)
+    if storage is not None:
+        try:
+            storage.close()
+        except Exception as e:  # pragma: no cover - defensive: shutdown must not raise
+            logger.error(f"Error closing storage on shutdown: {e}")
+
+
 # Initialize App
 app = FastAPI(
     title="LLM Central Memory Server",
     description="Shared memory server for multi-repo context",
     version=__version__,
+    lifespan=lifespan,
 )
 
 # CORS configuration

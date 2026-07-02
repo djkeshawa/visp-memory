@@ -63,6 +63,21 @@ SENSITIVE_RECALL_METADATA_KEYS = {"prompt", "response", "query", "content", "mes
 class BaseStorage(ABC):
     """Abstract interface for memory storage."""
 
+    def close(self) -> None:
+        """Release any resources held by the backend (connection pools, sessions).
+
+        Default is a no-op so backends without long-lived handles need not override
+        it. Backends that own such resources (e.g. Neo4j drivers, HTTP sessions,
+        ChromaDB clients) override this and must make it idempotent.
+        """
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
     @abstractmethod
     def store_memory(
         self, content: str, layer: MemoryLayer = "episodic", repo_id: str = None, **kwargs
@@ -553,6 +568,17 @@ class LocalStorage(BaseStorage):
             yield conn
         finally:
             conn.close()
+
+    def close(self) -> None:
+        """Release the ChromaDB client, if one was created. Idempotent.
+
+        SQLite connections are opened and closed per operation (see ``_get_db``),
+        so there is no persistent database handle to release here.
+        """
+        # ChromaDB's PersistentClient exposes no explicit close; drop references so
+        # the underlying system/DB handles can be released by garbage collection.
+        self._collections = {}
+        self._chroma_client = None
 
     def _get_chroma(self):
         """Get or create ChromaDB client."""

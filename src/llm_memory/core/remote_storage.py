@@ -90,6 +90,13 @@ class RemoteStorage(BaseStorage):
             # the probe is best-effort and must not fail client construction.
             pass
 
+    def close(self) -> None:
+        """Close the underlying HTTP session and its connection pool. Idempotent."""
+        session = getattr(self, "session", None)
+        if session is not None:
+            session.close()
+            self.session = None
+
     def _install_request_guard(self) -> None:
         """Inject a default timeout and centralized failure logging into the session."""
         original_request = self.session.request

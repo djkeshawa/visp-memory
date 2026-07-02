@@ -27,7 +27,7 @@ def _extract_memory_id(output: str) -> str:
 @pytest.fixture
 def temp_dir():
     """Create a temporary directory for each test."""
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         yield Path(tmpdir)
 
 
@@ -605,6 +605,45 @@ class TestCLIListCommands:
         assert "Old unused memory" in top_level.output
         assert "Memory Health" in grouped.output
         assert stored["importance"] == 0.8
+
+    def test_decay_preview_projects_accessed_memories_higher(self, cli_env):
+        """Frequently accessed memories should decay slower in the CLI preview.
+
+        This proves the CLI path uses the canonical access_count-aware
+        projected_importance() rather than a hand-rolled age-only formula.
+        """
+        runner.invoke(app, ["init", "--type", "code"])
+
+        from llm_memory import Memory
+        from llm_memory.interfaces.cli import _memory_decay_preview
+
+        memory = Memory()
+        idle_id = memory.record("Idle memory never accessed", importance=0.8)
+        used_id = memory.record("Frequently accessed memory", importance=0.8)
+
+        # Give both the same age but a very different access_count so only the
+        # use-aware half-life stretching can distinguish their projections.
+        with memory._storage._get_db() as conn:
+            conn.execute(
+                "UPDATE memories SET accessed_at = '2020-01-01 00:00:00', access_count = 0 "
+                "WHERE id = ?",
+                (idle_id,),
+            )
+            conn.execute(
+                "UPDATE memories SET accessed_at = '2020-01-01 00:00:00', access_count = 50 "
+                "WHERE id = ?",
+                (used_id,),
+            )
+            conn.commit()
+
+        rows = _memory_decay_preview(memory, halflife_days=30, min_importance=0.0)
+        projected = {row["id"]: row["projected"] for row in rows}
+
+        assert used_id in projected
+        assert idle_id in projected
+        # Same importance and age; the accessed memory must project strictly
+        # higher purely because access_count stretches its half-life.
+        assert projected[used_id] > projected[idle_id]
 
 
 class TestCLIContextGeneration:

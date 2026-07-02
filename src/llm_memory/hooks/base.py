@@ -135,3 +135,38 @@ class LLMToolAdapter(ABC):
             shutil.copy2(path, backup)
             return backup
         return None
+
+
+def _replace_between_markers(
+    content: str, start: str, end: str, replacement: str
+) -> Optional[str]:
+    """
+    Safely replace the region between two markers.
+
+    Guarantees the file is only rewritten when the markers are well-formed:
+    ``start`` must occur exactly once, ``end`` must occur exactly once, and
+    ``start`` must appear before ``end``. In any other case (missing, duplicated,
+    or reordered markers) this returns ``None`` so callers can refuse to write
+    and leave a potentially corrupt/ambiguous file untouched.
+
+    Args:
+        content: Current file content.
+        start: The start marker string.
+        end: The end marker string.
+        replacement: Text to place between ``start`` and ``end``. It is inserted
+            verbatim between the (preserved) marker strings.
+
+    Returns:
+        The rewritten content, or ``None`` if the markers are malformed.
+    """
+    if content.count(start) != 1 or content.count(end) != 1:
+        return None
+
+    start_idx = content.index(start)
+    end_idx = content.index(end)
+    if start_idx >= end_idx:
+        return None
+
+    before = content[:start_idx]
+    after = content[end_idx + len(end):]
+    return f"{before}{start}{replacement}{end}{after}"

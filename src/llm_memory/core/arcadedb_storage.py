@@ -557,9 +557,15 @@ class ArcadeDbStorage(BaseStorage):
             limit=max(limit * 4, 50),
             order_by="importance DESC",
         )
+        # When no layer is requested, exclude the 'raw' layer from search results
+        # (canonical SQLite behavior: search only episodic/semantic/intent). An explicit
+        # ``layer='raw'`` request is still honored. list_memories keeps all layers.
+        exclude_raw = layer is None
         terms = [term.lower() for term in query.split() if term.strip()]
         results = []
         for memory in candidates:
+            if exclude_raw and memory.get("layer") == "raw":
+                continue
             if float(memory.get("importance") or 0.0) < min_importance:
                 continue
             content = str(memory.get("content", ""))

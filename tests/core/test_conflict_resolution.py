@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import Mock
 
 from llm_memory.quality.conflict import ConflictDetector
@@ -57,16 +58,24 @@ def test_conflict_json_error():
     assert result is None
 
 
-def test_conflict_exception():
-    """Test handling of client exceptions."""
+def test_conflict_exception(caplog):
+    """Test handling of client exceptions.
+
+    Behavior is unchanged (returns None), but the failure must now be observable via a
+    logged warning instead of being silently swallowed.
+    """
     storage = Mock()
     client = Mock()
     detector = ConflictDetector(storage, llm_client=client)
 
     client.completion.side_effect = Exception("API Error")
 
-    result = detector.detect_conflicts("Sky is green", [{"id": "1", "content": "Sky is blue"}])
+    with caplog.at_level(logging.WARNING, logger="llm_memory.quality.conflict"):
+        result = detector.detect_conflicts("Sky is green", [{"id": "1", "content": "Sky is blue"}])
     assert result is None
+
+    messages = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("Conflict detection failed" in m and "API Error" in m for m in messages)
 
 
 def test_no_relevant_memories():

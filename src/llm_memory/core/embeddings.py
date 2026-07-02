@@ -9,6 +9,7 @@ Supports:
 - Custom providers
 """
 
+import logging
 import os
 from abc import ABC, abstractmethod
 from typing import List, Optional
@@ -16,6 +17,8 @@ from typing import List, Optional
 import numpy as np
 
 from llm_memory.config import EmbeddingConfig
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_EMBEDDING_MODELS = {
     "sentence-transformers": "all-MiniLM-L6-v2",
@@ -306,12 +309,34 @@ def get_embedding_provider(config: EmbeddingConfig, *, verify: bool = False) -> 
     if provider in {"auto", "cloud"}:
         for candidate in _candidate_providers_for_auto(config):
             try:
-                return _build_provider(config, candidate, verify=True)
-            except Exception:
+                built = _build_provider(config, candidate, verify=True)
+            except Exception as e:
+                # Don't silently swallow init failures during auto-selection: a failed
+                # candidate is exactly why we may end up on NoOpProvider below.
+                logger.warning(
+                    "Embedding provider %r unavailable during auto-selection: %s",
+                    candidate,
+                    e,
+                )
                 continue
+            if isinstance(built, NoOpProvider):
+                _warn_noop_fallback()
+            return built
+        _warn_noop_fallback()
         return NoOpProvider()
 
     return _build_provider(config, provider, verify=verify)
+
+
+def _warn_noop_fallback() -> None:
+    """Warn loudly that embeddings are disabled and semantic search is degraded."""
+    logger.warning(
+        "Embeddings are DISABLED: falling back to NoOpProvider, which returns the "
+        "same vector for every input. Semantic search will be degraded (results are "
+        "effectively unranked). To enable real embeddings, install "
+        "'sentence-transformers' for local embeddings, or set OPENROUTER_API_KEY / "
+        "OPENAI_API_KEY (or EMBEDDING_API_KEY) for a cloud provider, or run Ollama."
+    )
 
 
 def cosine_similarity(a: List[float], b: List[float]) -> float:

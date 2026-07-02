@@ -150,6 +150,23 @@ class Memory:
             api_key=self.config.embedding.api_key,
         )
 
+    def close(self) -> None:
+        """Release storage resources (e.g. the Neo4j driver connection pool).
+
+        Idempotent: safe to call more than once, since the underlying backend
+        ``close()`` implementations are idempotent.
+        """
+        storage = getattr(self, "_storage", None)
+        if storage is not None:
+            storage.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
     # =========================================================================
     # Quick Access Methods
     # =========================================================================

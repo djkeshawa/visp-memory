@@ -65,6 +65,12 @@ from llm_memory.core.ranking import projected_importance
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("llm-memory-mcp")
 
+# MCP schema enums are advisory-only in this SDK: a client can send any value
+# regardless of the declared enum. Validation therefore has to happen server-side
+# in the handlers below. These allow-lists are the canonical sets.
+VALID_LAYERS = frozenset({"raw", "episodic", "semantic", "intent"})
+VALID_INTENT_STATUSES = frozenset({"active", "completed", "closed"})
+
 # Every MCP tool definition (name + description + input schema) is loaded into the
 # assistant's context on every session. With the full surface that is several
 # thousand tokens of overhead before any work begins - at odds with this project's
@@ -170,6 +176,17 @@ def create_mcp_server() -> "Server":
                             "type": "integer",
                             "default": 10,
                             "description": "Maximum results to return",
+                        },
+                        "layers": {
+                            "type": "array",
+                            "items": {
+                                "type": "string",
+                                "enum": ["raw", "episodic", "semantic", "intent"],
+                            },
+                            "description": (
+                                "Optional list of memory layers to search "
+                                "(default: all except raw)"
+                            ),
                         },
                         "repo_id": {
                             "type": "string",
@@ -1130,8 +1147,19 @@ def _handle_context(args: dict[str, Any], memory: Memory) -> str:
 def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
     """Handle search tools."""
     if name == "memory_recall":
+        layers = args.get("layers")
+        if layers is not None:
+            if not isinstance(layers, list):
+                return "Error: 'layers' must be an array of layer names."
+            invalid = [layer for layer in layers if layer not in VALID_LAYERS]
+            if invalid:
+                return (
+                    f"Error: invalid layer(s) {invalid}. "
+                    f"Valid layers are: {', '.join(sorted(VALID_LAYERS))}."
+                )
         results = memory.recall(
             query=args["query"],
+            layers=layers,
             limit=args.get("limit", 10),
             repo_id=args.get("repo_id"),
             log_utility=args.get("log_utility", False),
@@ -1157,9 +1185,15 @@ def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
         return "\n".join(output)
 
     elif name == "memory_remember":
+        layer = args.get("layer")
+        if layer is not None and layer not in VALID_LAYERS:
+            return (
+                f"Error: invalid layer '{layer}'. "
+                f"Valid layers are: {', '.join(sorted(VALID_LAYERS))}."
+            )
         memories = memory._storage.list_memories(
             repo_id=args.get("repo_id") or memory.config.repo_id,
-            layer=args.get("layer"),
+            layer=layer,
             category=args.get("category"),
             status="active",
             limit=1,
@@ -1584,6 +1618,12 @@ def _handle_intent(name: str, args: dict[str, Any], memory: Memory) -> str:
         return f"Cleared {cleared} task(s)"
 
     elif name == "memory_update_intent":
+        status = args.get("status")
+        if status is not None and status not in VALID_INTENT_STATUSES:
+            return (
+                f"Error: invalid status '{status}'. "
+                f"Valid statuses are: {', '.join(sorted(VALID_INTENT_STATUSES))}."
+            )
         update_data = {
             key: args[key]
             for key in ("description", "priority", "status")

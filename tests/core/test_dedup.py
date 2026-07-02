@@ -9,6 +9,9 @@ existing metadata survives and that the merged source ids are retained.
 
 from typing import Any, Dict, List, Optional
 
+import pytest
+
+from llm_memory.core.storage import CHROMADB_AVAILABLE, LocalStorage
 from llm_memory.quality.dedup import Deduplicator
 
 
@@ -65,6 +68,58 @@ def test_merge_preserves_primary_metadata_and_records_provenance():
     # Provenance from the duplicates (and their own sources) is retained, in order,
     # de-duplicated, and excludes the primary itself.
     assert metadata["merged_source_ids"] == ["seed-1", "dup-1", "seed-2", "dup-2"]
+
+
+def test_merge_unions_tags_from_duplicates_into_primary():
+    """Tags on the merged-away duplicates must be unioned into the primary before the
+    duplicates are hard-deleted, otherwise those tags are lost forever."""
+    storage = _FakeStorage(
+        {
+            "primary": {
+                "id": "primary",
+                "content": "Primary fact",
+                "tags": ["auth", "backend"],
+            },
+            "dup-1": {"id": "dup-1", "content": "Dup", "tags": ["backend", "security"]},
+            "dup-2": {"id": "dup-2", "content": "Dup", "tags": ["cache"]},
+            "dup-3": {"id": "dup-3", "content": "Dup"},  # no tags key at all
+        }
+    )
+
+    result = Deduplicator(storage).merge_memories(["primary", "dup-1", "dup-2", "dup-3"])
+
+    assert result == "primary"
+    # Union preserves order (primary first, then newly seen tags) and de-duplicates.
+    assert storage._memories["primary"]["tags"] == [
+        "auth",
+        "backend",
+        "security",
+        "cache",
+    ]
+
+
+def test_merge_unions_tags_persisted_via_local_storage(tmp_path):
+    """End-to-end: with a real LocalStorage backend, the primary's persisted tags are
+    the union of all merged memories' tags after merge_memories."""
+    if not CHROMADB_AVAILABLE:
+        pytest.skip("ChromaDB not installed")
+
+    storage = LocalStorage(tmp_path)
+
+    primary_id = storage.store_memory(
+        "Primary fact", layer="semantic", tags=["auth", "backend"], auto_link=False
+    )
+    dup_id = storage.store_memory(
+        "Duplicate fact", layer="semantic", tags=["backend", "security"], auto_link=False
+    )
+
+    result = Deduplicator(storage).merge_memories([primary_id, dup_id])
+
+    assert result == primary_id
+    assert storage.get_memory(dup_id) is None
+
+    primary = storage.get_memory(primary_id)
+    assert primary["tags"] == ["auth", "backend", "security"]
 
 
 def test_merge_with_empty_list_returns_none():

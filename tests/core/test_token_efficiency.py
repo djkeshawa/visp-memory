@@ -10,7 +10,7 @@ from llm_memory import Memory, MemoryConfig
 
 @pytest.fixture
 def memory():
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         config = MemoryConfig()
         config.storage.data_dir = Path(tmpdir)
         config.embedding.provider = "noop"

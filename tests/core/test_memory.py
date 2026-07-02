@@ -15,7 +15,7 @@ from llm_memory.core.storage import CHROMADB_AVAILABLE, LocalStorage
 @pytest.fixture
 def memory():
     """Create a memory instance with temp directory."""
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         config = MemoryConfig()
         config.storage.data_dir = Path(tmpdir)
         config.embedding.provider = "noop"

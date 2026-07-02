@@ -7,6 +7,7 @@ Integrates with Cursor IDE by injecting context into .cursorrules file.
 from pathlib import Path
 from typing import Dict
 
+from llm_memory.hooks.base import _replace_between_markers
 from llm_memory.hooks.generic import GenericAdapter
 
 
@@ -94,16 +95,16 @@ Last updated: {self._get_timestamp()}
         start_marker = "# LLM-MEMORY START"
         end_marker = "# LLM-MEMORY END"
 
-        if start_marker in content and end_marker in content:
-            before = content.split(start_marker)[0]
-            after = content.split(end_marker)[1]
-
-            new_content = f"{before}{start_marker}\n\n{formatted_context}\n{end_marker}{after}"
-
-            self.context_file.write_text(new_content, encoding="utf-8")
-            return True
-        else:
+        # Only rewrite when the markers are well-formed (present once each,
+        # start before end). Malformed/duplicated/reordered markers => refuse.
+        new_content = _replace_between_markers(
+            content, start_marker, end_marker, f"\n\n{formatted_context}\n"
+        )
+        if new_content is None:
             return False
+
+        self.context_file.write_text(new_content, encoding="utf-8")
+        return True
 
     def _get_timestamp(self) -> str:
         """Get current timestamp."""
