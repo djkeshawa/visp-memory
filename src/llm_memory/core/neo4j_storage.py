@@ -26,6 +26,10 @@ from llm_memory.core.storage import BaseStorage, MemoryLayer
 
 logger = logging.getLogger(__name__)
 _RELATIONSHIP_TYPE_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+# Valid memory layers. ``layer`` is later f-string-interpolated into Cypher as a
+# node label (``SET m:{label}``), so it must be validated against this allow-list
+# before use to prevent label injection.
+_VALID_LAYERS = frozenset({"raw", "episodic", "semantic", "intent"})
 
 
 def _normalize_relationship_type(relationship: str) -> str:
@@ -87,9 +91,18 @@ class Neo4jStorage(BaseStorage):
             raise
 
     def close(self):
-        """Close driver connection."""
-        if self.driver:
-            self.driver.close()
+        """Close driver connection. Idempotent: safe to call more than once."""
+        driver = getattr(self, "driver", None)
+        if driver is not None:
+            driver.close()
+            self.driver = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
 
     def verify_connectivity(self):
         """Verify connection to Neo4j."""
@@ -281,6 +294,10 @@ class Neo4jStorage(BaseStorage):
         auto_link_min_score: float = DEFAULT_AUTO_LINK_MIN_SCORE,
     ) -> str:
         """Store a memory node."""
+        if layer not in _VALID_LAYERS:
+            raise ValueError(
+                "Memory layer must be one of: " + ", ".join(sorted(_VALID_LAYERS))
+            )
 
         # Generate embedding if not provided and embedding function is available
         if embedding is None and self._embedding_fn is not None:
@@ -381,12 +398,17 @@ class Neo4jStorage(BaseStorage):
         for source_id in source_ids:
             if source_id == memory_id:
                 continue
-            self.add_relationship(
-                source_id=source_id,
-                target_id=memory_id,
-                relationship=self.SOURCE_LINK_RELATIONSHIP,
-                strength=1.0,
-            )
+            try:
+                self.add_relationship(
+                    source_id=source_id,
+                    target_id=memory_id,
+                    relationship=self.SOURCE_LINK_RELATIONSHIP,
+                    strength=1.0,
+                )
+            except ValueError:
+                # Source IDs can come from imports or legacy data. Invalid cross-repo or
+                # missing sources should not block storing the memory itself.
+                continue
 
         if not enabled or limit <= 0:
             return
@@ -412,12 +434,15 @@ class Neo4jStorage(BaseStorage):
             if score < threshold:
                 continue
 
-            self.add_relationship(
-                source_id=memory_id,
-                target_id=candidate_id,
-                relationship=self.AUTO_LINK_RELATIONSHIP,
-                strength=score,
-            )
+            try:
+                self.add_relationship(
+                    source_id=memory_id,
+                    target_id=candidate_id,
+                    relationship=self.AUTO_LINK_RELATIONSHIP,
+                    strength=score,
+                )
+            except ValueError:
+                continue
 
             created += 1
             if created >= limit:
@@ -477,9 +502,18 @@ class Neo4jStorage(BaseStorage):
                 logger.warning(f"Failed to generate embedding for query: {e}")
                 embedding = None
 
+        # When no layer is requested, exclude the 'raw' layer from search results
+        # (canonical SQLite behavior: search only episodic/semantic/intent). An explicit
+        # ``layer='raw'`` request is still honored. list_memories keeps all layers.
+        exclude_raw = layer is None
+        # Over-fetch factor for the vector path so post-filtering still returns up to
+        # ``limit`` results (the fallback text query applies LIMIT $limit in-query).
+        vector_limit = max(limit * 5, 50)
+
         fallback_cypher = """
             MATCH (m:Memory)
             WHERE ($layer IS NULL OR m.layer = $layer)
+            AND (NOT $exclude_raw OR m.layer IS NULL OR m.layer <> 'raw')
             AND ($repo_id IS NULL OR m.repo_id = $repo_id)
             AND ($category IS NULL OR m.category = $category)
             AND ($status = 'all' OR m.status = $status OR ($status = 'active' AND m.status IS NULL))
@@ -496,11 +530,16 @@ class Neo4jStorage(BaseStorage):
             )
             cypher = fallback_cypher
         else:
-            # Vector Search
+            # Vector Search. queryNodes returns the k nearest nodes and the post-hoc
+            # WHERE (layer/raw/repo/category/status/importance) can discard some of them,
+            # so over-fetch candidates and re-apply $limit after filtering — otherwise a
+            # page of nearest nodes that are all excluded (e.g. all 'raw') would yield
+            # nothing even when non-raw matches exist further down the index.
             cypher = f"""
-                CALL db.index.vector.queryNodes('{self._vector_index}', $limit, $embedding)
+                CALL db.index.vector.queryNodes('{self._vector_index}', $vector_limit, $embedding)
                 YIELD node, score
                 WHERE ($layer IS NULL OR node.layer = $layer)
+                AND (NOT $exclude_raw OR node.layer IS NULL OR node.layer <> 'raw')
                 AND ($repo_id IS NULL OR node.repo_id = $repo_id)
                 AND ($category IS NULL OR node.category = $category)
                 AND (
@@ -510,6 +549,8 @@ class Neo4jStorage(BaseStorage):
                 )
                 AND node.importance >= $min_importance
                 RETURN node as m, score
+                ORDER BY score DESC
+                LIMIT $limit
             """
 
         try:
@@ -518,7 +559,9 @@ class Neo4jStorage(BaseStorage):
                 query=query,
                 embedding=embedding,
                 limit=limit,
+                vector_limit=vector_limit,
                 layer=layer,
+                exclude_raw=exclude_raw,
                 repo_id=repo_id,
                 category=category,
                 status=status,
@@ -533,7 +576,9 @@ class Neo4jStorage(BaseStorage):
                 query=query,
                 embedding=None,
                 limit=limit,
+                vector_limit=vector_limit,
                 layer=layer,
+                exclude_raw=exclude_raw,
                 repo_id=repo_id,
                 category=category,
                 status=status,
@@ -889,6 +934,20 @@ class Neo4jStorage(BaseStorage):
             return result.single()["c"] > 0
 
     # Relationship Operations
+    def _get_memory_repo_id(self, memory_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch a memory's repo_id for validation without bumping access_count.
+
+        Returns ``{"repo_id": ...}`` when the memory exists, otherwise ``None``.
+        """
+        with self.driver.session() as session:
+            record = session.run(
+                "MATCH (m:Memory {id: $id}) RETURN m.repo_id AS repo_id",
+                id=memory_id,
+            ).single()
+            if record is None:
+                return None
+            return {"repo_id": record["repo_id"]}
+
     def add_relationship(
         self,
         source_id: str,
@@ -898,8 +957,10 @@ class Neo4jStorage(BaseStorage):
         evidence: Dict[str, Any] = None,
     ) -> str:
         """Create a relationship."""
+        # Validate cheap/unsafe inputs before touching the database: the relationship
+        # type is interpolated into Cypher, so reject injection and unsupported
+        # confidence values before issuing any query.
         rel_type = _normalize_relationship_type(relationship)
-        rel_id = self._generate_id(f"{source_id}-{target_id}-{rel_type}")
         auto_rel_type = _normalize_relationship_type(self.AUTO_LINK_RELATIONSHIP)
         evidence_data = self._normalize_relationship_evidence(
             evidence,
@@ -907,6 +968,17 @@ class Neo4jStorage(BaseStorage):
             created_at=None,
             legacy=False,
         )
+
+        # Both memories must exist and share a repository (parity with LocalStorage
+        # and ArcadeDbStorage).
+        source = self._get_memory_repo_id(source_id)
+        target = self._get_memory_repo_id(target_id)
+        if source is None or target is None:
+            raise ValueError("Relationship source and target memories must both exist")
+        if source["repo_id"] != target["repo_id"]:
+            raise ValueError("Memory relationships cannot cross repository boundaries")
+
+        rel_id = self._generate_id(f"{source_id}-{target_id}-{rel_type}")
 
         with self.driver.session() as session:
             if rel_type != auto_rel_type:
@@ -1089,29 +1161,18 @@ class Neo4jStorage(BaseStorage):
             res = session.run(query, params)
             stats["memories_by_layer"] = {rec["layer"]: rec["c"] for rec in res}
 
+            # Count by category
+            category_query = (
+                f"{match_clause}{where_clause} RETURN m.category as category, count(m) as c"
+            )
+            res = session.run(category_query, params)
+            stats["memories_by_category"] = {rec["category"]: rec["c"] for rec in res}
+
             # Total
             stats["total_memories"] = sum(stats["memories_by_layer"].values())
 
-            # Intents (Intents might not have repo_id property on the node itself yet?
-            # We implemented set_intent but need to check if it adds repo_id)
-            # Assuming we want to filter intents too if we add repo_id to them.
-            # For now, let's keep intents global or update set_intent?
-            # set_intent in Neo4jStorage may not take repo_id in older deployments.
-            # Keep intents global unless the property exists.
-
-            # Count active intents
-            # If intents are shared, maybe we don't filter?
-            # But goals should probably be isolated too.
-            # Let's check if we can filter by repo_id on Intent nodes.
-            # Assuming set_intent adds it if passed.
-
-            # For now, just filtering Memories.
-
-            # Rels
-            # Rels between filtered memories
-            rel_query = """
-                MATCH (a:Memory)-[r]->(b:Memory)
-                """
+            # Relationships between filtered memories
+            rel_query = "MATCH (a:Memory)-[r]->(b:Memory)"
             if repo_id:
                 rel_query += " WHERE a.repo_id = $repo_id AND b.repo_id = $repo_id"
             rel_query += " RETURN count(r) as c"
@@ -1119,18 +1180,10 @@ class Neo4jStorage(BaseStorage):
             res = session.run(rel_query, params)
             stats["total_relationships"] = res.single()["c"]
 
-            # Active Intents count requires Intent nodes to have repo_id.
-            # Let's query active intents with repo_id if available
+            # Active intents, scoped to repo_id when provided.
             intent_query = "MATCH (i:Intent {status: 'active'})"
-            # Note: We haven't verified if Intent nodes have repo_id.
-            # If not, this might return 0 if we filter.
-            # Let's assume for this step we only filter Memories strictly.
-            # But for consistency, valid project stats should include project goals.
-
-            # Let's assume global intents for now or filter if property exists
             if repo_id:
                 intent_query += " WHERE i.repo_id = $repo_id"
-
             intent_query += " RETURN count(i) as c"
 
             res = session.run(intent_query, params)
@@ -1375,15 +1428,17 @@ class Neo4jStorage(BaseStorage):
 
     def add_team_member(self, team_id: str, user_id: str) -> bool:
         with self.driver.session() as session:
-            session.run(
+            result = session.run(
                 """
                 MATCH (t:Team {id: $team_id}), (u:User {id: $user_id})
-                MERGE (u)-[:MEMBER_OF]->(t)
+                MERGE (u)-[r:MEMBER_OF]->(t)
+                RETURN count(r) as c
             """,
                 team_id=team_id,
                 user_id=user_id,
             )
-        return True
+            record = result.single()
+            return bool(record and record["c"] > 0)
 
     def get_user_teams(self, user_id: str) -> List[Dict[str, Any]]:
         with self.driver.session() as session:

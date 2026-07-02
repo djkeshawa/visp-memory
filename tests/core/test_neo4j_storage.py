@@ -1,13 +1,15 @@
+import pytest
+
 from llm_memory.core.neo4j_storage import Neo4jStorage
 
 
 class FakeResult:
-    def __init__(self, count, records=None):
-        self.count = count
+    def __init__(self, single_value=None, records=None):
+        self._single = single_value
         self.records = records or []
 
     def single(self):
-        return {"c": self.count}
+        return self._single
 
     def __iter__(self):
         return iter(self.records)
@@ -18,12 +20,21 @@ class FakeSession:
         self.result_count = result_count
         self.records = records or []
         self.calls = []
+        # Optional overrides keyed by a substring of the Cypher query. Each maps to
+        # a callable(params) -> FakeResult so tests can model backend-specific reads
+        # (e.g. memory existence lookups for add_relationship validation).
+        self.query_results = {}
 
     def run(self, query, parameters=None, **params):
         merged_params = dict(parameters or {})
         merged_params.update(params)
         self.calls.append((query, merged_params))
-        return FakeResult(self.result_count, self.records)
+
+        for needle, factory in self.query_results.items():
+            if needle in query:
+                return factory(merged_params)
+
+        return FakeResult({"c": self.result_count}, self.records)
 
     def __enter__(self):
         return self
@@ -35,9 +46,13 @@ class FakeSession:
 class FakeDriver:
     def __init__(self, result_count, records=None):
         self.session_obj = FakeSession(result_count, records)
+        self.close_calls = 0
 
     def session(self):
         return self.session_obj
+
+    def close(self):
+        self.close_calls += 1
 
 
 class FakeNeo4jDateTime:
@@ -54,6 +69,31 @@ def neo4j_storage_with_delete_count(count, records=None):
     storage._vector_index = "memory_embedding_index"
     storage._uses_noop_embeddings = False
     return storage
+
+
+def set_memory_repo_ids(storage, repo_by_id):
+    """Make _get_memory_repo_id lookups resolve against ``repo_by_id``.
+
+    ``repo_by_id`` maps memory id -> repo_id. Ids absent from the mapping are treated
+    as missing memories (the lookup returns None).
+    """
+
+    def factory(params):
+        memory_id = params["id"]
+        if memory_id not in repo_by_id:
+            return FakeResult(single_value=None)
+        return FakeResult(single_value={"repo_id": repo_by_id[memory_id]})
+
+    storage.driver.session_obj.query_results["RETURN m.repo_id AS repo_id"] = factory
+
+
+def relationship_write_calls(storage):
+    """Return only the DELETE/MERGE calls, skipping the existence-lookup reads."""
+    return [
+        (query, params)
+        for query, params in storage.driver.session_obj.calls
+        if "RETURN m.repo_id AS repo_id" not in query
+    ]
 
 
 def test_neo4j_delete_memory_returns_false_when_missing():
@@ -86,16 +126,18 @@ def test_neo4j_add_relationship_rejects_unsafe_relationship_type():
 
 def test_neo4j_add_relationship_normalizes_safe_relationship_type():
     storage = neo4j_storage_with_delete_count(1)
+    set_memory_repo_ids(storage, {"source": "repo-a", "target": "repo-a"})
 
     rel_id = storage.add_relationship("source", "target", "depends on")
 
     assert rel_id
-    delete_query, delete_params = storage.driver.session_obj.calls[0]
+    write_calls = relationship_write_calls(storage)
+    delete_query, delete_params = write_calls[0]
     assert "[r:RELATED_TO]" in delete_query
     assert delete_params["source_id"] == "source"
     assert delete_params["target_id"] == "target"
 
-    query, params = storage.driver.session_obj.calls[1]
+    query, params = write_calls[1]
     assert "[r:DEPENDS_ON]" in query
     assert params["source_id"] == "source"
     assert params["target_id"] == "target"
@@ -110,6 +152,7 @@ def test_neo4j_add_relationship_normalizes_safe_relationship_type():
 
 def test_neo4j_add_relationship_persists_evidence_metadata():
     storage = neo4j_storage_with_delete_count(1)
+    set_memory_repo_ids(storage, {"source": "repo-a", "target": "repo-a"})
 
     storage.add_relationship(
         "source",
@@ -127,7 +170,7 @@ def test_neo4j_add_relationship_persists_evidence_metadata():
         },
     )
 
-    query, params = storage.driver.session_obj.calls[1]
+    query, params = relationship_write_calls(storage)[1]
     assert "[r:OBSERVED_IN]" in query
     assert params["confidence"] == "observed"
     assert params["confidence_score"] == 0.88
@@ -323,3 +366,175 @@ def test_neo4j_update_memory_refreshes_dimension_specific_vector():
     assert "setNodeVectorProperty(m, $vector_property, $embedding)" in vector_query
     assert vector_params["vector_property"] == "embedding_2"
     assert vector_params["embedding"] == [15.0, 0.0]
+
+
+def test_neo4j_store_memory_rejects_invalid_layer():
+    storage = neo4j_storage_with_delete_count(1)
+
+    with pytest.raises(ValueError, match="Memory layer must be one of"):
+        storage.store_memory("bad layer", layer="bogus", auto_link=False)
+
+    assert storage.driver.session_obj.calls == []
+
+
+def test_neo4j_store_memory_accepts_valid_layers():
+    for layer in ("raw", "episodic", "semantic", "intent"):
+        storage = neo4j_storage_with_delete_count(1)
+        memory_id = storage.store_memory(
+            "valid layer", layer=layer, repo_id="repo-a", auto_link=False
+        )
+        assert memory_id
+        # The MERGE ran and the layer label was applied.
+        label = layer.capitalize()
+        assert any(
+            f"SET m:{label}" in query for query, _ in storage.driver.session_obj.calls
+        )
+
+
+def test_neo4j_add_relationship_rejects_missing_memory():
+    storage = neo4j_storage_with_delete_count(1)
+    # Only "source" exists; "target" is absent from the mapping.
+    set_memory_repo_ids(storage, {"source": "repo-a"})
+
+    with pytest.raises(ValueError, match="must both exist"):
+        storage.add_relationship("source", "target", "related_to")
+
+    # No DELETE/MERGE write should have been issued.
+    assert relationship_write_calls(storage) == []
+
+
+def test_neo4j_add_relationship_rejects_cross_repo_memories():
+    storage = neo4j_storage_with_delete_count(1)
+    set_memory_repo_ids(storage, {"source": "repo-a", "target": "repo-b"})
+
+    with pytest.raises(ValueError, match="cannot cross repository"):
+        storage.add_relationship("source", "target", "related_to")
+
+    assert relationship_write_calls(storage) == []
+
+
+def test_neo4j_auto_link_skips_invalid_source_ids_without_failing_store():
+    # Regression: add_relationship now raises for missing/cross-repo pairs, but a bad
+    # source id (e.g. from an import) must not fail the store — the auto-link path skips
+    # it, matching the SQLite backend.
+    storage = neo4j_storage_with_delete_count(1)
+    # The new memory exists; the provenance sources are missing / cross-repo.
+    set_memory_repo_ids(storage, {"new-mem": "repo-a", "other-repo-src": "repo-b"})
+
+    storage._auto_link_memory(
+        memory_id="new-mem",
+        content="hello world",
+        repo_id="repo-a",
+        source_ids=["ghost-src", "other-repo-src"],
+        enabled=False,  # skip the similarity-candidate pass; exercise only source links
+    )
+
+    # No relationship was written for either invalid source, and nothing raised.
+    assert relationship_write_calls(storage) == []
+
+
+def test_neo4j_get_stats_includes_memories_by_category():
+    storage = neo4j_storage_with_delete_count(4)
+    session = storage.driver.session_obj
+    session.query_results["RETURN m.layer as layer"] = lambda params: FakeResult(
+        records=[
+            {"layer": "semantic", "c": 3},
+            {"layer": "episodic", "c": 1},
+        ]
+    )
+    session.query_results["RETURN m.category as category"] = lambda params: FakeResult(
+        records=[
+            {"category": "backend", "c": 2},
+            {"category": "general", "c": 2},
+        ]
+    )
+
+    stats = storage.get_stats()
+
+    assert set(stats.keys()) == {
+        "total_memories",
+        "memories_by_layer",
+        "memories_by_category",
+        "active_intents",
+        "total_relationships",
+    }
+    assert stats["memories_by_layer"] == {"semantic": 3, "episodic": 1}
+    assert stats["memories_by_category"] == {"backend": 2, "general": 2}
+    assert stats["total_memories"] == 4
+
+
+def test_neo4j_add_team_member_returns_false_when_missing():
+    storage = neo4j_storage_with_delete_count(0)
+
+    assert storage.add_team_member("team-a", "missing-user") is False
+
+
+def test_neo4j_add_team_member_returns_true_when_linked():
+    storage = neo4j_storage_with_delete_count(1)
+
+    assert storage.add_team_member("team-a", "alice") is True
+    query, _ = storage.driver.session_obj.calls[0]
+    assert "MERGE (u)-[r:MEMBER_OF]->(t)" in query
+    assert "RETURN count(r) as c" in query
+
+
+def test_neo4j_search_excludes_raw_layer_by_default():
+    storage = neo4j_storage_with_delete_count(0)
+    captured = {}
+
+    def factory(params):
+        captured["params"] = params
+        captured["ran"] = True
+        return FakeResult(records=[])
+
+    storage.driver.session_obj.query_results["toLower(m.content) CONTAINS"] = factory
+
+    storage.search_memories("anything")
+
+    assert captured.get("ran") is True
+    query = storage.driver.session_obj.calls[0][0]
+    assert "m.layer <> 'raw'" in query
+    assert captured["params"]["exclude_raw"] is True
+    assert captured["params"]["layer"] is None
+
+
+def test_neo4j_close_called_via_context_manager():
+    storage = neo4j_storage_with_delete_count(0)
+    driver = storage.driver
+
+    with storage as ctx:
+        assert ctx is storage
+        assert driver.close_calls == 0
+
+    # __exit__ delegates to close(), which closes the driver exactly once.
+    assert driver.close_calls == 1
+    # close() clears the driver reference so the pool can be released.
+    assert storage.driver is None
+
+
+def test_neo4j_double_close_is_safe():
+    storage = neo4j_storage_with_delete_count(0)
+    driver = storage.driver
+
+    storage.close()
+    # A second close() must not raise and must not re-close the already-closed driver.
+    storage.close()
+
+    assert driver.close_calls == 1
+    assert storage.driver is None
+
+
+def test_neo4j_search_includes_raw_when_layer_requested():
+    storage = neo4j_storage_with_delete_count(0)
+    captured = {}
+
+    def factory(params):
+        captured["params"] = params
+        return FakeResult(records=[])
+
+    storage.driver.session_obj.query_results["toLower(m.content) CONTAINS"] = factory
+
+    storage.search_memories("anything", layer="raw")
+
+    assert captured["params"]["exclude_raw"] is False
+    assert captured["params"]["layer"] == "raw"

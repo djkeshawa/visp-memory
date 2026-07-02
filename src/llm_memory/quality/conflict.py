@@ -4,10 +4,13 @@ Conflict Resolution Module
 Identifies and resolves conflicting information in memories.
 """
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from llm_memory.core.llm import LLMClient, create_llm_client
 from llm_memory.core.storage import BaseStorage
+
+logger = logging.getLogger(__name__)
 
 
 class ConflictDetector:
@@ -77,8 +80,10 @@ If no, return JSON: {{"conflict": false}}
                 return result
             return None
 
-        except Exception:
-            # Fallback or log error
+        except Exception as e:
+            # Don't let LLM/parse failures pass silently; keep returning None
+            # (behavior unchanged) but make the failure observable.
+            logger.warning("Conflict detection failed: %s", e)
             return None
 
     def scan_all(self, layer: str = "semantic", sample_size: int = 50) -> List[Dict[str, Any]]:

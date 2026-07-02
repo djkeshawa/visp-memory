@@ -19,7 +19,7 @@ class TestMCPServer:
             if not MCP_AVAILABLE:
                 pytest.skip("MCP not installed")
 
-            with tempfile.TemporaryDirectory() as tmpdir:
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
                 config = MemoryConfig()
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
@@ -45,7 +45,7 @@ class TestMCPServer:
             # Create a temp memory for testing
             import tempfile
 
-            with tempfile.TemporaryDirectory() as tmpdir:
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
                 config = MemoryConfig()
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
@@ -68,7 +68,7 @@ class TestMCPServer:
 
             import tempfile
 
-            with tempfile.TemporaryDirectory() as tmpdir:
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
                 config = MemoryConfig()
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
@@ -90,7 +90,7 @@ class TestMCPServer:
             if not MCP_AVAILABLE:
                 pytest.skip("MCP not installed")
 
-            with tempfile.TemporaryDirectory() as tmpdir:
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
                 config = MemoryConfig()
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
@@ -132,7 +132,7 @@ class TestMCPServer:
             if not MCP_AVAILABLE:
                 pytest.skip("MCP not installed")
 
-            with tempfile.TemporaryDirectory() as tmpdir:
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
                 config = MemoryConfig()
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
@@ -159,7 +159,7 @@ class TestMCPServer:
             if not MCP_AVAILABLE:
                 pytest.skip("MCP not installed")
 
-            with tempfile.TemporaryDirectory() as tmpdir:
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
                 config = MemoryConfig()
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
@@ -198,7 +198,7 @@ class TestMCPServer:
             if not MCP_AVAILABLE:
                 pytest.skip("MCP not installed")
 
-            with tempfile.TemporaryDirectory() as tmpdir:
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
                 config = MemoryConfig()
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
@@ -223,7 +223,7 @@ class TestMCPServer:
             if not MCP_AVAILABLE:
                 pytest.skip("MCP not installed")
 
-            with tempfile.TemporaryDirectory() as tmpdir:
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
                 config = MemoryConfig()
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
@@ -266,7 +266,7 @@ class TestMCPServer:
             if not MCP_AVAILABLE:
                 pytest.skip("MCP not installed")
 
-            with tempfile.TemporaryDirectory() as tmpdir:
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
                 config = MemoryConfig()
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
@@ -304,7 +304,7 @@ class TestMCPServer:
         """MCP recall-oriented output includes relationship evidence when available."""
         from llm_memory.interfaces.mcp import _format_relevant_memory
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
             config = MemoryConfig()
             config.storage.data_dir = Path(tmpdir)
             config.embedding.provider = "noop"
@@ -344,7 +344,7 @@ class TestMCPServer:
         """MCP trace output includes graph relationship reasons."""
         from llm_memory.interfaces.mcp import handle_tool
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
             config = MemoryConfig()
             config.storage.data_dir = Path(tmpdir)
             config.embedding.provider = "noop"
@@ -437,7 +437,7 @@ class TestMCPToolProfile:
         if not MCP_AVAILABLE:
             pytest.skip("MCP not installed")
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
             config = MemoryConfig()
             config.storage.data_dir = Path(tmpdir)
             config.embedding.provider = "noop"
@@ -450,3 +450,174 @@ class TestMCPToolProfile:
                     # Reached a handler that requires arguments; the name is valid.
                     continue
                 assert not result.startswith("Unknown tool"), name
+
+    @pytest.mark.asyncio
+    async def test_mcp_remember_rejects_invalid_layer(self):
+        """memory_remember must reject an out-of-vocabulary layer, not silently no-op."""
+        try:
+            from llm_memory.interfaces.mcp import MCP_AVAILABLE, handle_tool
+
+            if not MCP_AVAILABLE:
+                pytest.skip("MCP not installed")
+
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+                config = MemoryConfig()
+                config.storage.data_dir = Path(tmpdir)
+                config.embedding.provider = "noop"
+                memory = Memory(config=config)
+                memory.record("Some memory")
+
+                result = await handle_tool(
+                    "memory_remember", {"layer": "bogus"}, memory
+                )
+
+            assert result.startswith("Error:")
+            assert "bogus" in result
+        except ImportError:
+            pytest.skip("MCP not installed")
+
+    @pytest.mark.asyncio
+    async def test_mcp_remember_accepts_valid_layer(self):
+        """A valid layer filter still works on memory_remember."""
+        try:
+            from llm_memory.interfaces.mcp import MCP_AVAILABLE, handle_tool
+
+            if not MCP_AVAILABLE:
+                pytest.skip("MCP not installed")
+
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+                config = MemoryConfig()
+                config.storage.data_dir = Path(tmpdir)
+                config.embedding.provider = "noop"
+                memory = Memory(config=config)
+                memory.record("Some memory")
+
+                result = await handle_tool(
+                    "memory_remember", {"layer": "episodic"}, memory
+                )
+
+            assert not result.startswith("Error:")
+        except ImportError:
+            pytest.skip("MCP not installed")
+
+    @pytest.mark.asyncio
+    async def test_mcp_update_intent_rejects_invalid_status(self):
+        """memory_update_intent must reject an invalid status like the CLI does."""
+        try:
+            from llm_memory.interfaces.mcp import MCP_AVAILABLE, handle_tool
+
+            if not MCP_AVAILABLE:
+                pytest.skip("MCP not installed")
+
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+                config = MemoryConfig()
+                config.storage.data_dir = Path(tmpdir)
+                config.embedding.provider = "noop"
+                memory = Memory(config=config)
+                intent_id = memory.goal("Ship the release")
+
+                result = await handle_tool(
+                    "memory_update_intent",
+                    {"intent_id": intent_id, "status": "done"},
+                    memory,
+                )
+
+                # The intent must be untouched by the rejected update: it is
+                # still active.
+                active_ids = {i["id"] for i in memory.intent.get_active()}
+
+            assert result.startswith("Error:")
+            assert "done" in result
+            assert intent_id in active_ids
+        except ImportError:
+            pytest.skip("MCP not installed")
+
+    @pytest.mark.asyncio
+    async def test_mcp_update_intent_accepts_valid_status(self):
+        """A valid status update goes through on memory_update_intent."""
+        try:
+            from llm_memory.interfaces.mcp import MCP_AVAILABLE, handle_tool
+
+            if not MCP_AVAILABLE:
+                pytest.skip("MCP not installed")
+
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+                config = MemoryConfig()
+                config.storage.data_dir = Path(tmpdir)
+                config.embedding.provider = "noop"
+                memory = Memory(config=config)
+                intent_id = memory.goal("Ship the release")
+
+                result = await handle_tool(
+                    "memory_update_intent",
+                    {"intent_id": intent_id, "status": "completed"},
+                    memory,
+                )
+                # A completed intent is no longer active.
+                active_ids = {i["id"] for i in memory.intent.get_active()}
+
+            assert "Intent updated" in result
+            assert intent_id not in active_ids
+        except ImportError:
+            pytest.skip("MCP not installed")
+
+    @pytest.mark.asyncio
+    async def test_mcp_recall_rejects_invalid_layers(self):
+        """memory_recall must reject an unknown layer in the layers filter."""
+        try:
+            from llm_memory.interfaces.mcp import MCP_AVAILABLE, handle_tool
+
+            if not MCP_AVAILABLE:
+                pytest.skip("MCP not installed")
+
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+                config = MemoryConfig()
+                config.storage.data_dir = Path(tmpdir)
+                config.embedding.provider = "noop"
+                memory = Memory(config=config)
+                memory.record("Auth refresh fix")
+
+                result = await handle_tool(
+                    "memory_recall",
+                    {"query": "auth", "layers": ["semantic", "bogus"]},
+                    memory,
+                )
+
+            assert result.startswith("Error:")
+            assert "bogus" in result
+        except ImportError:
+            pytest.skip("MCP not installed")
+
+    @pytest.mark.asyncio
+    async def test_mcp_recall_applies_layers_filter(self):
+        """memory_recall passes a valid layers filter through to Memory.recall."""
+        try:
+            from llm_memory.interfaces.mcp import MCP_AVAILABLE, handle_tool
+
+            if not MCP_AVAILABLE:
+                pytest.skip("MCP not installed")
+
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+                config = MemoryConfig()
+                config.storage.data_dir = Path(tmpdir)
+                config.embedding.provider = "noop"
+                memory = Memory(config=config)
+
+                # A semantic (knowledge) memory and an episodic (event) memory.
+                memory.learn("Auth tokens rotate every 15 minutes")
+                memory.record("Fixed auth refresh bug")
+
+                with mock.patch.object(
+                    memory, "recall", wraps=memory.recall
+                ) as recall_spy:
+                    result = await handle_tool(
+                        "memory_recall",
+                        {"query": "auth", "layers": ["semantic"]},
+                        memory,
+                    )
+
+            # The filter must reach Memory.recall verbatim.
+            assert recall_spy.call_args.kwargs["layers"] == ["semantic"]
+            assert not result.startswith("Error:")
+        except ImportError:
+            pytest.skip("MCP not installed")

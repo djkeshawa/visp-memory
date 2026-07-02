@@ -200,6 +200,12 @@ class Deduplicator:
         # inside metadata rather than being silently dropped.
         merged_source_ids = list(primary_mem.get("source_ids") or [])
 
+        # Union tags from the merged-away duplicates into the primary. Otherwise the
+        # duplicates are hard-deleted below and their tags are lost forever. Order is
+        # preserved (primary's tags first, then newly seen tags from duplicates) and
+        # duplicates are dropped via ``dict.fromkeys``.
+        merged_tags = list(primary_mem.get("tags") or [])
+
         for oid in others:
             mem = self.storage.get_memory(oid)
             if not mem:
@@ -210,13 +216,25 @@ class Deduplicator:
             if mem.get("source_ids"):
                 merged_source_ids.extend(mem["source_ids"])
 
-            # Delete the duplicate
+            # Preserve the duplicate's tags on the primary before deletion.
+            if mem.get("tags"):
+                merged_tags.extend(mem["tags"])
+
+            # Delete the duplicate.
+            #
+            # NOTE (known limitation): ``delete_memory`` cascades and drops any graph
+            # relationships that pointed at this duplicate. We do NOT re-point those
+            # relationships at the primary here; relationship re-pointing is out of
+            # scope for the merge operation.
             self.storage.delete_memory(oid)
 
         # De-duplicate while preserving order, dropping any self-reference.
         deduped_source_ids = [
             sid for sid in dict.fromkeys(merged_source_ids) if sid and sid != primary_id
         ]
+
+        # De-duplicate tags while preserving insertion order, dropping empties.
+        deduped_tags = [tag for tag in dict.fromkeys(merged_tags) if tag]
 
         # Merge into the primary's existing metadata instead of replacing it, so
         # prior keys (applies_to, established_at, compressed_from, ...) survive.
@@ -225,7 +243,7 @@ class Deduplicator:
             "merged_count": len(others),
             "merged_source_ids": deduped_source_ids,
         }
-        self.storage.update_memory(primary_id, metadata=merged_metadata)
+        self.storage.update_memory(primary_id, metadata=merged_metadata, tags=deduped_tags)
 
         return primary_id
 

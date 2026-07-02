@@ -10,7 +10,7 @@ Supports two modes:
 from pathlib import Path
 from typing import Dict
 
-from llm_memory.hooks.base import LLMToolAdapter
+from llm_memory.hooks.base import LLMToolAdapter, _replace_between_markers
 
 
 class GenericAdapter(LLMToolAdapter):
@@ -84,6 +84,8 @@ class GenericAdapter(LLMToolAdapter):
                 if self.injection_marker in content:
                     results["injection_markers"] = True
                 else:
+                    # About to modify an existing user file - back it up first.
+                    self._backup_file(self.context_file)
                     # Add markers
                     if self.append_mode:
                         with self.context_file.open("a", encoding="utf-8") as f:
@@ -128,21 +130,25 @@ class GenericAdapter(LLMToolAdapter):
                 start_marker = f"{self.injection_marker} START"
                 end_marker = f"{self.injection_marker} END"
 
-                if start_marker in content and end_marker in content:
-                    # Split and remove section
-                    before = content.split(start_marker)[0]
-                    after = content.split(end_marker)[1] if end_marker in content else ""
-
-                    new_content = before + after
+                # Only rewrite when the markers are well-formed (each present
+                # exactly once and in order). This removes the markers too, so
+                # collapse them to an empty region first.
+                collapsed = _replace_between_markers(content, start_marker, end_marker, "")
+                if collapsed is not None:
+                    # Strip the (now adjacent) marker strings themselves.
+                    new_content = collapsed.replace(start_marker + end_marker, "")
+                    # Back up before the destructive write.
+                    self._backup_file(self.context_file)
                     self.context_file.write_text(new_content.strip() + "\n", encoding="utf-8")
                     results["injection_removed"] = True
                 else:
-                    results["injection_removed"] = False  # Not found
+                    results["injection_removed"] = False  # Not found / malformed
             else:
                 results["injection_removed"] = True  # File doesn't exist
         else:
             # Remove standalone file
             if self.context_file.exists():
+                self._backup_file(self.context_file)
                 self.context_file.unlink()
                 results["context_file"] = True
             else:
@@ -181,18 +187,17 @@ class GenericAdapter(LLMToolAdapter):
             start_marker = f"{self.injection_marker} START"
             end_marker = f"{self.injection_marker} END"
 
-            # Replace content between markers
-            if start_marker in content and end_marker in content:
-                before = content.split(start_marker)[0]
-                after = content.split(end_marker)[1]
-
-                new_content = f"{before}{start_marker}\n\n{full_context}\n{end_marker}{after}"
-
-                self.context_file.write_text(new_content, encoding="utf-8")
-                return True
-            else:
-                # Markers not found - can't inject
+            # Replace content between markers, but only if the markers are
+            # well-formed (present once each, start before end). A malformed,
+            # duplicated, or reordered marker file is never rewritten.
+            new_content = _replace_between_markers(
+                content, start_marker, end_marker, f"\n\n{full_context}\n"
+            )
+            if new_content is None:
                 return False
+
+            self.context_file.write_text(new_content, encoding="utf-8")
+            return True
         else:
             # Standalone mode - replace entire file
             self.context_file.write_text(full_context, encoding="utf-8")

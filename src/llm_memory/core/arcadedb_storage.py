@@ -296,6 +296,7 @@ class ArcadeDbStorage(BaseStorage):
         status: str = "active",
         limit: int = 50,
         order_by: str = "created_at DESC",
+        exclude_raw: bool = False,
     ) -> List[Dict[str, Any]]:
         query = f"SELECT FROM {self.MEMORY_TYPE}"
         conditions = []
@@ -304,6 +305,10 @@ class ArcadeDbStorage(BaseStorage):
         if layer:
             conditions.append("layer = ?")
             params.append(layer)
+        elif exclude_raw:
+            # Exclude the 'raw' layer in-query so raw rows never consume candidate
+            # slots before the importance cap (NULL layer is preserved).
+            conditions.append("(layer IS NULL OR layer <> 'raw')")
         if repo_id:
             conditions.append("repo_id = ?")
             params.append(repo_id)
@@ -549,6 +554,12 @@ class ArcadeDbStorage(BaseStorage):
         min_importance: float = 0.0,
         status: str = "active",
     ) -> List[Dict[str, Any]]:
+        # When no layer is requested, exclude the 'raw' layer from search results
+        # (canonical SQLite behavior: search only episodic/semantic/intent). An explicit
+        # ``layer='raw'`` request is still honored. list_memories keeps all layers.
+        # Push the exclusion into the query so raw rows do not fill the candidate cap
+        # ahead of lower-importance episodic/semantic/intent matches.
+        exclude_raw = layer is None
         candidates = self._query_memories(
             layer=layer,
             repo_id=repo_id,
@@ -556,6 +567,7 @@ class ArcadeDbStorage(BaseStorage):
             status=status,
             limit=max(limit * 4, 50),
             order_by="importance DESC",
+            exclude_raw=exclude_raw,
         )
         terms = [term.lower() for term in query.split() if term.strip()]
         results = []

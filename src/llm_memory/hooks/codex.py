@@ -9,6 +9,7 @@ Integrates llm-memory with Codex by:
 from pathlib import Path
 from typing import Dict
 
+from llm_memory.hooks.base import _replace_between_markers
 from llm_memory.hooks.generic import GenericAdapter
 
 CODEX_MARKER = "LLM-MEMORY CODEX MCP"
@@ -118,6 +119,8 @@ Run `llm-memory hooks update codex` to populate current memory context.
         if f"{AGENTS_MARKER} START" in content and f"{AGENTS_MARKER} END" in content:
             return True
 
+        # About to modify an existing user file - back it up first.
+        self._backup_file(self.context_file)
         with self.context_file.open("a", encoding="utf-8") as f:
             f.write("\n\n" + instructions.replace("# AGENTS.md\n\n", ""))
         return True
@@ -151,6 +154,8 @@ Use llm-memory as the persistent project memory for this repository.
         if new_content is None:
             return False
 
+        # Back up an existing config before the destructive rewrite.
+        self._backup_file(self.config_path)
         self.config_path.write_text(new_content, encoding="utf-8")
         return True
 
@@ -165,6 +170,8 @@ Use llm-memory as the persistent project memory for this repository.
         if new_content == content:
             return True
 
+        # Back up before the destructive rewrite.
+        self._backup_file(self.context_file)
         self.context_file.write_text(new_content.strip() + "\n", encoding="utf-8")
         return True
 
@@ -176,6 +183,11 @@ Use llm-memory as the persistent project memory for this repository.
         new_content = self._remove_marked_section(
             content, f"# BEGIN {CODEX_MARKER}", f"# END {CODEX_MARKER}"
         )
+        if new_content == content:
+            return True
+
+        # Back up before the destructive rewrite.
+        self._backup_file(self.config_path)
         self.config_path.write_text(
             new_content.strip() + ("\n" if new_content.strip() else ""), encoding="utf-8"
         )
@@ -188,22 +200,32 @@ Use llm-memory as the persistent project memory for this repository.
         content = self.context_file.read_text(encoding="utf-8")
         start_marker = f"{AGENTS_MARKER} START"
         end_marker = f"{AGENTS_MARKER} END"
-        if start_marker not in content or end_marker not in content:
+
+        # Only rewrite when the markers are well-formed (present once each,
+        # start before end). Malformed/duplicated/reordered markers => refuse.
+        new_content = _replace_between_markers(
+            content, start_marker, end_marker, f"\n\n{generated}\n"
+        )
+        if new_content is None:
             return False
 
-        before = content.split(start_marker)[0]
-        after = content.split(end_marker)[1]
-        self.context_file.write_text(
-            f"{before}{start_marker}\n\n{generated}\n{end_marker}{after}", encoding="utf-8"
-        )
+        self.context_file.write_text(new_content, encoding="utf-8")
         return True
 
     def _replace_marked_block(self, content: str, block: str) -> str | None:
         begin = f"# BEGIN {CODEX_MARKER}"
         end = f"# END {CODEX_MARKER}"
-        if begin in content and end in content:
-            before = content.split(begin)[0]
-            after = content.split(end, 1)[1]
+
+        # If a managed block is present, replace it only when the markers are
+        # well-formed (each present once, start before end). The replacement
+        # collapses the region and drops the old marker strings, since `block`
+        # carries its own BEGIN/END lines.
+        if begin in content or end in content:
+            collapsed = _replace_between_markers(content, begin, end, "")
+            if collapsed is None:
+                # Malformed/duplicated/reordered managed markers - refuse.
+                return None
+            before, after = collapsed.split(begin + end, 1)
             return f"{before}{block}{after.lstrip()}"
 
         unmanaged_table = "[mcp_servers.llm-memory]" in content

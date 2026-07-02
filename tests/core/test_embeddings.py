@@ -1,3 +1,4 @@
+import logging
 import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -88,6 +89,34 @@ def test_auto_embeddings_fall_back_to_noop_when_cloud_and_ollama_fail(monkeypatc
     provider = get_embedding_provider(config)
 
     assert provider.provider_name == "noop"
+
+
+def test_noop_fallback_emits_prominent_warning(monkeypatch, caplog):
+    """When auto-selection lands on NoOpProvider, a loud warning must be logged so the
+    operator knows embeddings are disabled and semantic search is degraded."""
+    openai_module = SimpleNamespace(OpenAI=Mock(side_effect=RuntimeError("cloud down")))
+    monkeypatch.setitem(sys.modules, "openai", openai_module)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+
+    ollama_module = SimpleNamespace(Client=Mock(side_effect=RuntimeError("ollama down")))
+    monkeypatch.setitem(sys.modules, "ollama", ollama_module)
+    monkeypatch.setenv("OLLAMA_HOST", "http://ollama:11434")
+
+    config = EmbeddingConfig(provider="auto")
+
+    with caplog.at_level(logging.WARNING, logger="llm_memory.core.embeddings"):
+        provider = get_embedding_provider(config)
+
+    assert provider.provider_name == "noop"
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    # Each failed candidate is logged...
+    assert any("unavailable during auto-selection" in m for m in warnings)
+    # ...and the terminal NoOp fallback warning names the env vars to set.
+    fallback = [m for m in warnings if "NoOpProvider" in m]
+    assert fallback, "expected a NoOpProvider fallback warning"
+    assert "OPENROUTER_API_KEY" in fallback[0]
+    assert "OPENAI_API_KEY" in fallback[0]
 
 
 def test_auto_embeddings_use_ollama_host_with_provider_default_model(monkeypatch):

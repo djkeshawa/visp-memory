@@ -133,6 +133,15 @@ class FakeArcadeDb:
         where_match = re.search(r" WHERE (.*?) ORDER BY ", sql)
         if where_match:
             for condition in where_match.group(1).split(" AND "):
+                condition = condition.strip()
+                if condition == "(layer IS NULL OR layer <> 'raw')":
+                    # Paramless literal filter (exclude_raw); consumes no parameter.
+                    rows = [
+                        row
+                        for row in rows
+                        if row.get("layer") is None or row.get("layer") != "raw"
+                    ]
+                    continue
                 field = condition.split(" = ?", 1)[0]
                 expected = params[param_index]
                 rows = [row for row in rows if row.get(field) == expected]
@@ -297,6 +306,41 @@ def test_arcadedb_memory_crud_list_search_stats_and_projects(fake_arcadedb, tmp_
     assert storage.delete_memory(repo_b) is True
     assert storage.delete_memory(repo_b) is False
     assert fake_arcadedb.paths[-1] == tmp_path / "arcadedb"
+
+
+def test_arcadedb_search_excludes_raw_layer_by_default(fake_arcadedb, tmp_path):
+    storage = ArcadeDbStorage(tmp_path)
+
+    raw_id = storage.store_memory(
+        "shared token appears in raw capture",
+        layer="raw",
+        repo_id="repo-a",
+        importance=0.9,
+        auto_link=False,
+    )
+    episodic_id = storage.store_memory(
+        "shared token appears in episodic note",
+        layer="episodic",
+        repo_id="repo-a",
+        importance=0.8,
+        auto_link=False,
+    )
+
+    # Default search (layer=None) must exclude the raw layer, mirroring SQLite.
+    default_ids = [item["id"] for item in storage.search_memories("shared token", repo_id="repo-a")]
+    assert episodic_id in default_ids
+    assert raw_id not in default_ids
+
+    # An explicit raw-layer search still returns raw memories.
+    raw_ids = [
+        item["id"]
+        for item in storage.search_memories("shared token", repo_id="repo-a", layer="raw")
+    ]
+    assert raw_ids == [raw_id]
+
+    # list_memories keeps every layer, including raw.
+    listed_ids = {item["id"] for item in storage.list_memories(repo_id="repo-a")}
+    assert listed_ids == {raw_id, episodic_id}
 
 
 def test_arcadedb_sessions_round_trip(fake_arcadedb, tmp_path):
