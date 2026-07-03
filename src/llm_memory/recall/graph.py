@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import deque
+from collections import defaultdict, deque
 from typing import Any
 
 from llm_memory.core.ranking import (
@@ -12,6 +12,59 @@ from llm_memory.core.ranking import (
     rank_memory_results,
     text_similarity,
 )
+
+# Spreading-activation constants (HippoRAG-style associative recall, cheap variant).
+# Each hop attenuates the signal by ACTIVATION_HOP_DECAY; a damped fixed-point pass
+# lets activation from multiple converging evidence paths ACCUMULATE on a node, so a
+# memory reachable through several independent paths outranks one reachable through a
+# single path of the same length. Decay < 1 with the seed-anchored update rule keeps
+# the iteration bounded and convergent.
+ACTIVATION_HOP_DECAY = 0.6
+ACTIVATION_ITERATIONS = 3
+
+
+def spread_activation(
+    seeds: dict[str, float],
+    edges: list[dict[str, Any]],
+    decay: float = ACTIVATION_HOP_DECAY,
+    iterations: int = ACTIVATION_ITERATIONS,
+) -> dict[str, float]:
+    """Spread activation from seed memories across an undirected evidence subgraph.
+
+    Runs a damped Jacobi-style fixed point: each round, a node's activation is its
+    seed value plus the decayed, edge-weighted activation of its neighbors from the
+    previous round, capped at 1.0. Convergent paths sum — the associative-recall
+    property plain BFS path-confidence lacks. Deterministic for a given input.
+    """
+    weights: dict[tuple[str, str], float] = {}
+    for edge in edges:
+        source = edge.get("source_id")
+        target = edge.get("target_id")
+        if not source or not target or source == target:
+            continue
+        factors = edge.get("relevance_factors") or {}
+        score = clamp_score(
+            factors.get("edge_score", edge.get("relevance_score")), default=0.5
+        )
+        key = (source, target) if source <= target else (target, source)
+        weights[key] = max(weights.get(key, 0.0), score)
+
+    activation = {node: clamp_score(value) for node, value in seeds.items()}
+    for _ in range(max(1, int(iterations))):
+        incoming: dict[str, float] = defaultdict(float)
+        for (source, target), weight in weights.items():
+            contribution = weight * decay
+            if source in activation:
+                incoming[target] += activation[source] * contribution
+            if target in activation:
+                incoming[source] += activation[target] * contribution
+        next_activation = dict(activation)
+        for node, inflow in incoming.items():
+            next_activation[node] = min(1.0, seeds.get(node, 0.0) + inflow)
+        if next_activation == activation:
+            break
+        activation = next_activation
+    return activation
 
 
 class GraphRecall:
@@ -35,6 +88,7 @@ class GraphRecall:
     ) -> dict[str, Any]:
         relationships = self._relationships(repo_id, relationship_filter)
         nodes, edges, omitted = self._expand([memory_id], relationships, repo_id, depth, limit)
+        self._apply_activation(nodes, edges, {memory_id: 1.0})
         return self._result(
             mode="neighbors",
             nodes=nodes,
@@ -61,6 +115,7 @@ class GraphRecall:
         nodes, edges, omitted = self._expand(seed_ids, relationships, repo_id, depth, limit * 6)
 
         seed_scores = {item["id"]: item.get("relevance_score", 0.0) for item in seeds}
+        self._apply_activation(nodes, edges, {seed_id: 1.0 for seed_id in seed_ids})
         for node in nodes:
             node["relevance_factors"]["query_score"] = (
                 seed_scores.get(node["id"]) or text_similarity(query, node.get("content", ""))
@@ -68,7 +123,9 @@ class GraphRecall:
             node["relevance_score"] = graph_node_relevance(
                 query_score=node["relevance_factors"]["query_score"],
                 importance=node.get("importance", 0.5),
-                edge_score=node["relevance_factors"].get("path_confidence", 1.0),
+                edge_score=node["relevance_factors"].get(
+                    "activation", node["relevance_factors"].get("path_confidence", 1.0)
+                ),
                 distance=node["relevance_factors"].get("distance", 0),
             )
 
@@ -173,6 +230,31 @@ class GraphRecall:
             limit=limit,
             explanation=explanation,
         )
+
+    def _apply_activation(
+        self,
+        nodes: list[dict[str, Any]],
+        edges: list[dict[str, Any]],
+        seeds: dict[str, float],
+    ) -> None:
+        """Attach spreading-activation scores and refresh node relevance in place.
+
+        Converging evidence paths accumulate, so a memory linked to the seeds
+        through several independent routes scores higher than single-path BFS
+        confidence could express.
+        """
+        activation = spread_activation(seeds, edges)
+        for node in nodes:
+            factors = node.setdefault("relevance_factors", {})
+            factors["activation"] = round(
+                clamp_score(activation.get(node["id"], factors.get("path_confidence", 0.0))), 4
+            )
+            node["relevance_score"] = graph_node_relevance(
+                query_score=1.0 if factors.get("seed") else factors.get("query_score", 0.0),
+                importance=node.get("importance", 0.5),
+                edge_score=factors["activation"],
+                distance=factors.get("distance", 0),
+            )
 
     def _search(
         self, query: str, repo_id: str | None, limit: int
