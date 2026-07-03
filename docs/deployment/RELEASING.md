@@ -232,46 +232,62 @@ git push origin v0.1.0
 
 **Warning:** Only do this if the release hasn't been published yet!
 
-## Publishing to PyPI (Optional)
+## Publishing to PyPI (automated)
 
-After the GitHub release is created, you can optionally publish to PyPI:
+PyPI publishing is wired into `.github/workflows/build-release.yml` via the
+`publish-pypi` job. On every `v*` tag push it **automatically** builds and
+uploads the wheel + sdist to PyPI using **Trusted Publishing (OIDC)** — no API
+token is stored in GitHub. After a release completes, anyone can:
 
-### 1. Get API Token
-
-1. Go to https://pypi.org/manage/account/token/
-2. Create a new API token
-3. Save it as `PYPI_TOKEN` in GitHub Secrets
-
-### 2. Upload Manually
-
-```bash
-# Download the wheel from GitHub release
-wget https://github.com/yourusername/llm-memory/releases/download/v0.1.0/llm_memory-0.1.0-py3-none-any.whl
-
-# Upload to PyPI
-pip install twine
-twine upload llm_memory-0.1.0-py3-none-any.whl
-```
-
-### 3. Or Add to Workflow
-
-Add to `.github/workflows/release-simple.yml`:
-
-```yaml
-- name: Publish to PyPI
-  if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-  env:
-    TWINE_USERNAME: __token__
-    TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
-  run: |
-    pip install twine
-    twine upload dist/*.whl
-```
-
-Then users can install with:
 ```bash
 pip install llm-memory
+pip install "llm-memory[all]"
 ```
+
+### One-time setup (do this once, before the first tagged release)
+
+**1. Register the Trusted Publisher on PyPI.**
+Because the project does not exist on PyPI yet, add it as a *pending* publisher:
+go to <https://pypi.org/manage/account/publishing/> → "Add a new pending
+publisher" and enter exactly:
+
+| Field | Value |
+|-------|-------|
+| PyPI Project Name | `llm-memory` |
+| Owner | `djkeshawa` |
+| Repository name | `llm-memory` |
+| Workflow name | `build-release.yml` |
+| Environment name | `pypi` |
+
+**2. Create the `pypi` GitHub environment.**
+In the repo: Settings → Environments → New environment → name it `pypi`. This
+matches the `environment: pypi` block in the workflow and lets you optionally
+require a manual approval before any publish.
+
+That's it — no secrets. The `id-token: write` permission in the job lets GitHub
+mint a short-lived OIDC token that PyPI trusts.
+
+### Releasing after setup
+
+Nothing extra to do: bump the version and push a `v*` tag (see the flows above).
+The pipeline runs the quality gate, `twine check` (verifies the metadata/README
+render), then publishes to PyPI, GHCR (Docker), and the GitHub Release together.
+
+### Important: versions are immutable
+
+PyPI **rejects re-uploading an existing version**. Always bump the version in
+`pyproject.toml` (the `create-release.sh` script does this) so the tag and the
+package version match and are new. If a publish fails *before* upload (e.g. an
+OIDC/config error), no version is consumed and you can fix and re-tag safely.
+
+### Optional: dry-run on TestPyPI first
+
+To rehearse the whole flow without touching real PyPI, register the same project
+as a pending publisher on <https://test.pypi.org/manage/account/publishing/>
+(environment `testpypi`) and run a one-off upload with
+`repository-url: https://test.pypi.org/legacy/`. This is optional — the `twine
+check` step already validates metadata in CI, and a failed real publish never
+consumes a version.
 
 ## Release Checklist
 
@@ -301,15 +317,12 @@ If the workflow isn't set up or you prefer manual control:
 
 This gives you full control but takes more time.
 
-## Advanced: Automated PyPI Publishing
+## Automated PyPI Publishing
 
-To fully automate PyPI publishing on release:
-
-1. Add PyPI token to GitHub secrets
-2. Enable "Trusted Publisher" on PyPI
-3. Update workflow to include PyPI upload step
-
-See [PACKAGING.md](PACKAGING.md) for detailed instructions.
+Already configured — see [Publishing to PyPI (automated)](#publishing-to-pypi-automated)
+above. It uses Trusted Publishing (OIDC), so there are no secrets to manage; the
+only one-time step is registering the pending publisher on PyPI and creating the
+`pypi` GitHub environment.
 
 ## Getting Help
 
