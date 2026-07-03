@@ -30,34 +30,39 @@ def build_frontend(required: bool = True) -> bool:
         print("Skipping optional frontend build. Package will work without dashboard.")
         return True
 
+    # Resolve the npm executable via PATH. On Windows npm is `npm.cmd`, which a
+    # bare subprocess(["npm", ...]) cannot execute (FileNotFoundError even when
+    # Node.js is installed); shutil.which honours PATHEXT and finds it.
+    npm = shutil.which("npm")
+    if npm is None:
+        print("Error: npm not found. Please install Node.js to build the dashboard.")
+        return not required
+
     # Check if node_modules exists
     node_modules = dashboard_dir / "node_modules"
     if not node_modules.exists():
         print("\nInstalling frontend dependencies...")
         try:
             subprocess.run(
-                ["npm", "install"],
+                [npm, "install"],
                 cwd=dashboard_dir,
                 check=True,
                 capture_output=False,
             )
-        except subprocess.CalledProcessError as e:
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
             print(f"Error: npm install failed: {e}")
-            return not required
-        except FileNotFoundError:
-            print("Error: npm not found. Please install Node.js to build the dashboard.")
             return not required
 
     # Build the Next.js app
     print("\nBuilding Next.js dashboard...")
     try:
         subprocess.run(
-            ["npm", "run", "export"],
+            [npm, "run", "export"],
             cwd=dashboard_dir,
             check=True,
             capture_output=False,
         )
-    except subprocess.CalledProcessError as e:
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
         print(f"Error: Next.js build failed: {e}")
         return not required
 
