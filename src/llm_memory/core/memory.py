@@ -138,6 +138,14 @@ class Memory:
         self._compressor = MemoryCompressor(self._storage, compress_fn)
         self.deduplicator = Deduplicator(self._storage)
 
+        from llm_memory.quality.reconcile import Reconciler
+
+        self.reconciler = Reconciler(
+            self._storage,
+            noop_threshold=self.config.quality.reconcile_noop_threshold,
+            update_threshold=self.config.quality.reconcile_update_threshold,
+        )
+
         # Initialize conflict detector
         from llm_memory.quality.conflict import ConflictDetector
 
@@ -239,9 +247,25 @@ class Memory:
         except ValueError:
             cat = category
 
-        # `detect_conflicts` is a control flag for this method only; it must not
-        # be forwarded to establish() (which does not accept it).
+        # `detect_conflicts`/`reconcile` are control flags for this method only;
+        # they must not be forwarded to establish() (which does not accept them).
         detect = kwargs.pop("detect_conflicts", False)
+        reconcile = kwargs.pop("reconcile", None)
+        if reconcile is None:
+            reconcile = self.config.quality.write_reconciliation
+
+        effective_repo_id = repo_id or self.config.repo_id
+        category_value = cat.value if hasattr(cat, "value") else str(cat)
+
+        # Write-time reconciliation: fold near-duplicate knowledge into the
+        # existing memory instead of inserting a copy. Keeps the store small,
+        # cheap to retrieve, and self-correcting (Mem0's ADD/UPDATE/NOOP model).
+        if reconcile:
+            decision = self.reconciler.decide(
+                knowledge, layer="semantic", repo_id=effective_repo_id, category=category_value
+            )
+            if decision.action in ("noop", "update") and decision.target_id:
+                return self._apply_reconcile_decision(decision, knowledge, importance)
 
         conflict = None
         if detect or self.config.quality.conflict_detection:
@@ -251,7 +275,7 @@ class Memory:
             knowledge=knowledge,
             category=cat,
             importance=importance,
-            repo_id=repo_id or self.config.repo_id,
+            repo_id=effective_repo_id,
             **kwargs,
         )
 
@@ -276,8 +300,63 @@ class Memory:
                         conflicting_id,
                         exc,
                     )
+                if self.config.quality.auto_supersede:
+                    self._supersede_memory(conflicting_id, superseded_by=memory_id, reason=reason)
 
         return memory_id
+
+    def _apply_reconcile_decision(self, decision, knowledge: str, importance: float) -> str:
+        """Reinforce or refresh an existing memory instead of inserting a duplicate."""
+        from llm_memory.core.clock import utc_now_iso
+
+        existing = self._storage.get_memory(decision.target_id)
+        if not existing:  # pragma: no cover - race between decide and apply
+            return decision.target_id
+        merged_importance = max(float(existing.get("importance", 0.5) or 0.0), float(importance))
+        updates: Dict[str, Any] = {"importance": merged_importance}
+        if decision.action == "update":
+            updates["content"] = knowledge
+            updates["metadata"] = {
+                **(existing.get("metadata") or {}),
+                "reconciled_at": utc_now_iso(),
+                "reconcile_action": "update",
+            }
+        self._storage.update_memory(decision.target_id, **updates)
+        logger.info(
+            "Reconciled knowledge into %s (%s, overlap=%.2f): %s",
+            decision.target_id,
+            decision.action,
+            decision.similarity,
+            decision.reason,
+        )
+        return decision.target_id
+
+    def _supersede_memory(self, memory_id: str, superseded_by: str, reason: str) -> None:
+        """Non-destructively invalidate a contradicted memory (belief revision).
+
+        The memory keeps its content and relationships but leaves the active set
+        (status="superseded"), so recall prioritizes current knowledge while the
+        old belief stays auditable and restorable. ``invalid_at`` records when the
+        belief stopped being held (bi-temporal validity, Zep-style).
+        """
+        from llm_memory.core.clock import utc_now_iso
+
+        try:
+            existing = self._storage.get_memory(memory_id)
+            if not existing:
+                return
+            self._storage.update_memory(
+                memory_id,
+                status="superseded",
+                metadata={
+                    **(existing.get("metadata") or {}),
+                    "superseded_by": superseded_by,
+                    "invalid_at": utc_now_iso(),
+                    "superseded_reason": reason,
+                },
+            )
+        except Exception as exc:  # supersession must never block the new write
+            logger.warning("Failed to supersede memory %s: %s", memory_id, exc)
 
     def check_conflict(self, content: str, layer: str = "semantic") -> Optional[Dict[str, Any]]:
         """

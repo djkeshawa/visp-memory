@@ -1,8 +1,8 @@
-from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from llm_memory.core.clock import utc_now
 from llm_memory.core.cross_repo import CrossRepoContext
 from llm_memory.core.repository import (
     DependencyType,
@@ -87,7 +87,7 @@ async def register_repository(
     return {
         **repo_obj.__dict__,
         "id": repo_id,
-        "created_at": datetime.now(),
+        "created_at": utc_now(),
     }
 
 
@@ -114,7 +114,7 @@ async def list_repositories(
     return [
         {
             **r.__dict__,
-            "created_at": r.created_at or datetime.now(),
+            "created_at": r.created_at or utc_now(),
         }
         for r in repos
     ]
@@ -159,7 +159,7 @@ async def get_repository(
 
     return {
         **repo.__dict__,
-        "created_at": repo.created_at or datetime.now(),
+        "created_at": repo.created_at or utc_now(),
     }
 
 

@@ -59,6 +59,7 @@ except ImportError:
     MCP_AVAILABLE = False
 
 from llm_memory import Memory
+from llm_memory.core.clock import parse_utc, utc_now
 from llm_memory.core.ranking import projected_importance
 
 # Set up logging
@@ -1646,11 +1647,8 @@ def _handle_intent(name: str, args: dict[str, Any], memory: Memory) -> str:
 
 
 def _parse_memory_datetime(value: Any) -> datetime:
-    if isinstance(value, datetime):
-        return value.replace(tzinfo=None)
-    if isinstance(value, str):
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
-    return datetime.now()
+    """Parse storage timestamps into aware UTC so age math matches utc_now()."""
+    return parse_utc(value) or utc_now()
 
 
 def _format_decay_preview(args: dict[str, Any], memory: Memory) -> str:
@@ -1664,7 +1662,7 @@ def _format_decay_preview(args: dict[str, Any], memory: Memory) -> str:
         limit=10000,
         order_by="accessed_at ASC",
     )
-    now = datetime.now()
+    now = utc_now()
     previews = []
     for item in memories:
         current = float(item.get("importance", 0.5) or 0.0)

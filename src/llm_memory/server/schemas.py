@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from llm_memory.core.ranking import DEFAULT_RECALL_MIN_SCORE
 
 MemoryLayer = Literal["raw", "episodic", "semantic", "intent"]
-MemoryStatus = Literal["active", "pending", "archived", "deleted"]
+MemoryStatus = Literal["active", "pending", "archived", "superseded", "deleted"]
 IntentStatus = Literal["active", "completed", "closed"]
 RelationshipConfidence = Literal["observed", "inferred", "ambiguous", "manual"]
 MAX_QUERY_LIMIT = 200

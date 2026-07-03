@@ -30,6 +30,7 @@ from rich.table import Table
 
 from llm_memory import Memory, MemoryConfig, __version__
 from llm_memory.config import load_config
+from llm_memory.core.clock import parse_utc, utc_now
 from llm_memory.core.ranking import projected_importance
 from llm_memory.core.reporting import MemoryIntelligenceReporter
 
@@ -76,12 +77,8 @@ def _repo_scope(memory: Memory, repo: str = None) -> str:
 
 
 def _parse_cli_datetime(value: Any) -> datetime:
-    """Parse storage timestamps from local or remote backends."""
-    if isinstance(value, datetime):
-        return value.replace(tzinfo=None)
-    if isinstance(value, str):
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
-    return datetime.now()
+    """Parse storage timestamps into aware UTC so age math matches utc_now()."""
+    return parse_utc(value) or utc_now()
 
 
 def _priority_label(priority: int) -> str:
@@ -129,7 +126,7 @@ def _memory_decay_preview(
         repo_id=_repo_scope(memory, repo),
         status="active",
     )
-    now = datetime.now()
+    now = utc_now()
     rows = []
 
     for item in memories:
@@ -996,6 +993,42 @@ def stats():
         console.print("\n[bold]By Category:[/bold]")
         for cat, count in list(s["memories_by_category"].items())[:10]:
             console.print(f"  {cat}: {count}")
+
+
+@app.command("ingest-instructions")
+def ingest_instructions_command(
+    root: str = typer.Option(".", "--root", help="Project root to scan"),
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository scope"),
+    importance: float = typer.Option(0.65, "--importance", min=0.0, max=1.0),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Report without storing"),
+    format: str = typer.Option("text", "--format", "-f", help="Output format: text or json"),
+):
+    """Import CLAUDE.md / AGENTS.md / .cursor rules / copilot-instructions as seed memories."""
+    from llm_memory.capture.instructions import ingest_instructions
+
+    memory = get_memory()
+    report = ingest_instructions(
+        memory,
+        root=root,
+        repo_id=_repo_scope(memory, repo),
+        importance=importance,
+        dry_run=dry_run,
+    )
+
+    if format.lower() == "json":
+        console.print_json(data=report.as_dict())
+        return
+
+    if not report.files:
+        console.print("[yellow]No instruction files found (CLAUDE.md, AGENTS.md, ...).[/yellow]")
+        return
+    verb = "Would store" if dry_run else "Stored"
+    console.print(
+        f"[green]{verb} {report.stored} section(s) from {len(report.files)} file(s); "
+        f"{report.skipped_unchanged} unchanged, {report.skipped_trivial} trivial skipped.[/green]"
+    )
+    for name in report.files:
+        console.print(f"  - {name}")
 
 
 @app.command("tokens")
@@ -1908,6 +1941,41 @@ def capture_conversation(
 hooks_app = typer.Typer(help="Integration with LLM tools (Claude Code, Codex, Cursor, Aider)")
 app.add_typer(hooks_app, name="hooks")
 
+# Runtime entry points invoked BY Claude Code (configured in .claude/settings.json
+# by `llm-memory hooks install claude-code`). They read the hook payload from
+# stdin, print hook JSON to stdout, and always exit 0: a memory failure must
+# never break the user's coding session.
+hook_runtime_app = typer.Typer(help="Hook runtime endpoints called by Claude Code (stdin JSON)")
+app.add_typer(hook_runtime_app, name="hook")
+
+
+def _run_hook_handler(handler_name: str) -> None:
+    import sys
+
+    try:
+        from llm_memory.hooks import claude_code_auto
+
+        raw = sys.stdin.read()
+        payload = json.loads(raw) if raw.strip() else {}
+        handler = getattr(claude_code_auto, handler_name)
+        output = handler(payload)
+        if output:
+            sys.stdout.write(json.dumps(output))
+    except Exception:  # fail-open by contract
+        pass
+
+
+@hook_runtime_app.command("session-start")
+def hook_session_start():
+    """Inject project memory context at session start (called by Claude Code)."""
+    _run_hook_handler("handle_session_start")
+
+
+@hook_runtime_app.command("pre-tool-use")
+def hook_pre_tool_use():
+    """Inject file-relevant memory before Read/Edit/Write (called by Claude Code)."""
+    _run_hook_handler("handle_pre_tool_use")
+
 
 def _get_hook_adapter(
     tool: str,
@@ -1944,6 +2012,14 @@ def hooks_install(
     config_path: Path = typer.Option(
         None, "--config-path", help="Codex config path; defaults to ~/.codex/config.toml"
     ),
+    auto_inject: bool = typer.Option(
+        True,
+        "--auto-inject/--no-auto-inject",
+        help=(
+            "claude-code only: also install real SessionStart/PreToolUse hooks in "
+            ".claude/settings.json so memory is injected automatically"
+        ),
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview installation without writing"),
 ):
     """
@@ -1972,6 +2048,20 @@ def hooks_install(
             console.print(f"[green]✓[/green] {component}")
         else:
             console.print(f"[yellow]✗[/yellow] {component}")
+
+    if tool.lower() == "claude-code" and auto_inject and not dry_run:
+        from llm_memory.hooks.claude_code_auto import install_auto_inject_hooks
+
+        try:
+            settings_path = install_auto_inject_hooks(Path.cwd())
+            console.print(f"[green]✓[/green] auto-inject hooks ({settings_path})")
+            console.print(
+                "[dim]SessionStart injects project memory; PreToolUse injects "
+                "file-relevant warnings before Read/Edit/Write. Requires `llm-memory` "
+                "on PATH for Claude Code to invoke.[/dim]"
+            )
+        except ValueError as e:
+            console.print(f"[yellow]✗ auto-inject hooks skipped:[/yellow] {e}")
 
     console.print(f"\n[green]{tool} integration {'validated' if dry_run else 'installed'}![/green]")
     console.print(f"Context file: {adapter.get_context_file_path()}")
@@ -2015,6 +2105,12 @@ def hooks_uninstall(
             console.print(f"[green]✓[/green] {component} removed")
         else:
             console.print(f"[yellow]✗[/yellow] {component} not found")
+
+    if tool.lower() == "claude-code" and not dry_run:
+        from llm_memory.hooks.claude_code_auto import uninstall_auto_inject_hooks
+
+        if uninstall_auto_inject_hooks(Path.cwd()):
+            console.print("[green]✓[/green] auto-inject hooks removed")
 
     console.print(f"\n[green]{tool} integration removed.[/green]")
 

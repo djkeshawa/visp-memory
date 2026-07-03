@@ -152,6 +152,78 @@ class TestCLIBasicCommands:
         assert "Memory Statistics" in result.output
         assert "Total Memories" in result.output
 
+    def test_hook_session_start_outputs_context_json(self, cli_env):
+        """The hook runtime prints SessionStart JSON with memory context."""
+        runner.invoke(app, ["init", "--type", "code"])
+        runner.invoke(app, ["goal", "Ship the auth rewrite"])
+
+        result = runner.invoke(app, ["hook", "session-start"], input="{}")
+
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["hookSpecificOutput"]["hookEventName"] == "SessionStart"
+        assert "Ship the auth rewrite" in payload["hookSpecificOutput"]["additionalContext"]
+
+    def test_hook_pre_tool_use_injects_file_memory(self, cli_env):
+        runner.invoke(app, ["init", "--type", "code"])
+        runner.invoke(app, ["warn", "src/auth.py", "Mutex required around refresh"])
+
+        stdin = json.dumps(
+            {
+                "session_id": "cli-test",
+                "tool_name": "Read",
+                "tool_input": {"file_path": "src/auth.py"},
+            }
+        )
+        result = runner.invoke(app, ["hook", "pre-tool-use"], input=stdin)
+
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert "Mutex required" in payload["hookSpecificOutput"]["additionalContext"]
+
+    def test_hook_runtime_fails_open_on_garbage_stdin(self, cli_env):
+        """A memory failure must never break the user's coding session."""
+        result = runner.invoke(app, ["hook", "pre-tool-use"], input="{not json")
+        assert result.exit_code == 0
+        assert result.output.strip() == ""
+
+    def test_hooks_install_claude_code_writes_settings(self, cli_env, temp_dir):
+        runner.invoke(app, ["init", "--type", "code"])
+
+        result = runner.invoke(app, ["hooks", "install", "claude-code"])
+
+        assert result.exit_code == 0
+        settings = json.loads(
+            (temp_dir / ".claude" / "settings.json").read_text(encoding="utf-8")
+        )
+        assert "SessionStart" in settings["hooks"]
+        assert "PreToolUse" in settings["hooks"]
+
+        uninstall = runner.invoke(app, ["hooks", "uninstall", "claude-code"])
+        assert uninstall.exit_code == 0
+        settings_after = json.loads(
+            (temp_dir / ".claude" / "settings.json").read_text(encoding="utf-8")
+        )
+        assert "hooks" not in settings_after or not settings_after["hooks"]
+
+    def test_ingest_instructions_command(self, cli_env, temp_dir):
+        """ingest-instructions imports CLAUDE.md sections idempotently."""
+        runner.invoke(app, ["init", "--type", "code"])
+        (temp_dir / "CLAUDE.md").write_text(
+            "## Conventions\n\nAlways run the linter before committing changes here.\n",
+            encoding="utf-8",
+        )
+
+        first = runner.invoke(app, ["ingest-instructions", "--format", "json"])
+        assert first.exit_code == 0
+        data = json.loads(first.output)
+        assert data["stored"] == 1
+        assert any("CLAUDE.md" in name for name in data["files"])
+
+        second = runner.invoke(app, ["ingest-instructions", "--format", "json"])
+        assert second.exit_code == 0
+        assert json.loads(second.output)["stored"] == 0
+
     def test_tokens_command_outputs_json_contract(self, cli_env):
         """Tokens command exposes a stable token-efficiency JSON contract."""
         runner.invoke(app, ["init", "--type", "code"])

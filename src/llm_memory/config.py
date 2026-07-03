@@ -123,6 +123,16 @@ class QualityConfig(BaseSettings):
     similarity_threshold: float = 0.9
     conflict_detection: bool = True
 
+    # Write-time reconciliation (Mem0-style ADD/UPDATE/NOOP): fold near-duplicate
+    # semantic knowledge into existing memories instead of inserting copies.
+    write_reconciliation: bool = True
+    reconcile_noop_threshold: float = 0.95
+    reconcile_update_threshold: float = 0.8
+    # When an LLM-confirmed contradiction is found, non-destructively invalidate
+    # the contradicted memory (status="superseded" + invalid_at) so recall
+    # prioritizes current knowledge while history stays auditable.
+    auto_supersede: bool = True
+
 
 class FeedbackConfig(BaseSettings):
     """Feedback and validation configuration."""

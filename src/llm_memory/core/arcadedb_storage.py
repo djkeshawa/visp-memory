@@ -1,10 +1,10 @@
 """ArcadeDB storage backend."""
 
 import logging
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from llm_memory.core.clock import utc_now
 from llm_memory.core.ranking import rank_memory_results, text_similarity, utility_rank_adjustment
 from llm_memory.core.storage import (
     REINFORCING_RECALL_EVENTS,
@@ -486,7 +486,7 @@ class ArcadeDbStorage(BaseStorage):
         metadata = metadata or {}
         source_ids = source_ids or []
         quality_flags = quality_flags or []
-        now = datetime.now().isoformat()
+        now = utc_now().isoformat()
 
         with self._database() as db:
             with db.transaction():
@@ -527,7 +527,7 @@ class ArcadeDbStorage(BaseStorage):
         memory = record
         # Increment in SQL (not read-modify-write) so concurrent reads cannot lose an
         # update, matching ``log_recall_event`` and the SQLite backend.
-        accessed_at = datetime.now().isoformat()
+        accessed_at = utc_now().isoformat()
         with self._database() as db:
             with db.transaction():
                 db.command(
@@ -629,7 +629,7 @@ class ArcadeDbStorage(BaseStorage):
 
         if kwargs.get("status") == "archived" and "archived_at" not in kwargs:
             updates.append("archived_at = ?")
-            params.append(datetime.now().isoformat())
+            params.append(utc_now().isoformat())
         elif kwargs.get("status") == "active" and "archived_at" not in kwargs:
             updates.append("archived_at = ?")
             params.append(None)
@@ -666,7 +666,7 @@ class ArcadeDbStorage(BaseStorage):
         repo_id: str = None,
     ) -> str:
         intent_id = self._generate_id(description)
-        now = datetime.now().isoformat()
+        now = utc_now().isoformat()
         self._insert_record(
             "Intent",
             {
@@ -715,7 +715,7 @@ class ArcadeDbStorage(BaseStorage):
             if key in kwargs and kwargs[key] is not None
         }
         if updates:
-            updates["updated_at"] = datetime.now().isoformat()
+            updates["updated_at"] = utc_now().isoformat()
         return self._update_record(
             "Intent",
             intent_id,
@@ -741,7 +741,7 @@ class ArcadeDbStorage(BaseStorage):
             raise ValueError("Memory relationships cannot cross repository boundaries")
 
         relationship_id = self._generate_id(f"{source_id}-{target_id}-{relationship}")
-        created_at = datetime.now().isoformat()
+        created_at = utc_now().isoformat()
         evidence_data = LocalStorage._normalize_relationship_evidence(
             evidence,
             strength=strength,
@@ -814,7 +814,7 @@ class ArcadeDbStorage(BaseStorage):
 
     def start_session(self) -> str:
         session_id = self._generate_id("session")
-        now = datetime.now().isoformat()
+        now = utc_now().isoformat()
         with self._database() as db:
             with db.transaction():
                 db.command(
@@ -826,7 +826,7 @@ class ArcadeDbStorage(BaseStorage):
         return session_id
 
     def end_session(self, session_id: str, summary: str, memory_ids: List[str]):
-        ended_at = datetime.now().isoformat()
+        ended_at = utc_now().isoformat()
         with self._database() as db:
             with db.transaction():
                 db.command(
@@ -1069,7 +1069,7 @@ class ArcadeDbStorage(BaseStorage):
                 "target_type": target_type,
                 "target_id": target_id,
                 "metadata": metadata or {},
-                "created_at": datetime.now().isoformat(),
+                "created_at": utc_now().isoformat(),
             },
             self.AUDIT_FIELDS,
             self.RECORD_JSON_FIELDS["AuditLog"],
@@ -1119,7 +1119,7 @@ class ArcadeDbStorage(BaseStorage):
                 "task_id": task_id,
                 "outcome": outcome,
                 "metadata": LocalStorage._sanitize_recall_metadata(metadata),
-                "created_at": datetime.now().isoformat(),
+                "created_at": utc_now().isoformat(),
             },
             self.RECALL_EVENT_FIELDS,
             self.RECORD_JSON_FIELDS["RecallFeedback"],
@@ -1135,7 +1135,7 @@ class ArcadeDbStorage(BaseStorage):
                         "sql",
                         f"UPDATE {self.MEMORY_TYPE} "
                         "SET access_count = access_count + 1, accessed_at = ? WHERE id = ?",
-                        datetime.now().isoformat(),
+                        utc_now().isoformat(),
                         memory_id,
                     )
         return event_id

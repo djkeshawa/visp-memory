@@ -5,6 +5,7 @@ from typing import List
 from fastapi import APIRouter, Depends, Request
 
 from llm_memory.config import load_config
+from llm_memory.core.clock import parse_utc, utc_now
 from llm_memory.server.auth import UserContext, get_current_user
 from llm_memory.server.authorization import can_access_scoped_record, require_repo_scope_access
 from llm_memory.server.schemas import (
@@ -22,11 +23,8 @@ def _normalize_content(value: str) -> str:
 
 
 def _as_datetime(value):
-    if isinstance(value, datetime):
-        return value.replace(tzinfo=None)
-    if isinstance(value, str):
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
-    return datetime.now()
+    """Parse storage timestamps into aware UTC so age math matches utc_now()."""
+    return parse_utc(value) or utc_now()
 
 
 def _decay_projection(
@@ -175,7 +173,7 @@ async def list_decay_preview(
         if can_access_scoped_record(storage, memory, user, scope_field="metadata")
     ]
 
-    now = datetime.now()
+    now = utc_now()
     candidates = [
         _decay_projection(
             memory,

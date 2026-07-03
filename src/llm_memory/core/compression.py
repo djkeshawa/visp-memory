@@ -14,6 +14,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
+from llm_memory.core.clock import utc_now
 from llm_memory.core.ranking import projected_importance
 from llm_memory.core.storage import BaseStorage
 from llm_memory.core.tokens import compute_savings
@@ -132,7 +133,7 @@ class MemoryCompressor:
             tags=list(all_tags),
             metadata={
                 "compressed_from": len(episodes),
-                "compressed_at": datetime.now().isoformat(),
+                "compressed_at": utc_now().isoformat(),
                 "token_savings": savings.as_dict(),
             },
             source_ids=source_ids,
@@ -145,7 +146,7 @@ class MemoryCompressor:
                 metadata={
                     **(ep.get("metadata") or {}),
                     "compressed_to": semantic_id,
-                    "compressed_at": datetime.now().isoformat(),
+                    "compressed_at": utc_now().isoformat(),
                 },
             )
 
@@ -339,7 +340,7 @@ class MemoryCompressor:
             metadata={
                 "compressed_from": len(memories),
                 "level": 2,
-                "compressed_at": datetime.now().isoformat(),
+                "compressed_at": utc_now().isoformat(),
                 "token_savings": savings.as_dict(),
             },
             source_ids=source_ids,

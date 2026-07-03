@@ -11,10 +11,10 @@ Like human episodic memory, these are specific events that can later
 be compressed into semantic knowledge (patterns/rules).
 """
 
-from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List
 
+from llm_memory.core.clock import utc_now
 from llm_memory.core.storage import BaseStorage
 from llm_memory.layers.base import BaseMemoryLayer
 
@@ -85,7 +85,7 @@ class EpisodicMemory(BaseMemoryLayer):
                 context={"files": ["auth/token.py"], "issue": "#142"}
             )
         """
-        metadata = {"recorded_at": datetime.now().isoformat(), **(context or {})}
+        metadata = {"recorded_at": utc_now().isoformat(), **(context or {})}
 
         return self.storage.store_memory(
             content=content,

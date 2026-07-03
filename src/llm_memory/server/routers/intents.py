@@ -4,6 +4,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from llm_memory.config import load_config
+from llm_memory.core.clock import utc_now
 from llm_memory.server.auth import UserContext, get_current_user
 from llm_memory.server.authorization import (
     can_access_scoped_record,
@@ -19,7 +20,7 @@ router = APIRouter(prefix="/intents", tags=["intents"])
 def _as_datetime(value):
     if isinstance(value, str):
         return datetime.fromisoformat(value)
-    return value or datetime.now()
+    return value or utc_now()
 
 
 def _intent_response_payload(intent: dict) -> dict:
@@ -96,8 +97,8 @@ async def create_intent(
         "repo_id": intent_repo_id,
         "status": "active",
         "context": context,
-        "created_at": datetime.now(),
-        "updated_at": datetime.now(),
+        "created_at": utc_now(),
+        "updated_at": utc_now(),
     }
 
 

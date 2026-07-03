@@ -1,10 +1,10 @@
 import os
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from llm_memory.config import EmbeddingConfig, load_config
+from llm_memory.core.clock import utc_now
 from llm_memory.core.indexing import (
     ReindexScope,
     inspect_embedding_index,
@@ -248,7 +248,7 @@ async def test_provider_connection(
             active=selected,
             connected=False,
             status="disabled",
-            last_checked_at=datetime.now(),
+            last_checked_at=utc_now(),
             message="Noop embeddings do not require a connection.",
         )
 
@@ -261,7 +261,7 @@ async def test_provider_connection(
             connected=False,
             status="not_configured",
             model=_provider_model(runtime_config.embedding, provider),
-            last_checked_at=datetime.now(),
+            last_checked_at=utc_now(),
             message=_missing_config_message(provider),
             action_hint=_missing_config_hint(provider),
         )
@@ -281,7 +281,7 @@ async def test_provider_connection(
             model=getattr(connected_provider, "model", None)
             or _provider_model(provider_config, provider),
             dimension=getattr(connected_provider, "dimension", None),
-            last_checked_at=datetime.now(),
+            last_checked_at=utc_now(),
             message=f"{provider} connected successfully.",
         )
     except Exception as error:
@@ -294,7 +294,7 @@ async def test_provider_connection(
             connected=False,
             status="failed",
             model=_provider_model(runtime_config.embedding, provider),
-            last_checked_at=datetime.now(),
+            last_checked_at=utc_now(),
             error_code=error_code,
             message=message,
             action_hint=_missing_config_hint(provider),

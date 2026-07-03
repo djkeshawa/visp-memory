@@ -5,8 +5,9 @@ FastAPI Server Entry Point
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime
 from pathlib import Path
+
+from llm_memory.core.clock import utc_now
 
 try:
     from fastapi import Depends, FastAPI
@@ -105,7 +106,7 @@ def get_server_embedding_runtime(config):
         return None, {
             "embedding_driver_status": "not_configured",
             "embedding_driver_connected": False,
-            "embedding_last_checked_at": datetime.now().isoformat(),
+            "embedding_last_checked_at": utc_now().isoformat(),
             "embedding_status_message": (
                 "No server embedding driver is configured; using text fallback."
             ),
@@ -127,14 +128,14 @@ def get_server_embedding_runtime(config):
             return provider, {
                 "embedding_driver_status": status,
                 "embedding_driver_connected": False,
-                "embedding_last_checked_at": datetime.now().isoformat(),
+                "embedding_last_checked_at": utc_now().isoformat(),
                 "embedding_status_message": message,
             }
 
         return provider, {
             "embedding_driver_status": "connected",
             "embedding_driver_connected": True,
-            "embedding_last_checked_at": datetime.now().isoformat(),
+            "embedding_last_checked_at": utc_now().isoformat(),
             "embedding_status_message": "Embedding driver connected.",
         }
     except Exception as e:
@@ -153,7 +154,7 @@ def get_server_embedding_runtime(config):
             return NoOpProvider(), {
                 "embedding_driver_status": "failed",
                 "embedding_driver_connected": False,
-                "embedding_last_checked_at": datetime.now().isoformat(),
+                "embedding_last_checked_at": utc_now().isoformat(),
                 "embedding_status_message": f"{error_message} Using noop embeddings.",
                 "embedding_connection_error": error_name,
             }
@@ -161,7 +162,7 @@ def get_server_embedding_runtime(config):
             return None, {
                 "embedding_driver_status": "failed",
                 "embedding_driver_connected": False,
-                "embedding_last_checked_at": datetime.now().isoformat(),
+                "embedding_last_checked_at": utc_now().isoformat(),
                 "embedding_status_message": error_message,
                 "embedding_connection_error": error_name,
             }
@@ -337,7 +338,7 @@ async def root(repo_id: str = None):
     response = {
         "status": "online",
         "version": __version__,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": utc_now().isoformat(),
         "stats": stats,
     }
     runtime = get_runtime_status(config, embedding_provider, embedding_runtime_status)
@@ -353,7 +354,7 @@ async def healthz():
     return {
         "status": "ok",
         "version": __version__,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": utc_now().isoformat(),
     }
 
 
@@ -377,7 +378,7 @@ async def readyz():
         "version": __version__,
         "storage_ready": storage_ready,
         "dashboard_static_available": dashboard_static_available,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": utc_now().isoformat(),
     }
     runtime = get_runtime_status(config, embedding_provider, embedding_runtime_status)
     runtime["storage_backend"] = app.state.storage_backend

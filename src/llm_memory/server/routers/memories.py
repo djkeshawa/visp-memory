@@ -4,6 +4,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from llm_memory.config import load_config
+from llm_memory.core.clock import utc_now
 from llm_memory.core.ranking import rank_memory_results
 from llm_memory.server.auth import UserContext, get_current_user
 from llm_memory.server.authorization import (
@@ -27,7 +28,7 @@ def _as_datetime(value):
     """Normalize storage timestamps for API responses."""
     if isinstance(value, str):
         return datetime.fromisoformat(value)
-    return value or datetime.now()
+    return value or utc_now()
 
 
 def _as_optional_datetime(value):
@@ -185,8 +186,8 @@ async def create_memory(
         **memory.model_dump(),
         "metadata": metadata,
         "repo_id": memory_repo_id,
-        "created_at": datetime.now(),
-        "accessed_at": datetime.now(),
+        "created_at": utc_now(),
+        "accessed_at": utc_now(),
         "similarity": None,
         "relevance_score": None,
     }
@@ -260,7 +261,7 @@ async def update_memory(
         update_data["metadata"] = metadata
     if update_data.get("status") == "active" and mem.get("status") == "pending":
         update_data["approved_by"] = user.user_id
-        update_data["approved_at"] = datetime.now().isoformat()
+        update_data["approved_at"] = utc_now().isoformat()
 
     success = storage.update_memory(memory_id, **update_data)
     if not success:

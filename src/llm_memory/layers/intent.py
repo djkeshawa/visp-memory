@@ -10,10 +10,10 @@ Intent provides the "why" that guides all decisions.
 It's the shortest-term memory but most influential.
 """
 
-from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from llm_memory.core.clock import utc_now
 from llm_memory.core.storage import BaseStorage
 from llm_memory.layers.base import BaseMemoryLayer
 
@@ -72,7 +72,7 @@ class IntentMemory(BaseMemoryLayer):
         """
         ctx = {
             "constraints": constraints or [],
-            "set_at": datetime.now().isoformat(),
+            "set_at": utc_now().isoformat(),
             **(context or {}),
         }
 
