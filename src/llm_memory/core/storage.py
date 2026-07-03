@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 MemoryLayer = Literal["raw", "episodic", "semantic", "intent"]
-MemoryStatus = Literal["active", "pending", "archived", "deleted"]
+MemoryStatus = Literal["active", "pending", "archived", "superseded", "deleted"]
 RecallEventType = Literal["surfaced", "used", "dismissed", "task_linked", "outcome_linked"]
 
 RECALL_EVENT_WEIGHTS: dict[str, float] = {
