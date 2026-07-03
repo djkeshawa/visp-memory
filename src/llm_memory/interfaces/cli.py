@@ -1941,6 +1941,41 @@ def capture_conversation(
 hooks_app = typer.Typer(help="Integration with LLM tools (Claude Code, Codex, Cursor, Aider)")
 app.add_typer(hooks_app, name="hooks")
 
+# Runtime entry points invoked BY Claude Code (configured in .claude/settings.json
+# by `llm-memory hooks install claude-code`). They read the hook payload from
+# stdin, print hook JSON to stdout, and always exit 0: a memory failure must
+# never break the user's coding session.
+hook_runtime_app = typer.Typer(help="Hook runtime endpoints called by Claude Code (stdin JSON)")
+app.add_typer(hook_runtime_app, name="hook")
+
+
+def _run_hook_handler(handler_name: str) -> None:
+    import sys
+
+    try:
+        from llm_memory.hooks import claude_code_auto
+
+        raw = sys.stdin.read()
+        payload = json.loads(raw) if raw.strip() else {}
+        handler = getattr(claude_code_auto, handler_name)
+        output = handler(payload)
+        if output:
+            sys.stdout.write(json.dumps(output))
+    except Exception:  # fail-open by contract
+        pass
+
+
+@hook_runtime_app.command("session-start")
+def hook_session_start():
+    """Inject project memory context at session start (called by Claude Code)."""
+    _run_hook_handler("handle_session_start")
+
+
+@hook_runtime_app.command("pre-tool-use")
+def hook_pre_tool_use():
+    """Inject file-relevant memory before Read/Edit/Write (called by Claude Code)."""
+    _run_hook_handler("handle_pre_tool_use")
+
 
 def _get_hook_adapter(
     tool: str,
@@ -1977,6 +2012,14 @@ def hooks_install(
     config_path: Path = typer.Option(
         None, "--config-path", help="Codex config path; defaults to ~/.codex/config.toml"
     ),
+    auto_inject: bool = typer.Option(
+        True,
+        "--auto-inject/--no-auto-inject",
+        help=(
+            "claude-code only: also install real SessionStart/PreToolUse hooks in "
+            ".claude/settings.json so memory is injected automatically"
+        ),
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview installation without writing"),
 ):
     """
@@ -2005,6 +2048,20 @@ def hooks_install(
             console.print(f"[green]✓[/green] {component}")
         else:
             console.print(f"[yellow]✗[/yellow] {component}")
+
+    if tool.lower() == "claude-code" and auto_inject and not dry_run:
+        from llm_memory.hooks.claude_code_auto import install_auto_inject_hooks
+
+        try:
+            settings_path = install_auto_inject_hooks(Path.cwd())
+            console.print(f"[green]✓[/green] auto-inject hooks ({settings_path})")
+            console.print(
+                "[dim]SessionStart injects project memory; PreToolUse injects "
+                "file-relevant warnings before Read/Edit/Write. Requires `llm-memory` "
+                "on PATH for Claude Code to invoke.[/dim]"
+            )
+        except ValueError as e:
+            console.print(f"[yellow]✗ auto-inject hooks skipped:[/yellow] {e}")
 
     console.print(f"\n[green]{tool} integration {'validated' if dry_run else 'installed'}![/green]")
     console.print(f"Context file: {adapter.get_context_file_path()}")
@@ -2048,6 +2105,12 @@ def hooks_uninstall(
             console.print(f"[green]✓[/green] {component} removed")
         else:
             console.print(f"[yellow]✗[/yellow] {component} not found")
+
+    if tool.lower() == "claude-code" and not dry_run:
+        from llm_memory.hooks.claude_code_auto import uninstall_auto_inject_hooks
+
+        if uninstall_auto_inject_hooks(Path.cwd()):
+            console.print("[green]✓[/green] auto-inject hooks removed")
 
     console.print(f"\n[green]{tool} integration removed.[/green]")
 
