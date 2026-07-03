@@ -49,7 +49,7 @@ def build_frontend(required: bool = True) -> bool:
                 check=True,
                 capture_output=False,
             )
-        except subprocess.CalledProcessError as e:
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
             print(f"Error: npm install failed: {e}")
             return not required
 
@@ -62,7 +62,7 @@ def build_frontend(required: bool = True) -> bool:
             check=True,
             capture_output=False,
         )
-    except subprocess.CalledProcessError as e:
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
         print(f"Error: Next.js build failed: {e}")
         return not required
 
