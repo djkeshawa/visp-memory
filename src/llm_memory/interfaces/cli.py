@@ -995,6 +995,42 @@ def stats():
             console.print(f"  {cat}: {count}")
 
 
+@app.command("ingest-instructions")
+def ingest_instructions_command(
+    root: str = typer.Option(".", "--root", help="Project root to scan"),
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository scope"),
+    importance: float = typer.Option(0.65, "--importance", min=0.0, max=1.0),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Report without storing"),
+    format: str = typer.Option("text", "--format", "-f", help="Output format: text or json"),
+):
+    """Import CLAUDE.md / AGENTS.md / .cursor rules / copilot-instructions as seed memories."""
+    from llm_memory.capture.instructions import ingest_instructions
+
+    memory = get_memory()
+    report = ingest_instructions(
+        memory,
+        root=root,
+        repo_id=_repo_scope(memory, repo),
+        importance=importance,
+        dry_run=dry_run,
+    )
+
+    if format.lower() == "json":
+        console.print_json(data=report.as_dict())
+        return
+
+    if not report.files:
+        console.print("[yellow]No instruction files found (CLAUDE.md, AGENTS.md, ...).[/yellow]")
+        return
+    verb = "Would store" if dry_run else "Stored"
+    console.print(
+        f"[green]{verb} {report.stored} section(s) from {len(report.files)} file(s); "
+        f"{report.skipped_unchanged} unchanged, {report.skipped_trivial} trivial skipped.[/green]"
+    )
+    for name in report.files:
+        console.print(f"  - {name}")
+
+
 @app.command("tokens")
 def tokens(
     format: str = typer.Option("text", "--format", "-f", help="Output format: text or json"),

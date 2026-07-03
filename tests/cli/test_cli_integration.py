@@ -152,6 +152,24 @@ class TestCLIBasicCommands:
         assert "Memory Statistics" in result.output
         assert "Total Memories" in result.output
 
+    def test_ingest_instructions_command(self, cli_env, temp_dir):
+        """ingest-instructions imports CLAUDE.md sections idempotently."""
+        runner.invoke(app, ["init", "--type", "code"])
+        (temp_dir / "CLAUDE.md").write_text(
+            "## Conventions\n\nAlways run the linter before committing changes here.\n",
+            encoding="utf-8",
+        )
+
+        first = runner.invoke(app, ["ingest-instructions", "--format", "json"])
+        assert first.exit_code == 0
+        data = json.loads(first.output)
+        assert data["stored"] == 1
+        assert any("CLAUDE.md" in name for name in data["files"])
+
+        second = runner.invoke(app, ["ingest-instructions", "--format", "json"])
+        assert second.exit_code == 0
+        assert json.loads(second.output)["stored"] == 0
+
     def test_tokens_command_outputs_json_contract(self, cli_env):
         """Tokens command exposes a stable token-efficiency JSON contract."""
         runner.invoke(app, ["init", "--type", "code"])
