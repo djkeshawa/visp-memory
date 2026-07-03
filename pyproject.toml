@@ -1,6 +1,6 @@
 [project]
 name = "llm-memory"
-version = "0.2.0"
+version = "0.2.1"
 description = "Human-inspired memory system for LLMs - persistent context, compressed knowledge, and intent tracking"
 readme = "README.md"
 requires-python = ">=3.10"
