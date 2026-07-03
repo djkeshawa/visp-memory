@@ -1,6 +1,9 @@
 [project]
-name = "llm-memory"
-version = "0.2.2"
+# PyPI distribution name. "llm-memory" is taken by an unrelated project, so the
+# published package is "llm-memory-mcp". The import package (llm_memory) and the
+# CLI commands (llm-memory, llm-memory-mcp) are unchanged.
+name = "llm-memory-mcp"
+version = "0.2.3"
 description = "Human-inspired memory system for LLMs - persistent context, compressed knowledge, and intent tracking"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -50,7 +53,7 @@ dev = [
     "pytest-asyncio>=0.21.0",
     "ruff>=0.1.0",
 ]
-all = ["llm-memory[openai,ollama,local-embeddings,api,mcp,capture,analysis,arcadedb,neo4j,dev]"]
+all = ["llm-memory-mcp[openai,ollama,local-embeddings,api,mcp,capture,analysis,arcadedb,neo4j,dev]"]
 
 [project.urls]
 Homepage = "https://github.com/djkeshawa/llm-memory"

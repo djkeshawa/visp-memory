@@ -75,13 +75,13 @@ of API/noop/fallback search.
 
 ```bash
 # From PyPI (when published)
-pip install llm-memory[all]
+pip install llm-memory-mcp[all]
 
 # Lean local install without local embedding model dependencies
-pip install llm-memory[api,mcp]
+pip install llm-memory-mcp[api,mcp]
 
 # Local embedded graph backend without Docker/Neo4j
-pip install "llm-memory[arcadedb,api,mcp]"
+pip install "llm-memory-mcp[arcadedb,api,mcp]"
 
 # From GitHub Release (direct download)
 pip install https://github.com/djkeshawa/llm-memory/releases/download/v0.1.0/llm_memory-0.1.0-py3-none-any.whl
@@ -156,7 +156,7 @@ rm -rf ~/.llm-memory
 | Dependency | Version | Required | Installation |
 |------------|---------|----------|--------------|
 | **Python** | 3.10+ | Yes | [python.org](https://www.python.org/downloads/) |
-| **ArcadeDB Embedded** | 26.4.x | Optional local graph backend | `pip install "llm-memory[arcadedb,api,mcp]"` |
+| **ArcadeDB Embedded** | 26.4.x | Optional local graph backend | `pip install "llm-memory-mcp[arcadedb,api,mcp]"` |
 | **Neo4j** | 5.15+ | For team/graph deployments | See below |
 | **Node.js** | 18+ | For dashboard dev | [nodejs.org](https://nodejs.org/) |
 
@@ -168,9 +168,9 @@ backend for shared/team deployments.
 
 | Backend | Set `LLM_MEMORY_STORAGE_BACKEND` | Install | Requires separate service | Best for |
 |---------|----------------------------------|---------|---------------------------|----------|
-| SQLite | `sqlite` or unset | `llm-memory[api,mcp]` | No | Smallest local install |
-| ArcadeDB | `arcadedb` | `llm-memory[arcadedb,api,mcp]` | No | Local embedded graph storage |
-| Neo4j | `neo4j` | `llm-memory[neo4j,api,mcp]` | Yes | Mature shared/team graph deployment |
+| SQLite | `sqlite` or unset | `llm-memory-mcp[api,mcp]` | No | Smallest local install |
+| ArcadeDB | `arcadedb` | `llm-memory-mcp[arcadedb,api,mcp]` | No | Local embedded graph storage |
+| Neo4j | `neo4j` | `llm-memory-mcp[neo4j,api,mcp]` | Yes | Mature shared/team graph deployment |
 
 ArcadeDB stores structured graph data under
 `$LLM_MEMORY_STORAGE_DATA_DIR/arcadedb` and keeps vector behavior conservative
