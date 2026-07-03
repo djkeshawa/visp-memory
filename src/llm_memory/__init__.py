@@ -16,9 +16,11 @@ except ImportError:  # pragma: no cover - Python 3.10+ includes importlib.metada
     version = None
 
 try:
-    __version__ = version("llm-memory") if version else "0.2.0"
+    # Distribution name on PyPI is "llm-memory-mcp" ("llm-memory" is owned by an
+    # unrelated project); the import package and CLI stay "llm-memory".
+    __version__ = version("llm-memory-mcp") if version else "0.2.3"
 except PackageNotFoundError:
-    __version__ = "0.2.0"
+    __version__ = "0.2.3"
 
 from llm_memory.config import MemoryConfig
 from llm_memory.core.memory import Memory

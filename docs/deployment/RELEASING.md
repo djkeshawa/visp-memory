@@ -240,20 +240,21 @@ uploads the wheel + sdist to PyPI using **Trusted Publishing (OIDC)** — no API
 token is stored in GitHub. After a release completes, anyone can:
 
 ```bash
-pip install llm-memory
-pip install "llm-memory[all]"
+pip install llm-memory-mcp
+pip install "llm-memory-mcp[all]"
 ```
 
 ### One-time setup (do this once, before the first tagged release)
 
 **1. Register the Trusted Publisher on PyPI.**
-Because the project does not exist on PyPI yet, add it as a *pending* publisher:
-go to <https://pypi.org/manage/account/publishing/> → "Add a new pending
-publisher" and enter exactly:
+The distribution name is `llm-memory-mcp` (the name `llm-memory` is owned by an
+unrelated project). Because it does not exist on PyPI yet, add it as a *pending*
+publisher: go to <https://pypi.org/manage/account/publishing/> → "Add a new
+pending publisher" and enter exactly:
 
 | Field | Value |
 |-------|-------|
-| PyPI Project Name | `llm-memory` |
+| PyPI Project Name | `llm-memory-mcp` |
 | Owner | `djkeshawa` |
 | Repository name | `llm-memory` |
 | Workflow name | `build-release.yml` |
