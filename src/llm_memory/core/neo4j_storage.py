@@ -6,7 +6,6 @@ import hashlib
 import json
 import logging
 import re
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 try:
@@ -15,6 +14,7 @@ except ImportError:  # pragma: no cover - exercised only when optional extra is 
     GraphDatabase = None
 
 from llm_memory.config import load_config
+from llm_memory.core.clock import utc_now
 from llm_memory.core.indexing import EmbeddingIndexReport, ReindexResult, ReindexScope
 from llm_memory.core.ranking import (
     clamp_score,
@@ -177,7 +177,7 @@ class Neo4jStorage(BaseStorage):
     @staticmethod
     def _generate_id(content: str) -> str:
         """Generate unique ID for content."""
-        timestamp = datetime.now().isoformat()
+        timestamp = utc_now().isoformat()
         return hashlib.sha256(f"{content}{timestamp}".encode()).hexdigest()[:16]
 
     @staticmethod

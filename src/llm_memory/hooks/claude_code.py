@@ -9,6 +9,7 @@ Integrates with Claude Code by:
 from pathlib import Path
 from typing import Dict
 
+from llm_memory.core.clock import utc_now
 from llm_memory.hooks.base import _replace_between_markers
 from llm_memory.hooks.generic import GenericAdapter
 
@@ -135,6 +136,5 @@ llm-memory warn "area" "warning"
 
     def _get_timestamp(self) -> str:
         """Get current timestamp for context."""
-        from datetime import datetime
 
-        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return utc_now().strftime("%Y-%m-%d %H:%M:%S")

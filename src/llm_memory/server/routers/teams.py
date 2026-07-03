@@ -1,8 +1,8 @@
-from datetime import datetime
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from llm_memory.core.clock import utc_now
 from llm_memory.core.team import Team, TeamManager, User
 from llm_memory.server.auth import UserContext, get_current_user
 from llm_memory.server.schemas import (
@@ -63,8 +63,8 @@ async def create_user(
     return {
         **user_obj.__dict__,
         "id": user_id,
-        "created_at": datetime.now(),
-        "last_active": datetime.now(),
+        "created_at": utc_now(),
+        "last_active": utc_now(),
     }
 
 
@@ -85,8 +85,8 @@ async def get_user(
 
     return {
         **user.__dict__,
-        "created_at": user.created_at or datetime.now(),
-        "last_active": user.last_active or datetime.now(),
+        "created_at": user.created_at or utc_now(),
+        "last_active": user.last_active or utc_now(),
     }
 
 
@@ -118,7 +118,7 @@ async def create_team(
     return {
         **team_obj.__dict__,
         "id": team_id,
-        "created_at": datetime.now(),
+        "created_at": utc_now(),
     }
 
 
@@ -139,7 +139,7 @@ async def get_team(
 
     return {
         **team.__dict__,
-        "created_at": team.created_at or datetime.now(),
+        "created_at": team.created_at or utc_now(),
     }
 
 
@@ -185,7 +185,7 @@ async def get_user_teams(
     return [
         {
             **t.__dict__,
-            "created_at": t.created_at or datetime.now(),
+            "created_at": t.created_at or utc_now(),
         }
         for t in teams
     ]

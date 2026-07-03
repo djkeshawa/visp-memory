@@ -3,6 +3,7 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from llm_memory.core.clock import utc_now
 from llm_memory.server.auth import UserContext, get_current_user
 from llm_memory.server.schemas import AuditLogEntry
 
@@ -34,7 +35,7 @@ def append_audit_event(
 def _as_datetime(value):
     if isinstance(value, str):
         return datetime.fromisoformat(value)
-    return value or datetime.now()
+    return value or utc_now()
 
 
 @router.get("/audit-log", response_model=List[AuditLogEntry])

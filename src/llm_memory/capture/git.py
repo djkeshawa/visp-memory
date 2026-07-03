@@ -20,6 +20,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from llm_memory.core.clock import utc_now
+
 try:
     import git
 
@@ -69,7 +71,7 @@ class CaptureManifest:
             "source_type": source_type,
             "source_identity": source_identity,
             "content_hash": content_hash,
-            "last_captured_at": datetime.now().isoformat(),
+            "last_captured_at": utc_now().isoformat(),
             "output_memory_ids": output_memory_ids,
             "capture_version": CAPTURE_MANIFEST_VERSION,
             "status": status,

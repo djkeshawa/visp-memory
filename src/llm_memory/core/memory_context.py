@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Dict
+
+from llm_memory.core.clock import utc_now
 
 
 def build_context(
@@ -57,7 +58,7 @@ def build_context(
         }
 
     context["meta"] = {
-        "generated_at": datetime.now().isoformat(),
+        "generated_at": utc_now().isoformat(),
         "stats": memory._storage.get_stats(repo_id=repo_id),
     }
     return context

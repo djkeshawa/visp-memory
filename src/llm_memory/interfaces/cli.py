@@ -30,6 +30,7 @@ from rich.table import Table
 
 from llm_memory import Memory, MemoryConfig, __version__
 from llm_memory.config import load_config
+from llm_memory.core.clock import parse_utc, utc_now
 from llm_memory.core.ranking import projected_importance
 from llm_memory.core.reporting import MemoryIntelligenceReporter
 
@@ -76,12 +77,8 @@ def _repo_scope(memory: Memory, repo: str = None) -> str:
 
 
 def _parse_cli_datetime(value: Any) -> datetime:
-    """Parse storage timestamps from local or remote backends."""
-    if isinstance(value, datetime):
-        return value.replace(tzinfo=None)
-    if isinstance(value, str):
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
-    return datetime.now()
+    """Parse storage timestamps into aware UTC so age math matches utc_now()."""
+    return parse_utc(value) or utc_now()
 
 
 def _priority_label(priority: int) -> str:
@@ -129,7 +126,7 @@ def _memory_decay_preview(
         repo_id=_repo_scope(memory, repo),
         status="active",
     )
-    now = datetime.now()
+    now = utc_now()
     rows = []
 
     for item in memories:

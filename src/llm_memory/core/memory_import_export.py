@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
 from llm_memory.capture.git import CaptureManifest
+from llm_memory.core.clock import utc_now
 
 REDACTED_SECRET = "***REDACTED***"
 _SENSITIVE_CONFIG_KEYS = {
@@ -47,7 +47,7 @@ def export_memory(memory: Any, path: Path = None) -> Dict[str, Any]:
 
     export_data = {
         "version": "1.0",
-        "exported_at": datetime.now().isoformat(),
+        "exported_at": utc_now().isoformat(),
         "config": _redact_config_secrets(memory.config.model_dump()),
         "memories": {
             "episodic": [

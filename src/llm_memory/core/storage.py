@@ -14,10 +14,10 @@ import sqlite3
 import uuid
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
+from llm_memory.core.clock import utc_now
 from llm_memory.core.indexing import EmbeddingIndexReport, ReindexResult, ReindexScope
 from llm_memory.core.ranking import (
     clamp_score,
@@ -928,7 +928,7 @@ class LocalStorage(BaseStorage):
         truncated hash. IDs are not content-addressed, so the extra entropy is
         behavior-preserving.
         """
-        timestamp = datetime.now().isoformat()
+        timestamp = utc_now().isoformat()
         nonce = uuid.uuid4().hex
         return hashlib.sha256(f"{content}{timestamp}{nonce}".encode()).hexdigest()[:16]
 
@@ -999,7 +999,7 @@ class LocalStorage(BaseStorage):
                 embedding = None
 
         # Store in SQLite
-        created_at = datetime.now().isoformat()
+        created_at = utc_now().isoformat()
         with self._get_db() as conn:
             conn.execute(
                 """
@@ -1893,7 +1893,7 @@ class LocalStorage(BaseStorage):
                     task_id,
                     outcome,
                     self._json_serialize(self._sanitize_recall_metadata(metadata)),
-                    datetime.now().isoformat(),
+                    utc_now().isoformat(),
                 ),
             )
             if normalized_type in REINFORCING_RECALL_EVENTS:

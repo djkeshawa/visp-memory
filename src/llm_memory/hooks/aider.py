@@ -7,6 +7,7 @@ Integrates with Aider by creating a .aider file for context.
 from pathlib import Path
 from typing import Dict
 
+from llm_memory.core.clock import utc_now
 from llm_memory.hooks.generic import GenericAdapter
 
 
@@ -107,6 +108,5 @@ llm-memory hooks update aider
 
     def _get_timestamp(self) -> str:
         """Get current timestamp."""
-        from datetime import datetime
 
-        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return utc_now().strftime("%Y-%m-%d %H:%M:%S")

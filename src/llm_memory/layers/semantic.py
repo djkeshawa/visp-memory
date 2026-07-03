@@ -12,10 +12,10 @@ Unlike episodic memories (events), semantic memories are:
 - Compressed (distilled from multiple episodes)
 """
 
-from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List
 
+from llm_memory.core.clock import utc_now
 from llm_memory.core.ranking import rank_memory_results
 from llm_memory.core.storage import BaseStorage
 from llm_memory.layers.base import BaseMemoryLayer
@@ -91,7 +91,7 @@ class SemanticMemory(BaseMemoryLayer):
                 importance=0.9
             )
         """
-        metadata = {"established_at": datetime.now().isoformat(), "applies_to": applies_to or []}
+        metadata = {"established_at": utc_now().isoformat(), "applies_to": applies_to or []}
 
         return self.storage.store_memory(
             content=knowledge,
