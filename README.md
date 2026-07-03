@@ -379,6 +379,40 @@ wrong edits avoided, citation coverage, token use, and latency.
 
 ---
 
+## ⚡ Automatic Memory Injection (Claude Code)
+
+Beyond MCP tools (which the agent must *choose* to call), LLM Memory can install
+**real Claude Code hooks** so memory is injected automatically:
+
+```bash
+llm-memory hooks install claude-code
+```
+
+This merges two hooks into your project's `.claude/settings.json`:
+
+| Hook | When | What it injects |
+|------|------|-----------------|
+| `SessionStart` | A session begins | Compact project memory: goals, constraints, warnings, conventions |
+| `PreToolUse` (Read/Edit/Write) | Before the agent reads or edits a file | That file's warnings, past bugs, and decisions |
+
+Properties: fail-open (a memory failure never breaks your session), no
+permission interference (context only, never a permission decision), and no
+repeat spam (each file's context is injected once per session). Requires
+`llm-memory` on PATH. Remove with `llm-memory hooks uninstall claude-code`, or
+pass `--no-auto-inject` to skip hook installation.
+
+### Seed Memory From Your Existing Instruction Files
+
+Import the context you already maintain (CLAUDE.md, AGENTS.md, `.cursorrules`,
+`.cursor/rules/*.mdc`, copilot-instructions.md) as relevance-ranked memories:
+
+```bash
+llm-memory ingest-instructions            # idempotent; re-run after edits
+llm-memory ingest-instructions --dry-run  # preview
+```
+
+---
+
 ## 🤖 MCP Server (Claude Desktop / IDEs)
 
 LLM Memory implements the **Model Context Protocol (MCP)**, allowing AI assistants to directly read and write to your project's memory.

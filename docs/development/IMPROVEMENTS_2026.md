@@ -101,6 +101,32 @@ exact curve): `t ← 0` on use (accessed_at refresh) and a growing `access_count
 the half-life via a **saturating** function (`log1p`), so the first recalls help most and the
 effect levels off — avoiding runaway persistence.
 
+## 3.5 Wave 2 (implemented June 2026)
+
+A second implementation pass delivered the top roadmap items below. Status markers:
+
+- ✅ **Spreading activation** (`recall/graph.py: spread_activation`) — the cheap variant of
+  roadmap item #1: damped fixed-point pass over the collected subgraph; converging evidence
+  paths accumulate (`relevance_factors.activation`) in `trace()` and `neighbors()`.
+- ✅ **Write-time reconciliation** (`quality/reconcile.py`) — roadmap item #3's deterministic
+  variant: `learn()` resolves each fact to ADD/UPDATE/NOOP; LLM-confirmed contradictions
+  **supersede** the old memory non-destructively (`status="superseded"` + `superseded_by`/
+  `invalid_at` metadata — a first slice of item #2's bi-temporal model at memory granularity).
+- ✅ **Automatic injection hooks** (`hooks/claude_code_auto.py`) — real Claude Code
+  SessionStart/PreToolUse hooks; memory injects without any tool call. Fail-open, no
+  permission interference, once-per-session per file.
+- ✅ **Instruction-file ingestion** (`capture/instructions.py`, `llm-memory
+  ingest-instructions`) — CLAUDE.md/AGENTS.md/.cursor rules/copilot-instructions become
+  relevance-ranked seed memories, idempotent by content hash.
+- ✅ **UTC timestamps** (`core/clock.py`) — all timestamp writes and age comparisons in UTC;
+  fixes decay/recency skew on non-UTC machines.
+- ✅ **CI evaluations** — the deterministic eval scripts (agent A/B, hallucination,
+  intelligence, benchmark) now run as a CI job.
+
+Still open from the roadmap: full PPR with node-specificity seeding (item #1's second step),
+edge-level bi-temporal validity windows (item #2), sleep-time consolidation (#4), salience
+rating (#5), reflection with governance (#6), query-aware pruning (#7), working-memory tier (#8).
+
 ## 4. Research-grounded roadmap (papers, prioritized)
 
 From a SOTA papers sweep (2024–2026). Build order follows impact-to-effort; Tier 1 items
