@@ -52,6 +52,12 @@ dev = [
 ]
 all = ["llm-memory[openai,ollama,local-embeddings,api,mcp,capture,analysis,arcadedb,neo4j,dev]"]
 
+[project.urls]
+Homepage = "https://github.com/djkeshawa/llm-memory"
+Repository = "https://github.com/djkeshawa/llm-memory"
+Issues = "https://github.com/djkeshawa/llm-memory/issues"
+Changelog = "https://github.com/djkeshawa/llm-memory/releases"
+
 [project.scripts]
 llm-memory = "llm_memory.interfaces.cli:app"
 llm-memory-mcp = "llm_memory.interfaces.mcp:main"

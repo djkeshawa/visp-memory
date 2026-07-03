@@ -71,6 +71,13 @@ jobs:
           pip install build
           python -m build
 
+      - name: Validate distribution metadata
+        # Fails the release early if the long description would not render on
+        # PyPI or the metadata is malformed — before any publish is attempted.
+        run: |
+          pip install twine
+          twine check dist/*
+
       - name: Upload Python Package
         uses: actions/upload-artifact@v4
         with:
@@ -172,6 +179,31 @@ jobs:
         with:
           name: standalone-${{ runner.os }}
           path: dist/llm-memory-standalone-*
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [quality, build-python]
+    # Only real version tags publish to PyPI (PyPI rejects re-uploads of an
+    # existing version, so this must never run on branch pushes or dispatch).
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/llm-memory
+    permissions:
+      # OIDC token for PyPI Trusted Publishing — no API token stored in GitHub.
+      id-token: write
+    steps:
+      - name: Download built distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
 
   release:
     name: Create Release
