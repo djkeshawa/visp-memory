@@ -120,10 +120,12 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
       const scopes: ProjectScope[] = scopeResult.status === "fulfilled" ? scopeResult.value : []
       const runtimeRepoId: string | null =
         runtimeResult.status === "fulfilled" ? runtimeResult.value.repoId ?? null : null
-      const failure = [scopeResult, runtimeResult].find((r) => r.status === "rejected")
-      if (failure && failure.status === "rejected") {
-        setLoadError(describeApiError(failure.reason))
-      }
+      // Surface a load error ONLY when the scope list itself failed (the dropdown is then unusable).
+      // A runtime-status-only blip is non-fatal — the dropdown still works from the scope list, and
+      // the sidebar/system-status poll runtime separately. Always writing this (including the null
+      // branch on success) also clears the failsafe timer's provisional "did not respond" message
+      // when a slow-but-successful load eventually resolves.
+      setLoadError(scopeResult.status === "rejected" ? describeApiError(scopeResult.reason) : null)
 
       settled = true
       clearTimeout(failsafe)
