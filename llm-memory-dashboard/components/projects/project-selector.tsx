@@ -1,20 +1,20 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { FolderGit2 } from "lucide-react"
 import { describeApiError, getProjectScopes, getRuntimeStatus } from "@/lib/api"
-import { PROJECT_QUERY_PARAM, PROJECT_STORAGE_KEY } from "@/lib/project-selection"
+import { useSelectProject, useSelectedProjectId } from "@/lib/project-selection"
 import type { ProjectScope } from "@/lib/types"
 
 export function ProjectSelector() {
-  const router = useRouter()
-  const pathname = usePathname()
-  const searchParams = useSearchParams()
-  const selectedRepoId = searchParams.get(PROJECT_QUERY_PARAM)
+  const selectedRepoId = useSelectedProjectId()
+  const selectProject = useSelectProject()
   const [projects, setProjects] = useState<ProjectScope[]>([])
   const [loadError, setLoadError] = useState<string | null>(null)
 
+  // Load the list of selectable projects once. Selection/persistence is owned entirely by the
+  // SelectedProjectProvider, so this effect no longer navigates or auto-selects — it only fills
+  // the dropdown options (deps [] so populating the list never re-triggers a selection).
   useEffect(() => {
     let isMounted = true
 
@@ -35,12 +35,6 @@ export function ProjectSelector() {
         const nextProjects = Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name))
         setProjects(nextProjects)
         setLoadError(null)
-
-        if (!selectedRepoId) {
-          const storedRepoId = window.localStorage.getItem(PROJECT_STORAGE_KEY)
-          const initialRepoId = storedRepoId && byId.has(storedRepoId) ? storedRepoId : runtime.repoId
-          if (initialRepoId) selectProject(initialRepoId, false)
-        }
       } catch (error) {
         if (!isMounted) return
         setLoadError(describeApiError(error))
@@ -51,16 +45,7 @@ export function ProjectSelector() {
     return () => {
       isMounted = false
     }
-  }, [selectedRepoId])
-
-  function selectProject(repoId: string, persist = true) {
-    const params = new URLSearchParams(searchParams.toString())
-    params.set(PROJECT_QUERY_PARAM, repoId)
-    if (persist) window.localStorage.setItem(PROJECT_STORAGE_KEY, repoId)
-
-    const nextUrl = `${pathname || "/"}?${params.toString()}`
-    router.replace(nextUrl, { scroll: false })
-  }
+  }, [])
 
   return (
     <div className="space-y-2 px-4">
@@ -69,7 +54,7 @@ export function ProjectSelector() {
         Project
       </div>
       <select
-        value={selectedRepoId || projects[0]?.id || ""}
+        value={selectedRepoId ?? projects[0]?.id ?? ""}
         onChange={(event) => selectProject(event.target.value)}
         disabled={projects.length === 0}
         className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none transition-colors focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:opacity-60"
