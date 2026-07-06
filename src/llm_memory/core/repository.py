@@ -7,7 +7,7 @@ Repositories are first-class entities that:
 - Enable cross-repo context sharing
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -36,6 +36,16 @@ class Repository:
     team_id: Optional[str] = None
     created_at: Optional[datetime] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Repository":
+        """Build a Repository from a storage dict, ignoring unknown keys.
+
+        Storage backends return raw node properties which may carry extra
+        normalized fields (e.g. ``tags``) that this entity does not model.
+        """
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
 
 
 @dataclass
@@ -76,7 +86,7 @@ class RepositoryManager:
             return None
         data = self.storage.get_repository(repo_id)
         if data:
-            return Repository(**data)
+            return Repository.from_dict(data)
         return None
 
     def list_all(self, team_id: Optional[str] = None) -> List[Repository]:
@@ -84,7 +94,7 @@ class RepositoryManager:
         if not hasattr(self.storage, "list_repositories"):
             return []
         repos_data = self.storage.list_repositories(team_id=team_id)
-        return [Repository(**repo) for repo in repos_data]
+        return [Repository.from_dict(repo) for repo in repos_data]
 
     def add_dependency(self, dep: RepositoryDependency) -> str:
         """Add a dependency relationship. Raises NotImplementedError if backend lacks support."""
