@@ -144,15 +144,19 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
 
       // Otherwise finalize the init-resolved selection now that scopes are known:
       //   a still-valid URL repo  ->  a still-valid stored repo  ->  runtime default  ->  first
-      //   available project. BOTH the URL and stored ids are validated against the scope set (the
+      //   available project. The URL and stored ids are validated against the scope set (the
       //   runtime default is injected above), so a deleted/renamed repo carried in a shared link
       //   or left in localStorage falls back to a real project instead of pinning the app to an
-      //   invalid scope that silently returns empty data.
+      //   invalid scope. But ONLY validate when the scope list actually loaded — if
+      //   getProjectScopes failed, we have no basis to reject and must trust the URL/stored value
+      //   (rejecting a valid deep link on a transient scopes blip would be worse).
+      const scopesLoaded = scopeResult.status === "fulfilled"
+      const isSelectable = (id: string) => !scopesLoaded || byId.has(id)
       const sorted = () => Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name))
       const finalId = userHasChosen
         ? selectedRef.current
-        : (fromUrl && byId.has(fromUrl) ? fromUrl : null) ||
-          (stored && byId.has(stored) ? stored : null) ||
+        : (fromUrl && isSelectable(fromUrl) ? fromUrl : null) ||
+          (stored && isSelectable(stored) ? stored : null) ||
           runtimeRepoId ||
           sorted()[0]?.id ||
           null
