@@ -100,7 +100,7 @@ class ArcadeDbStorage(BaseStorage):
         "created_at",
         "updated_at",
     ]
-    REPOSITORY_FIELDS = ["id", "name", "url", "description", "tech_stack", "team_id", "metadata"]
+    REPOSITORY_FIELDS = ["id", "name", "url", "description", "tech_stack", "team_id", "metadata", "created_at"]
     USER_FIELDS = ["id", "username", "email", "display_name", "metadata"]
     TEAM_FIELDS = ["id", "name", "description", "metadata"]
     AUDIT_FIELDS = [
@@ -893,6 +893,10 @@ class ArcadeDbStorage(BaseStorage):
                 "tech_stack": repo.get("tech_stack", []),
                 "team_id": repo.get("team_id"),
                 "metadata": repo.get("metadata", {}),
+                # Persist creation time once at T0 so reads round-trip a real timestamp, matching
+                # the neo4j and sqlite backends (was absent, so the router fabricated utc_now() on
+                # every read).
+                "created_at": repo.get("created_at") or utc_now().isoformat(),
             },
             self.REPOSITORY_FIELDS,
             self.RECORD_JSON_FIELDS["Repository"],

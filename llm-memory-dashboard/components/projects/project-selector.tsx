@@ -10,11 +10,12 @@ export function ProjectSelector() {
 
   return (
     <div className="space-y-2 px-4">
-      <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-        <FolderGit2 className="h-4 w-4 text-muted-foreground" />
+      <div id="project-selector-label" className="flex items-center gap-2 text-sm font-medium text-foreground">
+        <FolderGit2 className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
         Project
       </div>
       <select
+        aria-labelledby="project-selector-label"
         value={selectedRepoId ?? ""}
         onChange={(event) => selectProject(event.target.value)}
         disabled={projects.length === 0}
@@ -30,7 +31,7 @@ export function ProjectSelector() {
           ))
         )}
       </select>
-      {loadError ? <p className="text-xs text-destructive">{loadError}</p> : null}
+      {loadError ? <p role="alert" className="text-xs text-destructive">{loadError}</p> : null}
     </div>
   )
 }

@@ -7,6 +7,10 @@ import type { ProjectScope } from "@/lib/types"
 export const PROJECT_QUERY_PARAM = "repo_id"
 export const PROJECT_STORAGE_KEY = "llm-memory-selected-repo-id"
 
+// Upper bound on the initial scope/runtime load before the readiness gate is forced open with an
+// error, so a hung (connected-but-silent) backend can't wedge the app on the spinner forever.
+const LOAD_TIMEOUT_MS = 12000
+
 interface SelectedProjectContextValue {
   selectedRepoId: string | null
   projects: ProjectScope[]
@@ -88,23 +92,41 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
     const stored = readStoredRepoId()
 
     // Fast path: if the URL or localStorage already names a repo, show the app immediately with
-    // it so there is no loading flash on a warm load. The value is validated/corrected below once
-    // the scope list is known.
+    // it so there is no loading flash on a warm load. persist=false: an unvalidated URL id must
+    // not be written to localStorage until the async block validates it against the scope set. We
+    // also seed the option list with the selected repo so the dropdown always has a matching,
+    // enabled option during the load window (avoids a transient "No projects found").
     if (fromUrl || stored) {
-      selectProject((fromUrl || stored) as string, true)
+      const seed = (fromUrl || stored) as string
+      selectProject(seed, false)
+      setProjects([{ id: seed, name: seed, registered: false }])
       setReady(true)
     }
 
+    // Safety net: a stalled backend that accepts the socket but never responds would otherwise
+    // leave a cold load wedged on the spinner forever (fetch has no timeout). Force the gate open
+    // with an error after a bound.
+    let settled = false
+    const failsafe = setTimeout(() => {
+      if (settled) return
+      setLoadError((prev) => prev ?? "The server did not respond. Confirm the LLM Memory server is running.")
+      setReady(true)
+    }, LOAD_TIMEOUT_MS)
+
     void (async () => {
-      let scopes: ProjectScope[] = []
-      let runtimeRepoId: string | null = null
-      try {
-        const [scopeList, runtime] = await Promise.all([getProjectScopes(), getRuntimeStatus()])
-        scopes = scopeList
-        runtimeRepoId = runtime.repoId ?? null
-      } catch (error) {
-        setLoadError(describeApiError(error))
+      // allSettled, not Promise.all: a transient failure of one endpoint must not discard the
+      // other's success (a runtime-status blip should not wipe out a loaded scope list).
+      const [scopeResult, runtimeResult] = await Promise.allSettled([getProjectScopes(), getRuntimeStatus()])
+      const scopes: ProjectScope[] = scopeResult.status === "fulfilled" ? scopeResult.value : []
+      const runtimeRepoId: string | null =
+        runtimeResult.status === "fulfilled" ? runtimeResult.value.repoId ?? null : null
+      const failure = [scopeResult, runtimeResult].find((r) => r.status === "rejected")
+      if (failure && failure.status === "rejected") {
+        setLoadError(describeApiError(failure.reason))
       }
+
+      settled = true
+      clearTimeout(failsafe)
 
       const byId = new Map(scopes.map((scope) => [scope.id, scope]))
       // The server's landing repo may not be in the scope list (e.g. anonymous/admin wiring);
@@ -113,32 +135,45 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
         byId.set(runtimeRepoId, { id: runtimeRepoId, name: runtimeRepoId, registered: false })
       }
 
-      // Resolve the authoritative selection now that scopes are known:
-      //   URL (trusted — deep link / shareable)  ->  a still-valid stored repo  ->  runtime
-      //   default  ->  first available project.
-      // Validating `stored` against the scope set is what prevents a deleted/renamed project from
-      // being queried forever.
-      let sorted = Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name))
-      const resolved =
-        fromUrl ||
-        (stored && byId.has(stored) ? stored : null) ||
-        runtimeRepoId ||
-        sorted[0]?.id ||
-        null
+      // If the user picked a project during the scope-load window, that deliberate choice is
+      // authoritative — never override it with the value init resolved. `fastValue` is what the
+      // fast path selected (or null on a cold boot); if the current selection has diverged from
+      // it, the user chose.
+      const fastValue = fromUrl || stored || null
+      const userHasChosen = selectedRef.current !== fastValue
 
-      // Guarantee the resolved repo is a selectable <option> so the dropdown never shows a value
-      // with no matching option.
-      if (resolved && !byId.has(resolved)) {
-        byId.set(resolved, { id: resolved, name: resolved, registered: false })
-        sorted = Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name))
+      // Otherwise finalize the init-resolved selection now that scopes are known:
+      //   a still-valid URL repo  ->  a still-valid stored repo  ->  runtime default  ->  first
+      //   available project. BOTH the URL and stored ids are validated against the scope set (the
+      //   runtime default is injected above), so a deleted/renamed repo carried in a shared link
+      //   or left in localStorage falls back to a real project instead of pinning the app to an
+      //   invalid scope that silently returns empty data.
+      const sorted = () => Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name))
+      const finalId = userHasChosen
+        ? selectedRef.current
+        : (fromUrl && byId.has(fromUrl) ? fromUrl : null) ||
+          (stored && byId.has(stored) ? stored : null) ||
+          runtimeRepoId ||
+          sorted()[0]?.id ||
+          null
+
+      // Guarantee the active selection is a selectable <option> so the dropdown never shows a
+      // value with no matching option (covers a user-chosen out-of-scope repo).
+      if (finalId && !byId.has(finalId)) {
+        byId.set(finalId, { id: finalId, name: finalId, registered: false })
       }
-      setProjects(sorted)
+      setProjects(sorted())
 
-      if (resolved && resolved !== selectedRef.current) {
-        selectProject(resolved, true)
+      // Persist the validated final selection (the fast path deliberately did not persist an
+      // unvalidated URL id). Re-running selectProject when finalId is unchanged is a harmless
+      // no-op on state/URL and simply commits the now-validated value to localStorage.
+      if (finalId) {
+        selectProject(finalId, true)
       }
       setReady(true)
     })()
+
+    return () => clearTimeout(failsafe)
   }, [selectProject])
 
   // Keep React state in sync with browser Back/Forward, which change the URL without a router
@@ -166,8 +201,17 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
 
 function ProjectLoadingShell() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
-      <div className="h-8 w-8 animate-spin rounded-full border-2 border-muted border-t-foreground" />
+    <div
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+      className="flex min-h-screen items-center justify-center bg-background"
+    >
+      <div
+        aria-hidden="true"
+        className="h-8 w-8 animate-spin rounded-full border-2 border-muted border-t-foreground"
+      />
+      <span className="sr-only">Loading projects…</span>
     </div>
   )
 }
