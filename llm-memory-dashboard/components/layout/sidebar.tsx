@@ -1,13 +1,13 @@
 "use client"
 
 import Link from "next/link"
-import { usePathname, useSearchParams } from "next/navigation"
-import { Suspense, useEffect, useState } from "react"
+import { usePathname } from "next/navigation"
+import { useEffect, useState } from "react"
 import { Activity, Brain, ClipboardList, LayoutDashboard, Network, Search, Settings, Target } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { ThemeToggle } from "@/components/ui/theme-toggle"
 import { ProjectSelector } from "@/components/projects/project-selector"
-import { PROJECT_QUERY_PARAM, projectHref } from "@/lib/project-selection"
+import { projectHref, useSelectedProjectId } from "@/lib/project-selection"
 import { getRuntimeStatus } from "@/lib/api"
 
 const navItems = [
@@ -22,9 +22,8 @@ const navItems = [
 
 export function Sidebar() {
   const pathname = usePathname()
-  const searchParams = useSearchParams()
   const activePath = pathname === "/dashboard" ? "/" : pathname.replace(/^\/dashboard/, "")
-  const selectedRepoId = searchParams.get(PROJECT_QUERY_PARAM)
+  const selectedRepoId = useSelectedProjectId()
   const [systemHealth, setSystemHealth] = useState<"online" | "degraded" | "offline">("online")
 
   useEffect(() => {
@@ -88,9 +87,7 @@ export function Sidebar() {
 
       {/* Bottom Section */}
       <div className="hidden space-y-3 border-t border-border px-3 py-4 md:block">
-        <Suspense fallback={null}>
-          <ProjectSelector />
-        </Suspense>
+        <ProjectSelector />
 
         <div className="flex items-center justify-between px-4">
           <span className="text-sm text-muted-foreground">Theme</span>

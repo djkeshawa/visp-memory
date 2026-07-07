@@ -17,7 +17,8 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { createMemory, describeApiError } from "@/lib/api"
-import { useRouter } from "next/navigation"
+import { projectHref, useSelectedProjectId } from "@/lib/project-selection"
+import Link from "next/link"
 
 interface QuickActionsProps {
   /** Called after a memory is created so the parent can refetch its data. */
@@ -25,7 +26,7 @@ interface QuickActionsProps {
 }
 
 export function QuickActions({ onMemoryCreated }: QuickActionsProps = {}) {
-  const router = useRouter()
+  const selectedRepoId = useSelectedProjectId()
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [content, setContent] = useState("")
   const [category, setCategory] = useState("note")
@@ -38,7 +39,7 @@ export function QuickActions({ onMemoryCreated }: QuickActionsProps = {}) {
 
     setIsSubmitting(true)
     try {
-      await createMemory(content, category, [])
+      await createMemory(content, category, [], selectedRepoId)
       setErrorMessage(null)
       setContent("")
       setCategory("note")
@@ -114,9 +115,11 @@ export function QuickActions({ onMemoryCreated }: QuickActionsProps = {}) {
         </Dialog>
 
         <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
-          <Button variant="secondary" className="w-full" onClick={() => router.push("/recall")}>
-            <Search className="h-4 w-4 mr-2" />
-            Search
+          <Button asChild variant="secondary" className="w-full">
+            <Link href={projectHref("/recall", selectedRepoId)}>
+              <Search className="h-4 w-4 mr-2" />
+              Search
+            </Link>
           </Button>
         </motion.div>
       </div>
