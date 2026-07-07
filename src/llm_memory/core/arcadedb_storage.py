@@ -100,7 +100,16 @@ class ArcadeDbStorage(BaseStorage):
         "created_at",
         "updated_at",
     ]
-    REPOSITORY_FIELDS = ["id", "name", "url", "description", "tech_stack", "team_id", "metadata", "created_at"]
+    REPOSITORY_FIELDS = [
+        "id",
+        "name",
+        "url",
+        "description",
+        "tech_stack",
+        "team_id",
+        "metadata",
+        "created_at",
+    ]
     USER_FIELDS = ["id", "username", "email", "display_name", "metadata"]
     TEAM_FIELDS = ["id", "name", "description", "metadata"]
     AUDIT_FIELDS = [
