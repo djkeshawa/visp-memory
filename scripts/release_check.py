@@ -64,11 +64,11 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    run(["ruff", "check", "."])
-    run(["python3", "scripts/verify_github_workflows.py"])
+    run([sys.executable, "-m", "ruff", "check", "."])
+    run([sys.executable, "scripts/verify_github_workflows.py"])
 
     if not args.skip_tests:
-        run(["pytest", "-q"])
+        run([sys.executable, "-m", "pytest", "-q"])
 
     run(
         [
@@ -83,9 +83,9 @@ def main() -> int:
     )
 
     if not args.skip_frontend:
-        run(["python3", "build_frontend.py"])
+        run([sys.executable, "build_frontend.py"])
         if args.with_packaged_smoke or args.with_browser_smoke:
-            smoke_command = ["python3", "scripts/smoke_packaged_dashboard.py"]
+            smoke_command = [sys.executable, "scripts/smoke_packaged_dashboard.py"]
             if args.with_browser_smoke:
                 smoke_command.append("--browser")
             run(smoke_command)

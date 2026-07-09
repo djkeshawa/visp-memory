@@ -72,7 +72,7 @@ Impact is ranked by expected effect on agent quality, trust, and repeatability.
 - Make every new retrieval behavior measurable with recall quality metrics.
 - Keep local use simple; do not make Neo4j or heavy parser dependencies
   mandatory for individual developers.
-- Add implementation through scoped Visp tasks, not broad rewrites.
+- Add implementation through scoped tasks, not broad rewrites.
 
 ## Roadmap Tracks
 
@@ -442,7 +442,7 @@ Exit criteria:
 
 - Each schema has examples.
 - Backward compatibility is explicitly documented.
-- Implementation tasks are small enough for Visp task execution.
+- Implementation tasks are small enough for focused task execution.
 
 ### Phase 1: Evidence Graph Core
 

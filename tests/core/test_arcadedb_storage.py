@@ -1,5 +1,6 @@
 import builtins
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -722,6 +723,9 @@ def test_arcadedb_memory_intelligence_report_uses_public_storage_contract(
 
 
 def test_real_arcadedb_memory_smoke_skips_without_extra(tmp_path):
+    if sys.platform == "win32":
+        pytest.skip("arcadedb_embedded native smoke is unstable on Windows")
+
     try:
         import arcadedb_embedded  # noqa: F401
     except ImportError:

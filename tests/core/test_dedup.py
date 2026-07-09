@@ -23,9 +23,15 @@ class _FakeStorage:
     behaviour that made the original bug a data-loss issue.
     """
 
-    def __init__(self, memories: Dict[str, Dict[str, Any]]):
+    def __init__(
+        self,
+        memories: Dict[str, Dict[str, Any]],
+        relationships: Optional[List[Dict[str, Any]]] = None,
+    ):
         self._memories = memories
         self.deleted: List[str] = []
+        self.relationships = relationships or []
+        self.added_relationships: List[Dict[str, Any]] = []
 
     def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
         return self._memories.get(memory_id)
@@ -37,7 +43,37 @@ class _FakeStorage:
     def delete_memory(self, memory_id: str) -> bool:
         self.deleted.append(memory_id)
         self._memories.pop(memory_id, None)
+        self.relationships = [
+            relationship
+            for relationship in self.relationships
+            if relationship.get("source_id") != memory_id
+            and relationship.get("target_id") != memory_id
+        ]
         return True
+
+    def get_all_relationships(self, repo_id: str = None) -> List[Dict[str, Any]]:
+        return list(self.relationships)
+
+    def add_relationship(
+        self,
+        source_id: str,
+        target_id: str,
+        relationship: str,
+        strength: float = 1.0,
+        evidence: Dict[str, Any] = None,
+    ) -> str:
+        relationship_id = f"relationship-{len(self.added_relationships) + 1}"
+        self.added_relationships.append(
+            {
+                "id": relationship_id,
+                "source_id": source_id,
+                "target_id": target_id,
+                "relationship": relationship,
+                "strength": strength,
+                "evidence": evidence,
+            }
+        )
+        return relationship_id
 
 
 def test_merge_preserves_primary_metadata_and_records_provenance():
@@ -120,6 +156,66 @@ def test_merge_unions_tags_persisted_via_local_storage(tmp_path):
 
     primary = storage.get_memory(primary_id)
     assert primary["tags"] == ["auth", "backend", "security"]
+
+
+def test_merge_retargets_duplicate_relationships_before_delete():
+    storage = _FakeStorage(
+        {
+            "primary": {"id": "primary", "content": "Primary fact"},
+            "dup": {"id": "dup", "content": "Duplicate fact"},
+            "peer": {"id": "peer", "content": "Related fact"},
+        },
+        relationships=[
+            {
+                "id": "rel-1",
+                "source_id": "dup",
+                "target_id": "peer",
+                "relationship": "supports",
+                "strength": 0.8,
+                "evidence": {"source": "test", "reason": "duplicate supports peer"},
+            },
+            {
+                "id": "rel-2",
+                "source_id": "peer",
+                "target_id": "dup",
+                "relationship": "depends_on",
+                "strength": 0.6,
+                "evidence": {"source": "test", "reason": "peer depends on duplicate"},
+            },
+            {
+                "id": "rel-3",
+                "source_id": "dup",
+                "target_id": "primary",
+                "relationship": "related",
+                "strength": 0.4,
+                "evidence": {"source": "test", "reason": "would become self-link"},
+            },
+        ],
+    )
+
+    result = Deduplicator(storage).merge_memories(["primary", "dup"])
+
+    assert result == "primary"
+    assert storage.deleted == ["dup"]
+    assert storage.added_relationships == [
+        {
+            "id": "relationship-1",
+            "source_id": "primary",
+            "target_id": "peer",
+            "relationship": "supports",
+            "strength": 0.8,
+            "evidence": {"source": "test", "reason": "duplicate supports peer"},
+        },
+        {
+            "id": "relationship-2",
+            "source_id": "peer",
+            "target_id": "primary",
+            "relationship": "depends_on",
+            "strength": 0.6,
+            "evidence": {"source": "test", "reason": "peer depends on duplicate"},
+        },
+    ]
+    assert storage._memories["primary"]["metadata"]["retargeted_relationship_count"] == 2
 
 
 def test_merge_with_empty_list_returns_none():

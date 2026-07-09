@@ -72,5 +72,3 @@ log/
 *.whl
 dist-standalone/
 .ruff_cache/
-.visp
-.agents

@@ -1140,8 +1140,12 @@ def decay_preview(
 def dedup(
     layer: str = typer.Option("episodic", "--layer", "-l", help="Layer to check"),
     threshold: float = typer.Option(0.9, "--threshold", "-t", help="Similarity threshold"),
+    merge: bool = typer.Option(
+        False, "--merge", help="Merge duplicate groups into the first memory"
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip merge confirmation prompts"),
 ):
-    """Find and merge duplicate memories."""
+    """Find duplicate memories and optionally merge them."""
 
     memory = get_memory()
     duplicates = memory.deduplicate(layer=layer, threshold=threshold)
@@ -1160,7 +1164,27 @@ def dedup(
                 f"[{mem['id']}] {mem['content'][:50]}... ({mem.get('similarity', 0):.2f})"
             )
 
-    # TODO: Interactive merge workflow could be added here
+    if not merge:
+        return
+
+    merged_ids = []
+    for group in duplicates:
+        memory_ids = [mem["id"] for mem in group if mem.get("id")]
+        if len(memory_ids) < 2:
+            continue
+        if not yes and not typer.confirm(
+            f"Merge {len(memory_ids)} memories into {memory_ids[0]}?"
+        ):
+            continue
+        merged_id = memory.deduplicator.merge_memories(memory_ids)
+        if merged_id:
+            merged_ids.append(merged_id)
+            console.print(f"[green]Merged duplicate group into:[/green] {merged_id}")
+
+    if merged_ids:
+        console.print(f"[green]Merged {len(merged_ids)} duplicate group(s).[/green]")
+    else:
+        console.print("[yellow]No duplicate groups were merged.[/yellow]")
 
 
 # =============================================================================

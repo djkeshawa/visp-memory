@@ -12,6 +12,8 @@ from llm_memory.capture.git import CaptureManifest, capture_content_hash
 
 
 class TestCapture:
+    __test__ = False
+
     """
     Capture memories from test execution.
 
