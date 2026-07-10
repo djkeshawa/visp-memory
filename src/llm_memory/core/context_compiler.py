@@ -37,10 +37,11 @@ class ContextCompiler:
         metadata = memory.get("metadata") or {}
         memory_files = set(metadata.get("files") or metadata.get("applies_to") or [])
         memory_symbols = set(metadata.get("symbols") or [])
-        return not (
-            (files and not memory_files.intersection(files))
-            or (symbols and not memory_symbols.intersection(symbols))
-        )
+        if not files and not symbols:
+            return True
+        file_match = bool(files and memory_files.intersection(files))
+        symbol_match = bool(symbols and memory_symbols.intersection(symbols))
+        return file_match or symbol_match
 
     def compile(
         self,
@@ -78,6 +79,27 @@ class ContextCompiler:
                 if not self._matches_entities(memory, files=files, symbols=symbols):
                     continue
                 candidates[memory["id"]] = memory
+
+        # Text retrieval can miss a decision whose wording differs from the task even when
+        # both point at the same file or symbol. Add bounded entity-linked candidates before
+        # ranking so code-location evidence participates in the same scoring and budget rules.
+        if files or symbols:
+            for memory in self.storage.list_memories(
+                repo_id=repo_id,
+                status="active",
+                limit=500,
+            ):
+                if memory_filter and not memory_filter(memory):
+                    continue
+                metadata = memory.get("metadata") or {}
+                confidence = float(metadata.get("confidence", 0.5) or 0.0)
+                if confidence < min_confidence:
+                    continue
+                if not self._is_current(memory, as_of_time):
+                    continue
+                if not self._matches_entities(memory, files=files, symbols=symbols):
+                    continue
+                candidates.setdefault(memory["id"], memory)
 
         direct = rank_memory_results(list(candidates.values()), query=query, limit=60)
         for seed in direct[:5]:
@@ -119,6 +141,9 @@ class ContextCompiler:
                     "content": memory.get("content", ""),
                     "layer": memory.get("layer"),
                     "category": memory.get("category"),
+                    "repo_id": memory.get("repo_id"),
+                    "tags": memory.get("tags") or [],
+                    "source_ids": memory.get("source_ids") or [],
                     "relevance_score": memory.get("relevance_score")
                     or memory.get("similarity"),
                     "confidence": float(metadata.get("confidence", 0.5) or 0.0),
@@ -126,6 +151,8 @@ class ContextCompiler:
                     "valid_from": metadata.get("valid_from"),
                     "valid_to": metadata.get("valid_to"),
                     "source_revision": metadata.get("source_revision"),
+                    "source_hash": metadata.get("source_hash"),
+                    "evidence": metadata.get("evidence") or [],
                     "files": metadata.get("files") or metadata.get("applies_to") or [],
                     "symbols": metadata.get("symbols") or [],
                     "graph_seed_id": memory.get("graph_seed_id"),

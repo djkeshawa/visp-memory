@@ -731,6 +731,41 @@ class TestCLIContextGeneration:
         assert result.exit_code == 0
         assert "Project Memory Context" in result.output
 
+    def test_brief_command_outputs_cited_json(self, cli_env):
+        runner.invoke(app, ["init", "--type", "code", "--repo", "brief-repo"])
+        runner.invoke(
+            app,
+            [
+                "warn",
+                "src/auth.py",
+                "Keep credentials out of local storage",
+                "--repo",
+                "brief-repo",
+            ],
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "brief",
+                "Review authentication in `src/auth.py`",
+                "--repo",
+                "brief-repo",
+                "--file",
+                "src/auth.py",
+                "--tokens",
+                "300",
+                "--format",
+                "json",
+            ],
+        )
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["schema_version"] == "1.0"
+        assert data["sections"]["warnings"]
+        assert data["citations"]
+
     def test_inject_command(self, cli_env):
         """Test file-based context injection."""
         runner.invoke(app, ["init", "--type", "code"])

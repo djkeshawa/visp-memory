@@ -12,6 +12,7 @@ Usage:
     llm-memory done                    # Clear current task
     llm-memory recall "query"          # Search memories
     llm-memory context                 # Get full context
+    llm-memory brief "task"            # Prepare a cited task brief
     llm-memory stats                   # Show statistics
 """
 
@@ -929,6 +930,53 @@ def context(
         console.print_json(json.dumps(ctx, default=str))
     else:
         console.print(Markdown(ctx))
+
+
+@app.command()
+def brief(
+    task: str = typer.Argument(..., help="Concrete task to prepare"),
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository/project ID"),
+    files: List[str] = typer.Option(None, "--file", "-f", help="Relevant file paths"),
+    symbols: List[str] = typer.Option(None, "--symbol", "-s", help="Relevant symbols"),
+    constraints: List[str] = typer.Option(
+        None, "--constraint", "-c", help="Constraint that the task must preserve"
+    ),
+    intent_id: str = typer.Option(None, "--intent", help="Active intent ID override"),
+    token_budget: int = typer.Option(
+        2000, "--tokens", min=128, max=100000, help="Maximum injected context tokens"
+    ),
+    previous_fingerprint: str = typer.Option(
+        None, "--previous-fingerprint", help="Prior brief fingerprint for a delta"
+    ),
+    min_confidence: float = typer.Option(
+        0.0, "--min-confidence", min=0.0, max=1.0
+    ),
+    format: str = typer.Option("text", "--format", help="Output format: text or json"),
+):
+    """Prepare a cited, token-budgeted memory brief before work begins."""
+    from llm_memory.core.task_brief import TaskMemoryBriefCompiler
+
+    if format not in {"text", "json"}:
+        console.print("[red]--format must be text or json[/red]")
+        raise typer.Exit(2)
+    memory = get_memory()
+    result = TaskMemoryBriefCompiler(memory._storage).prepare(
+        task,
+        repo_id=_repo_scope(memory, repo),
+        token_budget=token_budget,
+        files=files or [],
+        symbols=symbols or [],
+        intent_id=intent_id,
+        constraints=constraints or [],
+        previous_fingerprint=previous_fingerprint,
+        min_confidence=min_confidence,
+    )
+    if format == "json":
+        console.print_json(json.dumps(result, default=str))
+    elif result["unchanged"]:
+        console.print(f"Task brief unchanged. Fingerprint: {result['fingerprint']}")
+    else:
+        console.print(Markdown(result["context"]))
 
 
 @app.command()

@@ -84,6 +84,7 @@ VALID_INTENT_STATUSES = frozenset({"active", "completed", "closed"})
 CORE_TOOL_NAMES = frozenset(
     {
         # Context & search
+        "memory_prepare_task",
         "memory_context",
         "memory_recall",
         "memory_trace",
@@ -142,6 +143,55 @@ def create_mcp_server() -> "Server":
         """List available memory tools, scoped to the active profile."""
         all_tools = [
             # Context & Search
+            Tool(
+                name="memory_prepare_task",
+                description=(
+                    "Prepare a cited, token-budgeted task brief with relevant decisions, "
+                    "warnings, knowledge, history, constraints, contradictions, and unknowns. "
+                    "Call this before planning or editing."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "required": ["task"],
+                    "properties": {
+                        "task": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 20000,
+                            "description": "The concrete task the LLM is about to perform",
+                        },
+                        "repo_id": {"type": "string"},
+                        "files": {"type": "array", "items": {"type": "string"}},
+                        "symbols": {"type": "array", "items": {"type": "string"}},
+                        "intent_id": {"type": "string"},
+                        "constraints": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "token_budget": {
+                            "type": "integer",
+                            "minimum": 128,
+                            "maximum": 100000,
+                            "default": 2000,
+                        },
+                        "min_confidence": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "default": 0,
+                        },
+                        "previous_fingerprint": {
+                            "type": "string",
+                            "description": "Prior brief fingerprint for an unchanged delta",
+                        },
+                        "format": {
+                            "type": "string",
+                            "enum": ["text", "json"],
+                            "default": "text",
+                        },
+                    },
+                },
+            ),
             Tool(
                 name="memory_context",
                 description=(
@@ -1271,6 +1321,31 @@ def _handle_context(args: dict[str, Any], memory: Memory) -> str:
     return ctx
 
 
+def _handle_task_brief(args: dict[str, Any], memory: Memory) -> str:
+    """Prepare the primary recall-before-work artifact."""
+    from llm_memory.core.task_brief import TaskMemoryBriefCompiler
+
+    task = str(args.get("task") or "").strip()
+    if not task:
+        return "Error: task is required."
+    brief = TaskMemoryBriefCompiler(memory._storage).prepare(
+        task,
+        repo_id=args.get("repo_id") or memory.config.repo_id,
+        token_budget=int(args.get("token_budget", 2000)),
+        files=args.get("files") or [],
+        symbols=args.get("symbols") or [],
+        intent_id=args.get("intent_id"),
+        constraints=args.get("constraints") or [],
+        previous_fingerprint=args.get("previous_fingerprint"),
+        min_confidence=float(args.get("min_confidence", 0.0)),
+    )
+    if args.get("format", "text") == "json":
+        return json.dumps(brief, indent=2, default=str)
+    if brief["unchanged"]:
+        return f"Task brief unchanged. Fingerprint: {brief['fingerprint']}"
+    return brief["context"]
+
+
 def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
     """Handle search tools."""
     if name == "memory_recall":
@@ -1938,6 +2013,9 @@ async def handle_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
     """Route tool calls to specialized handlers."""
 
     # Context
+    if name == "memory_prepare_task":
+        return _handle_task_brief(args, memory)
+
     if name == "memory_context":
         return _handle_context(args, memory)
 
