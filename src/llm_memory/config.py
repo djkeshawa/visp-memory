@@ -10,10 +10,10 @@ Supports:
 import json
 import os
 from pathlib import Path
-from typing import Any, List, Literal, Optional
+from typing import Annotated, Any, List, Literal, Optional
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class EmbeddingConfig(BaseSettings):
@@ -43,8 +43,10 @@ class StorageConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LLM_MEMORY_STORAGE_", populate_by_name=True)
 
     data_dir: Path = Path(".llm-memory/data")
-    vector_db: Literal["chroma", "memory"] = "chroma"
+    vector_db: Literal["chroma", "memory"] = "memory"
     backend: Literal["sqlite", "arcadedb", "neo4j"] = "sqlite"
+    allow_fallback: bool = False
+    connect_timeout_seconds: float = Field(default=15.0, ge=0.0, le=300.0)
 
     # Client-Server Mode
     mode: Literal["local", "client", "server"] = "local"
@@ -149,7 +151,7 @@ class ServerConfig(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="LLM_MEMORY_SERVER_", populate_by_name=True)
 
-    host: str = "0.0.0.0"
+    host: str = Field(default="127.0.0.1", validation_alias="LLM_MEMORY_BIND_HOST")
     port: int = 8000
     cors_origins: List[str] = Field(
         default_factory=lambda: [
@@ -164,17 +166,17 @@ class ServerConfig(BaseSettings):
     # Authentication
     auth_enabled: bool = True
     jwt_secret: str = Field(default="", validation_alias="LLM_MEMORY_JWT_SECRET")
-    jwt_algorithm: str = "HS256"
+    jwt_algorithm: Literal["HS256", "RS256"] = "HS256"
     jwt_expiry_hours: int = 24
 
     # API Key fallback (backward compatible)
-    api_keys: List[str] = Field(default_factory=list)
+    api_keys: Annotated[List[str], NoDecode] = Field(default_factory=list)
 
     # Multi-tenancy
     allow_anonymous: bool = False
     default_team: Optional[str] = None
 
-    @field_validator("cors_origins", mode="before")
+    @field_validator("cors_origins", "api_keys", mode="before")
     @classmethod
     def parse_cors_origins(cls, value: Any) -> List[str]:
         """Accept JSON-style lists or comma-separated env/config values."""
@@ -260,6 +262,11 @@ class MemoryConfig(BaseSettings):
             "LLM_MEMORY_STORAGE_DATA_DIR": ("storage", "data_dir"),
             "LLM_MEMORY_STORAGE_BACKEND": ("storage", "backend"),
             "LLM_MEMORY_STORAGE_MODE": ("storage", "mode"),
+            "LLM_MEMORY_STORAGE_ALLOW_FALLBACK": ("storage", "allow_fallback"),
+            "LLM_MEMORY_STORAGE_CONNECT_TIMEOUT_SECONDS": (
+                "storage",
+                "connect_timeout_seconds",
+            ),
             "LLM_MEMORY_STORAGE_SERVER_URL": ("storage", "server_url"),
             "LLM_MEMORY_API_KEY": ("storage", "api_key"),
             "LLM_MEMORY_JWT_TOKEN": ("storage", "jwt_token"),
@@ -271,6 +278,7 @@ class MemoryConfig(BaseSettings):
             "EMBEDDING_API_KEY": ("embedding", "api_key"),
             "EMBEDDING_API_BASE": ("embedding", "api_base"),
             "LLM_MEMORY_SERVER_AUTH_ENABLED": ("server", "auth_enabled"),
+            "LLM_MEMORY_BIND_HOST": ("server", "host"),
             "LLM_MEMORY_JWT_SECRET": ("server", "jwt_secret"),
             "LLM_MEMORY_SERVER_CORS_ORIGINS": ("server", "cors_origins"),
             "LLM_MEMORY_SERVER_CORS_ALLOW_CREDENTIALS": (
@@ -297,10 +305,13 @@ class MemoryConfig(BaseSettings):
                 ("server", "auth_enabled"),
                 ("server", "cors_allow_credentials"),
                 ("server", "allow_anonymous"),
+                ("storage", "allow_fallback"),
             }:
                 value = value.lower() in {"1", "true", "yes", "on"}
             elif path == ("server", "jwt_expiry_hours"):
                 value = int(value)
+            elif path == ("storage", "connect_timeout_seconds"):
+                value = float(value)
             elif path == ("server", "cors_origins"):
                 value = ServerConfig.parse_cors_origins(value)
             elif path == ("server", "api_keys"):

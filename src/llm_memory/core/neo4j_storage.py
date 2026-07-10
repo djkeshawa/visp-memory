@@ -2,7 +2,6 @@
 Neo4j Storage implementation for LLM Memory.
 """
 
-import hashlib
 import json
 import logging
 import re
@@ -14,7 +13,6 @@ except ImportError:  # pragma: no cover - exercised only when optional extra is 
     GraphDatabase = None
 
 from llm_memory.config import load_config
-from llm_memory.core.clock import utc_now
 from llm_memory.core.indexing import EmbeddingIndexReport, ReindexResult, ReindexScope
 from llm_memory.core.ranking import (
     clamp_score,
@@ -22,7 +20,13 @@ from llm_memory.core.ranking import (
     relationship_score,
     text_similarity,
 )
-from llm_memory.core.storage import BaseStorage, MemoryLayer
+from llm_memory.core.storage import (
+    STORAGE_SCHEMA_VERSION,
+    BaseStorage,
+    LocalStorage,
+    MemoryLayer,
+    StorageCapabilities,
+)
 
 logger = logging.getLogger(__name__)
 _RELATIONSHIP_TYPE_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
@@ -55,6 +59,32 @@ class Neo4jStorage(BaseStorage):
     RELATIONSHIP_CONFIDENCE_VALUES = {"observed", "inferred", "ambiguous", "manual"}
     LEGACY_RELATIONSHIP_EVIDENCE_REASON = "Legacy relationship without evidence metadata."
     UNSPECIFIED_RELATIONSHIP_EVIDENCE_REASON = "Relationship created without evidence metadata."
+    MEMORY_NODE_FIELDS = {
+        "id", "content", "layer", "repo_id", "category", "importance", "tags", "metadata",
+        "source_ids", "status", "source", "quality_flags", "created_at", "accessed_at",
+        "access_count", "approved_by", "approved_at", "archived_at", "compressed_at",
+        "last_quality_checked_at",
+    }
+    INTENT_NODE_FIELDS = {
+        "id", "description", "priority", "repo_id", "context", "status", "created_at",
+        "updated_at",
+    }
+    REPOSITORY_NODE_FIELDS = {
+        "id", "name", "url", "description", "tech_stack", "team_id", "metadata", "created_at",
+    }
+    USER_NODE_FIELDS = {
+        "id", "username", "email", "display_name", "metadata", "created_at", "last_active",
+    }
+    TEAM_NODE_FIELDS = {"id", "name", "description", "metadata", "created_at"}
+    SESSION_NODE_FIELDS = {"id", "summary", "memory_ids", "started_at", "ended_at"}
+    AUDIT_NODE_FIELDS = {
+        "id", "event_type", "actor_id", "repo_id", "target_type", "target_id", "metadata",
+        "created_at",
+    }
+    FEEDBACK_NODE_FIELDS = {
+        "id", "memory_id", "event_type", "repo_id", "query_hash", "task_id", "outcome",
+        "metadata", "created_at",
+    }
 
     def __init__(
         self,
@@ -86,6 +116,7 @@ class Neo4jStorage(BaseStorage):
             self.driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password))
             self.verify_connectivity()
             self._ensure_indexes()
+            self._ensure_schema_version()
         except Exception as e:
             logger.error(f"Failed to initialize Neo4j driver: {e}")
             raise
@@ -143,6 +174,18 @@ class Neo4jStorage(BaseStorage):
             session.run(
                 "CREATE INDEX audit_log_repo IF NOT EXISTS FOR (a:AuditLog) ON (a.repo_id)"
             )
+            session.run(
+                "CREATE INDEX memory_repo_status_created IF NOT EXISTS "
+                "FOR (m:Memory) ON (m.repo_id, m.status, m.created_at)"
+            )
+            session.run(
+                "CREATE INDEX memory_repo_layer_status IF NOT EXISTS "
+                "FOR (m:Memory) ON (m.repo_id, m.layer, m.status)"
+            )
+            session.run(
+                "CREATE INDEX intent_repo_status_priority IF NOT EXISTS "
+                "FOR (i:Intent) ON (i.repo_id, i.status, i.priority)"
+            )
 
             # Vector index dimensions must match the active embedding provider.
             if self._embedding_dimension:
@@ -162,6 +205,31 @@ class Neo4jStorage(BaseStorage):
                         f"(might be already present or incompatible version): {e}"
                     )
 
+    def _ensure_schema_version(self) -> None:
+        with self.driver.session() as session:
+            record = session.run(
+                """
+                MERGE (v:SchemaVersion {component: 'storage'})
+                ON CREATE SET v.version = $version, v.applied_at = datetime()
+                RETURN v.version AS version
+                """,
+                version=STORAGE_SCHEMA_VERSION,
+            ).single()
+            if not record:
+                return
+            stored_version = int(record["version"])
+            if stored_version > STORAGE_SCHEMA_VERSION:
+                raise RuntimeError(
+                    "Storage schema is newer than this llm-memory build "
+                    f"({stored_version} > {STORAGE_SCHEMA_VERSION})"
+                )
+            if stored_version < STORAGE_SCHEMA_VERSION:
+                session.run(
+                    "MATCH (v:SchemaVersion {component: 'storage'}) "
+                    "SET v.version = $version, v.applied_at = datetime()",
+                    version=STORAGE_SCHEMA_VERSION,
+                )
+
     @staticmethod
     def _vector_property_name(dimension: int = None) -> str:
         if dimension:
@@ -176,9 +244,8 @@ class Neo4jStorage(BaseStorage):
 
     @staticmethod
     def _generate_id(content: str) -> str:
-        """Generate unique ID for content."""
-        timestamp = utc_now().isoformat()
-        return hashlib.sha256(f"{content}{timestamp}".encode()).hexdigest()[:16]
+        """Generate collision-resistant IDs consistently across backends."""
+        return LocalStorage._generate_id(content)
 
     @staticmethod
     def _json_serialize(data: Any) -> str:
@@ -194,36 +261,102 @@ class Neo4jStorage(BaseStorage):
             return data
 
     @classmethod
-    def _node_to_dict(cls, node: Dict[str, Any]) -> Dict[str, Any]:
-        """Normalize Neo4j node properties to the storage dict contract."""
-        data = dict(node)
+    def _normalize_node(
+        cls,
+        node: Dict[str, Any],
+        *,
+        fields: set[str],
+        json_fields: set[str] | None = None,
+        defaults: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        """Normalize and constrain Neo4j properties for one entity contract."""
+        data = {key: value for key, value in dict(node).items() if key in fields}
         for key in list(data):
             if key == "embedding" or key.startswith("embedding_"):
                 data.pop(key, None)
 
-        for field in ("metadata", "context"):
+        for field in json_fields or set():
             if field in data and isinstance(data[field], str):
                 data[field] = cls._json_deserialize(data[field])
 
-        for field in ("tags", "source_ids", "quality_flags", "tech_stack", "memory_ids"):
-            if field in data and isinstance(data[field], str):
-                data[field] = cls._json_deserialize(data[field])
-            elif field in data and data[field] is None:
-                data[field] = []
-
-        for field in ("created_at", "updated_at", "accessed_at", "last_active"):
+        for field in (
+            "created_at", "updated_at", "accessed_at", "last_active", "started_at", "ended_at",
+            "approved_at", "archived_at", "compressed_at", "last_quality_checked_at",
+        ):
             value = data.get(field)
             if hasattr(value, "iso_format"):
                 data[field] = value.iso_format()
             elif hasattr(value, "isoformat"):
                 data[field] = value.isoformat()
 
-        data.setdefault("tags", [])
-        data.setdefault("metadata", {})
-        data.setdefault("source_ids", [])
-        data.setdefault("status", "active")
-        data.setdefault("quality_flags", [])
+        for field, value in (defaults or {}).items():
+            data.setdefault(field, value.copy() if isinstance(value, (dict, list)) else value)
         return data
+
+    @classmethod
+    def _memory_node_to_dict(cls, node: Dict[str, Any]) -> Dict[str, Any]:
+        return cls._normalize_node(
+            node,
+            fields=cls.MEMORY_NODE_FIELDS,
+            json_fields={"metadata", "tags", "source_ids", "quality_flags"},
+            defaults={
+                "tags": [],
+                "metadata": {},
+                "source_ids": [],
+                "status": "active",
+                "quality_flags": [],
+            },
+        )
+
+    # Compatibility for integrations that used the historical memory normalizer directly.
+    _node_to_dict = _memory_node_to_dict
+
+    @classmethod
+    def _intent_node_to_dict(cls, node: Dict[str, Any]) -> Dict[str, Any]:
+        return cls._normalize_node(
+            node, fields=cls.INTENT_NODE_FIELDS, json_fields={"context"},
+            defaults={"context": {}, "status": "active"},
+        )
+
+    @classmethod
+    def _repository_node_to_dict(cls, node: Dict[str, Any]) -> Dict[str, Any]:
+        return cls._normalize_node(
+            node, fields=cls.REPOSITORY_NODE_FIELDS, json_fields={"metadata", "tech_stack"},
+            defaults={"metadata": {}, "tech_stack": []},
+        )
+
+    @classmethod
+    def _user_node_to_dict(cls, node: Dict[str, Any]) -> Dict[str, Any]:
+        return cls._normalize_node(
+            node, fields=cls.USER_NODE_FIELDS, json_fields={"metadata"}, defaults={"metadata": {}},
+        )
+
+    @classmethod
+    def _team_node_to_dict(cls, node: Dict[str, Any]) -> Dict[str, Any]:
+        return cls._normalize_node(
+            node, fields=cls.TEAM_NODE_FIELDS, json_fields={"metadata"}, defaults={"metadata": {}},
+        )
+
+    @classmethod
+    def _audit_node_to_dict(cls, node: Dict[str, Any]) -> Dict[str, Any]:
+        return cls._normalize_node(
+            node, fields=cls.AUDIT_NODE_FIELDS, json_fields={"metadata"}, defaults={"metadata": {}},
+        )
+
+    def get_capabilities(self) -> StorageCapabilities:
+        return StorageCapabilities(vector_search=True, audit_log=True, reindex=True)
+
+    def get_schema_status(self) -> Dict[str, Any]:
+        with self.driver.session() as session:
+            record = session.run(
+                "MATCH (v:SchemaVersion {component: 'storage'}) RETURN v.version AS version"
+            ).single()
+        stored_version = int(record["version"]) if record else 0
+        return {
+            "current_version": STORAGE_SCHEMA_VERSION,
+            "stored_version": stored_version,
+            "status": "ready" if stored_version == STORAGE_SCHEMA_VERSION else "migration_required",
+        }
 
     @staticmethod
     def _format_temporal(value: Any) -> Any:
@@ -476,7 +609,7 @@ class Neo4jStorage(BaseStorage):
             if record:
                 node = dict(record["m"])
                 # Clean up internal props if any
-                return self._node_to_dict(node)
+                return self._memory_node_to_dict(node)
             return None
 
     def search_memories(
@@ -591,7 +724,7 @@ class Neo4jStorage(BaseStorage):
 
             memories = []
             for record in result:
-                mem = self._node_to_dict(dict(record["m"]))
+                mem = self._memory_node_to_dict(dict(record["m"]))
                 mem["similarity"] = record["score"]
                 memories.append(mem)
             return memories
@@ -620,7 +753,7 @@ class Neo4jStorage(BaseStorage):
             result = session.run(
                 query, layer=layer, repo_id=repo_id, category=category, status=status, limit=limit
             )
-            return [self._node_to_dict(dict(record["m"])) for record in result]
+            return [self._memory_node_to_dict(dict(record["m"])) for record in result]
 
     # Fields a caller may update. Property names are interpolated into Cypher,
     # so this allowlist prevents property-name injection via arbitrary kwargs.
@@ -901,7 +1034,7 @@ class Neo4jStorage(BaseStorage):
             query += " RETURN i ORDER BY i.priority DESC, i.created_at DESC"
 
             result = session.run(query, params)
-            return [self._node_to_dict(dict(rec["i"])) for rec in result]
+            return [self._intent_node_to_dict(dict(rec["i"])) for rec in result]
 
     def complete_intent(self, intent_id: str) -> bool:
         return self.update_intent(intent_id, status="completed")
@@ -1050,7 +1183,7 @@ class Neo4jStorage(BaseStorage):
             items = []
             seen_ids = set()
             for record in result:
-                item = self._node_to_dict(dict(record["related"]))
+                item = self._memory_node_to_dict(dict(record["related"]))
                 if item.get("id") in seen_ids:
                     continue
                 seen_ids.add(item.get("id"))
@@ -1251,7 +1384,7 @@ class Neo4jStorage(BaseStorage):
                 event_type=event_type,
                 limit=limit,
             )
-            return [self._node_to_dict(dict(record["a"])) for record in result]
+            return [self._audit_node_to_dict(dict(record["a"])) for record in result]
 
     # Repository operations
     def store_repository(self, repo: Dict[str, Any]) -> str:
@@ -1292,7 +1425,7 @@ class Neo4jStorage(BaseStorage):
         with self.driver.session() as session:
             result = session.run("MATCH (r:Repository {id: $id}) RETURN r", id=repo_id)
             record = result.single()
-            return self._node_to_dict(dict(record["r"])) if record else None
+            return self._repository_node_to_dict(dict(record["r"])) if record else None
 
     def list_repositories(self, team_id: str = None) -> List[Dict[str, Any]]:
         query = "MATCH (r:Repository)"
@@ -1304,7 +1437,7 @@ class Neo4jStorage(BaseStorage):
         query += " RETURN r"
         with self.driver.session() as session:
             result = session.run(query, params)
-            return [self._node_to_dict(dict(rec["r"])) for rec in result]
+            return [self._repository_node_to_dict(dict(rec["r"])) for rec in result]
 
     def list_project_ids(self) -> List[str]:
         with self.driver.session() as session:
@@ -1395,7 +1528,7 @@ class Neo4jStorage(BaseStorage):
         with self.driver.session() as session:
             result = session.run("MATCH (u:User {id: $id}) RETURN u", id=user_id)
             record = result.single()
-            return self._node_to_dict(dict(record["u"])) if record else None
+            return self._user_node_to_dict(dict(record["u"])) if record else None
 
     def store_team(self, team: Dict[str, Any]) -> str:
         team_id = team["id"]
@@ -1424,7 +1557,7 @@ class Neo4jStorage(BaseStorage):
         with self.driver.session() as session:
             result = session.run("MATCH (t:Team {id: $id}) RETURN t", id=team_id)
             record = result.single()
-            return self._node_to_dict(dict(record["t"])) if record else None
+            return self._team_node_to_dict(dict(record["t"])) if record else None
 
     def add_team_member(self, team_id: str, user_id: str) -> bool:
         with self.driver.session() as session:
@@ -1449,4 +1582,4 @@ class Neo4jStorage(BaseStorage):
             """,
                 id=user_id,
             )
-            return [self._node_to_dict(dict(rec["t"])) for rec in result]
+            return [self._team_node_to_dict(dict(rec["t"])) for rec in result]

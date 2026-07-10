@@ -34,6 +34,7 @@ async def test_provider_diagnostics_reports_active_openrouter_without_secrets(
 ):
     config = MemoryConfig()
     config.embedding.provider = "cloud"
+    config.storage.vector_db = "chroma"
     config.embedding.model = "openai/text-embedding-3-small"
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-secret")
     monkeypatch.setattr("llm_memory.server.routers.diagnostics.load_config", lambda: config)
@@ -180,7 +181,9 @@ async def test_provider_test_unknown_provider_returns_404(client):
 async def test_embedding_index_status_uses_runtime_provider(client, monkeypatch):
     config = MemoryConfig()
     config.embedding.provider = "cloud"
+    config.storage.vector_db = "chroma"
     monkeypatch.setattr("llm_memory.server.routers.diagnostics.load_config", lambda: config)
+    monkeypatch.setattr("llm_memory.core.storage.CHROMADB_AVAILABLE", True)
 
     previous_provider = getattr(app.state, "embedding_provider", None)
     previous_storage = app.state.storage

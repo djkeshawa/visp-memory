@@ -39,17 +39,17 @@ python -m build
 ```
 
 This creates:
-- `dist/llm_memory-0.1.0-py3-none-any.whl` - Wheel distribution
-- `dist/llm_memory-0.1.0.tar.gz` - Source distribution
+- `dist/llm_memory_mcp-0.2.3-py3-none-any.whl` - Wheel distribution
+- `dist/llm_memory_mcp-0.2.3.tar.gz` - Source distribution
 
 ### Installing
 
 ```bash
 # Install from local wheel
-pip install dist/llm_memory-0.1.0-py3-none-any.whl[all]
+pip install dist/llm_memory_mcp-0.2.3-py3-none-any.whl[all]
 
 # Lean server install without local sentence-transformer model dependencies
-pip install dist/llm_memory-0.1.0-py3-none-any.whl[api,mcp]
+pip install dist/llm_memory_mcp-0.2.3-py3-none-any.whl[api,mcp]
 
 # Or install directly from source
 pip install -e ".[all]"

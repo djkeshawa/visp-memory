@@ -4,14 +4,20 @@ Test Capture Module
 Captures test results and failures as memories.
 """
 
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import List
 
+from defusedxml import ElementTree
+from defusedxml.common import DefusedXmlException
+
 from llm_memory.capture.git import CaptureManifest, capture_content_hash
+
+MAX_JUNIT_REPORT_BYTES = 10 * 1024 * 1024
 
 
 class TestCapture:
+    __test__ = False
+
     """
     Capture memories from test execution.
 
@@ -36,8 +42,13 @@ class TestCapture:
         path = Path(report_path)
         if not path.exists():
             raise FileNotFoundError(f"Report not found: {report_path}")
+        report_size = path.stat().st_size
+        if report_size > MAX_JUNIT_REPORT_BYTES:
+            raise ValueError(
+                f"JUnit report exceeds the {MAX_JUNIT_REPORT_BYTES}-byte safety limit"
+            )
 
-        content_hash = capture_content_hash(path.read_text())
+        content_hash = capture_content_hash(path.read_text(encoding="utf-8"))
         manifest = CaptureManifest(self.memory)
         status, _entry = manifest.check("test_report", str(path), content_hash)
         if status == "unchanged":
@@ -45,9 +56,9 @@ class TestCapture:
             return []
 
         try:
-            tree = ET.parse(path)
+            tree = ElementTree.parse(path)
             root = tree.getroot()
-        except ET.ParseError as e:
+        except (ElementTree.ParseError, DefusedXmlException) as e:
             raise ValueError(f"Invalid XML report: {e}")
 
         memory_ids = []

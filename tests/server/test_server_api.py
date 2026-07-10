@@ -8,7 +8,7 @@ from llm_memory.server.app import app
 
 @pytest.mark.asyncio
 async def test_root_endpoint(client):
-    response = await client.get("/")
+    response = await client.get("/", headers={"X-API-KEY": "test_key"})
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "online"
@@ -33,7 +33,7 @@ async def test_root_endpoint_filters_stats_by_repo_id(client):
         headers=headers,
     )
 
-    response = await client.get("/?repo_id=repo-a")
+    response = await client.get("/?repo_id=repo-a", headers=headers)
 
     assert response.status_code == 200
     data = response.json()
@@ -48,7 +48,7 @@ async def test_healthz_is_unauthenticated(client):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
-    assert "version" in data
+    assert set(data) == {"status"}
 
 
 @pytest.mark.asyncio
@@ -59,11 +59,7 @@ async def test_readyz_reports_runtime_readiness(client, tmp_path, monkeypatch):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ready"
-    assert data["storage_ready"] is True
-    assert "storage_backend" in data
-    assert "embedding_provider" in data
-    assert "auth_enabled" in data
-    assert "dashboard_static_available" in data
+    assert data["checks"] == {"storage": "ok", "dashboard": "ok"}
 
 
 @pytest.mark.asyncio
@@ -75,8 +71,7 @@ async def test_readyz_returns_503_when_dashboard_static_is_missing(client, tmp_p
     assert response.status_code == 503
     data = response.json()
     assert data["status"] == "not_ready"
-    assert data["storage_ready"] is True
-    assert data["dashboard_static_available"] is False
+    assert data["checks"] == {"storage": "ok", "dashboard": "failed"}
 
 
 @pytest.mark.asyncio
@@ -97,8 +92,7 @@ async def test_readyz_returns_503_when_storage_check_fails(client, tmp_path, mon
     assert response.status_code == 503
     data = response.json()
     assert data["status"] == "not_ready"
-    assert data["storage_ready"] is False
-    assert data["storage_error"] == "RuntimeError"
+    assert data["checks"] == {"storage": "failed", "dashboard": "ok"}
     assert "database unavailable" not in str(data)
 
 
@@ -127,9 +121,73 @@ async def test_project_scopes_include_registered_and_memory_repo_ids(client):
 
 
 @pytest.mark.asyncio
+async def test_root_requires_authentication_and_returns_request_id(client):
+    response = await client.get("/")
+
+    assert response.status_code == 401
+    assert response.headers["X-Request-ID"]
+
+
+@pytest.mark.asyncio
+async def test_related_memories_and_sessions_round_trip(client):
+    headers = {"X-API-KEY": "test_key"}
+    source = await client.post(
+        "/memories",
+        json={"content": "Source", "repo_id": "repo-a"},
+        headers=headers,
+    )
+    target = await client.post(
+        "/memories",
+        json={"content": "Target", "repo_id": "repo-a"},
+        headers=headers,
+    )
+    source_id = source.json()["id"]
+    target_id = target.json()["id"]
+    relationship = await client.post(
+        "/relationships",
+        json={
+            "source_id": source_id,
+            "target_id": target_id,
+            "relationship": "supports",
+            "strength": 0.9,
+        },
+        headers=headers,
+    )
+    assert relationship.status_code == 200
+
+    related = await client.get(f"/memories/{source_id}/related", headers=headers)
+    assert related.status_code == 200
+    assert related.json()[0]["id"] == target_id
+    assert related.json()[0]["relationship"] == "supports"
+
+    started = await client.post("/sessions", headers=headers)
+    assert started.status_code == 200
+    session_id = started.json()["id"]
+    completed = await client.post(
+        f"/sessions/{session_id}/complete",
+        json={"summary": "Done", "memory_ids": [source_id]},
+        headers=headers,
+    )
+    assert completed.status_code == 200
+    assert completed.json() == {"id": session_id, "status": "completed"}
+
+
+@pytest.mark.asyncio
 async def test_favicon_head_does_not_error(client):
     response = await client.head("/favicon.ico")
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "location"),
+    [("/auth", "/dashboard/auth"), ("/settings", "/dashboard/settings")],
+)
+async def test_bare_dashboard_utility_routes_redirect(client, path, location):
+    response = await client.get(path)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == location
 
 
 @pytest.mark.asyncio

@@ -16,11 +16,20 @@ concurrency:
 jobs:
   python:
     name: Python (lint + tests)
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.10', '3.12']
+        include:
+          - os: ubuntu-latest
+            python-version: '3.10'
+            coverage: false
+          - os: ubuntu-latest
+            python-version: '3.12'
+            coverage: true
+          - os: windows-latest
+            python-version: '3.12'
+            coverage: false
 
     steps:
       - name: Checkout code
@@ -32,16 +41,30 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: 'pip'
 
-      - name: Install package with all extras
+      - name: Install supported test profile
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[all]"
+          python -m pip install -e ".[api,mcp,capture,analysis,arcadedb,neo4j,dev]"
 
       - name: Ruff lint
         run: ruff check .
 
       - name: Pytest
+        if: ${{ !matrix.coverage }}
         run: pytest -q
+
+      - name: Pytest with coverage
+        if: ${{ matrix.coverage }}
+        run: >-
+          pytest -q --cov=llm_memory --cov-report=term-missing --cov-report=xml
+          --cov-fail-under=74
+
+      - name: Upload coverage report
+        if: ${{ matrix.coverage }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-coverage
+          path: coverage.xml
 
   evals:
     # Deterministic memory-quality evaluations (no network, noop embeddings):
@@ -104,3 +127,85 @@ jobs:
       - name: Build (type-check + bundle)
         working-directory: llm-memory-dashboard
         run: npm run build
+
+  lockfile:
+    name: Lockfile validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+      - run: uv lock --check
+
+  security:
+    name: Dependency audits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'llm-memory-dashboard/package-lock.json'
+      - name: Audit supported Python profile
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[api,mcp,capture,analysis,neo4j,dev]"
+          python -m pip_audit --skip-editable
+      - name: Audit dashboard dependencies
+        working-directory: llm-memory-dashboard
+        run: |
+          npm ci
+          npm audit
+
+  browser-smoke:
+    name: Packaged browser smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'llm-memory-dashboard/package-lock.json'
+      - run: python -m pip install -e ".[api,mcp]"
+      - working-directory: llm-memory-dashboard
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - run: python build_frontend.py
+      - run: python scripts/smoke_packaged_dashboard.py --browser
+
+  docker-neo4j-smoke:
+    name: Docker + Neo4j runtime smoke
+    runs-on: ubuntu-latest
+    env:
+      NEO4J_PASSWORD: ci-only-neo4j-password
+      LLM_MEMORY_SERVER_AUTH_ENABLED: 'false'
+      LLM_MEMORY_SERVER_ALLOW_ANONYMOUS: 'true'
+      LLM_MEMORY_EMBEDDING_PROVIDER: noop
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start dashboard profile
+        run: docker compose --profile dashboard up -d --build --wait
+      - name: Verify readiness and core routes
+        run: |
+          curl --fail http://127.0.0.1:8000/readyz
+          curl --fail http://127.0.0.1:8000/repos/scopes
+          curl --fail -X POST -H 'Content-Type: application/json' \
+            -d '{"id":"ci-repo","name":"CI Repository"}' http://127.0.0.1:8000/repos
+          curl --fail -X POST -H 'Content-Type: application/json' \
+            -d '{"content":"CI memory","repo_id":"ci-repo"}' http://127.0.0.1:8000/memories
+          curl --fail -X POST http://127.0.0.1:8000/sessions
+          curl --fail 'http://127.0.0.1:8000/?repo_id=ci-repo'
+      - name: Show service logs on failure
+        if: failure()
+        run: docker compose --profile dashboard logs --no-color
+      - name: Stop services
+        if: always()
+        run: docker compose --profile dashboard down

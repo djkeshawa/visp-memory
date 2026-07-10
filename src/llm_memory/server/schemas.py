@@ -51,6 +51,27 @@ class MemoryResponse(BaseModel):
     relevance_score: Optional[float] = None
 
 
+class RelatedMemoryResponse(MemoryResponse):
+    relationship: str
+    strength: float = 1.0
+    relationship_evidence: Optional["RelationshipEvidence"] = None
+
+
+class SessionCreateResponse(BaseModel):
+    id: str
+    status: Literal["started"] = "started"
+
+
+class SessionCompleteRequest(BaseModel):
+    summary: str = ""
+    memory_ids: List[str] = Field(default_factory=list)
+
+
+class SessionCompleteResponse(BaseModel):
+    id: str
+    status: Literal["completed"] = "completed"
+
+
 class SearchQuery(BaseModel):
     query: str = Field(min_length=1)
     layers: Optional[List[MemoryLayer]] = None
@@ -339,6 +360,12 @@ class ProviderDiagnosticsResponse(BaseModel):
     active_provider: str
     effective_provider: Optional[str] = None
     providers: List[ProviderStatus]
+
+
+class StorageDiagnosticsResponse(BaseModel):
+    backend: str
+    capabilities: Dict[str, bool]
+    schema_status: Dict[str, Any]
 
 
 class EmbeddingIndexStatus(BaseModel):

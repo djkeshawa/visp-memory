@@ -1,4 +1,5 @@
 from llm_memory.core.repository import Repository, RepositoryManager
+from llm_memory.core.storage import StorageCapabilities
 
 
 class FakeStorage:
@@ -6,6 +7,9 @@ class FakeStorage:
 
     def __init__(self, repos):
         self.repos = repos
+
+    def get_capabilities(self):
+        return StorageCapabilities(repositories=True)
 
     def list_repositories(self, team_id=None):
         return list(self.repos)

@@ -1,0 +1,35 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      python-dependencies:
+        patterns: ["*"]
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /llm-memory-dashboard
+    schedule:
+      interval: weekly
+    groups:
+      dashboard-dependencies:
+        patterns: ["*"]
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      container-images:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]

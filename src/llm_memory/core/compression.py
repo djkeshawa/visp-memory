@@ -250,14 +250,6 @@ class MemoryCompressor:
             "how",
             "all",
             "any",
-            "both",
-            "each",
-            "few",
-            "more",
-            "most",
-            "other",
-            "some",
-            "such",
             "this",
             "that",
             "these",
@@ -421,7 +413,7 @@ class MemoryCompressor:
         for m in facts:
             by_category[m.get("category", "general")].append(m)
 
-        for category, items in by_category.items():
+        for _category, items in by_category.items():
             if len(items) >= 5:  # Need more evidence for a principle
                 # Only check items not already supporting a principle to avoid loops
                 # (Ideally we checks relationships, but simplified for MVP)

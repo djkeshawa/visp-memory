@@ -206,6 +206,8 @@ class Deduplicator:
         # duplicates are dropped via ``dict.fromkeys``.
         merged_tags = list(primary_mem.get("tags") or [])
 
+        retargeted_relationships = self._retarget_relationships(primary_id, others)
+
         for oid in others:
             mem = self.storage.get_memory(oid)
             if not mem:
@@ -220,12 +222,8 @@ class Deduplicator:
             if mem.get("tags"):
                 merged_tags.extend(mem["tags"])
 
-            # Delete the duplicate.
-            #
-            # NOTE (known limitation): ``delete_memory`` cascades and drops any graph
-            # relationships that pointed at this duplicate. We do NOT re-point those
-            # relationships at the primary here; relationship re-pointing is out of
-            # scope for the merge operation.
+            # Delete the duplicate after relationship retargeting has preserved
+            # graph evidence that would otherwise cascade away.
             self.storage.delete_memory(oid)
 
         # De-duplicate while preserving order, dropping any self-reference.
@@ -243,9 +241,67 @@ class Deduplicator:
             "merged_count": len(others),
             "merged_source_ids": deduped_source_ids,
         }
+        if retargeted_relationships:
+            merged_metadata["retargeted_relationship_count"] = retargeted_relationships
         self.storage.update_memory(primary_id, metadata=merged_metadata, tags=deduped_tags)
 
         return primary_id
+
+    def _retarget_relationships(self, primary_id: str, duplicate_ids: List[str]) -> int:
+        """Retarget duplicate relationships to the preserved primary before deletion."""
+        if not duplicate_ids:
+            return 0
+        if not hasattr(self.storage, "get_all_relationships") or not hasattr(
+            self.storage, "add_relationship"
+        ):
+            return 0
+
+        primary_mem = self.storage.get_memory(primary_id)
+        repo_id = primary_mem.get("repo_id") if primary_mem else None
+        duplicate_set = set(duplicate_ids)
+
+        try:
+            relationships = self.storage.get_all_relationships(repo_id=repo_id)
+        except Exception as exc:
+            logger.warning("Could not inspect relationships before dedup merge: %s", exc)
+            return 0
+
+        retargeted = 0
+        seen: set[tuple[str, str, str]] = set()
+        for relationship in relationships:
+            source_id = relationship.get("source_id")
+            target_id = relationship.get("target_id")
+            if source_id not in duplicate_set and target_id not in duplicate_set:
+                continue
+
+            new_source_id = primary_id if source_id in duplicate_set else source_id
+            new_target_id = primary_id if target_id in duplicate_set else target_id
+            relationship_type = relationship.get("relationship") or "related"
+            if not new_source_id or not new_target_id or new_source_id == new_target_id:
+                continue
+
+            retarget_key = (new_source_id, new_target_id, relationship_type)
+            if retarget_key in seen:
+                continue
+            seen.add(retarget_key)
+
+            try:
+                self.storage.add_relationship(
+                    new_source_id,
+                    new_target_id,
+                    relationship_type,
+                    strength=relationship.get("strength", 1.0),
+                    evidence=relationship.get("evidence"),
+                )
+                retargeted += 1
+            except Exception as exc:
+                logger.warning(
+                    "Could not retarget relationship %s during dedup merge: %s",
+                    relationship.get("id"),
+                    exc,
+                )
+
+        return retargeted
 
     def _find_duplicates_via_search(
         self, layer: str, content: str, embedding: List[float], threshold: float, limit: int

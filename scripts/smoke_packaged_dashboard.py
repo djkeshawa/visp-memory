@@ -73,20 +73,49 @@ const { chromium } = require('@playwright/test');
     '/dashboard/recall',
     '/dashboard/intents',
     '/dashboard/graph',
+    '/dashboard/health',
+    '/dashboard/auth',
+    '/dashboard/settings',
   ];
   for (const path of pages) {
     await page.goto(process.env.LLM_MEMORY_SMOKE_URL + path, { waitUntil: 'networkidle' });
+    await page.waitForFunction(() => document.body.innerText.trim().length >= 20);
     const text = await page.locator('body').innerText();
     if (!text || text.length < 20) throw new Error(`${path} rendered an empty page`);
     const title = await page.title();
     console.log(`${path} ok title=${JSON.stringify(title)}`);
   }
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  for (const path of pages) {
+    await page.goto(process.env.LLM_MEMORY_SMOKE_URL + path, { waitUntil: 'networkidle' });
+    await page.waitForFunction(() => document.body.innerText.trim().length >= 20);
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth
+    );
+    if (overflow > 1) throw new Error(`${path} has ${overflow}px horizontal overflow at 390px`);
+  }
+
+  await page.goto(process.env.LLM_MEMORY_SMOKE_URL + '/dashboard/settings', {
+    waitUntil: 'domcontentloaded',
+  });
+  await page.getByRole('button', { name: 'Open navigation menu' }).click();
+  const drawer = page.getByRole('dialog', { name: 'Navigation menu' });
+  await drawer.getByRole('link', { name: 'Memory Graph' }).waitFor({ state: 'visible' });
+  await drawer.getByRole('combobox', { name: 'Project' }).waitFor({ state: 'visible' });
+  await drawer.getByText('Theme', { exact: true }).waitFor({ state: 'visible' });
+  await drawer.getByText('System Online', { exact: true }).waitFor({ state: 'visible' });
+  await drawer.getByRole('link', { name: 'Settings' }).waitFor({ state: 'visible' });
+  await drawer.getByRole('button', { name: 'Close navigation menu' }).click();
   await browser.close();
 })().catch((error) => {
   console.error(error);
   process.exit(1);
 });
 """
+    node_code = node_code.replace(
+        "waitUntil: 'networkidle'", "waitUntil: 'domcontentloaded'"
+    )
     env = {**os.environ, "LLM_MEMORY_SMOKE_URL": base_url}
     subprocess.run(["node", "-e", node_code], cwd=DASHBOARD_DIR, env=env, check=True)
 
@@ -102,7 +131,7 @@ def main() -> int:
 
     if not (STATIC_DIR / "index.html").exists():
         raise SystemExit(
-            "Packaged dashboard static files are missing. Run python3 build_frontend.py first."
+            "Packaged dashboard static files are missing. Run python build_frontend.py first."
         )
 
     port = find_free_port()
@@ -127,9 +156,8 @@ def main() -> int:
             ],
             cwd=ROOT,
             env=env,
-            stdout=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.STDOUT,
-            text=True,
         )
         try:
             wait_until_ready(base_url)

@@ -1,7 +1,7 @@
 # Multi-stage build for LLM Memory with Dashboard
 
 # Stage 1: Build Next.js dashboard
-FROM node:20-alpine AS frontend-builder
+FROM node:20.19.4-alpine3.22 AS frontend-builder
 
 WORKDIR /app/dashboard
 COPY llm-memory-dashboard/package*.json ./
@@ -10,10 +10,10 @@ COPY llm-memory-dashboard/ ./
 RUN npm run export
 
 # Stage 2: Build Python package
-FROM python:3.11-slim AS python-builder
+FROM python:3.11.13-slim-bookworm AS python-builder
 
 WORKDIR /app
-COPY pyproject.toml README.md LICENSE ./
+COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src/ ./src/
 COPY --from=frontend-builder /app/dashboard/out ./src/llm_memory/server/static/
 
@@ -22,7 +22,7 @@ RUN pip install --no-cache-dir build && \
     python -m build
 
 # Stage 3: Final runtime image
-FROM python:3.11-slim
+FROM python:3.11.13-slim-bookworm
 
 # Install runtime dependencies
 RUN apt-get update && \
@@ -40,10 +40,16 @@ WORKDIR /app
 # Copy built wheel from builder
 COPY --from=python-builder /app/dist/*.whl ./
 
-# Install the runtime server profile. Keep local sentence-transformers out of
-# the default image, but allow it via --build-arg LLM_MEMORY_EXTRAS=...
+# Install the runtime server profile from lock-derived constraints. Keep local
+# transformers, Torch, and ChromaDB out of the production image.
 ARG LLM_MEMORY_EXTRAS=api,mcp,arcadedb,neo4j,openai,ollama
-RUN pip install --no-cache-dir "$(ls *.whl)[${LLM_MEMORY_EXTRAS}]" && \
+COPY pyproject.toml uv.lock ./
+RUN pip install --no-cache-dir "uv==0.11.7" && \
+    uv export --frozen --no-dev --no-emit-project --no-hashes \
+      --extra api --extra mcp --extra arcadedb --extra neo4j --extra openai --extra ollama \
+      --output-file constraints.txt && \
+    pip install --no-cache-dir --constraint constraints.txt "$(ls *.whl)[${LLM_MEMORY_EXTRAS}]" && \
+    rm constraints.txt pyproject.toml uv.lock && \
     rm *.whl
 
 # Switch to non-root user
@@ -59,7 +65,7 @@ EXPOSE 8000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/')" || exit 1
+    CMD python -c "import requests; requests.get('http://localhost:8000/readyz').raise_for_status()" || exit 1
 
 # Start the server
 CMD ["uvicorn", "llm_memory.server.app:app", "--host", "0.0.0.0", "--port", "8000"]

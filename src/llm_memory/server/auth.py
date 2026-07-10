@@ -2,12 +2,13 @@
 Authentication and Authorization for LLM Memory Server.
 """
 
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import jwt
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError, jwt
 from pydantic import BaseModel
 
 from llm_memory.config import load_config
@@ -64,10 +65,10 @@ async def get_current_user(
     # 1. Check for API key in header (backward compatibility)
     api_key = request.headers.get("X-API-KEY")
     if api_key:
-        if api_key in config.server.api_keys:
+        if any(secrets.compare_digest(api_key, candidate) for candidate in config.server.api_keys):
             return UserContext(user_id="api_key_user", username="api_key", is_admin=True)
         # Also check storage config api key
-        if config.storage.api_key and api_key == config.storage.api_key:
+        if config.storage.api_key and secrets.compare_digest(api_key, config.storage.api_key):
             return UserContext(user_id="default_admin", username="admin", is_admin=True)
 
     # 2. Check for JWT in Bearer token
@@ -96,7 +97,7 @@ async def get_current_user(
                 team_id=payload.get("team_id"),
                 is_admin=payload.get("is_admin", False),
             )
-        except JWTError:
+        except jwt.PyJWTError:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Could not validate credentials",

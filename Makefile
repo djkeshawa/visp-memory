@@ -1,5 +1,10 @@
 .PHONY: help build build-frontend build-python clean install install-dev test lint format release-check docker-build docker-run
 
+PYTHON ?= python
+PIP ?= $(PYTHON) -m pip
+PYTEST ?= $(PYTHON) -m pytest
+RUFF ?= $(PYTHON) -m ruff
+
 help:
 	@echo "LLM Memory - Build Commands"
 	@echo "============================"
@@ -20,12 +25,12 @@ build: build-frontend build-python
 
 build-frontend:
 	@echo "Building Next.js dashboard..."
-	python3 build_frontend.py
+	$(PYTHON) build_frontend.py
 
 build-python:
 	@echo "Building Python package..."
-	pip install build
-	python3 -m build --wheel
+	$(PIP) install build
+	$(PYTHON) -m build --wheel
 
 clean:
 	@echo "Cleaning build artifacts..."
@@ -37,27 +42,27 @@ clean:
 
 install: build
 	@echo "Installing llm-memory..."
-	pip install dist/*.whl
+	$(PIP) install dist/*.whl
 
 install-dev:
 	@echo "Installing llm-memory with dev dependencies..."
-	pip install -e ".[all]"
+	$(PIP) install -e ".[all]"
 
 test:
 	@echo "Running tests..."
-	pytest -v
+	$(PYTEST) -v
 
 lint:
 	@echo "Running linter..."
-	ruff check .
+	$(RUFF) check .
 
 format:
 	@echo "Formatting code..."
-	ruff format .
+	$(RUFF) format .
 
 release-check:
 	@echo "Running release readiness checks..."
-	python3 scripts/release_check.py
+	$(PYTHON) scripts/release_check.py
 
 docker-build:
 	@echo "Building Docker image..."

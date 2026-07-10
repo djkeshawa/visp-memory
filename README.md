@@ -74,17 +74,20 @@ Install via pip. This includes the CLI, API server, and embedded dashboard. Add
 of API/noop/fallback search.
 
 ```bash
-# From PyPI (when published)
-pip install llm-memory-mcp[all]
-
-# Lean local install without local embedding model dependencies
+# Lean server install: SQLite plus text fallback is the default
 pip install llm-memory-mcp[api,mcp]
+
+# Add ChromaDB only when persistent vector indexes are required
+pip install llm-memory-mcp[api,mcp,chroma]
+
+# Add local transformer/Torch support explicitly for non-production use
+pip install llm-memory-mcp[api,mcp,local-embeddings]
 
 # Local embedded graph backend without Docker/Neo4j
 pip install "llm-memory-mcp[arcadedb,api,mcp]"
 
 # From GitHub Release (direct download)
-pip install https://github.com/djkeshawa/llm-memory/releases/download/v0.1.0/llm_memory-0.1.0-py3-none-any.whl
+pip install https://github.com/djkeshawa/llm-memory/releases/download/v0.2.3/llm_memory_mcp-0.2.3-py3-none-any.whl
 ```
 
 ### Method 2: Docker
@@ -107,6 +110,12 @@ docker compose --profile arcadedb up --build
 docker compose --profile full up --build
 ```
 
+Compose publishes API and database ports on `127.0.0.1` by default. Set a
+unique `NEO4J_PASSWORD` for graph profiles and `LLM_MEMORY_SERVER_API_KEYS` for
+dashboard access, then enter the API key in Dashboard Settings. Set
+`LLM_MEMORY_BIND_HOST=0.0.0.0` only when remote exposure is intentional and
+protected by TLS and network controls.
+
 Open `http://localhost:8000/dashboard`. Set `LLM_MEMORY_EMBEDDING_PROVIDER`
 to `openai` with `OPENAI_API_KEY` when you prefer hosted embeddings; automatic
 selection prefers OpenAI when a key is present, otherwise the full profile uses
@@ -119,8 +128,9 @@ LLM_MEMORY_EMBEDDING_PROVIDER=sentence-transformers \
 docker compose --profile full up --build
 ```
 
-The default Docker image includes ArcadeDB Embedded. For a leaner image without
-ArcadeDB, override the extras:
+The default Docker image includes ArcadeDB Embedded but excludes ChromaDB and
+local transformer/Torch dependencies. Override extras only for a deliberate
+custom image:
 
 ```bash
 LLM_MEMORY_EXTRAS=api,mcp,neo4j,openai,ollama \
@@ -170,7 +180,7 @@ backend for shared/team deployments.
 |---------|----------------------------------|---------|---------------------------|----------|
 | SQLite | `sqlite` or unset | `llm-memory-mcp[api,mcp]` | No | Smallest local install |
 | ArcadeDB | `arcadedb` | `llm-memory-mcp[arcadedb,api,mcp]` | No | Local embedded graph storage |
-| Neo4j | `neo4j` | `llm-memory-mcp[neo4j,api,mcp]` | Yes | Mature shared/team graph deployment |
+| Neo4j | `neo4j` | `llm-memory-mcp[neo4j,api,mcp]` | Yes | Shared/team graph deployment |
 
 ArcadeDB stores structured graph data under
 `$LLM_MEMORY_STORAGE_DATA_DIR/arcadedb` and keeps vector behavior conservative

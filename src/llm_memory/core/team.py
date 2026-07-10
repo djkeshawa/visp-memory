@@ -8,7 +8,7 @@ Supports:
 - Shared memory access
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -47,10 +47,15 @@ class TeamManager:
     def __init__(self, storage: BaseStorage):
         self.storage = storage
 
+    @staticmethod
+    def _entity_from_storage(entity_type, data: Dict[str, Any]):
+        allowed = {item.name for item in fields(entity_type)}
+        return entity_type(**{key: value for key, value in data.items() if key in allowed})
+
     # User operations
     def create_user(self, user: User) -> str:
         """Create a new user. Raises NotImplementedError if backend lacks support."""
-        if not hasattr(self.storage, "store_user"):
+        if not self.storage.get_capabilities().teams:
             raise NotImplementedError("Storage backend does not support user management")
         user_dict = {
             "id": user.id,
@@ -63,17 +68,17 @@ class TeamManager:
 
     def get_user(self, user_id: str) -> Optional[User]:
         """Get user by ID."""
-        if not hasattr(self.storage, "get_user"):
+        if not self.storage.get_capabilities().teams:
             return None
         data = self.storage.get_user(user_id)
         if data:
-            return User(**data)
+            return self._entity_from_storage(User, data)
         return None
 
     # Team operations
     def create_team(self, team: Team) -> str:
         """Create a new team. Raises NotImplementedError if backend lacks support."""
-        if not hasattr(self.storage, "store_team"):
+        if not self.storage.get_capabilities().teams:
             raise NotImplementedError("Storage backend does not support team management")
         team_dict = {
             "id": team.id,
@@ -85,16 +90,16 @@ class TeamManager:
 
     def get_team(self, team_id: str) -> Optional[Team]:
         """Get team by ID."""
-        if not hasattr(self.storage, "get_team"):
+        if not self.storage.get_capabilities().teams:
             return None
         data = self.storage.get_team(team_id)
         if data:
-            return Team(**data)
+            return self._entity_from_storage(Team, data)
         return None
 
     def add_member(self, team_id: str, user_id: str) -> bool:
         """Add user to team."""
-        if not hasattr(self.storage, "add_team_member"):
+        if not self.storage.get_capabilities().teams:
             return False
         if self.get_team(team_id) is None:
             raise ValueError(f"Team not found: {team_id}")
@@ -104,7 +109,7 @@ class TeamManager:
 
     def get_user_teams(self, user_id: str) -> List[Team]:
         """Get all teams a user belongs to."""
-        if not hasattr(self.storage, "get_user_teams"):
+        if not self.storage.get_capabilities().teams:
             return []
         teams_data = self.storage.get_user_teams(user_id)
-        return [Team(**t) for t in teams_data]
+        return [self._entity_from_storage(Team, item) for item in teams_data]

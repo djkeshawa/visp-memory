@@ -56,16 +56,11 @@ def has_release_action(content: str) -> bool:
 
 def main() -> int:
     release_workflow = WORKFLOWS / "build-release.yml"
-    simple_workflow = WORKFLOWS / "release-simple.yml"
 
     release_text = text(release_workflow)
-    simple_text = text(simple_workflow)
 
     if not has_tag_push_trigger(release_text):
         raise SystemExit("build-release.yml must own tag-triggered release publishing")
-
-    if has_tag_push_trigger(simple_text):
-        raise SystemExit("release-simple.yml must not also publish on tag push")
 
     tag_release_publishers = [
         path.name

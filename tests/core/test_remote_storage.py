@@ -193,3 +193,47 @@ def test_remote_storage_update_intent_calls_patch_endpoint():
     assert storage.update_intent("intent-1", description="New goal", priority=3) is True
     assert storage.session.last_patch_url == "http://memory.example/intents/intent-1"
     assert storage.session.last_patch_json == {"description": "New goal", "priority": 3}
+
+
+def test_remote_storage_related_memories_calls_authenticated_api_contract():
+    payload = [{"id": "memory-2", "relationship": "supports", "strength": 0.9}]
+    storage = remote_storage_with(FakeResponse(200, payload))
+
+    assert storage.get_related_memories("memory-1", relationship="supports") == payload
+    assert storage.session.last_get_url == "http://memory.example/memories/memory-1/related"
+    assert storage.session.last_get_params == {"relationship": "supports"}
+
+
+def test_remote_storage_related_memories_returns_empty_only_for_404():
+    storage = remote_storage_with(FakeResponse(404, {"detail": "Memory not found"}))
+    assert storage.get_related_memories("missing") == []
+
+    storage = remote_storage_with(FakeResponse(500, {"detail": "database unavailable"}))
+    with pytest.raises(RemoteStorageError, match="HTTP 500: database unavailable"):
+        storage.get_related_memories("memory-1")
+
+
+def test_remote_storage_malformed_read_response_is_explicit_error():
+    storage = remote_storage_with(FakeResponse(200, {"unexpected": "object"}))
+
+    with pytest.raises(RemoteStorageError, match="invalid response"):
+        storage.list_memories()
+
+
+def test_remote_storage_session_round_trip_contract():
+    storage = remote_storage_with(FakeResponse(200, {"id": "session-1"}))
+    assert storage.start_session() == "session-1"
+    assert storage.session.last_post_url == "http://memory.example/sessions"
+
+    storage = remote_storage_with(FakeResponse(200, {"status": "completed"}))
+    assert storage.end_session("session-1", "Done", ["memory-1"]) is True
+    assert storage.session.last_post_url == "http://memory.example/sessions/session-1/complete"
+    assert storage.session.last_post_json == {
+        "summary": "Done",
+        "memory_ids": ["memory-1"],
+    }
+
+
+def test_remote_storage_missing_session_returns_false():
+    storage = remote_storage_with(FakeResponse(404, {"detail": "Session not found"}))
+    assert storage.end_session("missing", "", []) is False

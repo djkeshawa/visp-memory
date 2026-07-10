@@ -33,6 +33,7 @@ ENV/
 
 # Testing
 .pytest_cache/
+.test-tmp/
 .coverage
 htmlcov/
 
@@ -72,5 +73,4 @@ log/
 *.whl
 dist-standalone/
 .ruff_cache/
-.visp
-.agents
+.playwright-cache/
