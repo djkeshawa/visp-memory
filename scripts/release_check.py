@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 import argparse
-import shutil
 import subprocess
 import sys
+import tempfile
+import venv
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +33,11 @@ def has_module(module: str) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--skip-twine",
+        action="store_true",
+        help="Skip Twine distribution validation explicitly.",
+    )
     parser.add_argument(
         "--skip-frontend",
         action="store_true",
@@ -96,11 +102,43 @@ def main() -> int:
 
         run([sys.executable, "-m", "build", "--wheel"])
 
-        if shutil.which("twine"):
-            dist_files = [str(path) for path in sorted((ROOT / "dist").glob("*"))]
-            run(["twine", "check", *dist_files])
-        else:
-            print("\nSkipping twine check: twine is not installed.")
+        dist_files = [str(path) for path in sorted((ROOT / "dist").glob("*"))]
+        if not args.skip_twine:
+            if not has_module("twine"):
+                raise SystemExit(
+                    "Python package 'twine' is required. Install it or pass --skip-twine."
+                )
+            run([sys.executable, "-m", "twine", "check", *dist_files])
+
+        wheel = next(iter(sorted((ROOT / "dist").glob("*.whl"))), None)
+        if wheel is None:
+            raise SystemExit("The package build did not produce a wheel.")
+        with tempfile.TemporaryDirectory(prefix="llm-memory-wheel-smoke-") as temp_dir:
+            environment = Path(temp_dir) / "venv"
+            venv.EnvBuilder(with_pip=True).create(environment)
+            python = environment / (
+                "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
+            )
+            cli = environment / (
+                "Scripts/llm-memory.exe" if sys.platform == "win32" else "bin/llm-memory"
+            )
+            run([str(python), "-m", "pip", "install", f"{wheel}[api,mcp]"])
+            run([str(cli), "--help"])
+            run(
+                [
+                    str(python),
+                    "-c",
+                    (
+                        "from importlib.metadata import version; "
+                        "from pathlib import Path; "
+                        "import llm_memory.server.app as api; "
+                        "from llm_memory.interfaces.mcp import MCP_AVAILABLE; "
+                        "static = Path(api.__file__).parent / 'static'; "
+                        "assert version('llm-memory-mcp'); assert MCP_AVAILABLE; "
+                        "assert (static / 'index.html').is_file()"
+                    ),
+                ]
+            )
 
     if args.with_docker_build:
         run(["docker", "build", "-t", "llm-memory:release-check", "."])

@@ -69,6 +69,7 @@ export function ProjectSelector() {
         Project
       </div>
       <select
+        aria-label="Project"
         value={selectedRepoId || projects[0]?.id || ""}
         onChange={(event) => selectProject(event.target.value)}
         disabled={projects.length === 0}

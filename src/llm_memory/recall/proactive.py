@@ -426,7 +426,7 @@ class ProactiveRecall:
         normalized = re.sub(r"\b\d+\b", "<n>", normalized)
 
         # Generate hash
-        return hashlib.md5(normalized.encode()).hexdigest()[:8]
+        return hashlib.sha256(normalized.encode()).hexdigest()[:8]
 
     # =========================================================================
     # Private Methods

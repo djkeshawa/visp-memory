@@ -70,8 +70,7 @@ The tag push triggers `.github/workflows/build-release.yml`, which will:
 - Create a GitHub Release
 - Upload the wheel file as an asset
 
-(`.github/workflows/release-simple.yml` is a manual, wheel-only path triggered
-via "Run workflow" / `workflow_dispatch`; it does **not** run on tag push.)
+This tag-triggered workflow is the repository's sole publishing path.
 
 Check progress at: `https://github.com/yourusername/llm-memory/actions`
 
@@ -89,7 +88,7 @@ It includes:
 ## What Gets Built
 
 Each release includes a single wheel file:
-- **Name**: `llm_memory-X.Y.Z-py3-none-any.whl`
+- **Name**: `llm_memory_mcp-X.Y.Z-py3-none-any.whl`
 - **Size**: ~600 KB
 - **Contains**:
   - All Python code
@@ -152,9 +151,8 @@ For the full manual checklist, see [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
 The tag-triggered release workflow is `.github/workflows/build-release.yml`. It runs when:
 - A tag starting with `v` is pushed (e.g., `v0.1.0`)
 
-A separate workflow, `.github/workflows/release-simple.yml`, is a manual,
-wheel-only path triggered via the "Run workflow" button (`workflow_dispatch`)
-and does **not** run on tag push.
+Manual `workflow_dispatch` runs use the same workflow and quality gates without
+creating a second publisher.
 
 **What it does:**
 
@@ -164,7 +162,7 @@ and does **not** run on tag push.
    - Setup Node.js 20
 
 2. **Build Frontend** (2 min)
-   - Run `python3 build_frontend.py`
+   - Run `python build_frontend.py`
    - Install npm dependencies
    - Build the static dashboard
    - Copy static files to the package directory
@@ -312,7 +310,7 @@ If the workflow isn't set up or you prefer manual control:
    - Description: (copy from the workflow's changelog template)
 
 4. **Upload wheel:**
-   - Drag `dist/llm_memory-0.1.0-py3-none-any.whl` to the assets section
+   - Drag `dist/llm_memory_mcp-0.2.3-py3-none-any.whl` to the assets section
 
 5. **Publish release**
 

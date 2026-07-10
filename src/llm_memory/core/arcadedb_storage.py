@@ -8,10 +8,12 @@ from llm_memory.core.clock import utc_now
 from llm_memory.core.ranking import rank_memory_results, text_similarity, utility_rank_adjustment
 from llm_memory.core.storage import (
     REINFORCING_RECALL_EVENTS,
+    STORAGE_SCHEMA_VERSION,
     BaseStorage,
     LocalStorage,
     MemoryLayer,
     MemoryStatus,
+    StorageCapabilities,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,6 +51,7 @@ class ArcadeDbStorage(BaseStorage):
         "Team",
         "AuditLog",
         "RecallFeedback",
+        "SchemaVersion",
     ]
     EDGE_TYPES = ["MemoryRelationship", "RepoDependency", "TeamMember"]
     MEMORY_RELATIONSHIP_EDGE = "MemoryRelationship"
@@ -133,6 +136,7 @@ class ArcadeDbStorage(BaseStorage):
         "notes",
     ]
     TEAM_MEMBER_FIELDS = ["id", "team_id", "user_id"]
+    SCHEMA_VERSION_FIELDS = ["id", "component", "version", "applied_at"]
     RECORD_JSON_FIELDS = {
         "Intent": {"context"},
         "Repository": {"tech_stack", "metadata"},
@@ -148,6 +152,7 @@ class ArcadeDbStorage(BaseStorage):
         "Team": TEAM_FIELDS,
         "AuditLog": AUDIT_FIELDS,
         "RecallFeedback": RECALL_EVENT_FIELDS,
+        "SchemaVersion": SCHEMA_VERSION_FIELDS,
     }
 
     def __init__(
@@ -186,6 +191,50 @@ class ArcadeDbStorage(BaseStorage):
                     db.command("sql", f"CREATE VERTEX TYPE {vertex_type} IF NOT EXISTS")
                 for edge_type in self.EDGE_TYPES:
                     db.command("sql", f"CREATE EDGE TYPE {edge_type} IF NOT EXISTS")
+                versions = self._rows(
+                    db.query("sql", "SELECT FROM SchemaVersion WHERE id = ?", "storage")
+                )
+                if versions:
+                    stored_version = int(self._record_get(versions[0], "version", 0) or 0)
+                    if stored_version > STORAGE_SCHEMA_VERSION:
+                        raise RuntimeError(
+                            "Storage schema is newer than this llm-memory build "
+                            f"({stored_version} > {STORAGE_SCHEMA_VERSION})"
+                        )
+                    if stored_version < STORAGE_SCHEMA_VERSION:
+                        db.command(
+                            "sql",
+                            "UPDATE SchemaVersion SET version = ?, applied_at = ? "
+                            "WHERE id = ?",
+                            STORAGE_SCHEMA_VERSION,
+                            utc_now().isoformat(),
+                            "storage",
+                        )
+                else:
+                    db.command(
+                        "sql",
+                        "INSERT INTO SchemaVersion SET id = ?, component = ?, version = ?, "
+                        "applied_at = ?",
+                        "storage",
+                        "storage",
+                        STORAGE_SCHEMA_VERSION,
+                        utc_now().isoformat(),
+                    )
+
+    def get_capabilities(self) -> StorageCapabilities:
+        return StorageCapabilities(vector_search=False, audit_log=True, reindex=False)
+
+    def get_schema_status(self) -> Dict[str, Any]:
+        with self._database() as db:
+            rows = self._rows(
+                db.query("sql", "SELECT FROM SchemaVersion WHERE id = ?", "storage")
+            )
+        stored_version = int(self._record_get(rows[0], "version", 0) or 0) if rows else 0
+        return {
+            "current_version": STORAGE_SCHEMA_VERSION,
+            "stored_version": stored_version,
+            "status": "ready" if stored_version == STORAGE_SCHEMA_VERSION else "migration_required",
+        }
 
     @staticmethod
     def _json_serialize(data: Any) -> str:

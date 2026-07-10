@@ -21,7 +21,10 @@ def append_audit_event(
     metadata: dict = None,
 ) -> None:
     """Write an audit event when the storage backend supports it."""
-    if hasattr(storage, "append_audit_log"):
+    capabilities = storage.get_capabilities() if hasattr(storage, "get_capabilities") else None
+    if (capabilities and capabilities.audit_log) or (
+        capabilities is None and hasattr(storage, "append_audit_log")
+    ):
         storage.append_audit_log(
             event_type=event_type,
             actor_id=actor_id,
@@ -54,7 +57,11 @@ async def list_audit_log(
             detail="Audit log access requires an admin user",
         )
     storage = request.app.state.storage
-    if not hasattr(storage, "list_audit_logs"):
+    capabilities = storage.get_capabilities() if hasattr(storage, "get_capabilities") else None
+    if not (
+        (capabilities and capabilities.audit_log)
+        or (capabilities is None and hasattr(storage, "list_audit_logs"))
+    ):
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Storage backend does not support audit logs",

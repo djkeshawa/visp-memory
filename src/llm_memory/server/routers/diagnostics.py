@@ -20,6 +20,7 @@ from llm_memory.server.schemas import (
     EmbeddingReindexResponse,
     ProviderDiagnosticsResponse,
     ProviderStatus,
+    StorageDiagnosticsResponse,
 )
 
 router = APIRouter(prefix="/diagnostics", tags=["diagnostics"])
@@ -32,6 +33,21 @@ DEFAULT_PROVIDER_MODELS = {
     "sentence-transformers": "all-MiniLM-L6-v2",
     "noop": None,
 }
+
+
+@router.get("/storage", response_model=StorageDiagnosticsResponse)
+async def get_storage_diagnostics(
+    request: Request,
+    user: UserContext = Depends(get_current_user),
+):
+    """Return non-secret backend capabilities and schema compatibility."""
+    del user
+    storage = request.app.state.storage
+    return StorageDiagnosticsResponse(
+        backend=request.app.state.storage_backend,
+        capabilities=storage.get_capabilities().to_dict(),
+        schema_status=storage.get_schema_status(),
+    )
 
 
 def _configured_provider(config_provider: str) -> str:

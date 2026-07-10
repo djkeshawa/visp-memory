@@ -17,6 +17,7 @@ from llm_memory.server.schemas import (
     MemoryCreate,
     MemoryResponse,
     MemoryUpdate,
+    RelatedMemoryResponse,
     SearchQuery,
 )
 
@@ -204,6 +205,40 @@ async def get_memory(
     )
 
     return _memory_response_payload(mem)
+
+
+@router.get("/memories/{memory_id}/related", response_model=List[RelatedMemoryResponse])
+async def get_related_memories(
+    request: Request,
+    memory_id: str,
+    relationship: str = None,
+    user: UserContext = Depends(get_current_user),
+):
+    """Return visible memories directly related to a memory."""
+    storage = request.app.state.storage
+    source = require_scoped_record_access(
+        storage,
+        storage.get_memory(memory_id),
+        user,
+        scope_field="metadata",
+        not_found_detail="Memory not found",
+    )
+    related = storage.get_related_memories(memory_id, relationship=relationship)
+    visible = [
+        item
+        for item in related
+        if item.get("repo_id") == source.get("repo_id")
+        and can_access_scoped_record(storage, item, user, scope_field="metadata")
+    ]
+    return [
+        {
+            **_memory_response_payload(item),
+            "relationship": item.get("relationship", "related_to"),
+            "strength": item.get("strength", 1.0),
+            "relationship_evidence": item.get("relationship_evidence"),
+        }
+        for item in visible
+    ]
 
 
 @router.delete("/memories/{memory_id}")

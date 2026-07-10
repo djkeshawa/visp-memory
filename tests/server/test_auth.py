@@ -1,8 +1,8 @@
 import unittest.mock as mock
 
+import jwt
 import pytest
 from fastapi import HTTPException
-from jose import jwt
 
 from llm_memory.config import MemoryConfig, ServerConfig
 from llm_memory.server.auth import create_access_token, get_current_user
@@ -22,7 +22,9 @@ class MockAuth:
 def mock_config():
     config = MemoryConfig()
     config.server = ServerConfig(
-        jwt_secret="test_secret", api_keys=["test_key"], jwt_expiry_hours=24
+        jwt_secret="test_secret_at_least_32_bytes_long",
+        api_keys=["test_key"],
+        jwt_expiry_hours=24,
     )
     with mock.patch("llm_memory.server.auth.load_config", return_value=config):
         yield config
@@ -33,7 +35,7 @@ def test_create_access_token(mock_config):
     token = create_access_token(data)
     assert token is not None
 
-    payload = jwt.decode(token, "test_secret", algorithms=["HS256"])
+    payload = jwt.decode(token, "test_secret_at_least_32_bytes_long", algorithms=["HS256"])
     assert payload["sub"] == "user123"
     assert payload["username"] == "testuser"
     assert "exp" in payload

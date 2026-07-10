@@ -6,8 +6,11 @@ x-llm-memory-build: &llm-memory-build
     LLM_MEMORY_EXTRAS: ${LLM_MEMORY_EXTRAS:-api,mcp,arcadedb,neo4j,openai,ollama}
 
 x-llm-memory-env: &llm-memory-env
-  LLM_MEMORY_SERVER_AUTH_ENABLED: ${LLM_MEMORY_SERVER_AUTH_ENABLED:-false}
-  LLM_MEMORY_SERVER_ALLOW_ANONYMOUS: ${LLM_MEMORY_SERVER_ALLOW_ANONYMOUS:-true}
+  LLM_MEMORY_SERVER_AUTH_ENABLED: ${LLM_MEMORY_SERVER_AUTH_ENABLED:-true}
+  LLM_MEMORY_SERVER_ALLOW_ANONYMOUS: ${LLM_MEMORY_SERVER_ALLOW_ANONYMOUS:-false}
+  LLM_MEMORY_SERVER_API_KEYS: ${LLM_MEMORY_SERVER_API_KEYS:-}
+  LLM_MEMORY_STORAGE_ALLOW_FALLBACK: ${LLM_MEMORY_STORAGE_ALLOW_FALLBACK:-false}
+  LLM_MEMORY_STORAGE_CONNECT_TIMEOUT_SECONDS: ${LLM_MEMORY_STORAGE_CONNECT_TIMEOUT_SECONDS:-30}
   LLM_MEMORY_REPO_ID: ${LLM_MEMORY_REPO_ID:-llm-memory}
   LLM_MEMORY_EMBEDDING_PROVIDER: ${LLM_MEMORY_EMBEDDING_PROVIDER:-auto}
   LLM_MEMORY_EMBEDDING_MODEL: ${LLM_MEMORY_EMBEDDING_MODEL:-}
@@ -23,7 +26,7 @@ services:
     build: *llm-memory-build
     image: ${LLM_MEMORY_IMAGE:-llm-memory:local}
     ports:
-      - "${LLM_MEMORY_PORT:-8000}:8000"
+      - "${LLM_MEMORY_BIND_HOST:-127.0.0.1}:${LLM_MEMORY_PORT:-8000}:8000"
     volumes:
       - llm-memory-lite-data:/data
     environment:
@@ -42,7 +45,7 @@ services:
     build: *llm-memory-build
     image: ${LLM_MEMORY_IMAGE:-llm-memory:local}
     ports:
-      - "${LLM_MEMORY_PORT:-8000}:8000"
+      - "${LLM_MEMORY_BIND_HOST:-127.0.0.1}:${LLM_MEMORY_PORT:-8000}:8000"
     volumes:
       - llm-memory-arcadedb-data:/data
     environment:
@@ -61,7 +64,7 @@ services:
     build: *llm-memory-build
     image: ${LLM_MEMORY_IMAGE:-llm-memory:local}
     ports:
-      - "${LLM_MEMORY_PORT:-8000}:8000"
+      - "${LLM_MEMORY_BIND_HOST:-127.0.0.1}:${LLM_MEMORY_PORT:-8000}:8000"
     volumes:
       - llm-memory-full-data:/data
     environment:
@@ -71,7 +74,7 @@ services:
       OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
       NEO4J_URI: bolt://neo4j:7687
       NEO4J_USER: neo4j
-      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-memorypass}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in .env}
     depends_on:
       neo4j:
         condition: service_healthy
@@ -93,10 +96,8 @@ services:
     build: *llm-memory-build
     image: ${LLM_MEMORY_IMAGE:-llm-memory:local}
     container_name: llm-memory-dashboard
-    # `depends_on` (below) only orders `compose up` -- it is NOT honored on Docker's
-    # post-reboot auto-restart. If this server starts before Neo4j is accepting bolt
-    # connections, initialize_storage() silently falls back to an empty SQLite DB and
-    # never retries. Block startup until Neo4j is reachable so that can't happen.
+    # Keep a startup gate for post-reboot restarts in addition to the application's
+    # bounded connection retry and fail-fast behavior.
     command:
       - sh
       - -ec
@@ -108,7 +109,7 @@ services:
         echo "Neo4j is ready -- starting server."
         exec uvicorn llm_memory.server.app:app --host 0.0.0.0 --port 8000
     ports:
-      - "${LLM_MEMORY_PORT:-8000}:8000"
+      - "${LLM_MEMORY_BIND_HOST:-127.0.0.1}:${LLM_MEMORY_PORT:-8000}:8000"
     volumes:
       - llm-memory-dashboard-data:/data
     environment:
@@ -121,7 +122,7 @@ services:
       LLM_MEMORY_STORAGE_DATA_DIR: /data
       NEO4J_URI: bolt://neo4j:7687
       NEO4J_USER: neo4j
-      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-memorypass}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in .env}
     depends_on:
       neo4j:
         condition: service_healthy
@@ -134,10 +135,10 @@ services:
 
   neo4j:
     profiles: ["full", "dashboard"]
-    image: neo4j:5.15
+    image: neo4j:5.26.28-community
     ports:
-      - "${NEO4J_HTTP_PORT:-7474}:7474"
-      - "${NEO4J_BOLT_PORT:-7687}:7687"
+      - "${LLM_MEMORY_BIND_HOST:-127.0.0.1}:${NEO4J_HTTP_PORT:-7474}:7474"
+      - "${LLM_MEMORY_BIND_HOST:-127.0.0.1}:${NEO4J_BOLT_PORT:-7687}:7687"
     volumes:
       - neo4j-data:/data
       - neo4j-logs:/logs
@@ -149,10 +150,10 @@ services:
     tmpfs:
       - /var/lib/neo4j/run:uid=7474,gid=7474,mode=700
     environment:
-      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-memorypass}
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in .env}
       NEO4J_PLUGINS: '["apoc"]'
     healthcheck:
-      test: ["CMD-SHELL", "cypher-shell -u neo4j -p ${NEO4J_PASSWORD:-memorypass} 'RETURN 1'"]
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p ${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in .env} 'RETURN 1'"]
       interval: 10s
       timeout: 10s
       retries: 12
@@ -161,7 +162,7 @@ services:
 
   ollama:
     profiles: ["full", "ollama"]
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.31.1
     volumes:
       - ollama-data:/root/.ollama
     environment:
@@ -175,7 +176,7 @@ services:
 
   ollama-pull:
     profiles: ["full", "ollama"]
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.31.1
     environment:
       OLLAMA_HOST: http://ollama:11434
     command: ["pull", "${LLM_MEMORY_OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}"]

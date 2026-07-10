@@ -7,7 +7,7 @@ Repositories are first-class entities that:
 - Enable cross-repo context sharing
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -55,9 +55,14 @@ class RepositoryManager:
     def __init__(self, storage: BaseStorage):
         self.storage = storage
 
+    @staticmethod
+    def _repository_from_storage(data: Dict[str, Any]) -> Repository:
+        allowed = {item.name for item in fields(Repository)}
+        return Repository(**{key: value for key, value in data.items() if key in allowed})
+
     def register(self, repo: Repository) -> str:
         """Register a new repository. Raises NotImplementedError if backend lacks support."""
-        if not hasattr(self.storage, "store_repository"):
+        if not self.storage.get_capabilities().repositories:
             raise NotImplementedError("Storage backend does not support repository management")
         repo_dict = {
             "id": repo.id,
@@ -72,23 +77,23 @@ class RepositoryManager:
 
     def get(self, repo_id: str) -> Optional[Repository]:
         """Get repository by ID."""
-        if not hasattr(self.storage, "get_repository"):
+        if not self.storage.get_capabilities().repositories:
             return None
         data = self.storage.get_repository(repo_id)
         if data:
-            return Repository(**data)
+            return self._repository_from_storage(data)
         return None
 
     def list_all(self, team_id: Optional[str] = None) -> List[Repository]:
         """List all repositories, optionally filtered by team."""
-        if not hasattr(self.storage, "list_repositories"):
+        if not self.storage.get_capabilities().repositories:
             return []
         repos_data = self.storage.list_repositories(team_id=team_id)
-        return [Repository(**repo) for repo in repos_data]
+        return [self._repository_from_storage(repo) for repo in repos_data]
 
     def add_dependency(self, dep: RepositoryDependency) -> str:
         """Add a dependency relationship. Raises NotImplementedError if backend lacks support."""
-        if not hasattr(self.storage, "add_repo_dependency"):
+        if not self.storage.get_capabilities().repositories:
             raise NotImplementedError("Storage backend does not support repository dependencies")
         if self.get(dep.source_repo_id) is None:
             raise ValueError(f"Repository not found: {dep.source_repo_id}")
@@ -104,7 +109,7 @@ class RepositoryManager:
 
     def get_dependencies(self, repo_id: str) -> List[RepositoryDependency]:
         """Get direct dependencies of a repository."""
-        if not hasattr(self.storage, "get_repo_dependencies"):
+        if not self.storage.get_capabilities().repositories:
             return []
         deps_data = self.storage.get_repo_dependencies(repo_id)
         return [

@@ -211,6 +211,26 @@ export interface RuntimeStatus {
   dashboardStaticAvailable?: boolean
 }
 
+export interface StorageCapabilities {
+  graph: boolean
+  vectorSearch: boolean
+  repositories: boolean
+  teams: boolean
+  sessions: boolean
+  auditLog: boolean
+  reindex: boolean
+}
+
+export interface StorageDiagnostics {
+  backend: string
+  capabilities: StorageCapabilities
+  schema: {
+    currentVersion?: number
+    storedVersion?: number
+    status?: string
+  }
+}
+
 export interface SystemStatus {
   apiServer: "online" | "offline"
   vectorDatabase: "ready" | "syncing" | "offline"

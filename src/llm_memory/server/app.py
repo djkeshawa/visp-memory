@@ -4,13 +4,15 @@ FastAPI Server Entry Point
 
 import logging
 import os
+import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from llm_memory.core.clock import utc_now
 
 try:
-    from fastapi import Depends, FastAPI
+    from fastapi import Depends, FastAPI, Request
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import FileResponse, JSONResponse, Response
     from fastapi.staticfiles import StaticFiles
@@ -38,6 +40,7 @@ from llm_memory.server.routers import (
     quality,
     relationships,
     repositories,
+    sessions,
     teams,
 )
 from llm_memory.server.schemas import (
@@ -211,19 +214,41 @@ def get_runtime_status(config, embedding_provider=None, embedding_status=None):
 def initialize_storage(config, embedding_fn=None, embedding_provider=None):
     """Initialize the configured server storage backend."""
     if config.storage.backend == "neo4j":
-        try:
-            storage = Neo4jStorage(
-                uri=config.storage.neo4j_uri,
-                user=config.storage.neo4j_user,
-                password=config.storage.neo4j_password,
-                embedding_fn=embedding_fn,
-                embedding_dimension=getattr(embedding_provider, "dimension", None),
+        deadline = time.monotonic() + config.storage.connect_timeout_seconds
+        last_error = None
+        while True:
+            try:
+                storage = Neo4jStorage(
+                    uri=config.storage.neo4j_uri,
+                    user=config.storage.neo4j_user,
+                    password=config.storage.neo4j_password,
+                    embedding_fn=embedding_fn,
+                    embedding_dimension=getattr(embedding_provider, "dimension", None),
+                )
+                logger.info("Initialized Neo4j storage")
+                return storage, "neo4j"
+            except Exception as error:
+                last_error = error
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                logger.warning(
+                    "Neo4j connection failed; retrying in %.1f seconds (%s)",
+                    min(1.0, remaining),
+                    error.__class__.__name__,
+                )
+                time.sleep(min(1.0, remaining))
+
+        if config.storage.allow_fallback:
+            logger.error(
+                "Neo4j unavailable after bounded retries; starting in explicit SQLite "
+                "fallback mode (%s)",
+                last_error.__class__.__name__,
             )
-            logger.info("Initialized Neo4j Storage")
-            return storage, "neo4j"
-        except Exception as e:
-            logger.error(f"Failed to initialize Neo4j, falling back to SQLite: {e}")
-            return LocalStorage(config.storage.data_dir, embedding_fn=embedding_fn), "sqlite"
+            fallback = LocalStorage(config.storage.data_dir, embedding_fn=embedding_fn)
+            return fallback, "sqlite-fallback"
+
+        raise RuntimeError("Neo4j storage is unavailable and fallback is disabled") from last_error
 
     if config.storage.backend == "arcadedb":
         storage = ArcadeDbStorage(
@@ -294,6 +319,39 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+@app.middleware("http")
+async def request_context_middleware(request: Request, call_next):
+    """Attach a correlation ID and record sanitized request timing metadata."""
+    supplied_request_id = request.headers.get("X-Request-ID", "")
+    request_id = supplied_request_id if 0 < len(supplied_request_id) <= 128 else uuid.uuid4().hex
+    started_at = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception(
+            "Unhandled request error request_id=%s method=%s path=%s",
+            request_id,
+            request.method,
+            request.url.path,
+        )
+        response = JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error", "request_id": request_id},
+        )
+
+    duration_ms = (time.perf_counter() - started_at) * 1000
+    response.headers["X-Request-ID"] = request_id
+    logger.info(
+        "request_complete request_id=%s method=%s path=%s status=%s duration_ms=%.2f",
+        request_id,
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+    )
+    return response
+
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
@@ -323,14 +381,46 @@ app.include_router(platform.router)
 app.include_router(repositories.router)
 app.include_router(teams.router)
 app.include_router(relationships.router)
+app.include_router(sessions.router)
 app.include_router(diagnostics.router)
 
 
+def _get_scoped_stats(repo_id: str | None, user: UserContext) -> dict:
+    """Calculate status statistics without crossing tenant boundaries."""
+    if user.is_admin:
+        return app.state.storage.get_stats(repo_id=repo_id)
+
+    memories = [
+        memory
+        for memory in app.state.storage.list_memories(repo_id=repo_id)
+        if can_access_scoped_record(app.state.storage, memory, user, scope_field="metadata")
+    ]
+    intents = [
+        intent
+        for intent in app.state.storage.list_intents(repo_id=repo_id)
+        if can_access_scoped_record(app.state.storage, intent, user, scope_field="context")
+    ]
+    memories_by_layer: dict[str, int] = {}
+    for memory in memories:
+        layer = memory.get("layer", "unknown")
+        memories_by_layer[layer] = memories_by_layer.get(layer, 0) + 1
+    return {
+        "total_memories": len(memories),
+        "total_intents": len(intents),
+        "memories_by_layer": memories_by_layer,
+    }
+
+
 @app.get("/", tags=["system"])
-async def root(repo_id: str = None):
-    """System status and stats."""
+async def root(
+    repo_id: str = None,
+    user: UserContext = Depends(get_current_user),
+):
+    """Return authenticated, tenant-scoped system status and statistics."""
+    target_repo_id = repo_id or config.repo_id
+    require_repo_scope_access(app.state.storage, target_repo_id, user)
     try:
-        stats = app.state.storage.get_stats(repo_id=repo_id or config.repo_id)
+        stats = _get_scoped_stats(target_repo_id, user)
     except Exception as e:
         logger.error(f"Failed to get stats: {e}")
         stats = {}
@@ -351,41 +441,28 @@ async def root(repo_id: str = None):
 @app.get("/healthz", tags=["system"])
 async def healthz():
     """Unauthenticated liveness probe."""
-    return {
-        "status": "ok",
-        "version": __version__,
-        "timestamp": utc_now().isoformat(),
-    }
+    return {"status": "ok"}
 
 
 @app.get("/readyz", tags=["system"])
 async def readyz():
     """Unauthenticated readiness probe for release and first-run checks."""
     storage_ready = True
-    storage_error = None
-
     try:
         app.state.storage.get_stats()
     except Exception as e:
         storage_ready = False
-        storage_error = e.__class__.__name__
         logger.error("Storage readiness check failed: %s", e)
 
     dashboard_static_available = STATIC_DIR.exists() and STATIC_DIR.is_dir()
     ready = storage_ready and dashboard_static_available
     payload = {
         "status": "ready" if ready else "not_ready",
-        "version": __version__,
-        "storage_ready": storage_ready,
-        "dashboard_static_available": dashboard_static_available,
-        "timestamp": utc_now().isoformat(),
+        "checks": {
+            "storage": "ok" if storage_ready else "failed",
+            "dashboard": "ok" if dashboard_static_available else "failed",
+        },
     }
-    runtime = get_runtime_status(config, embedding_provider, embedding_runtime_status)
-    runtime["storage_backend"] = app.state.storage_backend
-    payload.update(runtime)
-
-    if storage_error:
-        payload["storage_error"] = storage_error
 
     return JSONResponse(status_code=200 if ready else 503, content=payload)
 

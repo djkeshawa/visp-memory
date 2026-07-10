@@ -8,6 +8,7 @@ import {
     ProviderConnectionStatus,
     ProviderDiagnostic,
     RuntimeStatus,
+    StorageDiagnostics,
     SearchResult,
     Stats,
     ProjectScope,
@@ -26,12 +27,14 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_LLM_MEMORY_API_URL || ""
 export class ApiError extends Error {
     status: number
     detail?: string
+    requestId?: string
 
-    constructor(message: string, status: number, detail?: string) {
+    constructor(message: string, status: number, detail?: string, requestId?: string) {
         super(message)
         this.name = "ApiError"
         this.status = status
         this.detail = detail
+        this.requestId = requestId
     }
 }
 
@@ -40,12 +43,7 @@ export function isApiError(error: unknown): error is ApiError {
 }
 
 export function hasAuthCredentials(): boolean {
-    const apiKey =
-        process.env.NEXT_PUBLIC_LLM_MEMORY_API_KEY ||
-        (typeof window !== "undefined" ? window.localStorage.getItem("llm-memory-api-key") : null)
-    const jwtToken =
-        process.env.NEXT_PUBLIC_LLM_MEMORY_JWT_TOKEN ||
-        (typeof window !== "undefined" ? window.localStorage.getItem("llm-memory-jwt-token") : null)
+    const { apiKey, jwtToken } = getAuthCredentials()
 
     return Boolean(apiKey || jwtToken)
 }
@@ -60,25 +58,48 @@ export function describeApiError(error: unknown): string {
     }
 
     if (error.status === 401) {
+        const requestId = error.requestId ? ` Request ID: ${error.requestId}.` : ""
         if (!hasAuthCredentials()) {
-            return "Authentication is required. Add an API key or JWT token before loading protected data."
+            return `Authentication is required. Add an API key or JWT token before loading protected data.${requestId}`
         }
 
-        return `The configured credentials were rejected${error.detail ? `: ${error.detail}` : "."}`
+        return `The configured credentials were rejected${error.detail ? `: ${error.detail}` : "."}${requestId}`
     }
 
-    return `The server returned HTTP ${error.status}${error.detail ? `: ${error.detail}` : "."}`
+    const requestId = error.requestId ? ` Request ID: ${error.requestId}.` : ""
+    return `The server returned HTTP ${error.status}${error.detail ? `: ${error.detail}` : "."}${requestId}`
+}
+
+const API_KEY_STORAGE_KEY = "llm-memory-api-key"
+const JWT_STORAGE_KEY = "llm-memory-jwt-token"
+export const AUTH_CHANGED_EVENT = "llm-memory-auth-changed"
+
+export function getAuthCredentials(): { apiKey: string; jwtToken: string } {
+    if (typeof window === "undefined") return { apiKey: "", jwtToken: "" }
+    return {
+        apiKey: window.sessionStorage.getItem(API_KEY_STORAGE_KEY) || "",
+        jwtToken: window.sessionStorage.getItem(JWT_STORAGE_KEY) || "",
+    }
+}
+
+export function setAuthCredentials(apiKey: string, jwtToken: string): void {
+    if (typeof window === "undefined") return
+    const trimmedApiKey = apiKey.trim()
+    const trimmedJwtToken = jwtToken.trim()
+    if (trimmedApiKey) window.sessionStorage.setItem(API_KEY_STORAGE_KEY, trimmedApiKey)
+    else window.sessionStorage.removeItem(API_KEY_STORAGE_KEY)
+    if (trimmedJwtToken) window.sessionStorage.setItem(JWT_STORAGE_KEY, trimmedJwtToken)
+    else window.sessionStorage.removeItem(JWT_STORAGE_KEY)
+    window.dispatchEvent(new Event(AUTH_CHANGED_EVENT))
+}
+
+export function clearAuthCredentials(): void {
+    setAuthCredentials("", "")
 }
 
 function authHeaders(): HeadersInit {
     const headers: Record<string, string> = {}
-
-    const apiKey =
-        process.env.NEXT_PUBLIC_LLM_MEMORY_API_KEY ||
-        (typeof window !== "undefined" ? window.localStorage.getItem("llm-memory-api-key") : null)
-    const jwtToken =
-        process.env.NEXT_PUBLIC_LLM_MEMORY_JWT_TOKEN ||
-        (typeof window !== "undefined" ? window.localStorage.getItem("llm-memory-jwt-token") : null)
+    const { apiKey, jwtToken } = getAuthCredentials()
 
     if (jwtToken) headers.Authorization = `Bearer ${jwtToken}`
     else if (apiKey) headers["X-API-KEY"] = apiKey
@@ -121,7 +142,7 @@ function withQuery(path: string, params: Record<string, string | number | null |
 async function apiErrorFromResponse(res: Response): Promise<ApiError> {
     const detail = await readErrorDetail(res)
     const message = detail || `Request failed with HTTP ${res.status}`
-    return new ApiError(message, res.status, detail)
+    return new ApiError(message, res.status, detail, res.headers.get("X-Request-ID") || undefined)
 }
 
 async function readErrorDetail(res: Response): Promise<string | undefined> {
@@ -189,6 +210,30 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
         repoId: data.repo_id,
         storageReady: data.storage_ready,
         dashboardStaticAvailable: data.dashboard_static_available,
+    }
+}
+
+export async function getStorageDiagnostics(): Promise<StorageDiagnostics> {
+    const res = await request("/diagnostics/storage", { headers: authHeaders() })
+    const data = await res.json()
+    const capabilities = data.capabilities || {}
+    const schema = data.schema_status || data.schema || {}
+    return {
+        backend: readString(data.backend) || "unknown",
+        capabilities: {
+            graph: Boolean(capabilities.graph),
+            vectorSearch: Boolean(capabilities.vector_search),
+            repositories: Boolean(capabilities.repositories),
+            teams: Boolean(capabilities.teams),
+            sessions: Boolean(capabilities.sessions),
+            auditLog: Boolean(capabilities.audit_log),
+            reindex: Boolean(capabilities.reindex),
+        },
+        schema: {
+            currentVersion: readNumber(schema.current_version),
+            storedVersion: readNumber(schema.stored_version),
+            status: readString(schema.status),
+        },
     }
 }
 

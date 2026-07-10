@@ -14,7 +14,7 @@ try:
 except ImportError:
     REQUESTS_AVAILABLE = False
 
-from llm_memory.core.storage import BaseStorage, MemoryLayer
+from llm_memory.core.storage import BaseStorage, MemoryLayer, StorageCapabilities
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +97,9 @@ class RemoteStorage(BaseStorage):
             session.close()
             self.session = None
 
+    def get_capabilities(self) -> StorageCapabilities:
+        return StorageCapabilities(audit_log=False, reindex=False, vector_search=False)
+
     def _install_request_guard(self) -> None:
         """Inject a default timeout and centralized failure logging into the session."""
         original_request = self.session.request
@@ -141,9 +144,9 @@ class RemoteStorage(BaseStorage):
             if response.status_code == 404:
                 return None
             response.raise_for_status()
-            return response.json()
-        except requests.RequestException:
-            return None
+            return self._response_json(response, "get memory", dict)
+        except requests.RequestException as e:
+            raise self._write_error("get memory", e) from e
 
     def search_memories(self, query: str, repo_id: str = None, **kwargs) -> List[Dict[str, Any]]:
         """Search across memories."""
@@ -159,9 +162,9 @@ class RemoteStorage(BaseStorage):
             }
             response = self.session.post(f"{self.server_url}/recall", json=payload)
             response.raise_for_status()
-            return response.json()
-        except requests.RequestException:
-            return []
+            return self._response_json(response, "search memories", list)
+        except requests.RequestException as e:
+            raise self._write_error("search memories", e) from e
 
     def list_memories(self, repo_id: str = None, **kwargs) -> List[Dict[str, Any]]:
         """List memories with optional filtering."""
@@ -173,25 +176,31 @@ class RemoteStorage(BaseStorage):
             }
             response = self.session.get(f"{self.server_url}/memories", params=params)
             response.raise_for_status()
-            return response.json()
-        except requests.RequestException:
-            return []
+            return self._response_json(response, "list memories", list)
+        except requests.RequestException as e:
+            raise self._write_error("list memories", e) from e
 
     def update_memory(self, memory_id: str, **kwargs) -> bool:
         """Update a memory."""
         try:
             response = self.session.patch(f"{self.server_url}/memories/{memory_id}", json=kwargs)
-            return 200 <= response.status_code < 300
-        except requests.RequestException:
-            return False
+            if response.status_code == 404:
+                return False
+            response.raise_for_status()
+            return True
+        except requests.RequestException as e:
+            raise self._write_error("update memory", e) from e
 
     def delete_memory(self, memory_id: str) -> bool:
         """Delete a memory."""
         try:
             response = self.session.delete(f"{self.server_url}/memories/{memory_id}")
-            return 200 <= response.status_code < 300
-        except requests.RequestException:
-            return False
+            if response.status_code == 404:
+                return False
+            response.raise_for_status()
+            return True
+        except requests.RequestException as e:
+            raise self._write_error("delete memory", e) from e
 
     def get_collection(self, layer: str):
         return None  # Remote storage doesn't expose vector collections directly
@@ -209,6 +218,20 @@ class RemoteStorage(BaseStorage):
             raise RemoteStorageError(f"Remote server returned an empty id for {operation}")
 
         return str(resource_id)
+
+    def _response_json(self, response: Any, operation: str, expected_type: type) -> Any:
+        """Decode and validate JSON returned by a successful remote read."""
+        try:
+            payload = response.json()
+        except (TypeError, ValueError) as error:
+            raise RemoteStorageError(
+                f"Remote server returned malformed JSON while attempting to {operation}"
+            ) from error
+        if not isinstance(payload, expected_type):
+            raise RemoteStorageError(
+                f"Remote server returned an invalid response while attempting to {operation}"
+            )
+        return payload
 
     def _write_error(self, operation: str, error: Any) -> RemoteStorageError:
         detail = str(error)
@@ -258,19 +281,23 @@ class RemoteStorage(BaseStorage):
                 params["repo_id"] = repo_id
             response = self.session.get(f"{self.server_url}/intents", params=params)
             response.raise_for_status()
+            payload = self._response_json(response, "list intents", list)
             if status == "all":
-                return response.json()
-            return [i for i in response.json() if i.get("status") == status]
-        except requests.RequestException:
-            return []
+                return payload
+            return [i for i in payload if i.get("status") == status]
+        except requests.RequestException as e:
+            raise self._write_error("list intents", e) from e
 
     def complete_intent(self, intent_id: str) -> bool:
         """Mark intent as complete."""
         try:
             response = self.session.post(f"{self.server_url}/intents/{intent_id}/complete")
-            return 200 <= response.status_code < 300
-        except requests.RequestException:
-            return False
+            if response.status_code == 404:
+                return False
+            response.raise_for_status()
+            return True
+        except requests.RequestException as e:
+            raise self._write_error("complete intent", e) from e
 
     def update_intent(self, intent_id: str, **kwargs) -> bool:
         """Update an intent on the remote server."""
@@ -279,9 +306,12 @@ class RemoteStorage(BaseStorage):
             return False
         try:
             response = self.session.patch(f"{self.server_url}/intents/{intent_id}", json=payload)
-            return 200 <= response.status_code < 300
-        except requests.RequestException:
-            return False
+            if response.status_code == 404:
+                return False
+            response.raise_for_status()
+            return True
+        except requests.RequestException as e:
+            raise self._write_error("update intent", e) from e
 
     # Relationship Operations
     def add_relationship(
@@ -311,8 +341,18 @@ class RemoteStorage(BaseStorage):
     def get_related_memories(
         self, memory_id: str, relationship: str = None
     ) -> List[Dict[str, Any]]:
-        # Not currently exposed via API explicitly
-        return []
+        try:
+            params = {"relationship": relationship} if relationship else None
+            response = self.session.get(
+                f"{self.server_url}/memories/{memory_id}/related",
+                params=params,
+            )
+            if response.status_code == 404:
+                return []
+            response.raise_for_status()
+            return self._response_json(response, "get related memories", list)
+        except requests.RequestException as e:
+            raise self._write_error("get related memories", e) from e
 
     def get_all_relationships(self, repo_id: str = None) -> List[Dict[str, Any]]:
         """Get all relationships."""
@@ -324,16 +364,31 @@ class RemoteStorage(BaseStorage):
             if response.status_code == 404:
                 return []
             response.raise_for_status()
-            return response.json()
-        except requests.RequestException:
-            return []
+            return self._response_json(response, "list relationships", list)
+        except requests.RequestException as e:
+            raise self._write_error("list relationships", e) from e
 
     # Session Operations
     def start_session(self) -> str:
-        return "session_remote"
+        try:
+            response = self.session.post(f"{self.server_url}/sessions")
+            response.raise_for_status()
+            return self._response_id(response, "start session")
+        except requests.RequestException as e:
+            raise self._write_error("start session", e) from e
 
     def end_session(self, session_id: str, summary: str, memory_ids: List[str]):
-        pass
+        try:
+            response = self.session.post(
+                f"{self.server_url}/sessions/{session_id}/complete",
+                json={"summary": summary, "memory_ids": memory_ids},
+            )
+            if response.status_code == 404:
+                return False
+            response.raise_for_status()
+            return True
+        except requests.RequestException as e:
+            raise self._write_error("complete session", e) from e
 
     # Stats
     def get_stats(self, repo_id: str = None) -> Dict[str, Any]:
@@ -341,12 +396,11 @@ class RemoteStorage(BaseStorage):
         try:
             params = {"repo_id": repo_id} if repo_id else None
             response = self.session.get(f"{self.server_url}/", params=params)
-            if response.status_code == 200:
-                data = response.json()
-                return data.get("stats", data)
-            return {}
-        except requests.RequestException:
-            return {}
+            response.raise_for_status()
+            data = self._response_json(response, "get stats", dict)
+            return data.get("stats", data)
+        except requests.RequestException as e:
+            raise self._write_error("get stats", e) from e
 
     # Repository Operations
     def store_repository(self, repo: Dict[str, Any]) -> str:
@@ -363,9 +417,9 @@ class RemoteStorage(BaseStorage):
             if response.status_code == 404:
                 return None
             response.raise_for_status()
-            return response.json()
-        except requests.RequestException:
-            return None
+            return self._response_json(response, "get repository", dict)
+        except requests.RequestException as e:
+            raise self._write_error("get repository", e) from e
 
     def list_repositories(self, team_id: str = None) -> List[Dict[str, Any]]:
         try:
@@ -374,17 +428,18 @@ class RemoteStorage(BaseStorage):
                 params["team_id"] = team_id
             response = self.session.get(f"{self.server_url}/repos", params=params)
             response.raise_for_status()
-            return response.json()
-        except requests.RequestException:
-            return []
+            return self._response_json(response, "list repositories", list)
+        except requests.RequestException as e:
+            raise self._write_error("list repositories", e) from e
 
     def list_project_ids(self) -> List[str]:
         try:
             response = self.session.get(f"{self.server_url}/repos/scopes")
             response.raise_for_status()
-            return [item["id"] for item in response.json() if item.get("id")]
-        except requests.RequestException:
-            return []
+            payload = self._response_json(response, "list project scopes", list)
+            return [item["id"] for item in payload if item.get("id")]
+        except requests.RequestException as e:
+            raise self._write_error("list project scopes", e) from e
 
     def add_repo_dependency(
         self, source_id: str, target_id: str, dep_type: str, version: str = None, notes: str = None
@@ -408,9 +463,9 @@ class RemoteStorage(BaseStorage):
         try:
             response = self.session.get(f"{self.server_url}/repos/{repo_id}/dependencies")
             response.raise_for_status()
-            return response.json()
-        except requests.RequestException:
-            return []
+            return self._response_json(response, "get repository dependencies", list)
+        except requests.RequestException as e:
+            raise self._write_error("get repository dependencies", e) from e
 
     # Team and User Operations
     def store_user(self, user: Dict[str, Any]) -> str:
@@ -427,9 +482,9 @@ class RemoteStorage(BaseStorage):
             if response.status_code == 404:
                 return None
             response.raise_for_status()
-            return response.json()
-        except requests.RequestException:
-            return None
+            return self._response_json(response, "get user", dict)
+        except requests.RequestException as e:
+            raise self._write_error("get user", e) from e
 
     def store_team(self, team: Dict[str, Any]) -> str:
         try:
@@ -445,22 +500,25 @@ class RemoteStorage(BaseStorage):
             if response.status_code == 404:
                 return None
             response.raise_for_status()
-            return response.json()
-        except requests.RequestException:
-            return None
+            return self._response_json(response, "get team", dict)
+        except requests.RequestException as e:
+            raise self._write_error("get team", e) from e
 
     def add_team_member(self, team_id: str, user_id: str) -> bool:
         try:
             payload = {"user_id": user_id}
             response = self.session.post(f"{self.server_url}/teams/{team_id}/members", json=payload)
-            return 200 <= response.status_code < 300
-        except requests.RequestException:
-            return False
+            if response.status_code == 404:
+                return False
+            response.raise_for_status()
+            return True
+        except requests.RequestException as e:
+            raise self._write_error("add team member", e) from e
 
     def get_user_teams(self, user_id: str) -> List[Dict[str, Any]]:
         try:
             response = self.session.get(f"{self.server_url}/teams/users/{user_id}/teams")
             response.raise_for_status()
-            return response.json()
-        except requests.RequestException:
-            return []
+            return self._response_json(response, "get user teams", list)
+        except requests.RequestException as e:
+            raise self._write_error("get user teams", e) from e

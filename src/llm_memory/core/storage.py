@@ -14,6 +14,7 @@ import sqlite3
 import uuid
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
@@ -58,6 +59,23 @@ RECALL_EVENT_WEIGHTS: dict[str, float] = {
 # deliberately do not reinforce, to avoid popularity bias from mere exposure.
 REINFORCING_RECALL_EVENTS = frozenset({"used", "task_linked", "outcome_linked"})
 SENSITIVE_RECALL_METADATA_KEYS = {"prompt", "response", "query", "content", "messages"}
+STORAGE_SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class StorageCapabilities:
+    """Feature contract advertised by each storage backend."""
+
+    graph: bool = True
+    vector_search: bool = False
+    repositories: bool = True
+    teams: bool = True
+    sessions: bool = True
+    audit_log: bool = False
+    reindex: bool = False
+
+    def to_dict(self) -> Dict[str, bool]:
+        return asdict(self)
 
 
 class BaseStorage(ABC):
@@ -70,6 +88,18 @@ class BaseStorage(ABC):
         it. Backends that own such resources (e.g. Neo4j drivers, HTTP sessions,
         ChromaDB clients) override this and must make it idempotent.
         """
+
+    def get_capabilities(self) -> StorageCapabilities:
+        """Return the backend's supported optional feature set."""
+        return StorageCapabilities()
+
+    def get_schema_status(self) -> Dict[str, Any]:
+        """Return non-secret schema compatibility information."""
+        return {
+            "current_version": STORAGE_SCHEMA_VERSION,
+            "stored_version": STORAGE_SCHEMA_VERSION,
+            "status": "ready",
+        }
 
     def __enter__(self):
         return self
@@ -289,6 +319,22 @@ class LocalStorage(BaseStorage):
             # later connection inherits it (readers do not block writers).
             conn.execute("PRAGMA journal_mode=WAL")
 
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            row = conn.execute("SELECT MAX(version) AS version FROM schema_migrations").fetchone()
+            stored_version = int(row["version"] or 0)
+            if stored_version > STORAGE_SCHEMA_VERSION:
+                raise RuntimeError(
+                    "Storage schema is newer than this llm-memory build "
+                    f"({stored_version} > {STORAGE_SCHEMA_VERSION})"
+                )
+
             # Main memories table
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS memories (
@@ -324,6 +370,9 @@ class LocalStorage(BaseStorage):
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_repo ON memories(repo_id)")
 
             memory_migrations = {
+                "created_at": (
+                    "ALTER TABLE memories ADD COLUMN created_at TIMESTAMP DEFAULT NULL"
+                ),
                 "status": "ALTER TABLE memories ADD COLUMN status TEXT DEFAULT 'active'",
                 "approved_by": "ALTER TABLE memories ADD COLUMN approved_by TEXT DEFAULT NULL",
                 "approved_at": "ALTER TABLE memories ADD COLUMN approved_at TIMESTAMP DEFAULT NULL",
@@ -517,9 +566,21 @@ class LocalStorage(BaseStorage):
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_repo ON memories(repo_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status)")
             conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_repo_status_created "
+                "ON memories(repo_id, status, created_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_repo_layer_status "
+                "ON memories(repo_id, layer, status)"
+            )
+            conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance)"
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_intents_status ON intents(status)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_intents_repo_status_priority "
+                "ON intents(repo_id, status, priority)"
+            )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_relationships_source ON relationships(source_id)"
             )
@@ -546,7 +607,33 @@ class LocalStorage(BaseStorage):
                 "ON recall_events(event_type)"
             )
 
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version) VALUES (?)",
+                (STORAGE_SCHEMA_VERSION,),
+            )
+
             conn.commit()
+
+    def get_capabilities(self) -> StorageCapabilities:
+        return StorageCapabilities(
+            vector_search=bool(
+                CHROMADB_AVAILABLE
+                and self._embedding_fn is not None
+                and not self._uses_noop_embeddings
+            ),
+            audit_log=True,
+            reindex=True,
+        )
+
+    def get_schema_status(self) -> Dict[str, Any]:
+        with self._get_db() as conn:
+            row = conn.execute("SELECT MAX(version) AS version FROM schema_migrations").fetchone()
+        stored_version = int(row["version"] or 0)
+        return {
+            "current_version": STORAGE_SCHEMA_VERSION,
+            "stored_version": stored_version,
+            "status": "ready" if stored_version == STORAGE_SCHEMA_VERSION else "migration_required",
+        }
 
     @contextmanager
     def _get_db(self):

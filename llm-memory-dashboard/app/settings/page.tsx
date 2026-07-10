@@ -2,13 +2,19 @@
 
 import { Suspense, useEffect, useState } from "react"
 import { motion } from "framer-motion"
-import { AlertTriangle, Database, RefreshCw, Settings, Wrench } from "lucide-react"
+import { AlertTriangle, Database, KeyRound, LogOut, RefreshCw, Settings, Wrench } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
+  clearAuthCredentials,
   describeApiError,
+  getAuthCredentials,
   getEmbeddingIndexStatus,
   getProviderDiagnostics,
+  getStorageDiagnostics,
   reindexEmbeddingIndex,
+  setAuthCredentials,
   testProvider,
 } from "@/lib/api"
 import { pageTransition } from "@/lib/animations"
@@ -19,6 +25,7 @@ import type {
   EmbeddingReindexResult,
   ProviderConnectionStatus,
   ProviderDiagnostic,
+  StorageDiagnostics,
 } from "@/lib/types"
 
 const statusConfig: Record<
@@ -73,11 +80,21 @@ function SettingsContent() {
   const selectedRepoId = useSelectedProjectId()
   const [providers, setProviders] = useState<ProviderDiagnostic[]>([])
   const [embeddingIndex, setEmbeddingIndex] = useState<EmbeddingIndexStatus | null>(null)
+  const [storageDiagnostics, setStorageDiagnostics] = useState<StorageDiagnostics | null>(null)
   const [reindexResult, setReindexResult] = useState<EmbeddingReindexResult | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [testingProvider, setTestingProvider] = useState<string | null>(null)
   const [isReindexing, setIsReindexing] = useState(false)
+  const [apiKey, setApiKey] = useState("")
+  const [jwtToken, setJwtToken] = useState("")
+  const [authMessage, setAuthMessage] = useState<string | null>(null)
+
+  useEffect(() => {
+    const credentials = getAuthCredentials()
+    setApiKey(credentials.apiKey)
+    setJwtToken(credentials.jwtToken)
+  }, [])
 
   useEffect(() => {
     void loadDiagnostics()
@@ -86,12 +103,14 @@ function SettingsContent() {
   const loadDiagnostics = async () => {
     setIsLoading(true)
     try {
-      const [providerData, indexData] = await Promise.all([
+      const [providerData, indexData, storageData] = await Promise.all([
         getProviderDiagnostics(),
         getEmbeddingIndexStatus(selectedRepoId),
+        getStorageDiagnostics(),
       ])
       setProviders(providerData)
       setEmbeddingIndex(indexData)
+      setStorageDiagnostics(storageData)
       setLoadError(null)
     } catch (error) {
       console.error("Failed to fetch diagnostics:", error)
@@ -136,6 +155,22 @@ function SettingsContent() {
     }
   }
 
+  const handleSaveCredentials = () => {
+    setAuthCredentials(apiKey, jwtToken)
+    setAuthMessage("Credentials saved for this browser session.")
+    void loadDiagnostics()
+  }
+
+  const handleClearCredentials = () => {
+    clearAuthCredentials()
+    setApiKey("")
+    setJwtToken("")
+    setAuthMessage("Credentials cleared.")
+    setProviders([])
+    setEmbeddingIndex(null)
+    setStorageDiagnostics(null)
+  }
+
   return (
     <motion.div initial="initial" animate="animate" variants={pageTransition} className="space-y-8">
       <div className="flex items-center gap-3">
@@ -147,6 +182,48 @@ function SettingsContent() {
           <p className="text-muted-foreground mt-1">Provider diagnostics and connectivity checks</p>
         </div>
       </div>
+
+      <section className="rounded-lg border border-border bg-card p-4" aria-labelledby="authentication-heading">
+        <div className="flex items-center gap-2">
+          <KeyRound className="h-5 w-5 text-primary" />
+          <h2 id="authentication-heading" className="text-lg font-semibold text-foreground">
+            Authentication
+          </h2>
+        </div>
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="api-key">API key</Label>
+            <Input
+              id="api-key"
+              type="password"
+              autoComplete="off"
+              value={apiKey}
+              onChange={(event) => setApiKey(event.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="jwt-token">JWT token</Label>
+            <Input
+              id="jwt-token"
+              type="password"
+              autoComplete="off"
+              value={jwtToken}
+              onChange={(event) => setJwtToken(event.target.value)}
+            />
+          </div>
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <Button size="sm" onClick={handleSaveCredentials}>
+            <KeyRound className="h-4 w-4" />
+            <span>Use credentials</span>
+          </Button>
+          <Button size="sm" variant="outline" onClick={handleClearCredentials}>
+            <LogOut className="h-4 w-4" />
+            <span>Clear</span>
+          </Button>
+          {authMessage ? <p className="text-sm text-muted-foreground" role="status">{authMessage}</p> : null}
+        </div>
+      </section>
 
       {loadError ? (
         <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-muted-foreground">
@@ -227,7 +304,7 @@ function SettingsContent() {
                 size="sm"
                 variant="outline"
                 onClick={() => handleReindex(true)}
-                disabled={isReindexing}
+                disabled={isReindexing || storageDiagnostics?.capabilities.reindex === false}
               >
                 <Wrench className={cn("h-4 w-4", isReindexing && "animate-pulse")} />
                 <span>Dry Run</span>
@@ -235,7 +312,11 @@ function SettingsContent() {
               <Button
                 size="sm"
                 onClick={() => handleReindex(false)}
-                disabled={isReindexing || embeddingIndex.status !== "available"}
+                disabled={
+                  isReindexing ||
+                  embeddingIndex.status !== "available" ||
+                  storageDiagnostics?.capabilities.reindex === false
+                }
               >
                 <RefreshCw className={cn("h-4 w-4", isReindexing && "animate-spin")} />
                 <span>Rebuild</span>

@@ -33,7 +33,7 @@ jobs:
       - name: Install Python quality dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[all]" build twine
+          python -m pip install -e ".[api,mcp,capture,analysis,arcadedb,neo4j,dev]"
 
       - name: Dashboard quality checks
         working-directory: llm-memory-dashboard
@@ -44,7 +44,7 @@ jobs:
           npm audit --omit=dev
 
       - name: Python package, MCP, and CLI smoke checks
-        run: python3 scripts/release_check.py --skip-frontend
+        run: python scripts/release_check.py --skip-frontend
 
   build-python:
     name: Build Python Package
@@ -64,19 +64,19 @@ jobs:
           node-version: '20'
 
       - name: Build and Copy Frontend
-        run: python3 build_frontend.py
+        run: python build_frontend.py
 
       - name: Build Python Package
         run: |
-          pip install build
+          python -m pip install build
           python -m build
 
       - name: Validate distribution metadata
         # Fails the release early if the long description would not render on
         # PyPI or the metadata is malformed — before any publish is attempted.
         run: |
-          pip install twine
-          twine check dist/*
+          python -m pip install twine
+          python -m twine check dist/*
 
       - name: Upload Python Package
         uses: actions/upload-artifact@v4
@@ -117,12 +117,14 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -162,10 +164,10 @@ jobs:
         run: choco install upx
 
       - name: Build and Copy Frontend
-        run: python3 build_frontend.py
+        run: python build_frontend.py
 
       - name: Install PyInstaller
-        run: pip install pyinstaller
+        run: python -m pip install pyinstaller
 
       - name: Build Executable (Linux/macOS)
         if: runner.os != 'Windows'

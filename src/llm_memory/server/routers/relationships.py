@@ -21,7 +21,7 @@ async def list_relationships(
 ):
     """Get all relationships."""
     storage = request.app.state.storage
-    if not hasattr(storage, "get_all_relationships"):
+    if not storage.get_capabilities().graph:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Storage backend does not support relationship listing",
@@ -51,7 +51,7 @@ async def add_relationship(
 ):
     """Add a relationship between memories."""
     storage = request.app.state.storage
-    if not hasattr(storage, "add_relationship"):
+    if not storage.get_capabilities().graph:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Storage backend does not support relationships",

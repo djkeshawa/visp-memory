@@ -125,6 +125,8 @@ async def update_intent(
         for reserved_key in ("author_id", "team_id"):
             if reserved_key in existing_context:
                 context[reserved_key] = existing_context[reserved_key]
+            else:
+                context.pop(reserved_key, None)
         update_data["context"] = context
 
     success = storage.update_intent(intent_id, **update_data)

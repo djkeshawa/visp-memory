@@ -56,6 +56,7 @@ class FakeArcadeDb:
             "Team": {},
             "AuditLog": {},
             "RecallFeedback": {},
+            "SchemaVersion": {},
         }
         self.edges = {"MemoryRelationship": {}, "RepoDependency": {}, "TeamMember": {}}
         self.memories = self.records["Memory"]
