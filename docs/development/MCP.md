@@ -59,6 +59,7 @@ installing so it loads the MCP server.
 
 Stable local workflow tools:
 
+- `memory_prepare_task`: prepare the cited, token-budgeted memory brief for a task.
 - `memory_context`: get full memory context for the current project.
 - `memory_recall`: search past decisions, events, and knowledge.
 - `memory_record`: store an event or finding.
@@ -92,6 +93,22 @@ Recall relevant memory:
   "limit": 5
 }
 ```
+
+Prepare before planning or editing:
+
+```json
+{
+  "task": "Fix session expiration in the dashboard",
+  "files": ["src/llm_memory/server/auth_store.py"],
+  "symbols": ["authenticate_session"],
+  "token_budget": 1200,
+  "format": "text"
+}
+```
+
+`memory_prepare_task` is deterministic by default and returns evidence citations,
+active intent, constraints, contradictions, and explicit unknowns. Reuse its
+fingerprint to avoid reinjecting an unchanged brief.
 
 Warn about a file:
 

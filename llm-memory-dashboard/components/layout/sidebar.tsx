@@ -7,6 +7,7 @@ import {
   Activity,
   Brain,
   Cable,
+  ClipboardCheck,
   ClipboardList,
   FolderGit2,
   LayoutDashboard,
@@ -36,6 +37,7 @@ import { cn } from "@/lib/utils"
 
 const navItems = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
+  { href: "/brief", label: "Task Brief", icon: ClipboardCheck },
   { href: "/memories", label: "Memories", icon: Library },
   { href: "/recall", label: "Recall", icon: Search },
   { href: "/graph", label: "Memory Graph", icon: Network },

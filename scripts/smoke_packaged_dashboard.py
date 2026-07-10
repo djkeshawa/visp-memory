@@ -69,6 +69,7 @@ const { chromium } = require('@playwright/test');
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const pages = [
     '/dashboard',
+    '/dashboard/brief',
     '/dashboard/intelligence',
     '/dashboard/recall',
     '/dashboard/intents',
@@ -85,6 +86,15 @@ const { chromium } = require('@playwright/test');
     const title = await page.title();
     console.log(`${path} ok title=${JSON.stringify(title)}`);
   }
+
+  await page.goto(process.env.LLM_MEMORY_SMOKE_URL + '/dashboard/brief', {
+    waitUntil: 'domcontentloaded',
+  });
+  await page.getByLabel('Task').fill('Review the authentication callback');
+  await page.getByLabel('Files').fill('src/auth.py');
+  await page.getByRole('button', { name: 'Prepare brief' }).click();
+  await page.getByRole('heading', { name: 'Compiled context' }).waitFor({ state: 'visible' });
+  await page.getByRole('heading', { name: 'Unknowns to verify' }).waitFor({ state: 'visible' });
 
   await page.setViewportSize({ width: 390, height: 844 });
   for (const path of pages) {

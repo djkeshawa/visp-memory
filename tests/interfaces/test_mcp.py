@@ -58,6 +58,54 @@ class TestMCPServer:
             pytest.skip("MCP not installed")
 
     @pytest.mark.asyncio
+    async def test_mcp_prepare_task_returns_cited_brief_and_delta(self):
+        try:
+            from llm_memory.interfaces.mcp import MCP_AVAILABLE, handle_tool
+
+            if not MCP_AVAILABLE:
+                pytest.skip("MCP not installed")
+
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+                config = MemoryConfig()
+                config.storage.data_dir = Path(tmpdir)
+                config.repo_id = "brief-repo"
+                config.embedding.provider = "noop"
+                memory = Memory(config=config)
+                memory.learn(
+                    "Use repository-scoped HttpOnly sessions",
+                    repo_id="brief-repo",
+                )
+
+                raw = await handle_tool(
+                    "memory_prepare_task",
+                    {
+                        "task": "Review repository authentication",
+                        "repo_id": "brief-repo",
+                        "token_budget": 300,
+                        "format": "json",
+                    },
+                    memory,
+                )
+                brief = json.loads(raw)
+                unchanged = await handle_tool(
+                    "memory_prepare_task",
+                    {
+                        "task": "Review repository authentication",
+                        "repo_id": "brief-repo",
+                        "token_budget": 300,
+                        "previous_fingerprint": brief["fingerprint"],
+                    },
+                    memory,
+                )
+
+            assert brief["schema_version"] == "1.0"
+            assert brief["citations"]
+            assert "Task Memory Brief" in brief["context"]
+            assert "Task brief unchanged" in unchanged
+        except ImportError:
+            pytest.skip("MCP not installed")
+
+    @pytest.mark.asyncio
     async def test_mcp_handle_record(self):
         """MCP record tool works."""
         try:
