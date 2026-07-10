@@ -17,6 +17,7 @@ export default function AuthenticationPage() {
   const [password, setPassword] = useState("")
   const [message, setMessage] = useState<string | null>(null)
   const [setupRequired, setSetupRequired] = useState(false)
+  const [authDisabled, setAuthDisabled] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   useEffect(() => {
@@ -25,7 +26,8 @@ export default function AuthenticationPage() {
         const status = await getAuthenticationStatus()
         setSetupRequired(status.setupRequired)
         if (!status.authEnabled) {
-          window.location.assign("/dashboard")
+          setAuthDisabled(true)
+          setMessage("Authentication is disabled for this server. You can open the dashboard directly.")
           return
         }
         try {
@@ -43,6 +45,10 @@ export default function AuthenticationPage() {
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault()
+    if (authDisabled) {
+      window.location.assign("/dashboard")
+      return
+    }
     if (!username.trim() || !password) {
       setMessage("Enter your username and password.")
       return
@@ -85,6 +91,7 @@ export default function AuthenticationPage() {
                 className="pl-9"
                 value={username}
                 onChange={(event) => setUsername(event.target.value)}
+                disabled={authDisabled}
                 autoFocus
               />
             </div>
@@ -100,6 +107,7 @@ export default function AuthenticationPage() {
                 className="pl-9"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
+                disabled={authDisabled}
               />
             </div>
           </div>
@@ -115,7 +123,7 @@ export default function AuthenticationPage() {
 
           <Button type="submit" className="w-full" disabled={isSubmitting || setupRequired}>
             <LogIn className="h-4 w-4" aria-hidden="true" />
-            <span>{isSubmitting ? "Signing in..." : "Sign in"}</span>
+            <span>{authDisabled ? "Open dashboard" : isSubmitting ? "Signing in..." : "Sign in"}</span>
           </Button>
         </form>
       </section>
