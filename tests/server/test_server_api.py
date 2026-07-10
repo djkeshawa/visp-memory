@@ -179,6 +179,18 @@ async def test_favicon_head_does_not_error(client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "location"),
+    [("/auth", "/dashboard/auth"), ("/settings", "/dashboard/settings")],
+)
+async def test_bare_dashboard_utility_routes_redirect(client, path, location):
+    response = await client.get(path)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == location
+
+
+@pytest.mark.asyncio
 async def test_memories_endpoint_protected(client):
     # Should fail without auth
     response = await client.get("/memories")

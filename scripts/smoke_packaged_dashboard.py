@@ -74,6 +74,7 @@ const { chromium } = require('@playwright/test');
     '/dashboard/intents',
     '/dashboard/graph',
     '/dashboard/health',
+    '/dashboard/auth',
     '/dashboard/settings',
   ];
   for (const path of pages) {

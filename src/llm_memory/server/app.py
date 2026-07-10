@@ -14,7 +14,7 @@ from llm_memory.core.clock import utc_now
 try:
     from fastapi import Depends, FastAPI, Request
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import FileResponse, JSONResponse, Response
+    from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
     from fastapi.staticfiles import StaticFiles
 except ImportError:
     raise ImportError("FastAPI not installed. Run: pip install llm-memory[api]")
@@ -611,6 +611,18 @@ async def favicon():
         if icon_path.exists():
             return FileResponse(icon_path)
     return Response(status_code=204)
+
+
+@app.get("/auth", include_in_schema=False)
+async def redirect_authentication_page():
+    """Keep the focused dashboard authentication screen reachable without its base path."""
+    return RedirectResponse(url="/dashboard/auth")
+
+
+@app.get("/settings", include_in_schema=False)
+async def redirect_settings_page():
+    """Redirect the common bare settings URL to the bundled dashboard route."""
+    return RedirectResponse(url="/dashboard/settings")
 
 
 if STATIC_DIR.exists() and STATIC_DIR.is_dir():

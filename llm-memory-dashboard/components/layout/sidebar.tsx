@@ -7,6 +7,7 @@ import {
   Activity,
   Brain,
   ClipboardList,
+  KeyRound,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -35,6 +36,7 @@ const navItems = [
   { href: "/health", label: "Memory Health", icon: Activity },
   { href: "/recall", label: "Recall", icon: Search },
   { href: "/intents", label: "Intents", icon: Target },
+  { href: "/auth", label: "Authentication", icon: KeyRound },
   { href: "/settings", label: "Settings", icon: Settings },
 ]
 
@@ -165,10 +167,20 @@ export function Sidebar() {
             <span className="text-sm text-muted-foreground">Theme</span>
             <ThemeToggle />
           </div>
-          <div className="flex items-center gap-2 px-4 py-2">
-            <span className={cn("h-2 w-2 rounded-full", systemIndicator.color)} />
-            <span className="text-xs text-muted-foreground">{systemIndicator.label}</span>
-          </div>
+          {systemHealth === "auth_required" ? (
+            <Link
+              href={projectHref("/auth", selectedRepoId)}
+              className="flex items-center gap-2 rounded-md px-4 py-2 text-xs text-intent hover:bg-secondary"
+            >
+              <span className={cn("h-2 w-2 rounded-full", systemIndicator.color)} />
+              <span>{systemIndicator.label}</span>
+            </Link>
+          ) : (
+            <div className="flex items-center gap-2 px-4 py-2">
+              <span className={cn("h-2 w-2 rounded-full", systemIndicator.color)} />
+              <span className="text-xs text-muted-foreground">{systemIndicator.label}</span>
+            </div>
+          )}
         </div>
       </aside>
 
@@ -208,10 +220,20 @@ export function Sidebar() {
                 <ThemeToggle />
               </div>
               <div className="flex items-center justify-between gap-3 px-4 py-2">
-                <div className="flex min-w-0 items-center gap-2">
-                  <span className={cn("h-2 w-2 shrink-0 rounded-full", systemIndicator.color)} />
-                  <span className="truncate text-xs text-muted-foreground">{systemIndicator.label}</span>
-                </div>
+                {systemHealth === "auth_required" ? (
+                  <Link
+                    href={projectHref("/auth", selectedRepoId)}
+                    className="flex min-w-0 items-center gap-2 text-intent"
+                  >
+                    <span className={cn("h-2 w-2 shrink-0 rounded-full", systemIndicator.color)} />
+                    <span className="truncate text-xs">{systemIndicator.label}</span>
+                  </Link>
+                ) : (
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className={cn("h-2 w-2 shrink-0 rounded-full", systemIndicator.color)} />
+                    <span className="truncate text-xs text-muted-foreground">{systemIndicator.label}</span>
+                  </div>
+                )}
                 {authenticated ? (
                   <button
                     type="button"
