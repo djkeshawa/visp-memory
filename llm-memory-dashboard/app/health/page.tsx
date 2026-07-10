@@ -140,7 +140,7 @@ function HealthContent() {
         <Metric title="Weakening" value={summary.weakening} icon={<AlertTriangle className="h-4 w-4" />} />
       </div>
 
-      <div className="glass overflow-hidden rounded-xl">
+      <div className="glass overflow-hidden rounded-lg">
         <div className="border-b border-border p-5">
           <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
             <div>
@@ -180,7 +180,7 @@ function HealthContent() {
 
 function Metric({ title, value, icon }: { title: string; value: string | number; icon: React.ReactNode }) {
   return (
-    <div className="glass rounded-xl p-5">
+    <div className="glass rounded-lg p-5">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">{title}</p>
         <div className="rounded-lg bg-secondary p-2 text-muted-foreground">{icon}</div>

@@ -33,9 +33,12 @@ ENV/
 
 # Testing
 .pytest_cache/
+.pytest-tmp*/
 .test-tmp/
 .coverage
 htmlcov/
+.uv-cache/
+.pip-audit-cache/
 
 # Project specific
 .llm-memory/data/
@@ -50,6 +53,7 @@ Thumbs.db
 
 # Node.js / Next.js
 node_modules/
+.npm-cache/
 .next/
 out/
 build/

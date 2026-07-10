@@ -33,7 +33,7 @@ const layerConfig: Record<MemoryLayer, { icon: typeof Database; color: string; b
 
 export function RecentActivity({ memories }: RecentActivityProps) {
   return (
-    <div className="glass rounded-xl overflow-hidden">
+    <div className="glass rounded-lg overflow-hidden">
       <div className="p-5 border-b border-border">
         <h2 className="text-lg font-semibold text-foreground">Recent Activity</h2>
         <p className="text-sm text-muted-foreground mt-1">Latest memories from your system</p>

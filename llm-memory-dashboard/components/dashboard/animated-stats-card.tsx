@@ -51,12 +51,12 @@ export function AnimatedStatsCard({ title, value, icon, change, gradient }: Anim
       animate={isInView ? { opacity: 1, y: 0 } : {}}
       transition={{ duration: 0.4 }}
       whileHover={{ y: -4 }}
-      className="glass rounded-xl p-5 cursor-pointer group transition-shadow hover:shadow-lg"
+      className="glass rounded-lg p-5 cursor-pointer group transition-shadow hover:shadow-md"
     >
       <div className="flex items-start gap-4">
         <div
           className={cn(
-            "flex h-12 w-12 items-center justify-center rounded-xl transition-transform group-hover:rotate-[5deg]",
+            "flex h-11 w-11 items-center justify-center rounded-md transition-transform",
             gradient,
           )}
         >

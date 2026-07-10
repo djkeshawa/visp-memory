@@ -1835,6 +1835,39 @@ def repo_context(
 team_app = typer.Typer(help="Team and user management")
 app.add_typer(team_app, name="teams")
 
+admin_app = typer.Typer(help="Dashboard administrator management")
+app.add_typer(admin_app, name="admin")
+
+
+@admin_app.command("create")
+def create_dashboard_admin(
+    username: str = typer.Option("admin", "--username", help="Administrator username"),
+    password: Optional[str] = typer.Option(
+        None,
+        "--password",
+        envvar="LLM_MEMORY_ADMIN_PASSWORD",
+        help="Password, preferably supplied through LLM_MEMORY_ADMIN_PASSWORD",
+        hide_input=True,
+    ),
+):
+    """Create the first dashboard administrator account."""
+    from llm_memory.server.auth_store import AuthStore
+
+    if not password:
+        password = typer.prompt("Password", hide_input=True, confirmation_prompt=True)
+    config = load_config()
+    auth_store = AuthStore(config.storage.data_dir / "auth.db")
+    try:
+        account = auth_store.create_account(
+            username=username,
+            password=password,
+            role="admin",
+        )
+    except ValueError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(code=1) from error
+    console.print(f"[green]Created dashboard administrator:[/green] {account['username']}")
+
 
 @team_app.command("create")
 def create_team(

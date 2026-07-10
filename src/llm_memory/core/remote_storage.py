@@ -368,6 +368,18 @@ class RemoteStorage(BaseStorage):
         except requests.RequestException as e:
             raise self._write_error("list relationships", e) from e
 
+    def delete_relationship(self, relationship_id: str) -> bool:
+        try:
+            response = self.session.delete(
+                f"{self.server_url}/relationships/{relationship_id}"
+            )
+            if response.status_code == 404:
+                return False
+            response.raise_for_status()
+            return True
+        except requests.RequestException as e:
+            raise self._write_error("delete relationship", e) from e
+
     # Session Operations
     def start_session(self) -> str:
         try:
@@ -431,6 +443,29 @@ class RemoteStorage(BaseStorage):
             return self._response_json(response, "list repositories", list)
         except requests.RequestException as e:
             raise self._write_error("list repositories", e) from e
+
+    def update_repository(self, repo_id: str, **kwargs) -> bool:
+        action = "archive" if kwargs.get("status") == "archived" else "restore"
+        try:
+            response = self.session.post(f"{self.server_url}/repos/{repo_id}/{action}")
+            if response.status_code == 404:
+                return False
+            response.raise_for_status()
+            return True
+        except requests.RequestException as e:
+            raise self._write_error(f"{action} repository", e) from e
+
+    def delete_repository(self, repo_id: str) -> bool:
+        try:
+            response = self.session.delete(
+                f"{self.server_url}/repos/{repo_id}", params={"confirmation": repo_id}
+            )
+            if response.status_code == 404:
+                return False
+            response.raise_for_status()
+            return True
+        except requests.RequestException as e:
+            raise self._write_error("purge repository", e) from e
 
     def list_project_ids(self) -> List[str]:
         try:

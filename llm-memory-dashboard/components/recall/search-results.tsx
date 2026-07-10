@@ -38,7 +38,7 @@ export function SearchResults({ results, query }: SearchResultsProps) {
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="glass rounded-xl p-8 text-center"
+        className="glass rounded-lg p-8 text-center"
       >
         <p className="text-muted-foreground">
           No results found for &quot;<span className="text-foreground font-medium">{query}</span>&quot;
@@ -54,7 +54,7 @@ export function SearchResults({ results, query }: SearchResultsProps) {
         <span className="text-foreground font-medium">{query}</span>&quot;
       </p>
 
-      <div className="glass rounded-xl overflow-hidden">
+      <div className="glass rounded-lg overflow-hidden">
         <motion.div className="divide-y divide-border" variants={staggerContainer} initial="hidden" animate="visible">
           {results.map((memory) => {
             const config = layerConfig[memory.layer] ?? layerConfig.episodic

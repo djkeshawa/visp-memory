@@ -50,6 +50,7 @@ try:
         PromptArgument,
         PromptMessage,
         Resource,
+        SamplingMessage,
         TextContent,
         Tool,
     )
@@ -160,6 +161,25 @@ def create_mcp_server() -> "Server":
                             "default": True,
                             "description": "Include recent events",
                         },
+                        "query": {
+                            "type": "string",
+                            "description": "Optional task query for compact ranked context",
+                        },
+                        "repo_id": {"type": "string"},
+                        "token_budget": {
+                            "type": "integer",
+                            "minimum": 64,
+                            "maximum": 100000,
+                            "default": 2000,
+                        },
+                        "previous_fingerprint": {
+                            "type": "string",
+                            "description": (
+                                "Prior fingerprint; unchanged context returns no payload"
+                            ),
+                        },
+                        "files": {"type": "array", "items": {"type": "string"}},
+                        "symbols": {"type": "array", "items": {"type": "string"}},
                     },
                 },
             ),
@@ -855,6 +875,40 @@ def create_mcp_server() -> "Server":
                     },
                 },
             ),
+            Tool(
+                name="memory_model_task",
+                description=(
+                    "Run an LLM-required memory task. Uses the connected MCP client's model "
+                    "through sampling when supported, otherwise the configured server provider."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "required": ["task", "prompt"],
+                    "properties": {
+                        "task": {
+                            "type": "string",
+                            "enum": [
+                                "extraction",
+                                "reconciliation",
+                                "consolidation",
+                                "merge_suggestion",
+                                "reflection",
+                                "intent_verification",
+                                "reranking",
+                                "answer",
+                            ],
+                        },
+                        "prompt": {"type": "string", "minLength": 1, "maxLength": 20000},
+                        "system_prompt": {"type": "string", "maxLength": 4000},
+                        "max_tokens": {
+                            "type": "integer",
+                            "minimum": 64,
+                            "maximum": 4000,
+                            "default": 800,
+                        },
+                    },
+                },
+            ),
         ]
         profile = _resolve_tool_profile()
         tools = _filter_tools_by_profile(all_tools, profile)
@@ -871,6 +925,56 @@ def create_mcp_server() -> "Server":
     async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         """Handle tool calls."""
         try:
+            if name == "memory_model_task":
+                from llm_memory.core.model_router import ModelRouter
+
+                task = str(arguments.get("task", ""))
+                prompt = str(arguments.get("prompt", ""))
+                system_prompt = str(arguments.get("system_prompt", ""))
+                max_tokens = max(64, min(int(arguments.get("max_tokens", 800)), 4000))
+                if not prompt:
+                    raise ValueError("prompt is required")
+                session = server.request_context.session
+                client_params = session.client_params
+                supports_sampling = bool(
+                    client_params
+                    and client_params.capabilities
+                    and client_params.capabilities.sampling
+                )
+                if supports_sampling:
+                    sampled = await session.create_message(
+                        [
+                            SamplingMessage(
+                                role="user",
+                                content=TextContent(type="text", text=prompt),
+                            )
+                        ],
+                        max_tokens=max_tokens,
+                        system_prompt=system_prompt or None,
+                    )
+                    content = sampled.content
+                    if isinstance(content, list):
+                        text_parts = [
+                            item.text for item in content if isinstance(item, TextContent)
+                        ]
+                        output = "\n".join(text_parts)
+                    elif isinstance(content, TextContent):
+                        output = content.text
+                    else:
+                        output = str(content)
+                    result = {
+                        "task": task,
+                        "provider": "mcp-sampling",
+                        "model": sampled.model,
+                        "text": output,
+                    }
+                else:
+                    result = ModelRouter(memory.config.llm).complete(
+                        task,
+                        prompt,
+                        system_prompt=system_prompt or None,
+                    )
+                return [TextContent(type="text", text=json.dumps(result, indent=2))]
             result = await handle_tool(name, arguments, memory)
             return [TextContent(type="text", text=result)]
         except Exception as e:
@@ -1138,6 +1242,28 @@ def create_mcp_server() -> "Server":
 def _handle_context(args: dict[str, Any], memory: Memory) -> str:
     """Handle context tools."""
     fmt = args.get("format", "text")
+    if args.get("query"):
+        from llm_memory.core.context_compiler import ContextCompiler
+
+        compiled = ContextCompiler(memory._storage).compile(
+            str(args["query"]),
+            repo_id=args.get("repo_id") or memory.config.repo_id,
+            token_budget=int(args.get("token_budget", 2000)),
+            files=args.get("files") or [],
+            symbols=args.get("symbols") or [],
+            previous_fingerprint=args.get("previous_fingerprint"),
+        )
+        if fmt == "json":
+            return json.dumps(compiled, indent=2, default=str)
+        if compiled["unchanged"]:
+            return f"Context unchanged. Fingerprint: {compiled['fingerprint']}"
+        if compiled["abstained"]:
+            return f"No reliable context: {compiled['abstention_reason']}"
+        return (
+            f"Context fingerprint: {compiled['fingerprint']}\n"
+            f"Token count: {compiled['token_count']}/{compiled['token_budget']}\n\n"
+            f"{compiled['context']}"
+        )
     include_history = args.get("include_history", True)
     ctx = memory.context(format=fmt, include_history=include_history)
     if fmt == "json":

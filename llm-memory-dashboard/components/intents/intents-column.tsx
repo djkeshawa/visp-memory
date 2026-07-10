@@ -14,9 +14,10 @@ interface IntentsColumnProps {
   onComplete?: (intent: Intent) => void
   onClose?: (intent: Intent) => void
   onUpdate?: (intent: Intent, updates: { description: string; priority: number }) => void
+  onReopen?: (intent: Intent) => void
 }
 
-export function IntentsColumn({ title, intents, type, onComplete, onClose, onUpdate }: IntentsColumnProps) {
+export function IntentsColumn({ title, intents, type, onComplete, onClose, onUpdate, onReopen }: IntentsColumnProps) {
   const isEmpty = intents.length === 0
 
   return (
@@ -38,7 +39,7 @@ export function IntentsColumn({ title, intents, type, onComplete, onClose, onUpd
 
       {/* Intent Cards */}
       {isEmpty ? (
-        <div className="glass rounded-xl p-8 border-2 border-dashed border-border text-center">
+        <div className="glass rounded-lg p-8 border-2 border-dashed border-border text-center">
           {type === "active" ? (
             <>
               <Circle className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
@@ -60,6 +61,7 @@ export function IntentsColumn({ title, intents, type, onComplete, onClose, onUpd
               onComplete={onComplete}
               onClose={onClose}
               onUpdate={onUpdate}
+              onReopen={onReopen}
             />
           ))}
         </motion.div>

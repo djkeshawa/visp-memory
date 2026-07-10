@@ -11,6 +11,7 @@ from llm_memory.server.auth import create_access_token, get_current_user
 class MockRequest:
     def __init__(self, headers=None):
         self.headers = headers or {}
+        self.cookies = {}
 
 
 class MockAuth:
@@ -119,3 +120,76 @@ async def test_get_current_user_auth_disabled(mock_config):
 
     assert user.username == "local"
     assert user.is_admin is True
+
+
+@pytest.mark.asyncio
+async def test_password_login_session_csrf_and_logout(client):
+    from llm_memory.server.app import app
+
+    app.state.auth_store.create_account(
+        username="owner",
+        password="correct-horse-battery-staple",
+        role="admin",
+    )
+    rejected = await client.post(
+        "/auth/login", json={"username": "owner", "password": "wrong-password"}
+    )
+    assert rejected.status_code == 401
+
+    login = await client.post(
+        "/auth/login",
+        json={"username": "owner", "password": "correct-horse-battery-staple"},
+    )
+    assert login.status_code == 200
+    assert "HttpOnly" in login.headers["set-cookie"]
+    csrf_token = login.json()["csrf_token"]
+
+    current = await client.get("/auth/me")
+    assert current.status_code == 200
+    assert current.json()["user"]["username"] == "owner"
+
+    missing_csrf = await client.post("/auth/logout")
+    assert missing_csrf.status_code == 403
+    logged_out = await client.post("/auth/logout", headers={"X-CSRF-Token": csrf_token})
+    assert logged_out.status_code == 200
+    assert (await client.get("/auth/me")).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_personal_access_token_is_scoped_and_revocable(client):
+    from llm_memory.server.app import app
+
+    app.state.auth_store.create_account(
+        username="token-owner",
+        password="correct-horse-battery-staple",
+        role="admin",
+    )
+    login = await client.post(
+        "/auth/login",
+        json={"username": "token-owner", "password": "correct-horse-battery-staple"},
+    )
+    csrf_token = login.json()["csrf_token"]
+    created = await client.post(
+        "/auth/tokens",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "name": "Codex",
+            "scopes": ["memory:read"],
+            "repo_ids": ["allowed-repo"],
+        },
+    )
+    assert created.status_code == 201
+    token = created.json()["token"]
+    token_id = created.json()["id"]
+    assert token.startswith("llmm_")
+
+    pat_headers = {"Authorization": f"Bearer {token}"}
+    assert (await client.get("/auth/me", headers=pat_headers)).status_code == 200
+    assert (await client.post("/memories", headers=pat_headers, json={})).status_code == 403
+    assert (await client.get("/repos", headers=pat_headers)).status_code == 403
+
+    revoked = await client.delete(
+        f"/auth/tokens/{token_id}", headers={"X-CSRF-Token": csrf_token}
+    )
+    assert revoked.status_code == 200
+    assert (await client.get("/auth/me", headers=pat_headers)).status_code == 401

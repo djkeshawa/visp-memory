@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from llm_memory.core.ranking import DEFAULT_RECALL_MIN_SCORE
 
 MemoryLayer = Literal["raw", "episodic", "semantic", "intent"]
-MemoryStatus = Literal["active", "pending", "archived", "superseded", "deleted"]
+MemoryStatus = Literal["active", "pending", "archived", "superseded", "merged", "deleted"]
 IntentStatus = Literal["active", "completed", "closed"]
 RelationshipConfidence = Literal["observed", "inferred", "ambiguous", "manual"]
 MAX_QUERY_LIMIT = 200
@@ -28,6 +28,22 @@ class MemoryCreate(BaseModel):
     status: MemoryStatus = "active"
     source: Optional[str] = None
     quality_flags: List[str] = Field(default_factory=list)
+    title: Optional[str] = None
+    summary: Optional[str] = None
+    observed_at: Optional[datetime] = None
+    valid_from: Optional[datetime] = None
+    valid_to: Optional[datetime] = None
+    source_revision: Optional[str] = None
+    source_hash: Optional[str] = None
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    entities: List[str] = Field(default_factory=list)
+    files: List[str] = Field(default_factory=list)
+    symbols: List[str] = Field(default_factory=list)
+    keywords: List[str] = Field(default_factory=list)
+    evidence: List[Dict[str, Any]] = Field(default_factory=list)
+    lineage: List[str] = Field(default_factory=list)
+    pinned: bool = False
+    hold: bool = False
 
 
 class MemoryResponse(BaseModel):
@@ -49,6 +65,22 @@ class MemoryResponse(BaseModel):
     accessed_at: datetime
     similarity: Optional[float] = None
     relevance_score: Optional[float] = None
+    title: Optional[str] = None
+    summary: Optional[str] = None
+    observed_at: Optional[datetime] = None
+    valid_from: Optional[datetime] = None
+    valid_to: Optional[datetime] = None
+    source_revision: Optional[str] = None
+    source_hash: Optional[str] = None
+    confidence: float = 0.5
+    entities: List[str] = Field(default_factory=list)
+    files: List[str] = Field(default_factory=list)
+    symbols: List[str] = Field(default_factory=list)
+    keywords: List[str] = Field(default_factory=list)
+    evidence: List[Dict[str, Any]] = Field(default_factory=list)
+    lineage: List[str] = Field(default_factory=list)
+    pinned: bool = False
+    hold: bool = False
 
 
 class RelatedMemoryResponse(MemoryResponse):
@@ -70,6 +102,7 @@ class SessionCompleteRequest(BaseModel):
 class SessionCompleteResponse(BaseModel):
     id: str
     status: Literal["completed"] = "completed"
+    intent_evaluations: Optional[List[Dict[str, Any]]] = None
 
 
 class SearchQuery(BaseModel):
@@ -219,6 +252,12 @@ class IntentResponse(IntentCreate):
     updated_at: Optional[datetime] = None
 
 
+class IntentEvaluationRequest(BaseModel):
+    summary: str = Field(min_length=1, max_length=20000)
+    memory_ids: List[str] = Field(default_factory=list)
+    allow_auto_complete: bool = True
+
+
 class DecayPreviewItem(BaseModel):
     memory_id: str
     snippet: str
@@ -251,6 +290,21 @@ class MemoryUpdate(BaseModel):
     status: Optional[MemoryStatus] = None
     source: Optional[str] = None
     quality_flags: Optional[List[str]] = None
+
+
+class MemoryMergePreviewRequest(BaseModel):
+    memory_ids: List[str] = Field(min_length=2)
+    target_id: Optional[str] = None
+    target_content: Optional[str] = None
+
+
+class MemoryMergeRequest(MemoryMergePreviewRequest):
+    reviewed: bool = False
+
+
+class MemoryPurgeRequest(BaseModel):
+    memory_ids: List[str] = Field(min_length=1)
+    confirmation: Optional[str] = None
 
 
 class DuplicateCandidate(BaseModel):
@@ -290,6 +344,26 @@ class AskMemoryResponse(BaseModel):
     citations: List[AskMemoryCitation]
     mode: Literal["retrieval_only", "generated"] = "retrieval_only"
     provider_status: Literal["not_configured", "available", "failed"] = "not_configured"
+    provider: Optional[str] = None
+    model: Optional[str] = None
+
+
+class ContextCompileRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=20000)
+    repo_id: Optional[str] = None
+    token_budget: int = Field(default=2000, ge=64, le=100000)
+    as_of: Optional[datetime] = None
+    files: List[str] = Field(default_factory=list)
+    symbols: List[str] = Field(default_factory=list)
+    previous_fingerprint: Optional[str] = None
+    min_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class ReflectionCreateRequest(BaseModel):
+    repo_id: str
+    title: str = Field(min_length=3, max_length=200)
+    evidence_ids: List[str] = Field(min_length=2)
+    reviewed: bool = False
 
 
 class AuditLogEntry(BaseModel):
@@ -322,6 +396,8 @@ class RepositoryCreate(BaseModel):
 
 class RepositoryResponse(RepositoryCreate):
     id: str
+    status: Literal["active", "archived"] = "active"
+    archived_at: Optional[datetime] = None
     created_at: datetime
 
 
@@ -329,6 +405,7 @@ class ProjectScopeResponse(BaseModel):
     id: str
     name: str
     registered: bool = False
+    status: Literal["active", "archived"] = "active"
 
 
 ProviderStatusValue = Literal[

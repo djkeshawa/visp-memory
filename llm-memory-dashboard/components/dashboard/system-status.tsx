@@ -57,7 +57,7 @@ export function SystemStatus({ status: initialStatus }: SystemStatusProps) {
   ]
 
   return (
-    <div className="glass rounded-xl p-5">
+    <div className="glass rounded-lg p-5">
       <h3 className="text-sm font-semibold text-foreground mb-4">System Status</h3>
       <div className="space-y-3">
         {items.map((item) => {

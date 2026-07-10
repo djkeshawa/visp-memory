@@ -2,20 +2,17 @@
 
 import { Suspense, useEffect, useState } from "react"
 import { motion } from "framer-motion"
-import { AlertTriangle, Database, KeyRound, LogOut, RefreshCw, Settings, Wrench } from "lucide-react"
+import { AlertTriangle, BrainCircuit, Database, RefreshCw, Settings, Wrench } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import {
-  clearAuthCredentials,
   describeApiError,
-  getAuthCredentials,
   getEmbeddingIndexStatus,
+  getModelRoutingStatus,
   getProviderDiagnostics,
   getStorageDiagnostics,
   reindexEmbeddingIndex,
-  setAuthCredentials,
   testProvider,
+  testModelRouting,
 } from "@/lib/api"
 import { pageTransition } from "@/lib/animations"
 import { cn } from "@/lib/utils"
@@ -26,6 +23,7 @@ import type {
   ProviderConnectionStatus,
   ProviderDiagnostic,
   StorageDiagnostics,
+  ModelRoutingStatus,
 } from "@/lib/types"
 
 const statusConfig: Record<
@@ -81,21 +79,14 @@ function SettingsContent() {
   const [providers, setProviders] = useState<ProviderDiagnostic[]>([])
   const [embeddingIndex, setEmbeddingIndex] = useState<EmbeddingIndexStatus | null>(null)
   const [storageDiagnostics, setStorageDiagnostics] = useState<StorageDiagnostics | null>(null)
+  const [modelRouting, setModelRouting] = useState<ModelRoutingStatus | null>(null)
   const [reindexResult, setReindexResult] = useState<EmbeddingReindexResult | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [testingProvider, setTestingProvider] = useState<string | null>(null)
   const [isReindexing, setIsReindexing] = useState(false)
-  const [apiKey, setApiKey] = useState("")
-  const [jwtToken, setJwtToken] = useState("")
-  const [authMessage, setAuthMessage] = useState<string | null>(null)
-
-  useEffect(() => {
-    const credentials = getAuthCredentials()
-    setApiKey(credentials.apiKey)
-    setJwtToken(credentials.jwtToken)
-  }, [])
-
+  const [isTestingModel, setIsTestingModel] = useState(false)
+  const [modelMessage, setModelMessage] = useState<string | null>(null)
   useEffect(() => {
     void loadDiagnostics()
   }, [selectedRepoId])
@@ -103,14 +94,16 @@ function SettingsContent() {
   const loadDiagnostics = async () => {
     setIsLoading(true)
     try {
-      const [providerData, indexData, storageData] = await Promise.all([
+      const [providerData, indexData, storageData, modelData] = await Promise.all([
         getProviderDiagnostics(),
         getEmbeddingIndexStatus(selectedRepoId),
         getStorageDiagnostics(),
+        getModelRoutingStatus(),
       ])
       setProviders(providerData)
       setEmbeddingIndex(indexData)
       setStorageDiagnostics(storageData)
+      setModelRouting(modelData)
       setLoadError(null)
     } catch (error) {
       console.error("Failed to fetch diagnostics:", error)
@@ -155,75 +148,29 @@ function SettingsContent() {
     }
   }
 
-  const handleSaveCredentials = () => {
-    setAuthCredentials(apiKey, jwtToken)
-    setAuthMessage("Credentials saved for this browser session.")
-    void loadDiagnostics()
-  }
-
-  const handleClearCredentials = () => {
-    clearAuthCredentials()
-    setApiKey("")
-    setJwtToken("")
-    setAuthMessage("Credentials cleared.")
-    setProviders([])
-    setEmbeddingIndex(null)
-    setStorageDiagnostics(null)
+  const handleModelTest = async () => {
+    setIsTestingModel(true)
+    try {
+      await testModelRouting()
+      setModelMessage("Task model connected successfully.")
+    } catch (error) {
+      setModelMessage(describeApiError(error))
+    } finally {
+      setIsTestingModel(false)
+    }
   }
 
   return (
     <motion.div initial="initial" animate="animate" variants={pageTransition} className="space-y-8">
       <div className="flex items-center gap-3">
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600">
-          <Settings className="h-6 w-6 text-white" />
+        <div className="flex h-11 w-11 items-center justify-center rounded-md bg-primary text-primary-foreground">
+          <Settings className="h-5 w-5" />
         </div>
         <div>
           <h1 className="text-2xl font-semibold text-foreground">Settings</h1>
           <p className="text-muted-foreground mt-1">Provider diagnostics and connectivity checks</p>
         </div>
       </div>
-
-      <section className="rounded-lg border border-border bg-card p-4" aria-labelledby="authentication-heading">
-        <div className="flex items-center gap-2">
-          <KeyRound className="h-5 w-5 text-primary" />
-          <h2 id="authentication-heading" className="text-lg font-semibold text-foreground">
-            Authentication
-          </h2>
-        </div>
-        <div className="mt-4 grid gap-4 md:grid-cols-2">
-          <div className="space-y-2">
-            <Label htmlFor="api-key">API key</Label>
-            <Input
-              id="api-key"
-              type="password"
-              autoComplete="off"
-              value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="jwt-token">JWT token</Label>
-            <Input
-              id="jwt-token"
-              type="password"
-              autoComplete="off"
-              value={jwtToken}
-              onChange={(event) => setJwtToken(event.target.value)}
-            />
-          </div>
-        </div>
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          <Button size="sm" onClick={handleSaveCredentials}>
-            <KeyRound className="h-4 w-4" />
-            <span>Use credentials</span>
-          </Button>
-          <Button size="sm" variant="outline" onClick={handleClearCredentials}>
-            <LogOut className="h-4 w-4" />
-            <span>Clear</span>
-          </Button>
-          {authMessage ? <p className="text-sm text-muted-foreground" role="status">{authMessage}</p> : null}
-        </div>
-      </section>
 
       {loadError ? (
         <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-muted-foreground">
@@ -235,15 +182,41 @@ function SettingsContent() {
       ) : null}
 
       {isLoading ? (
-        <div className="rounded-xl border border-border bg-card/80 p-4 text-sm text-muted-foreground">
+        <div className="rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground">
           Loading diagnostics...
         </div>
+      ) : null}
+
+      {modelRouting ? (
+        <section className="border-b border-border pb-7" aria-labelledby="task-model-heading">
+          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <BrainCircuit className="h-5 w-5 text-primary" />
+                <h2 id="task-model-heading" className="text-lg font-semibold">Task model</h2>
+              </div>
+              <p className="mt-2 text-sm text-muted-foreground">
+                {modelRouting.configured
+                  ? `${modelRouting.provider} · ${modelRouting.model || "provider default"}`
+                  : "No server model configured. MCP client sampling remains available when supported."}
+              </p>
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {modelRouting.tasks.map((task) => <code key={task} className="rounded-sm bg-secondary px-2 py-1 text-xs text-muted-foreground">{task}</code>)}
+              </div>
+              {modelMessage ? <p className="mt-3 text-sm text-muted-foreground" role="status">{modelMessage}</p> : null}
+            </div>
+            <Button size="sm" variant="outline" onClick={() => void handleModelTest()} disabled={isTestingModel || !modelRouting.configured}>
+              <RefreshCw className={isTestingModel ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
+              <span>Test model</span>
+            </Button>
+          </div>
+        </section>
       ) : null}
 
       {embeddingIndex ? (
         <div
           className={cn(
-            "glass rounded-xl border p-4",
+            "glass rounded-lg border p-4",
             embeddingIndex.needsReindex ? "border-intent/40" : "border-border",
           )}
         >
@@ -327,7 +300,7 @@ function SettingsContent() {
       ) : null}
 
       {!isLoading && providers.length === 0 && !loadError ? (
-        <div className="rounded-xl border border-border bg-card/80 p-4 text-sm text-muted-foreground">
+        <div className="rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground">
           No provider diagnostics are currently available.
         </div>
       ) : null}
@@ -342,7 +315,7 @@ function SettingsContent() {
               <div
                 key={provider.provider}
                 className={cn(
-                  "glass rounded-xl border p-4",
+                  "glass rounded-lg border p-4",
                   testingProvider === provider.provider ? "border-primary/40" : config.border,
                 )}
               >

@@ -1,9 +1,45 @@
 # Server Authentication
 
 The FastAPI server protects memory, intent, repository, team, and relationship
-routes by default. The root status endpoint and packaged dashboard shell can be
-loaded without credentials, but API calls from clients need authentication
-unless local development mode is explicitly enabled.
+routes by default. The packaged dashboard shell can be loaded without
+credentials, but its data and all detailed API routes require authentication.
+
+## Dashboard Accounts
+
+There is no public signup. Bootstrap the first administrator once:
+
+```bash
+export LLM_MEMORY_BOOTSTRAP_ADMIN_USERNAME=admin
+export LLM_MEMORY_BOOTSTRAP_ADMIN_PASSWORD="replace-with-a-strong-password"
+llm-memory serve
+```
+
+Alternatively, create an administrator interactively:
+
+```bash
+llm-memory admin create --username admin
+```
+
+Open `/dashboard/auth` and sign in with the account. The server stores only an
+Argon2id password hash. Browser sessions use opaque, hashed server-side IDs in
+HttpOnly cookies, expire after 12 idle hours or 7 days, and require CSRF and
+origin checks for changes. Administrators can create and disable more accounts
+from Users & Teams in the sidebar.
+
+## Personal Access Tokens
+
+Create API and MCP credentials from Dashboard > Integrations. Tokens begin
+with `llmm_`, are displayed once, and are stored only as hashes. Select the
+minimum required project access, scopes, and expiry, then send the token as a
+Bearer credential:
+
+```bash
+curl http://127.0.0.1:8000/memories \
+  -H "Authorization: Bearer llmm_your_token"
+```
+
+Tokens can be revoked immediately from the same page. The dashboard never
+stores account passwords or tokens in local storage.
 
 ## Local Development
 
@@ -18,7 +54,7 @@ llm-memory serve
 This makes API calls run as a local admin user. Do not use this setting for a
 shared server.
 
-## API Key Mode
+## Legacy API Key Mode
 
 For simple server-to-client setups, configure one or more API keys:
 
@@ -36,7 +72,7 @@ curl http://127.0.0.1:8000/memories \
 
 `LLM_MEMORY_API_KEY` is also accepted for backward-compatible single-key setups.
 
-## JWT Mode
+## Legacy JWT Mode
 
 JWT mode requires a signing secret:
 
@@ -101,7 +137,8 @@ export NEO4J_PASSWORD=replace-me
 
 - Do not run with `LLM_MEMORY_SERVER_AUTH_ENABLED=false` outside local
   development.
-- Use long random values for API keys and JWT secrets.
+- Prefer scoped personal access tokens over compatibility API keys and JWTs.
+- Use long random values for bootstrap passwords, API keys, and JWT secrets.
 - Treat memory content as potentially sensitive project data.
 - Avoid broad CORS origins on shared deployments.
 - Back up the storage directory or Neo4j database before upgrades.

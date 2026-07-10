@@ -1255,6 +1255,14 @@ class Neo4jStorage(BaseStorage):
                 for rec in result
             ]
 
+    def delete_relationship(self, relationship_id: str) -> bool:
+        with self.driver.session() as session:
+            record = session.run(
+                "MATCH ()-[r {id: $id}]->() WITH r, count(r) AS c DELETE r RETURN c",
+                id=relationship_id,
+            ).single()
+        return bool(record and record["c"])
+
     # Session Ops
     def start_session(self) -> str:
         sid = self._generate_id("session")
@@ -1408,6 +1416,7 @@ class Neo4jStorage(BaseStorage):
                     tech_stack: $tech_stack,
                     team_id: $team_id,
                     metadata: $metadata,
+                    status: $status,
                     created_at: datetime()
                 })
             """,
@@ -1418,6 +1427,7 @@ class Neo4jStorage(BaseStorage):
                 tech_stack=repo.get("tech_stack", []),
                 team_id=repo.get("team_id"),
                 metadata=self._json_serialize(repo.get("metadata", {})),
+                status=repo.get("status", "active"),
             )
         return repo_id
 
@@ -1427,17 +1437,66 @@ class Neo4jStorage(BaseStorage):
             record = result.single()
             return self._repository_node_to_dict(dict(record["r"])) if record else None
 
-    def list_repositories(self, team_id: str = None) -> List[Dict[str, Any]]:
+    def list_repositories(
+        self, team_id: str = None, status: str = "active"
+    ) -> List[Dict[str, Any]]:
         query = "MATCH (r:Repository)"
         params = {}
+        conditions = []
         if team_id:
-            query += " WHERE r.team_id = $team_id"
+            conditions.append("r.team_id = $team_id")
             params["team_id"] = team_id
+        if status and status != "all":
+            conditions.append("coalesce(r.status, 'active') = $status")
+            params["status"] = status
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
 
         query += " RETURN r"
         with self.driver.session() as session:
             result = session.run(query, params)
             return [self._repository_node_to_dict(dict(rec["r"])) for rec in result]
+
+    def update_repository(self, repo_id: str, **kwargs) -> bool:
+        allowed = {"name", "url", "description", "tech_stack", "metadata", "status"}
+        updates = {
+            key: value
+            for key, value in kwargs.items()
+            if key in allowed and value is not None
+        }
+        if not updates:
+            return False
+        if "metadata" in updates:
+            updates["metadata"] = self._json_serialize(updates["metadata"])
+        clauses = [f"r.{key} = ${key}" for key in updates]
+        if updates.get("status") == "archived":
+            clauses.append("r.archived_at = datetime()")
+        elif updates.get("status") == "active":
+            clauses.append("r.archived_at = null")
+        with self.driver.session() as session:
+            record = session.run(
+                "MATCH (r:Repository {id: $id}) SET "
+                + ", ".join(clauses)
+                + " RETURN count(r) AS c",
+                id=repo_id,
+                **updates,
+            ).single()
+        return bool(record and record["c"])
+
+    def delete_repository(self, repo_id: str) -> bool:
+        with self.driver.session() as session:
+            exists = session.run(
+                "MATCH (r:Repository {id: $id}) RETURN count(r) AS c", id=repo_id
+            ).single()["c"]
+            if not exists:
+                return False
+            session.run(
+                "MATCH (m:Memory {repo_id: $id}) DETACH DELETE m",
+                id=repo_id,
+            )
+            session.run("MATCH (i:Intent {repo_id: $id}) DETACH DELETE i", id=repo_id)
+            session.run("MATCH (r:Repository {id: $id}) DETACH DELETE r", id=repo_id)
+        return True
 
     def list_project_ids(self) -> List[str]:
         with self.driver.session() as session:

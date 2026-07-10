@@ -22,7 +22,7 @@ export function SearchBar({ onSearch, isLoading }: SearchBarProps) {
 
   return (
     <form onSubmit={handleSubmit}>
-      <div className="glass rounded-xl p-2 flex items-center gap-2">
+      <div className="glass rounded-lg p-2 flex items-center gap-2">
         <div className="flex items-center gap-3 flex-1 px-3">
           <Search className="h-5 w-5 text-muted-foreground shrink-0" />
           <input
@@ -37,7 +37,7 @@ export function SearchBar({ onSearch, isLoading }: SearchBarProps) {
           <Button
             type="submit"
             disabled={isLoading || !query.trim()}
-            className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md hover:shadow-lg transition-shadow px-6"
+            className="px-6"
           >
             {isLoading ? "Searching..." : "Search"}
           </Button>

@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 
 MemoryLayer = Literal["raw", "episodic", "semantic", "intent"]
-MemoryStatus = Literal["active", "pending", "archived", "superseded", "deleted"]
+MemoryStatus = Literal["active", "pending", "archived", "superseded", "merged", "deleted"]
 RecallEventType = Literal["surfaced", "used", "dismissed", "task_linked", "outcome_linked"]
 
 RECALL_EVENT_WEIGHTS: dict[str, float] = {
@@ -59,7 +59,7 @@ RECALL_EVENT_WEIGHTS: dict[str, float] = {
 # deliberately do not reinforce, to avoid popularity bias from mere exposure.
 REINFORCING_RECALL_EVENTS = frozenset({"used", "task_linked", "outcome_linked"})
 SENSITIVE_RECALL_METADATA_KEYS = {"prompt", "response", "query", "content", "messages"}
-STORAGE_SCHEMA_VERSION = 1
+STORAGE_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -205,6 +205,10 @@ class BaseStorage(ABC):
         """Get all relationships."""
         pass
 
+    def delete_relationship(self, relationship_id: str) -> bool:
+        """Delete a relationship by ID when supported."""
+        return False
+
     # Stats
     @abstractmethod
     def get_stats(self, repo_id: str = None) -> Dict[str, Any]:
@@ -226,6 +230,14 @@ class BaseStorage(ABC):
     def list_repositories(self, team_id: str = None) -> List[Dict[str, Any]]:
         """List all repositories."""
         pass
+
+    def update_repository(self, repo_id: str, **kwargs) -> bool:
+        """Update repository lifecycle or display fields."""
+        return False
+
+    def delete_repository(self, repo_id: str) -> bool:
+        """Permanently remove a repository and its scoped records."""
+        return False
 
     @abstractmethod
     def list_project_ids(self) -> List[str]:
@@ -479,9 +491,23 @@ class LocalStorage(BaseStorage):
                     tech_stack TEXT DEFAULT '[]',
                     team_id TEXT,
                     metadata TEXT DEFAULT '{}',
+                    status TEXT DEFAULT 'active',
+                    archived_at TIMESTAMP DEFAULT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+
+            repository_migrations = {
+                "status": "ALTER TABLE repositories ADD COLUMN status TEXT DEFAULT 'active'",
+                "archived_at": (
+                    "ALTER TABLE repositories ADD COLUMN archived_at TIMESTAMP DEFAULT NULL"
+                ),
+            }
+            for column, statement in repository_migrations.items():
+                try:
+                    conn.execute(f"SELECT {column} FROM repositories LIMIT 1")
+                except sqlite3.OperationalError:
+                    conn.execute(statement)
 
             # Team management (Phase 3.3)
             conn.execute("""
@@ -1857,6 +1883,12 @@ class LocalStorage(BaseStorage):
             cursor = conn.execute(query, params)
             return [self._relationship_row_to_dict(row) for row in cursor.fetchall()]
 
+    def delete_relationship(self, relationship_id: str) -> bool:
+        with self._get_db() as conn:
+            result = conn.execute("DELETE FROM relationships WHERE id = ?", (relationship_id,))
+            conn.commit()
+        return result.rowcount > 0
+
     def start_session(self) -> str:
         """Start a new session for tracking."""
         session_id = self._generate_id("session")
@@ -2357,9 +2389,9 @@ class LocalStorage(BaseStorage):
                 conn.execute(
                     """
                     INSERT INTO repositories (
-                        id, name, url, description, tech_stack, team_id, metadata
+                        id, name, url, description, tech_stack, team_id, metadata, status
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         repo_id,
@@ -2369,6 +2401,7 @@ class LocalStorage(BaseStorage):
                         self._json_serialize(repo.get("tech_stack", [])),
                         repo.get("team_id"),
                         self._json_serialize(repo.get("metadata", {})),
+                        repo.get("status", "active"),
                     ),
                 )
             except sqlite3.IntegrityError as e:
@@ -2382,16 +2415,67 @@ class LocalStorage(BaseStorage):
             row = cursor.fetchone()
             return self._row_to_dict(row) if row else None
 
-    def list_repositories(self, team_id: str = None) -> List[Dict[str, Any]]:
-        query = "SELECT * FROM repositories"
+    def list_repositories(
+        self, team_id: str = None, status: str = "active"
+    ) -> List[Dict[str, Any]]:
+        query = "SELECT * FROM repositories WHERE 1=1"
         params = []
         if team_id:
-            query += " WHERE team_id = ?"
+            query += " AND team_id = ?"
             params.append(team_id)
+        if status and status != "all":
+            query += " AND status = ?"
+            params.append(status)
 
         with self._get_db() as conn:
             cursor = conn.execute(query, params)
             return [self._row_to_dict(row) for row in cursor.fetchall()]
+
+    def update_repository(self, repo_id: str, **kwargs) -> bool:
+        allowed = {"name", "url", "description", "tech_stack", "metadata", "status"}
+        updates = []
+        params: list[Any] = []
+        for field, value in kwargs.items():
+            if field not in allowed or value is None:
+                continue
+            if field in {"tech_stack", "metadata"}:
+                value = self._json_serialize(value)
+            updates.append(f"{field} = ?")
+            params.append(value)
+        if "status" in kwargs:
+            if kwargs["status"] == "archived":
+                updates.append("archived_at = CURRENT_TIMESTAMP")
+            elif kwargs["status"] == "active":
+                updates.append("archived_at = NULL")
+        if not updates:
+            return False
+        params.append(repo_id)
+        with self._get_db() as conn:
+            result = conn.execute(
+                f"UPDATE repositories SET {', '.join(updates)} WHERE id = ?", params
+            )
+            conn.commit()
+        return result.rowcount > 0
+
+    def delete_repository(self, repo_id: str) -> bool:
+        if self.get_repository(repo_id) is None:
+            return False
+        memory_ids = [
+            memory["id"]
+            for memory in self.list_memories(repo_id=repo_id, status="all", limit=100000)
+        ]
+        for memory_id in memory_ids:
+            self.delete_memory(memory_id)
+        with self._get_db() as conn:
+            conn.execute("DELETE FROM intents WHERE repo_id = ?", (repo_id,))
+            conn.execute(
+                "DELETE FROM repository_dependencies "
+                "WHERE source_repo_id = ? OR target_repo_id = ?",
+                (repo_id, repo_id),
+            )
+            conn.execute("DELETE FROM repositories WHERE id = ?", (repo_id,))
+            conn.commit()
+        return True
 
     def add_repo_dependency(
         self,

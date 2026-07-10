@@ -1,130 +1,131 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import Link from "next/link"
-import { KeyRound, LogIn, LogOut, ShieldCheck } from "lucide-react"
+import { FormEvent, useEffect, useState } from "react"
+import { KeyRound, LockKeyhole, LogIn, ShieldCheck, UserRound } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
-  clearAuthCredentials,
   describeApiError,
-  getAuthCredentials,
-  getRuntimeStatus,
-  setAuthCredentials,
+  getAuthenticationStatus,
+  getCurrentAccount,
+  login,
 } from "@/lib/api"
 
 export default function AuthenticationPage() {
-  const [apiKey, setApiKey] = useState("")
-  const [jwtToken, setJwtToken] = useState("")
+  const [username, setUsername] = useState("")
+  const [password, setPassword] = useState("")
   const [message, setMessage] = useState<string | null>(null)
-  const [isError, setIsError] = useState(false)
+  const [setupRequired, setSetupRequired] = useState(false)
+  const [authDisabled, setAuthDisabled] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   useEffect(() => {
-    const credentials = getAuthCredentials()
-    setApiKey(credentials.apiKey)
-    setJwtToken(credentials.jwtToken)
+    const initialize = async () => {
+      try {
+        const status = await getAuthenticationStatus()
+        setSetupRequired(status.setupRequired)
+        if (!status.authEnabled) {
+          setAuthDisabled(true)
+          setMessage("Authentication is disabled for this server. You can open the dashboard directly.")
+          return
+        }
+        try {
+          await getCurrentAccount()
+          window.location.assign("/dashboard")
+        } catch {
+          // The visitor is not signed in yet.
+        }
+      } catch (error) {
+        setMessage(describeApiError(error))
+      }
+    }
+    void initialize()
   }, [])
 
-  const handleAuthenticate = async () => {
-    if (!apiKey.trim() && !jwtToken.trim()) {
-      setIsError(true)
-      setMessage("Enter an API key or JWT token.")
+  const handleSubmit = async (event: FormEvent) => {
+    event.preventDefault()
+    if (authDisabled) {
+      window.location.assign("/dashboard")
       return
     }
-
+    if (!username.trim() || !password) {
+      setMessage("Enter your username and password.")
+      return
+    }
     setIsSubmitting(true)
-    setAuthCredentials(apiKey, jwtToken)
+    setMessage(null)
     try {
-      await getRuntimeStatus()
-      setIsError(false)
-      setMessage("Authenticated. Opening the dashboard...")
+      await login(username, password)
       window.location.assign("/dashboard")
     } catch (error) {
-      clearAuthCredentials()
-      setIsError(true)
       setMessage(describeApiError(error))
     } finally {
       setIsSubmitting(false)
     }
   }
 
-  const handleClear = () => {
-    clearAuthCredentials()
-    setApiKey("")
-    setJwtToken("")
-    setIsError(false)
-    setMessage("Credentials cleared from this browser session.")
-  }
-
   return (
-    <div className="mx-auto flex min-h-[calc(100vh-8rem)] max-w-lg items-center py-8">
-      <section className="w-full rounded-lg border border-border bg-card p-6" aria-labelledby="auth-heading">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-md bg-primary text-primary-foreground">
-            <ShieldCheck className="h-5 w-5" aria-hidden="true" />
-          </div>
-          <div>
-            <h1 id="auth-heading" className="text-xl font-semibold text-foreground">
-              Authentication
-            </h1>
-            <p className="text-sm text-muted-foreground">Connect this browser session to LLM Memory.</p>
-          </div>
-        </div>
-
-        <div className="mt-6 space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="auth-api-key">API key</Label>
-            <Input
-              id="auth-api-key"
-              type="password"
-              autoComplete="off"
-              value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="auth-jwt-token">JWT token</Label>
-            <Input
-              id="auth-jwt-token"
-              type="password"
-              autoComplete="off"
-              value={jwtToken}
-              onChange={(event) => setJwtToken(event.target.value)}
-            />
+    <div className="mx-auto flex min-h-[calc(100vh-8rem)] max-w-md items-center py-8">
+      <section className="w-full overflow-hidden rounded-lg border border-border bg-card shadow-sm" aria-labelledby="login-heading">
+        <div className="border-b border-border bg-secondary/45 px-6 py-5">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-md bg-primary text-primary-foreground">
+              <ShieldCheck className="h-5 w-5" aria-hidden="true" />
+            </div>
+            <div>
+              <h1 id="login-heading" className="text-xl font-semibold text-foreground">Sign in</h1>
+              <p className="mt-1 text-sm text-muted-foreground">Access your LLM Memory workspace</p>
+            </div>
           </div>
         </div>
 
-        <p className="mt-3 text-xs text-muted-foreground">
-          Credentials remain in session storage and are cleared when the browser session ends.
-        </p>
+        <form className="space-y-5 px-6 py-6" onSubmit={handleSubmit}>
+          <div className="space-y-2">
+            <Label htmlFor="username">Username</Label>
+            <div className="relative">
+              <UserRound className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                id="username"
+                autoComplete="username"
+                className="pl-9"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                disabled={authDisabled}
+                autoFocus
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="password">Password</Label>
+            <div className="relative">
+              <LockKeyhole className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                id="password"
+                type="password"
+                autoComplete="current-password"
+                className="pl-9"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                disabled={authDisabled}
+              />
+            </div>
+          </div>
 
-        <div className="mt-5 flex flex-wrap items-center gap-2">
-          <Button onClick={handleAuthenticate} disabled={isSubmitting}>
+          {setupRequired ? (
+            <div className="flex gap-3 rounded-md border border-intent/35 bg-intent/5 p-3 text-sm text-muted-foreground">
+              <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-intent" />
+              <p>No administrator account exists yet. Create one with the server admin command, then sign in here.</p>
+            </div>
+          ) : null}
+
+          {message ? <p className="text-sm text-destructive" role="alert">{message}</p> : null}
+
+          <Button type="submit" className="w-full" disabled={isSubmitting || setupRequired}>
             <LogIn className="h-4 w-4" aria-hidden="true" />
-            <span>{isSubmitting ? "Checking..." : "Authenticate"}</span>
+            <span>{authDisabled ? "Open dashboard" : isSubmitting ? "Signing in..." : "Sign in"}</span>
           </Button>
-          <Button variant="outline" onClick={handleClear} disabled={isSubmitting}>
-            <LogOut className="h-4 w-4" aria-hidden="true" />
-            <span>Clear</span>
-          </Button>
-          <Button variant="ghost" asChild>
-            <Link href="/settings">
-              <KeyRound className="h-4 w-4" aria-hidden="true" />
-              <span>Advanced settings</span>
-            </Link>
-          </Button>
-        </div>
-
-        {message ? (
-          <p
-            className={isError ? "mt-4 text-sm text-destructive" : "mt-4 text-sm text-muted-foreground"}
-            role={isError ? "alert" : "status"}
-          >
-            {message}
-          </p>
-        ) : null}
+        </form>
       </section>
     </div>
   )

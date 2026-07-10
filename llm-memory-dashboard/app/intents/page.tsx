@@ -17,7 +17,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
 import { IntentsColumn } from "@/components/intents/intents-column"
-import { closeIntent, completeIntent, createIntent, describeApiError, getIntents, updateIntent } from "@/lib/api"
+import { closeIntent, completeIntent, createIntent, describeApiError, getIntents, reopenIntent, updateIntent } from "@/lib/api"
 import { pageTransition } from "@/lib/animations"
 import { useSelectedProjectId } from "@/lib/project-selection"
 import type { Intent } from "@/lib/types"
@@ -87,6 +87,15 @@ function IntentsContent() {
     }
   }
 
+  const handleReopen = async (intent: Intent) => {
+    try {
+      await reopenIntent(intent.id)
+      fetchIntents()
+    } catch (error) {
+      setErrorMessage(describeApiError(error))
+    }
+  }
+
   const handleUpdate = async (intent: Intent, updates: { description: string; priority: number }) => {
     try {
       await updateIntent(intent.id, updates)
@@ -111,12 +120,10 @@ function IntentsContent() {
 
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>
-            <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
-              <Button className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md hover:shadow-lg transition-shadow">
-                <Plus className="h-4 w-4 mr-2" />
+              <Button>
+                <Plus className="h-4 w-4" />
                 New Intent
               </Button>
-            </motion.div>
           </DialogTrigger>
           <DialogContent className="sm:max-w-[425px]">
             <form onSubmit={handleSubmit}>
@@ -186,6 +193,7 @@ function IntentsContent() {
           intents={closedIntents}
           type="completed"
           onUpdate={handleUpdate}
+          onReopen={handleReopen}
         />
       </div>
     </motion.div>

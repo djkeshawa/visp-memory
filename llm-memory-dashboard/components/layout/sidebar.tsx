@@ -6,37 +6,45 @@ import { useEffect, useRef, useState } from "react"
 import {
   Activity,
   Brain,
+  Cable,
   ClipboardList,
-  KeyRound,
+  FolderGit2,
   LayoutDashboard,
+  Library,
   LogOut,
   Menu,
   Network,
   Search,
   Settings,
   Target,
+  UserRound,
+  Users,
   X,
 } from "lucide-react"
 import { ProjectSelector } from "@/components/projects/project-selector"
 import { ThemeToggle } from "@/components/ui/theme-toggle"
 import {
   AUTH_CHANGED_EVENT,
-  clearAuthCredentials,
+  getCurrentAccount,
   getRuntimeStatus,
-  hasAuthCredentials,
   isApiError,
+  logout,
 } from "@/lib/api"
+import type { AuthUser } from "@/lib/types"
 import { projectHref, useSelectedProjectId } from "@/lib/project-selection"
 import { cn } from "@/lib/utils"
 
 const navItems = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/intelligence", label: "Intelligence", icon: ClipboardList },
-  { href: "/graph", label: "Memory Graph", icon: Network },
-  { href: "/health", label: "Memory Health", icon: Activity },
+  { href: "/", label: "Overview", icon: LayoutDashboard },
+  { href: "/memories", label: "Memories", icon: Library },
   { href: "/recall", label: "Recall", icon: Search },
+  { href: "/graph", label: "Memory Graph", icon: Network },
   { href: "/intents", label: "Intents", icon: Target },
-  { href: "/auth", label: "Authentication", icon: KeyRound },
+  { href: "/projects", label: "Projects", icon: FolderGit2 },
+  { href: "/intelligence", label: "Intelligence", icon: ClipboardList },
+  { href: "/health", label: "Operations", icon: Activity },
+  { href: "/integrations", label: "Integrations", icon: Cable },
+  { href: "/users", label: "Users", icon: Users },
   { href: "/settings", label: "Settings", icon: Settings },
 ]
 
@@ -49,6 +57,7 @@ export function Sidebar() {
   const [systemHealth, setSystemHealth] = useState<SystemHealth>("online")
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [authenticated, setAuthenticated] = useState(false)
+  const [account, setAccount] = useState<AuthUser | null>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
@@ -70,8 +79,17 @@ export function Sidebar() {
   }, [])
 
   useEffect(() => {
-    const updateAuthState = () => setAuthenticated(hasAuthCredentials())
-    updateAuthState()
+    const updateAuthState = async () => {
+      try {
+        const session = await getCurrentAccount()
+        setAccount(session.user)
+        setAuthenticated(true)
+      } catch {
+        setAccount(null)
+        setAuthenticated(false)
+      }
+    }
+    void updateAuthState()
     window.addEventListener(AUTH_CHANGED_EVENT, updateAuthState)
     return () => window.removeEventListener(AUTH_CHANGED_EVENT, updateAuthState)
   }, [])
@@ -119,10 +137,15 @@ export function Sidebar() {
       )
     })
 
-  const handleClearCredentials = () => {
-    clearAuthCredentials()
-    setAuthenticated(false)
-    setSystemHealth("auth_required")
+  const handleLogout = async () => {
+    try {
+      await logout()
+    } finally {
+      setAccount(null)
+      setAuthenticated(false)
+      setSystemHealth("auth_required")
+      window.location.assign("/dashboard/auth")
+    }
   }
 
   return (
@@ -158,7 +181,7 @@ export function Sidebar() {
             <p className="text-xs text-muted-foreground">Dashboard</p>
           </div>
         </div>
-        <nav className="flex-1 space-y-1 px-3 py-4" aria-label="Primary navigation">
+        <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4" aria-label="Primary navigation">
           {renderNavigation()}
         </nav>
         <div className="space-y-3 border-t border-border px-3 py-4">
@@ -181,6 +204,20 @@ export function Sidebar() {
               <span className="text-xs text-muted-foreground">{systemIndicator.label}</span>
             </div>
           )}
+          {authenticated && account ? (
+            <div className="flex items-center gap-3 border-t border-border px-4 pt-3">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-secondary text-foreground">
+                <UserRound className="h-4 w-4" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-foreground">{account.displayName || account.username}</p>
+                <p className="text-xs capitalize text-muted-foreground">{account.role}</p>
+              </div>
+              <button type="button" onClick={() => void handleLogout()} className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground" aria-label="Sign out" title="Sign out">
+                <LogOut className="h-4 w-4" />
+              </button>
+            </div>
+          ) : null}
         </div>
       </aside>
 
@@ -237,10 +274,10 @@ export function Sidebar() {
                 {authenticated ? (
                   <button
                     type="button"
-                    onClick={handleClearCredentials}
+                    onClick={() => void handleLogout()}
                     className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground"
-                    aria-label="Clear authentication credentials"
-                    title="Clear authentication credentials"
+                    aria-label="Sign out"
+                    title="Sign out"
                   >
                     <LogOut className="h-4 w-4" />
                   </button>

@@ -115,3 +115,50 @@ async def test_cross_repo_context(client):
     warnings = [w["content"] for w in data["warnings"]]
     assert "Lib API Deprecated" in warnings
     assert "lib-repo" in data["monitored_repos"]
+
+
+@pytest.mark.asyncio
+async def test_repository_archive_restore_and_confirmed_purge(client):
+    headers = {"X-API-KEY": "test_key"}
+    await client.post(
+        "/repos", json={"name": "Lifecycle", "id": "lifecycle-repo"}, headers=headers
+    )
+    memory = await client.post(
+        "/memories",
+        json={"content": "Project memory", "repo_id": "lifecycle-repo"},
+        headers=headers,
+    )
+
+    archived = await client.post("/repos/lifecycle-repo/archive", headers=headers)
+    assert archived.status_code == 200
+    scopes = await client.get("/repos/scopes", headers=headers)
+    assert "lifecycle-repo" not in {item["id"] for item in scopes.json()}
+    blocked_write = await client.post(
+        "/memories",
+        json={"content": "Blocked", "repo_id": "lifecycle-repo"},
+        headers=headers,
+    )
+    assert blocked_write.status_code == 409
+
+    archived_list = await client.get("/repos?include_archived=true", headers=headers)
+    assert any(
+        repo["id"] == "lifecycle-repo" and repo["status"] == "archived"
+        for repo in archived_list.json()
+    )
+    restored = await client.post("/repos/lifecycle-repo/restore", headers=headers)
+    assert restored.status_code == 200
+
+    preview = await client.get("/repos/lifecycle-repo/purge-preview", headers=headers)
+    assert preview.json()["memories"] == 1
+    rejected = await client.delete(
+        "/repos/lifecycle-repo?confirmation=wrong", headers=headers
+    )
+    assert rejected.status_code == 400
+    purged = await client.delete(
+        "/repos/lifecycle-repo?confirmation=lifecycle-repo", headers=headers
+    )
+    assert purged.status_code == 200
+    assert purged.json()["backup"].endswith(".json")
+    assert (await client.get("/repos/lifecycle-repo", headers=headers)).status_code == 404
+    memory_lookup = await client.get(f"/memories/{memory.json()['id']}", headers=headers)
+    assert memory_lookup.status_code == 404

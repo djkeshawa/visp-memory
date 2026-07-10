@@ -1,3 +1,4 @@
+import json
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -11,6 +12,8 @@ from llm_memory.core.repository import (
     RepositoryManager,
 )
 from llm_memory.server.auth import UserContext, get_current_user
+from llm_memory.server.authorization import require_admin
+from llm_memory.server.routers.platform import append_audit_event
 from llm_memory.server.schemas import (
     DependencyCreate,
     ProjectScopeResponse,
@@ -95,12 +98,13 @@ async def register_repository(
 async def list_repositories(
     request: Request,
     team_id: Optional[str] = None,
+    include_archived: bool = False,
     user: UserContext = Depends(get_current_user),
 ):
     """List all repositories."""
     repo_mgr = RepositoryManager(request.app.state.storage)
     if user.is_admin:
-        repos = repo_mgr.list_all(team_id=team_id)
+        repos = repo_mgr.list_all(team_id=team_id, include_archived=include_archived)
     elif team_id and team_id != user.team_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -109,7 +113,9 @@ async def list_repositories(
     elif not user.team_id:
         repos = []
     else:
-        repos = repo_mgr.list_all(team_id=user.team_id)
+        repos = repo_mgr.list_all(
+            team_id=user.team_id, include_archived=include_archived
+        )
 
     return [
         {
@@ -132,16 +138,26 @@ async def list_project_scopes(request: Request, user: UserContext = Depends(get_
     else:
         repos = repo_mgr.list_all(team_id=user.team_id)
     repo_by_id = {repo.id: repo for repo in repos}
+    archived_ids = {
+        repo.id
+        for repo in repo_mgr.list_all(
+            team_id=None if user.is_admin else user.team_id,
+            include_archived=True,
+        )
+        if repo.status == "archived"
+    }
 
     project_ids = set(repo_by_id)
     if user.is_admin and hasattr(storage, "list_project_ids"):
         project_ids.update(storage.list_project_ids())
+    project_ids.difference_update(archived_ids)
 
     return [
         {
             "id": project_id,
             "name": repo_by_id[project_id].name if project_id in repo_by_id else project_id,
             "registered": project_id in repo_by_id,
+            "status": repo_by_id[project_id].status if project_id in repo_by_id else "active",
         }
         for project_id in sorted(project_ids)
     ]
@@ -161,6 +177,130 @@ async def get_repository(
         **repo.__dict__,
         "created_at": repo.created_at or utc_now(),
     }
+
+
+@router.post("/{repo_id}/archive")
+async def archive_repository(
+    request: Request,
+    repo_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    require_admin(user)
+    manager = RepositoryManager(request.app.state.storage)
+    repository = _require_repo_access(manager.get(repo_id), user)
+    if repository.status != "archived" and not manager.archive(repo_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
+    append_audit_event(
+        request.app.state.storage,
+        event_type="repository.archived",
+        actor_id=user.user_id,
+        repo_id=repo_id,
+        target_type="repository",
+        target_id=repo_id,
+    )
+    return {"status": "archived", "id": repo_id}
+
+
+@router.post("/{repo_id}/restore")
+async def restore_repository(
+    request: Request,
+    repo_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    require_admin(user)
+    manager = RepositoryManager(request.app.state.storage)
+    _require_repo_access(manager.get(repo_id), user)
+    if not manager.restore(repo_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
+    append_audit_event(
+        request.app.state.storage,
+        event_type="repository.restored",
+        actor_id=user.user_id,
+        repo_id=repo_id,
+        target_type="repository",
+        target_id=repo_id,
+    )
+    return {"status": "active", "id": repo_id}
+
+
+def _repository_purge_preview(storage, repo_id: str) -> dict:
+    memories = storage.list_memories(repo_id=repo_id, status="all", limit=100000)
+    intents = storage.get_active_intents(repo_id=repo_id, status="all")
+    relationships = storage.get_all_relationships(repo_id=repo_id)
+    return {
+        "repo_id": repo_id,
+        "memories": len(memories),
+        "intents": len(intents),
+        "relationships": len(relationships),
+        "content_bytes": sum(
+            len(memory.get("content", "").encode("utf-8")) for memory in memories
+        ),
+    }
+
+
+@router.get("/{repo_id}/purge-preview")
+async def preview_repository_purge(
+    request: Request,
+    repo_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    require_admin(user)
+    if not request.app.state.storage.get_repository(repo_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
+    return _repository_purge_preview(request.app.state.storage, repo_id)
+
+
+def _export_repository_backup(storage, repo_id: str, backup_dir) -> str:
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = utc_now().strftime("%Y%m%dT%H%M%SZ")
+    backup_path = backup_dir / f"project-{repo_id}-{timestamp}.json"
+    payload = {
+        "format": "llm-memory-project-backup-v1",
+        "created_at": utc_now().isoformat(),
+        "repository": storage.get_repository(repo_id),
+        "memories": storage.list_memories(repo_id=repo_id, status="all", limit=100000),
+        "intents": storage.get_active_intents(repo_id=repo_id, status="all"),
+        "relationships": storage.get_all_relationships(repo_id=repo_id),
+    }
+    serialized = json.dumps(payload, indent=2, default=str)
+    backup_path.write_text(serialized, encoding="utf-8")
+    json.loads(backup_path.read_text(encoding="utf-8"))
+    return backup_path.name
+
+
+@router.delete("/{repo_id}")
+async def purge_repository(
+    request: Request,
+    repo_id: str,
+    confirmation: str,
+    user: UserContext = Depends(get_current_user),
+):
+    require_admin(user)
+    if confirmation != repo_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Confirmation must exactly match the repository ID",
+        )
+    manager = RepositoryManager(request.app.state.storage)
+    repository = _require_repo_access(manager.get(repo_id), user)
+    preview = _repository_purge_preview(request.app.state.storage, repo_id)
+    backup_name = _export_repository_backup(
+        request.app.state.storage,
+        repo_id,
+        request.app.state.auth_store.path.parent / "backups",
+    )
+    if not manager.purge(repo_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
+    append_audit_event(
+        request.app.state.storage,
+        event_type="repository.purged",
+        actor_id=user.user_id,
+        repo_id=repo_id,
+        target_type="repository",
+        target_id=repository.id,
+        metadata={"backup": backup_name, **preview},
+    )
+    return {"status": "purged", "id": repo_id, "backup": backup_name, **preview}
 
 
 @router.post("/{repo_id}/dependencies")
