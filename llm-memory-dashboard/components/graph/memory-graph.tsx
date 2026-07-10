@@ -587,7 +587,7 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
 
   if (errorMessage) {
     return (
-      <div className="glass flex min-h-[360px] items-center justify-center rounded-xl p-6">
+      <div className="glass flex min-h-[360px] items-center justify-center rounded-lg p-6">
         <div className="max-w-md text-center text-sm text-muted-foreground">
           <AlertTriangle className="mx-auto mb-3 h-6 w-6 text-destructive" />
           <p className="font-medium text-foreground">Graph data is unavailable</p>
@@ -603,7 +603,7 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
       transition={{ duration: 0.5 }}
-      className="relative w-full h-[700px] rounded-2xl overflow-hidden border border-white/10 bg-[#0a0a0f]"
+      className="relative h-[700px] w-full overflow-hidden rounded-lg border border-white/10 bg-[#0a0a0f]"
     >
       <canvas
         ref={canvasRef}
@@ -701,7 +701,7 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
             initial={{ opacity: 0, x: 20 }}
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: 20 }}
-            className="absolute top-16 right-4 w-72 rounded-xl bg-black/70 backdrop-blur-md border border-white/10 overflow-hidden"
+            className="absolute right-4 top-16 w-72 overflow-hidden rounded-lg border border-white/10 bg-black/80"
           >
             <div className="h-1" style={{ backgroundColor: getLayerColors(selectedNode.layer).fill }} />
             <div className="p-4">

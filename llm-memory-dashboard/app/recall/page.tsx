@@ -41,9 +41,9 @@ function RecallContent() {
       <div className="text-center space-y-4">
         <motion.div
           whileHover={{ rotate: 5, scale: 1.1 }}
-          className="inline-flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 shadow-lg mx-auto"
+          className="mx-auto inline-flex h-12 w-12 items-center justify-center rounded-md bg-primary text-primary-foreground"
         >
-          <Search className="h-8 w-8 text-white" />
+          <Search className="h-6 w-6" />
         </motion.div>
         <div>
           <h1 className="text-2xl font-semibold text-foreground">Recall</h1>

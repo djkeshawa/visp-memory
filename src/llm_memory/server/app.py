@@ -22,17 +22,23 @@ except ImportError:
 from llm_memory import __version__
 from llm_memory.config import load_config
 from llm_memory.core.arcadedb_storage import ArcadeDbStorage
+from llm_memory.core.intent_evaluator import IntentEvaluator
+from llm_memory.core.lifecycle import MemoryLifecycleManager
+from llm_memory.core.model_router import ModelRouter
 from llm_memory.core.neo4j_storage import Neo4jStorage
 from llm_memory.core.reporting import MemoryIntelligenceReporter
 from llm_memory.core.storage import LocalStorage
 from llm_memory.recall.graph import GraphRecall
 from llm_memory.server.auth import UserContext, get_current_user
+from llm_memory.server.auth_store import AuthStore
 from llm_memory.server.authorization import (
     can_access_scoped_record,
     require_repo_scope_access,
 )
 from llm_memory.server.routers import (
     ai,
+    authentication,
+    context,
     diagnostics,
     intents,
     memories,
@@ -371,8 +377,22 @@ app.state.storage = storage
 app.state.storage_backend = effective_storage_backend
 app.state.embedding_provider = embedding_provider
 app.state.embedding_runtime_status = embedding_runtime_status
+app.state.auth_store = AuthStore(config.storage.data_dir / "auth.db")
+app.state.memory_lifecycle = MemoryLifecycleManager(
+    storage, config.storage.data_dir / "lifecycle.db"
+)
+app.state.model_router = ModelRouter(config.llm)
+app.state.intent_evaluator = IntentEvaluator(storage, app.state.model_router, config.llm)
+bootstrapped_account = app.state.auth_store.bootstrap_admin(
+    config.server.bootstrap_admin_username,
+    config.server.bootstrap_admin_password,
+)
+if bootstrapped_account:
+    logger.info("Bootstrapped the initial administrator account")
 
 # Include Routers
+app.include_router(authentication.router)
+app.include_router(context.router)
 app.include_router(memories.router)
 app.include_router(intents.router)
 app.include_router(ai.router)

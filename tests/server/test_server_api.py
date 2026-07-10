@@ -532,11 +532,156 @@ async def test_audit_log_records_memory_state_changes_without_secrets(client):
 
 
 @pytest.mark.asyncio
+async def test_memory_delete_is_recoverable_and_purge_is_explicit(client):
+    headers = {"X-API-KEY": "test_key"}
+    created = await client.post(
+        "/memories",
+        json={"content": "Recoverable note", "repo_id": "trash-repo"},
+        headers=headers,
+    )
+    memory_id = created.json()["id"]
+
+    deleted = await client.delete(f"/memories/{memory_id}?reason=obsolete", headers=headers)
+    assert deleted.status_code == 200
+    assert deleted.json()["recoverable"] is True
+    deleted_memory = await client.get(f"/memories/{memory_id}", headers=headers)
+    assert deleted_memory.json()["status"] == "deleted"
+
+    restored = await client.post(f"/memories/{memory_id}/restore", headers=headers)
+    assert restored.status_code == 200
+    active_memory = await client.get(f"/memories/{memory_id}", headers=headers)
+    assert active_memory.json()["status"] == "active"
+
+    await client.delete(f"/memories/{memory_id}", headers=headers)
+    wrong_confirmation = await client.delete(
+        f"/memories/{memory_id}/purge?confirmation=wrong", headers=headers
+    )
+    assert wrong_confirmation.status_code == 400
+    purged = await client.delete(
+        f"/memories/{memory_id}/purge?confirmation={memory_id}", headers=headers
+    )
+    assert purged.status_code == 200
+    assert (await client.get(f"/memories/{memory_id}", headers=headers)).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_memory_merge_preview_execute_and_undo(client):
+    headers = {"X-API-KEY": "test_key"}
+    memory_ids = []
+    for tags in (["one"], ["two"]):
+        response = await client.post(
+            "/memories",
+            json={
+                "content": "Canonical deployment rule",
+                "repo_id": "merge-repo",
+                "tags": tags,
+            },
+            headers=headers,
+        )
+        memory_ids.append(response.json()["id"])
+
+    preview = await client.post(
+        "/memories/merge/preview", json={"memory_ids": memory_ids}, headers=headers
+    )
+    assert preview.status_code == 200
+    assert preview.json()["exact_duplicate"] is True
+    merged = await client.post(
+        "/memories/merge", json={"memory_ids": memory_ids}, headers=headers
+    )
+    assert merged.status_code == 200
+    operation_id = merged.json()["operation_id"]
+    merged_source = await client.get(f"/memories/{memory_ids[1]}", headers=headers)
+    assert merged_source.json()["status"] == "merged"
+
+    undone = await client.post(
+        f"/memories/merge/{operation_id}/undo", headers=headers
+    )
+    assert undone.status_code == 200
+    restored_source = await client.get(f"/memories/{memory_ids[1]}", headers=headers)
+    assert restored_source.json()["status"] == "active"
+
+
+@pytest.mark.asyncio
 async def test_intents_endpoint(client):
     headers = {"X-API-KEY": "test_key"}
     response = await client.get("/intents", headers=headers)
     assert response.status_code == 200
     assert isinstance(response.json(), list)
+
+
+@pytest.mark.asyncio
+async def test_intent_is_completed_automatically_from_captured_evidence(client):
+    headers = {"X-API-KEY": "test_key"}
+    intent = await client.post(
+        "/intents",
+        json={"description": "Implement secure login", "repo_id": "intent-auto"},
+        headers=headers,
+    )
+    evidence = await client.post(
+        "/memories",
+        json={
+            "content": "Implemented secure login and all tests passed",
+            "repo_id": "intent-auto",
+            "category": "test_result",
+        },
+        headers=headers,
+    )
+    assert evidence.status_code == 200
+
+    completed = await client.get(
+        "/intents?repo_id=intent-auto&status=completed", headers=headers
+    )
+    completed_intent = next(item for item in completed.json() if item["id"] == intent.json()["id"])
+    evaluation = completed_intent["context"]["completion_evaluation"]
+    assert evaluation["objective_evidence"] is True
+    assert evaluation["decision"] == "completed"
+
+    reopened = await client.post(f"/intents/{intent.json()['id']}/reopen", headers=headers)
+    assert reopened.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_context_compile_returns_citations_and_unchanged_delta(client):
+    headers = {"X-API-KEY": "test_key"}
+    await client.post(
+        "/memories",
+        json={
+            "content": "Session cookies protect dashboard authentication",
+            "layer": "semantic",
+            "repo_id": "context-repo",
+            "files": ["src/auth.py"],
+            "symbols": ["login"],
+            "confidence": 0.95,
+            "source_revision": "abc123",
+        },
+        headers=headers,
+    )
+    compiled = await client.post(
+        "/context/compile",
+        json={
+            "query": "dashboard authentication",
+            "repo_id": "context-repo",
+            "files": ["src/auth.py"],
+            "token_budget": 200,
+        },
+        headers=headers,
+    )
+    assert compiled.status_code == 200
+    assert compiled.json()["items"][0]["source_revision"] == "abc123"
+
+    unchanged = await client.post(
+        "/context/compile",
+        json={
+            "query": "dashboard authentication",
+            "repo_id": "context-repo",
+            "files": ["src/auth.py"],
+            "token_budget": 200,
+            "previous_fingerprint": compiled.json()["fingerprint"],
+        },
+        headers=headers,
+    )
+    assert unchanged.json()["unchanged"] is True
+    assert unchanged.json()["token_count"] == 0
 
 
 @pytest.mark.asyncio

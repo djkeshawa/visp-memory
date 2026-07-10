@@ -20,6 +20,12 @@ import {
     MemoryIntelligenceReportItem,
     MemoryIntelligenceReportSection,
     QualityDuplicateResponse,
+    AuthSession,
+    AuthUser,
+    PersonalAccessToken,
+    Project,
+    MemoryMergePreview,
+    ModelRoutingStatus,
 } from "./types"
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_LLM_MEMORY_API_URL || ""
@@ -44,8 +50,8 @@ export function isApiError(error: unknown): error is ApiError {
 
 export function hasAuthCredentials(): boolean {
     const { apiKey, jwtToken } = getAuthCredentials()
-
-    return Boolean(apiKey || jwtToken)
+    if (typeof window === "undefined") return Boolean(apiKey || jwtToken)
+    return Boolean(apiKey || jwtToken || window.sessionStorage.getItem(AUTH_USER_STORAGE_KEY))
 }
 
 export function describeApiError(error: unknown): string {
@@ -60,7 +66,7 @@ export function describeApiError(error: unknown): string {
     if (error.status === 401) {
         const requestId = error.requestId ? ` Request ID: ${error.requestId}.` : ""
         if (!hasAuthCredentials()) {
-            return `Authentication is required. Add an API key or JWT token before loading protected data.${requestId}`
+            return `Authentication is required. Sign in to load protected data.${requestId}`
         }
 
         return `The configured credentials were rejected${error.detail ? `: ${error.detail}` : "."}${requestId}`
@@ -72,6 +78,8 @@ export function describeApiError(error: unknown): string {
 
 const API_KEY_STORAGE_KEY = "llm-memory-api-key"
 const JWT_STORAGE_KEY = "llm-memory-jwt-token"
+const CSRF_STORAGE_KEY = "llm-memory-csrf-token"
+const AUTH_USER_STORAGE_KEY = "llm-memory-auth-user"
 export const AUTH_CHANGED_EVENT = "llm-memory-auth-changed"
 
 export function getAuthCredentials(): { apiKey: string; jwtToken: string } {
@@ -94,15 +102,21 @@ export function setAuthCredentials(apiKey: string, jwtToken: string): void {
 }
 
 export function clearAuthCredentials(): void {
+    if (typeof window !== "undefined") {
+        window.sessionStorage.removeItem(CSRF_STORAGE_KEY)
+        window.sessionStorage.removeItem(AUTH_USER_STORAGE_KEY)
+    }
     setAuthCredentials("", "")
 }
 
 function authHeaders(): HeadersInit {
     const headers: Record<string, string> = {}
     const { apiKey, jwtToken } = getAuthCredentials()
+    const csrfToken = typeof window !== "undefined" ? window.sessionStorage.getItem(CSRF_STORAGE_KEY) : null
 
     if (jwtToken) headers.Authorization = `Bearer ${jwtToken}`
     else if (apiKey) headers["X-API-KEY"] = apiKey
+    if (csrfToken) headers["X-CSRF-Token"] = csrfToken
 
     return headers
 }
@@ -116,7 +130,14 @@ function jsonHeaders(): HeadersInit {
 
 async function request(path: string, init?: RequestInit): Promise<Response> {
     try {
-        const res = await fetch(`${API_BASE_URL}${path}`, init)
+        const res = await fetch(`${API_BASE_URL}${path}`, {
+            ...init,
+            credentials: "include",
+            headers: {
+                ...authHeaders(),
+                ...(init?.headers || {}),
+            },
+        })
         if (!res.ok) {
             throw await apiErrorFromResponse(res)
         }
@@ -127,7 +148,144 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
     }
 }
 
-function withQuery(path: string, params: Record<string, string | number | null | undefined>): string {
+function normalizeAuthUser(data: Record<string, unknown>): AuthUser {
+    return {
+        id: String(data.id),
+        username: String(data.username),
+        email: data.email ? String(data.email) : null,
+        displayName: data.display_name ? String(data.display_name) : null,
+        role: data.role === "admin" ? "admin" : "user",
+        teamId: data.team_id ? String(data.team_id) : null,
+        enabled: data.enabled !== false,
+        lastLoginAt: data.last_login_at ? String(data.last_login_at) : null,
+    }
+}
+
+function rememberAuthSession(data: Record<string, unknown>, notify = false): AuthSession {
+    const user = normalizeAuthUser(data.user as Record<string, unknown>)
+    const csrfToken = data.csrf_token ? String(data.csrf_token) : null
+    if (typeof window !== "undefined") {
+        window.sessionStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(user))
+        if (csrfToken) window.sessionStorage.setItem(CSRF_STORAGE_KEY, csrfToken)
+        if (notify) window.dispatchEvent(new Event(AUTH_CHANGED_EVENT))
+    }
+    return {
+        user,
+        authType: String(data.auth_type || "session"),
+        scopes: Array.isArray(data.scopes) ? data.scopes.map(String) : ["*"],
+        repoIds: Array.isArray(data.repo_ids) ? data.repo_ids.map(String) : [],
+        csrfToken,
+    }
+}
+
+export async function getAuthenticationStatus(): Promise<{ authEnabled: boolean; setupRequired: boolean }> {
+    const res = await request("/auth/status")
+    const data = await res.json()
+    return { authEnabled: Boolean(data.auth_enabled), setupRequired: Boolean(data.setup_required) }
+}
+
+export async function login(username: string, password: string): Promise<AuthSession> {
+    const res = await request("/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+    })
+    return rememberAuthSession(await res.json(), true)
+}
+
+export async function getCurrentAccount(): Promise<AuthSession> {
+    const res = await request("/auth/me")
+    return rememberAuthSession(await res.json())
+}
+
+export async function listAccounts(): Promise<AuthUser[]> {
+    const res = await request("/auth/users")
+    return (await res.json()).map(normalizeAuthUser)
+}
+
+export async function createAccount(payload: {
+    username: string
+    password: string
+    displayName?: string
+    email?: string
+    role: "admin" | "user"
+}): Promise<AuthUser> {
+    const res = await request("/auth/users", {
+        method: "POST",
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+            username: payload.username,
+            password: payload.password,
+            display_name: payload.displayName || null,
+            email: payload.email || null,
+            role: payload.role,
+        }),
+    })
+    return normalizeAuthUser(await res.json())
+}
+
+export async function setAccountEnabled(userId: string, enabled: boolean): Promise<AuthUser> {
+    const res = await request(`/auth/users/${encodeURIComponent(userId)}`, {
+        method: "PATCH",
+        headers: jsonHeaders(),
+        body: JSON.stringify({ enabled }),
+    })
+    return normalizeAuthUser(await res.json())
+}
+
+export async function logout(): Promise<void> {
+    await request("/auth/logout", { method: "POST" })
+    clearAuthCredentials()
+}
+
+export async function listPersonalAccessTokens(): Promise<PersonalAccessToken[]> {
+    const res = await request("/auth/tokens")
+    const data = await res.json()
+    return data.map(normalizePersonalAccessToken)
+}
+
+export async function createPersonalAccessToken(payload: {
+    name: string
+    scopes: string[]
+    repoIds: string[]
+    expiresAt?: string | null
+}): Promise<PersonalAccessToken> {
+    const res = await request("/auth/tokens", {
+        method: "POST",
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+            name: payload.name,
+            scopes: payload.scopes,
+            repo_ids: payload.repoIds,
+            expires_at: payload.expiresAt || null,
+        }),
+    })
+    return normalizePersonalAccessToken(await res.json())
+}
+
+export async function revokePersonalAccessToken(tokenId: string): Promise<void> {
+    await request(`/auth/tokens/${encodeURIComponent(tokenId)}`, { method: "DELETE" })
+}
+
+function normalizePersonalAccessToken(data: Record<string, unknown>): PersonalAccessToken {
+    return {
+        id: String(data.id),
+        name: String(data.name),
+        tokenPrefix: String(data.token_prefix),
+        scopes: Array.isArray(data.scopes) ? data.scopes.map(String) : [],
+        repoIds: Array.isArray(data.repo_ids) ? data.repo_ids.map(String) : [],
+        createdAt: String(data.created_at),
+        expiresAt: data.expires_at ? String(data.expires_at) : null,
+        lastUsedAt: data.last_used_at ? String(data.last_used_at) : null,
+        revokedAt: data.revoked_at ? String(data.revoked_at) : null,
+        token: data.token ? String(data.token) : undefined,
+    }
+}
+
+function withQuery(
+    path: string,
+    params: Record<string, string | number | boolean | null | undefined>,
+): string {
     const searchParams = new URLSearchParams()
     for (const [key, value] of Object.entries(params)) {
         if (value !== undefined && value !== null && value !== "") {
@@ -186,7 +344,67 @@ export async function getProjectScopes(): Promise<ProjectScope[]> {
         id: item.id,
         name: item.name || item.id,
         registered: Boolean(item.registered),
+        status: item.status === "archived" ? "archived" : "active",
     }))
+}
+
+export async function getProjects(includeArchived = false): Promise<Project[]> {
+    const res = await request(withQuery("/repos", { include_archived: includeArchived }))
+    return (await res.json()).map((item: any) => ({
+        id: item.id,
+        name: item.name,
+        url: item.url,
+        description: item.description,
+        techStack: Array.isArray(item.tech_stack) ? item.tech_stack : [],
+        status: item.status === "archived" ? "archived" : "active",
+        archivedAt: item.archived_at,
+        createdAt: item.created_at,
+    }))
+}
+
+export async function createProject(payload: {
+    id?: string
+    name: string
+    description?: string
+    url?: string
+}): Promise<Project> {
+    const res = await request("/repos", {
+        method: "POST",
+        headers: jsonHeaders(),
+        body: JSON.stringify(payload),
+    })
+    const item = await res.json()
+    return {
+        id: item.id,
+        name: item.name,
+        url: item.url,
+        description: item.description,
+        techStack: item.tech_stack || [],
+        status: item.status === "archived" ? "archived" : "active",
+        archivedAt: item.archived_at,
+        createdAt: item.created_at,
+    }
+}
+
+export async function archiveProject(repoId: string): Promise<void> {
+    await request(`/repos/${encodeURIComponent(repoId)}/archive`, { method: "POST" })
+}
+
+export async function restoreProject(repoId: string): Promise<void> {
+    await request(`/repos/${encodeURIComponent(repoId)}/restore`, { method: "POST" })
+}
+
+export async function getProjectPurgePreview(repoId: string): Promise<Record<string, number | string>> {
+    const res = await request(`/repos/${encodeURIComponent(repoId)}/purge-preview`)
+    return res.json()
+}
+
+export async function purgeProject(repoId: string): Promise<{ backup: string }> {
+    const res = await request(
+        withQuery(`/repos/${encodeURIComponent(repoId)}`, { confirmation: repoId }),
+        { method: "DELETE" },
+    )
+    return res.json()
 }
 
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {
@@ -241,18 +459,117 @@ export async function getRecentMemories(limit: number = 8, repoId?: string | nul
     const res = await request(withQuery("/memories", { limit, repo_id: repoId }), { headers: authHeaders() })
     const data = await res.json()
 
-    return data.map((item: any) => ({
+    return data.map(normalizeMemory)
+}
+
+export async function getModelRoutingStatus(): Promise<ModelRoutingStatus> {
+    const res = await request("/ai/routing")
+    const data = await res.json()
+    return {
+        provider: data.provider || "none",
+        model: data.model,
+        configured: Boolean(data.configured),
+        supportsClientSampling: Boolean(data.supports_client_sampling),
+        timeoutSeconds: Number(data.timeout_seconds || 30),
+        maxOutputTokens: Number(data.max_output_tokens || 800),
+        tasks: Array.isArray(data.tasks) ? data.tasks.map(String) : [],
+    }
+}
+
+export async function testModelRouting(): Promise<void> {
+    await request("/ai/test", { method: "POST" })
+}
+
+export async function getMemories(
+    repoId?: string | null,
+    status = "active",
+    limit = 200,
+): Promise<Memory[]> {
+    const res = await request(withQuery("/memories", { repo_id: repoId, status, limit }))
+    return (await res.json()).map(normalizeMemory)
+}
+
+export async function deleteMemory(memoryId: string, reason = "Deleted from dashboard"): Promise<void> {
+    await request(withQuery(`/memories/${encodeURIComponent(memoryId)}`, { reason }), {
+        method: "DELETE",
+    })
+}
+
+export async function restoreMemory(memoryId: string): Promise<void> {
+    await request(`/memories/${encodeURIComponent(memoryId)}/restore`, { method: "POST" })
+}
+
+export async function purgeMemory(memoryId: string): Promise<void> {
+    await request(
+        withQuery(`/memories/${encodeURIComponent(memoryId)}/purge`, { confirmation: memoryId }),
+        { method: "DELETE" },
+    )
+}
+
+export async function previewMemoryMerge(
+    memoryIds: string[],
+    targetId?: string,
+): Promise<MemoryMergePreview> {
+    const res = await request("/memories/merge/preview", {
+        method: "POST",
+        headers: jsonHeaders(),
+        body: JSON.stringify({ memory_ids: memoryIds, target_id: targetId }),
+    })
+    return normalizeMergePreview(await res.json())
+}
+
+export async function mergeMemories(
+    memoryIds: string[],
+    targetId: string,
+    reviewed: boolean,
+): Promise<MemoryMergePreview> {
+    const res = await request("/memories/merge", {
+        method: "POST",
+        headers: jsonHeaders(),
+        body: JSON.stringify({ memory_ids: memoryIds, target_id: targetId, reviewed }),
+    })
+    return normalizeMergePreview(await res.json())
+}
+
+export async function undoMemoryMerge(operationId: string): Promise<void> {
+    await request(`/memories/merge/${encodeURIComponent(operationId)}/undo`, { method: "POST" })
+}
+
+function normalizeMemory(item: any): Memory {
+    return {
         id: item.id,
         content: item.content,
         layer: item.layer,
         category: item.category,
         status: item.status,
+        repoId: item.repo_id,
         createdAt: item.created_at,
         accessedAt: item.accessed_at,
         importance: item.importance,
         accessCount: item.access_count,
         tags: item.tags,
-    }))
+        metadata: item.metadata,
+    }
+}
+
+function normalizeMergePreview(data: any): MemoryMergePreview {
+    return {
+        memoryIds: data.memory_ids || [],
+        targetId: data.target_id,
+        repoId: data.repo_id,
+        layer: data.layer,
+        targetContent: data.target_content,
+        exactDuplicate: Boolean(data.exact_duplicate),
+        validationErrors: data.validation_errors || [],
+        warnings: data.warnings || [],
+        relationshipRewrites: Number(data.relationship_rewrites || 0),
+        sourceTokens: Number(data.source_tokens || 0),
+        resultTokens: Number(data.result_tokens || 0),
+        estimatedTokensSaved: Number(data.estimated_tokens_saved || 0),
+        mergedTags: data.merged_tags || [],
+        operationId: data.operation_id,
+        status: data.status,
+    }
 }
 
 export async function getIntents(repoId?: string | null, status: string = "active"): Promise<Intent[]> {
@@ -267,6 +584,7 @@ export async function getIntents(repoId?: string | null, status: string = "activ
         status: item.status,
         createdAt: item.created_at,
         updatedAt: item.updated_at,
+        context: item.context || {},
     }))
 }
 
@@ -405,6 +723,10 @@ export async function completeIntent(intentId: string): Promise<void> {
         method: "POST",
         headers: authHeaders(),
     })
+}
+
+export async function reopenIntent(intentId: string): Promise<void> {
+    await request(`/intents/${encodeURIComponent(intentId)}/reopen`, { method: "POST" })
 }
 
 export async function getDecayPreview(options: {

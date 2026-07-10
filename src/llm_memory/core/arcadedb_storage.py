@@ -111,6 +111,8 @@ class ArcadeDbStorage(BaseStorage):
         "tech_stack",
         "team_id",
         "metadata",
+        "status",
+        "archived_at",
         "created_at",
     ]
     USER_FIELDS = ["id", "username", "email", "display_name", "metadata"]
@@ -919,6 +921,25 @@ class ArcadeDbStorage(BaseStorage):
                 filtered.append(relationship)
         return filtered
 
+    def delete_relationship(self, relationship_id: str) -> bool:
+        with self._database() as db:
+            existing = list(
+                db.query(
+                    "sql",
+                    f"SELECT FROM {self.MEMORY_RELATIONSHIP_EDGE} WHERE id = ?",
+                    relationship_id,
+                )
+            )
+            if not existing:
+                return False
+            with db.transaction():
+                db.command(
+                    "sql",
+                    f"DELETE EDGE {self.MEMORY_RELATIONSHIP_EDGE} WHERE id = ?",
+                    relationship_id,
+                )
+        return True
+
     def get_stats(self, repo_id: str = None) -> Dict[str, Any]:
         memories = self.list_memories(repo_id=repo_id, status="active", limit=100000)
         by_layer: dict[str, int] = {}
@@ -951,6 +972,7 @@ class ArcadeDbStorage(BaseStorage):
                 "tech_stack": repo.get("tech_stack", []),
                 "team_id": repo.get("team_id"),
                 "metadata": repo.get("metadata", {}),
+                "status": repo.get("status", "active"),
                 # Persist creation time once at T0 so reads round-trip a real timestamp, matching
                 # the neo4j and sqlite backends (was absent, so the router fabricated utc_now() on
                 # every read).
@@ -971,15 +993,47 @@ class ArcadeDbStorage(BaseStorage):
             self.RECORD_JSON_FIELDS["Repository"],
         )
 
-    def list_repositories(self, team_id: str = None) -> List[Dict[str, Any]]:
-        filters = {"team_id": team_id} if team_id else None
+    def list_repositories(
+        self, team_id: str = None, status: str = "active"
+    ) -> List[Dict[str, Any]]:
+        filters = {}
+        if team_id:
+            filters["team_id"] = team_id
+        if status and status != "all":
+            filters["status"] = status
         return self._list_records(
             "Repository",
             self.REPOSITORY_FIELDS,
             json_fields=self.RECORD_JSON_FIELDS["Repository"],
-            filters=filters,
+            filters=filters or None,
             order_by="name ASC",
         )
+
+    def update_repository(self, repo_id: str, **kwargs) -> bool:
+        allowed = {"name", "url", "description", "tech_stack", "metadata", "status"}
+        updates = {
+            key: value
+            for key, value in kwargs.items()
+            if key in allowed and value is not None
+        }
+        if updates.get("status") == "archived":
+            updates["archived_at"] = utc_now().isoformat()
+        elif updates.get("status") == "active":
+            updates["archived_at"] = None
+        return self._update_record(
+            "Repository",
+            repo_id,
+            updates,
+            json_fields=self.RECORD_JSON_FIELDS["Repository"],
+        )
+
+    def delete_repository(self, repo_id: str) -> bool:
+        if self.get_repository(repo_id) is None:
+            return False
+        self._delete_records("Memory", {"repo_id": repo_id})
+        self._delete_records("Intent", {"repo_id": repo_id})
+        self._delete_records("Repository", {"id": repo_id})
+        return True
 
     def list_project_ids(self) -> List[str]:
         memories = self.list_memories(status="all", limit=100000)

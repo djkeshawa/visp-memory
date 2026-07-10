@@ -65,7 +65,7 @@ function DashboardContent() {
       </div>
 
       {loadError ? (
-        <div className="glass rounded-xl border border-destructive/30 p-4">
+        <div className="glass rounded-lg border border-destructive/30 p-4">
           <div className="flex items-start gap-3">
             <AlertTriangle className="mt-0.5 h-5 w-5 text-destructive" />
             <div>
@@ -83,28 +83,28 @@ function DashboardContent() {
           value={displayStats.totalMemories}
           icon={<Database className="h-5 w-5 text-white" />}
           change={isLoading ? "Loading..." : "Total stored"}
-          gradient="bg-gradient-to-br from-blue-500 to-blue-600"
+          gradient="bg-episodic"
         />
         <AnimatedStatsCard
           title="Active Intents"
           value={displayStats.activeIntents}
           icon={<Target className="h-5 w-5 text-white" />}
           change={isLoading ? "Loading..." : "In progress"}
-          gradient="bg-gradient-to-br from-amber-500 to-amber-600"
+          gradient="bg-intent"
         />
         <AnimatedStatsCard
           title="Knowledge Nodes"
           value={displayStats.knowledgeNodes}
           icon={<Brain className="h-5 w-5 text-white" />}
           change={isLoading ? "Loading..." : "Semantic layer"}
-          gradient="bg-gradient-to-br from-purple-500 to-purple-600"
+          gradient="bg-semantic"
         />
         <AnimatedStatsCard
           title="Connections"
           value={displayStats.connections}
           icon={<Share2 className="h-5 w-5 text-white" />}
           change={isLoading ? "Loading..." : "Graph edges"}
-          gradient="bg-gradient-to-br from-cyan-500 to-cyan-600"
+          gradient="bg-success"
         />
       </div>
 

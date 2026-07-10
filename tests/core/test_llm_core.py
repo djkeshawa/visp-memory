@@ -36,16 +36,13 @@ def test_create_unknown_provider():
 
 def test_openai_completion():
     with patch.dict(sys.modules, {"openai": mock_openai}):
-        # Setup mock response
         mock_instance = mock_openai.OpenAI.return_value
-        mock_instance.chat.completions.create.return_value.choices = [
-            Mock(message=Mock(content="Hello OpenAI"))
-        ]
+        mock_instance.responses.create.return_value.output_text = "Hello OpenAI"
 
         client = OpenAIClient(api_key="sk-test")
         response = client.completion("Hi")
         assert response == "Hello OpenAI"
-        mock_instance.chat.completions.create.assert_called_once()
+        mock_instance.responses.create.assert_called_once()
 
 
 def test_anthropic_completion():

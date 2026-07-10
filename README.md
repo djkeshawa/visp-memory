@@ -111,8 +111,11 @@ docker compose --profile full up --build
 ```
 
 Compose publishes API and database ports on `127.0.0.1` by default. Set a
-unique `NEO4J_PASSWORD` for graph profiles and `LLM_MEMORY_SERVER_API_KEYS` for
-dashboard access, then enter the API key in Dashboard Settings. Set
+unique `NEO4J_PASSWORD` for graph profiles and bootstrap the first dashboard
+administrator with `LLM_MEMORY_BOOTSTRAP_ADMIN_USERNAME` and
+`LLM_MEMORY_BOOTSTRAP_ADMIN_PASSWORD`. Sign in at `/dashboard/auth`, then use
+the Integrations page to create scoped personal access tokens for API and MCP
+clients. Set
 `LLM_MEMORY_BIND_HOST=0.0.0.0` only when remote exposure is intentional and
 protected by TLS and network controls.
 

@@ -9,10 +9,16 @@ from llm_memory.server.auth import UserContext, get_current_user
 from llm_memory.server.authorization import (
     can_access_scoped_record,
     require_repo_scope_access,
+    require_repo_writable,
     require_scoped_record_access,
 )
 from llm_memory.server.routers.platform import append_audit_event
-from llm_memory.server.schemas import IntentCreate, IntentResponse, IntentUpdate
+from llm_memory.server.schemas import (
+    IntentCreate,
+    IntentEvaluationRequest,
+    IntentResponse,
+    IntentUpdate,
+)
 
 router = APIRouter(prefix="/intents", tags=["intents"])
 
@@ -75,7 +81,7 @@ async def create_intent(
     storage = request.app.state.storage
     config = load_config()
     intent_repo_id = intent.repo_id or config.repo_id
-    require_repo_scope_access(storage, intent_repo_id, user)
+    require_repo_writable(storage, intent_repo_id, user)
 
     # Add author attribution
     context = dict(intent.context or {})
@@ -190,3 +196,91 @@ async def close_intent(
         target_id=intent_id,
     )
     return {"status": "closed", "id": intent_id}
+
+
+@router.post("/{intent_id}/evaluate")
+async def evaluate_intent(
+    request: Request,
+    intent_id: str,
+    payload: IntentEvaluationRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    storage = request.app.state.storage
+    intent = require_scoped_record_access(
+        storage,
+        _find_intent(storage, intent_id),
+        user,
+        scope_field="context",
+        not_found_detail="Intent not found",
+    )
+    result = request.app.state.intent_evaluator.evaluate(
+        intent,
+        summary=payload.summary,
+        memory_ids=payload.memory_ids,
+        actor_id=user.user_id,
+        allow_auto_complete=payload.allow_auto_complete,
+    )
+    append_audit_event(
+        storage,
+        event_type=f"intent.evaluation_{result['decision']}",
+        actor_id=user.user_id,
+        repo_id=intent.get("repo_id"),
+        target_type="intent",
+        target_id=intent_id,
+        metadata={
+            "confidence": result["confidence"],
+            "objective_evidence": result["objective_evidence"],
+            "evaluator_version": result["evaluator_version"],
+        },
+    )
+    return result
+
+
+@router.get("/completion-suggestions")
+async def list_completion_suggestions(
+    request: Request,
+    repo_id: str = None,
+    user: UserContext = Depends(get_current_user),
+):
+    storage = request.app.state.storage
+    config = load_config()
+    target_repo_id = repo_id or config.repo_id
+    require_repo_scope_access(storage, target_repo_id, user)
+    suggestions = []
+    for intent in storage.get_active_intents(repo_id=target_repo_id, status="active"):
+        if not can_access_scoped_record(storage, intent, user, scope_field="context"):
+            continue
+        evaluation = (intent.get("context") or {}).get("completion_evaluation") or {}
+        if evaluation.get("decision") == "suggested":
+            suggestions.append(_intent_response_payload(intent))
+    return suggestions
+
+
+@router.post("/{intent_id}/reopen")
+async def reopen_intent(
+    request: Request,
+    intent_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    storage = request.app.state.storage
+    intent = require_scoped_record_access(
+        storage,
+        _find_intent(storage, intent_id),
+        user,
+        scope_field="context",
+        not_found_detail="Intent not found",
+    )
+    context = dict(intent.get("context") or {})
+    context.pop("completed_automatically", None)
+    context.pop("completed_at", None)
+    if not storage.update_intent(intent_id, status="active", context=context):
+        raise HTTPException(status_code=404, detail="Intent not found")
+    append_audit_event(
+        storage,
+        event_type="intent.reopened",
+        actor_id=user.user_id,
+        repo_id=intent.get("repo_id"),
+        target_type="intent",
+        target_id=intent_id,
+    )
+    return {"status": "active", "id": intent_id}

@@ -5,12 +5,14 @@ export interface Memory {
   content: string
   layer: MemoryLayer
   category: string
-  status?: "active" | "pending" | "archived" | "deleted"
+  status?: "active" | "pending" | "archived" | "superseded" | "merged" | "deleted"
+  repoId?: string | null
   createdAt: string
   accessedAt?: string
   importance?: number
   accessCount?: number
   tags?: string[]
+  metadata?: Record<string, unknown>
 }
 
 export interface SearchResult extends Memory {
@@ -106,6 +108,7 @@ export interface Intent {
   status: "active" | "completed" | "closed"
   createdAt: string
   updatedAt?: string
+  context?: Record<string, any>
 }
 
 export interface DecayPreviewItem {
@@ -136,6 +139,36 @@ export interface ProjectScope {
   id: string
   name: string
   registered: boolean
+  status?: "active" | "archived"
+}
+
+export interface Project {
+  id: string
+  name: string
+  url?: string | null
+  description?: string | null
+  techStack: string[]
+  status: "active" | "archived"
+  archivedAt?: string | null
+  createdAt: string
+}
+
+export interface MemoryMergePreview {
+  memoryIds: string[]
+  targetId: string
+  repoId?: string | null
+  layer: string
+  targetContent: string
+  exactDuplicate: boolean
+  validationErrors: string[]
+  warnings: string[]
+  relationshipRewrites: number
+  sourceTokens: number
+  resultTokens: number
+  estimatedTokensSaved: number
+  mergedTags: string[]
+  operationId?: string
+  status?: string
 }
 
 export interface Stats {
@@ -236,4 +269,46 @@ export interface SystemStatus {
   vectorDatabase: "ready" | "syncing" | "offline"
   embeddings: "active" | "inactive" | "offline"
   runtime?: RuntimeStatus
+}
+
+export interface ModelRoutingStatus {
+  provider: string
+  model?: string | null
+  configured: boolean
+  supportsClientSampling: boolean
+  timeoutSeconds: number
+  maxOutputTokens: number
+  tasks: string[]
+}
+
+export interface AuthUser {
+  id: string
+  username: string
+  email?: string | null
+  displayName?: string | null
+  role: "admin" | "user"
+  teamId?: string | null
+  enabled: boolean
+  lastLoginAt?: string | null
+}
+
+export interface AuthSession {
+  user: AuthUser
+  authType: string
+  scopes: string[]
+  repoIds: string[]
+  csrfToken?: string | null
+}
+
+export interface PersonalAccessToken {
+  id: string
+  name: string
+  tokenPrefix: string
+  scopes: string[]
+  repoIds: string[]
+  createdAt: string
+  expiresAt?: string | null
+  lastUsedAt?: string | null
+  revokedAt?: string | null
+  token?: string
 }

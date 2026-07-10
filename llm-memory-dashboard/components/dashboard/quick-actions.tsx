@@ -56,13 +56,13 @@ export function QuickActions({ onMemoryCreated }: QuickActionsProps = {}) {
   }
 
   return (
-    <div className="glass rounded-xl p-5">
+    <div className="glass rounded-lg p-5">
       <h3 className="text-sm font-semibold text-foreground mb-4">Quick Actions</h3>
       <div className="space-y-3">
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>
             <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
-              <Button className="w-full bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md hover:shadow-lg transition-shadow">
+              <Button className="w-full">
                 <Plus className="h-4 w-4 mr-2" />
                 New Memory
               </Button>

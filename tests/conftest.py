@@ -6,8 +6,12 @@ import httpx
 import pytest_asyncio
 
 from llm_memory.config import MemoryConfig, ServerConfig
+from llm_memory.core.intent_evaluator import IntentEvaluator
+from llm_memory.core.lifecycle import MemoryLifecycleManager
+from llm_memory.core.model_router import ModelRouter
 from llm_memory.core.storage import LocalStorage
 from llm_memory.server.app import app
+from llm_memory.server.auth_store import AuthStore
 
 
 @pytest_asyncio.fixture
@@ -17,6 +21,10 @@ async def client():
     # otherwise raise a spurious PermissionError after the test has passed.
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         app.state.storage = LocalStorage(Path(tmpdir))
+        app.state.auth_store = AuthStore(Path(tmpdir) / "auth.db")
+        app.state.memory_lifecycle = MemoryLifecycleManager(
+            app.state.storage, Path(tmpdir) / "lifecycle.db"
+        )
 
         config = MemoryConfig()
         config.embedding.provider = "noop"
@@ -26,6 +34,10 @@ async def client():
             allow_anonymous=False,
         )
         config.storage.api_key = "test_key"
+        app.state.model_router = ModelRouter(config.llm)
+        app.state.intent_evaluator = IntentEvaluator(
+            app.state.storage, app.state.model_router, config.llm
+        )
 
         transport = httpx.ASGITransport(app=app)
         with mock.patch("llm_memory.server.auth.load_config", return_value=config):

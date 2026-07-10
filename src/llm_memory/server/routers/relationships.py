@@ -87,3 +87,34 @@ async def add_relationship(
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     return {"id": rel_id, "status": "created"}
+
+
+@router.delete("/{relationship_id}")
+async def delete_relationship(
+    request: Request,
+    relationship_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """Delete a relationship after verifying access to both endpoints."""
+    storage = request.app.state.storage
+    relationship = next(
+        (
+            item
+            for item in storage.get_all_relationships()
+            if item.get("id") == relationship_id
+        ),
+        None,
+    )
+    if not relationship:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Relationship not found")
+    for memory_id in (relationship.get("source_id"), relationship.get("target_id")):
+        require_scoped_record_access(
+            storage,
+            storage.get_memory(memory_id),
+            user,
+            scope_field="metadata",
+            not_found_detail="Relationship not found",
+        )
+    if not storage.delete_relationship(relationship_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Relationship not found")
+    return {"status": "deleted", "id": relationship_id}

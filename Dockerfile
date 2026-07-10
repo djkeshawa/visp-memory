@@ -42,11 +42,11 @@ COPY --from=python-builder /app/dist/*.whl ./
 
 # Install the runtime server profile from lock-derived constraints. Keep local
 # transformers, Torch, and ChromaDB out of the production image.
-ARG LLM_MEMORY_EXTRAS=api,mcp,arcadedb,neo4j,openai,ollama
+ARG LLM_MEMORY_EXTRAS=api,mcp,arcadedb,neo4j,openai,anthropic,ollama
 COPY pyproject.toml uv.lock ./
 RUN pip install --no-cache-dir "uv==0.11.7" && \
     uv export --frozen --no-dev --no-emit-project --no-hashes \
-      --extra api --extra mcp --extra arcadedb --extra neo4j --extra openai --extra ollama \
+      --extra api --extra mcp --extra arcadedb --extra neo4j --extra openai --extra anthropic --extra ollama \
       --output-file constraints.txt && \
     pip install --no-cache-dir --constraint constraints.txt "$(ls *.whl)[${LLM_MEMORY_EXTRAS}]" && \
     rm constraints.txt pyproject.toml uv.lock && \

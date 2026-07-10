@@ -18,7 +18,9 @@ def require_admin(user: UserContext) -> None:
     this is a no-op there; with auth enabled, anonymous and ordinary team users
     are rejected.
     """
-    if not user.is_admin:
+    if not user.is_admin or (
+        user.auth_type == "pat" and "admin" not in user.scopes and "*" not in user.scopes
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Administrator privileges are required for this operation",
@@ -27,12 +29,25 @@ def require_admin(user: UserContext) -> None:
 
 def require_repo_scope_access(storage: Any, repo_id: Optional[str], user: UserContext) -> None:
     """Hide registered repositories outside the current non-admin user's team."""
+    if user.auth_type == "pat" and user.repo_ids and repo_id not in user.repo_ids:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
     if user.is_admin:
         return
 
     repo = _get_repository(storage, repo_id)
     if repo and repo.get("team_id") != user.team_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
+
+
+def require_repo_writable(storage: Any, repo_id: Optional[str], user: UserContext) -> None:
+    """Require access to a repository that is accepting new records."""
+    require_repo_scope_access(storage, repo_id, user)
+    repo = _get_repository(storage, repo_id)
+    if repo and repo.get("status", "active") == "archived":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Repository is archived and does not accept new writes",
+        )
 
 
 def can_access_scoped_record(
@@ -43,6 +58,9 @@ def can_access_scoped_record(
     scope_field: str,
 ) -> bool:
     """Return whether a memory/intent row belongs to the current user's team scope."""
+    repo_id = record.get("repo_id")
+    if user.auth_type == "pat" and user.repo_ids and repo_id not in user.repo_ids:
+        return False
     if user.is_admin:
         return True
     if not user.team_id:

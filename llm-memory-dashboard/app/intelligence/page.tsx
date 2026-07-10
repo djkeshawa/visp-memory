@@ -207,7 +207,7 @@ function IntelligenceContent() {
 
 function Metric({ title, value, icon }: { title: string; value: string | number; icon: React.ReactNode }) {
   return (
-    <div className="glass rounded-xl p-5">
+    <div className="glass rounded-lg p-5">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">{title}</p>
         <div className="rounded-lg bg-secondary p-2 text-muted-foreground">{icon}</div>
@@ -219,7 +219,7 @@ function Metric({ title, value, icon }: { title: string; value: string | number;
 
 function Panel({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
   return (
-    <section className="glass overflow-hidden rounded-xl">
+    <section className="glass overflow-hidden rounded-lg">
       <div className="flex items-center gap-2 border-b border-border p-4">
         <div className="rounded-lg bg-secondary p-2 text-muted-foreground">{icon}</div>
         <h2 className="text-base font-semibold text-foreground">{title}</h2>

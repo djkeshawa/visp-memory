@@ -10,7 +10,7 @@ const suggestions = ["authentication", "database schema", "API design"]
 
 export function SearchSuggestions({ onSelect }: SearchSuggestionsProps) {
   return (
-    <div className="glass rounded-xl p-8 text-center">
+    <div className="glass rounded-lg p-8 text-center">
       <p className="text-muted-foreground mb-4">Try searching for:</p>
       <div className="flex items-center justify-center gap-3 flex-wrap">
         {suggestions.map((suggestion) => (

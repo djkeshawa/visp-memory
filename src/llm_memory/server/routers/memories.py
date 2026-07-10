@@ -1,20 +1,26 @@
 from datetime import datetime
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from llm_memory.config import load_config
 from llm_memory.core.clock import utc_now
+from llm_memory.core.lifecycle import LifecycleError
 from llm_memory.core.ranking import rank_memory_results
 from llm_memory.server.auth import UserContext, get_current_user
 from llm_memory.server.authorization import (
     can_access_scoped_record,
+    require_admin,
     require_repo_scope_access,
+    require_repo_writable,
     require_scoped_record_access,
 )
 from llm_memory.server.routers.platform import append_audit_event
 from llm_memory.server.schemas import (
     MemoryCreate,
+    MemoryMergePreviewRequest,
+    MemoryMergeRequest,
+    MemoryPurgeRequest,
     MemoryResponse,
     MemoryUpdate,
     RelatedMemoryResponse,
@@ -23,6 +29,25 @@ from llm_memory.server.schemas import (
 
 # No prefix to maintain backward compatibility for /recall and /relationships
 router = APIRouter(tags=["memories"])
+
+PROVENANCE_FIELDS = (
+    "title",
+    "summary",
+    "observed_at",
+    "valid_from",
+    "valid_to",
+    "source_revision",
+    "source_hash",
+    "confidence",
+    "entities",
+    "files",
+    "symbols",
+    "keywords",
+    "evidence",
+    "lineage",
+    "pinned",
+    "hold",
+)
 
 
 def _as_datetime(value):
@@ -39,6 +64,7 @@ def _as_optional_datetime(value):
 
 
 def _memory_response_payload(memory: dict):
+    metadata = memory.get("metadata", {})
     return {
         "id": memory["id"],
         "content": memory["content"],
@@ -47,7 +73,7 @@ def _memory_response_payload(memory: dict):
         "repo_id": memory.get("repo_id"),
         "importance": memory.get("importance", 0.5),
         "tags": memory.get("tags", []),
-        "metadata": memory.get("metadata", {}),
+        "metadata": metadata,
         "status": memory.get("status", "active"),
         "source": memory.get("source"),
         "quality_flags": memory.get("quality_flags", []),
@@ -58,6 +84,24 @@ def _memory_response_payload(memory: dict):
         "accessed_at": _as_datetime(memory.get("accessed_at")),
         "similarity": memory.get("similarity"),
         "relevance_score": memory.get("relevance_score"),
+        "title": metadata.get("title"),
+        "summary": metadata.get("summary"),
+        "observed_at": _as_optional_datetime(
+            metadata.get("observed_at") or memory.get("created_at")
+        ),
+        "valid_from": _as_optional_datetime(metadata.get("valid_from")),
+        "valid_to": _as_optional_datetime(metadata.get("valid_to")),
+        "source_revision": metadata.get("source_revision"),
+        "source_hash": metadata.get("source_hash"),
+        "confidence": metadata.get("confidence", 0.5),
+        "entities": metadata.get("entities", []),
+        "files": metadata.get("files", metadata.get("applies_to", [])),
+        "symbols": metadata.get("symbols", []),
+        "keywords": metadata.get("keywords", []),
+        "evidence": metadata.get("evidence", []),
+        "lineage": metadata.get("lineage", memory.get("source_ids", [])),
+        "pinned": bool(metadata.get("pinned", False)),
+        "hold": bool(metadata.get("hold", False)),
     }
 
 
@@ -152,13 +196,19 @@ async def create_memory(
     storage = request.app.state.storage
     config = load_config()
     memory_repo_id = memory.repo_id or config.repo_id
-    require_repo_scope_access(storage, memory_repo_id, user)
+    require_repo_writable(storage, memory_repo_id, user)
 
     # Add author attribution to metadata
     metadata = dict(memory.metadata or {})
     metadata["author_id"] = user.user_id
     if user.team_id:
         metadata["team_id"] = user.team_id
+    for field in PROVENANCE_FIELDS:
+        value = getattr(memory, field)
+        if isinstance(value, datetime):
+            value = value.isoformat()
+        if value not in (None, [], ""):
+            metadata[field] = value
 
     mem_id = storage.store_memory(
         content=memory.content,
@@ -182,6 +232,27 @@ async def create_memory(
         target_id=mem_id,
         metadata={"layer": memory.layer, "category": memory.category},
     )
+    if memory_repo_id:
+        evaluations = request.app.state.intent_evaluator.evaluate_repository(
+            memory_repo_id,
+            summary=memory.content,
+            memory_ids=[mem_id],
+            actor_id=user.user_id,
+        )
+        for evaluation in evaluations:
+            if evaluation["decision"] == "completed":
+                append_audit_event(
+                    storage,
+                    event_type="intent.evaluation_completed",
+                    actor_id=user.user_id,
+                    repo_id=memory_repo_id,
+                    target_type="intent",
+                    target_id=evaluation["intent_id"],
+                    metadata={
+                        "confidence": evaluation["confidence"],
+                        "memory_id": mem_id,
+                    },
+                )
     return {
         "id": mem_id,
         **memory.model_dump(),
@@ -243,14 +314,20 @@ async def get_related_memories(
 
 @router.delete("/memories/{memory_id}")
 async def delete_memory(
-    request: Request, memory_id: str, user: UserContext = Depends(get_current_user)
+    request: Request,
+    memory_id: str,
+    reason: str = "Deleted by user",
+    user: UserContext = Depends(get_current_user),
 ):
+    """Move a memory to recoverable trash."""
     storage = request.app.state.storage
     mem = storage.get_memory(memory_id)
     require_scoped_record_access(
         storage, mem, user, scope_field="metadata", not_found_detail="Memory not found"
     )
-    success = storage.delete_memory(memory_id)
+    success = request.app.state.memory_lifecycle.soft_delete(
+        memory_id, actor_id=user.user_id, reason=reason
+    )
     if not success:
         raise HTTPException(status_code=404, detail="Memory not found")
     append_audit_event(
@@ -261,7 +338,238 @@ async def delete_memory(
         target_type="memory",
         target_id=memory_id,
     )
-    return {"status": "deleted", "id": memory_id}
+    return {"status": "deleted", "id": memory_id, "recoverable": True}
+
+
+@router.post("/memories/{memory_id}/restore")
+async def restore_memory(
+    request: Request,
+    memory_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    storage = request.app.state.storage
+    memory = require_scoped_record_access(
+        storage,
+        storage.get_memory(memory_id),
+        user,
+        scope_field="metadata",
+        not_found_detail="Memory not found",
+    )
+    if not request.app.state.memory_lifecycle.restore(memory_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only deleted memories can be restored",
+        )
+    append_audit_event(
+        storage,
+        event_type="memory.restored",
+        actor_id=user.user_id,
+        repo_id=memory.get("repo_id"),
+        target_type="memory",
+        target_id=memory_id,
+    )
+    return {"status": "restored", "id": memory_id}
+
+
+@router.post("/memories/merge/preview")
+async def preview_memory_merge(
+    request: Request,
+    payload: MemoryMergePreviewRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    storage = request.app.state.storage
+    for memory_id in payload.memory_ids:
+        require_scoped_record_access(
+            storage,
+            storage.get_memory(memory_id),
+            user,
+            scope_field="metadata",
+            not_found_detail="Memory not found",
+        )
+    try:
+        return request.app.state.memory_lifecycle.preview_merge(
+            payload.memory_ids,
+            target_id=payload.target_id,
+            target_content=payload.target_content,
+        )
+    except LifecycleError as error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
+
+
+@router.post("/memories/merge")
+async def merge_memories(
+    request: Request,
+    payload: MemoryMergeRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    storage = request.app.state.storage
+    for memory_id in payload.memory_ids:
+        require_scoped_record_access(
+            storage,
+            storage.get_memory(memory_id),
+            user,
+            scope_field="metadata",
+            not_found_detail="Memory not found",
+        )
+    preview = request.app.state.memory_lifecycle.preview_merge(
+        payload.memory_ids,
+        target_id=payload.target_id,
+        target_content=payload.target_content,
+    )
+    if not preview["exact_duplicate"] and not payload.reviewed:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Semantic merges require reviewed=true after inspecting the preview",
+        )
+    try:
+        result = request.app.state.memory_lifecycle.merge(
+            payload.memory_ids,
+            actor_id=user.user_id,
+            target_id=payload.target_id,
+            target_content=payload.target_content,
+        )
+    except LifecycleError as error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
+    append_audit_event(
+        storage,
+        event_type="memory.merged",
+        actor_id=user.user_id,
+        repo_id=result.get("repo_id"),
+        target_type="memory_merge",
+        target_id=result["operation_id"],
+        metadata={"memory_ids": result["memory_ids"], "target_id": result["target_id"]},
+    )
+    return result
+
+
+@router.post("/memories/merge/{operation_id}/undo")
+async def undo_memory_merge(
+    request: Request,
+    operation_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    operation = request.app.state.memory_lifecycle.get_operation(operation_id)
+    if not operation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Merge not found")
+    target = require_scoped_record_access(
+        request.app.state.storage,
+        request.app.state.storage.get_memory(operation["target_id"]),
+        user,
+        scope_field="metadata",
+        not_found_detail="Merge not found",
+    )
+    try:
+        result = request.app.state.memory_lifecycle.undo_merge(
+            operation_id, actor_id=user.user_id
+        )
+    except LifecycleError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    append_audit_event(
+        request.app.state.storage,
+        event_type="memory.merge_undone",
+        actor_id=user.user_id,
+        repo_id=target.get("repo_id"),
+        target_type="memory_merge",
+        target_id=operation_id,
+    )
+    return result
+
+
+@router.post("/memories/purge/preview")
+async def preview_memory_purge(
+    request: Request,
+    payload: MemoryPurgeRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    require_admin(user)
+    return request.app.state.memory_lifecycle.purge_preview(payload.memory_ids)
+
+
+@router.delete("/memories/{memory_id}/purge")
+async def purge_memory(
+    request: Request,
+    memory_id: str,
+    confirmation: str,
+    user: UserContext = Depends(get_current_user),
+):
+    require_admin(user)
+    if confirmation != memory_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Confirmation must exactly match the memory ID",
+        )
+    memory = request.app.state.storage.get_memory(memory_id)
+    if not memory:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory not found")
+    try:
+        result = request.app.state.memory_lifecycle.purge([memory_id])
+    except LifecycleError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    append_audit_event(
+        request.app.state.storage,
+        event_type="memory.purged",
+        actor_id=user.user_id,
+        repo_id=memory.get("repo_id"),
+        target_type="memory",
+        target_id=memory_id,
+        metadata={"reason": "confirmed permanent purge"},
+    )
+    return result
+
+
+@router.get("/maintenance/retention-preview")
+async def retention_preview(
+    request: Request,
+    repo_id: str,
+    retention_days: int = 30,
+    user: UserContext = Depends(get_current_user),
+):
+    require_admin(user)
+    return request.app.state.memory_lifecycle.retention_preview(
+        repo_id, retention_days=retention_days
+    )
+
+
+@router.post("/maintenance/retention")
+async def execute_retention(
+    request: Request,
+    repo_id: str,
+    confirmation: str,
+    retention_days: int = 30,
+    user: UserContext = Depends(get_current_user),
+):
+    require_admin(user)
+    if confirmation != repo_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Confirmation must exactly match the repository ID",
+        )
+    try:
+        result = request.app.state.memory_lifecycle.execute_retention(
+            repo_id, retention_days=retention_days
+        )
+    except LifecycleError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    append_audit_event(
+        request.app.state.storage,
+        event_type="memory.retention_executed",
+        actor_id=user.user_id,
+        repo_id=repo_id,
+        target_type="repository",
+        target_id=repo_id,
+        metadata={"retention_days": retention_days, "purged": len(result["purged_ids"])},
+    )
+    return result
+
+
+@router.get("/maintenance/verify")
+async def verify_memory_consistency(
+    request: Request,
+    repo_id: str = None,
+    user: UserContext = Depends(get_current_user),
+):
+    require_admin(user)
+    return request.app.state.memory_lifecycle.verify_consistency(repo_id)
 
 
 @router.patch("/memories/{memory_id}")

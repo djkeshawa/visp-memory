@@ -96,6 +96,22 @@ class CaptureConfig(BaseSettings):
     llm_model: Optional[str] = None
 
 
+class LLMConfig(BaseSettings):
+    """Shared model routing for server-side memory intelligence tasks."""
+
+    model_config = SettingsConfigDict(env_prefix="LLM_MEMORY_LLM_", populate_by_name=True)
+
+    provider: Literal["none", "openai", "anthropic", "ollama"] = "none"
+    model: Optional[str] = None
+    api_key: Optional[str] = Field(default=None, validation_alias="LLM_MEMORY_LLM_API_KEY")
+    base_url: Optional[str] = Field(default=None, validation_alias="LLM_MEMORY_LLM_BASE_URL")
+    timeout_seconds: float = Field(default=30.0, ge=1.0, le=300.0)
+    max_output_tokens: int = Field(default=800, ge=64, le=16000)
+    intent_auto_complete: bool = True
+    intent_completion_threshold: float = Field(default=0.9, ge=0.5, le=1.0)
+    intent_suggestion_threshold: float = Field(default=0.65, ge=0.0, le=1.0)
+
+
 class RecallConfig(BaseSettings):
     """Proactive recall configuration."""
 
@@ -168,6 +184,13 @@ class ServerConfig(BaseSettings):
     jwt_secret: str = Field(default="", validation_alias="LLM_MEMORY_JWT_SECRET")
     jwt_algorithm: Literal["HS256", "RS256"] = "HS256"
     jwt_expiry_hours: int = 24
+    session_idle_hours: int = 12
+    session_max_days: int = 7
+    session_cookie_secure: bool = False
+    bootstrap_admin_username: str = "admin"
+    bootstrap_admin_password: str = Field(
+        default="", validation_alias="LLM_MEMORY_BOOTSTRAP_ADMIN_PASSWORD"
+    )
 
     # API Key fallback (backward compatible)
     api_keys: Annotated[List[str], NoDecode] = Field(default_factory=list)
@@ -206,6 +229,7 @@ class MemoryConfig(BaseSettings):
     server: ServerConfig = Field(default_factory=ServerConfig)
     compression: CompressionConfig = Field(default_factory=CompressionConfig)
     capture: CaptureConfig = Field(default_factory=CaptureConfig)
+    llm: LLMConfig = Field(default_factory=LLMConfig)
     recall: RecallConfig = Field(default_factory=RecallConfig)
     analysis: AnalysisConfig = Field(default_factory=AnalysisConfig)
     quality: QualityConfig = Field(default_factory=QualityConfig)
@@ -289,6 +313,35 @@ class MemoryConfig(BaseSettings):
             "LLM_MEMORY_SERVER_ALLOW_ANONYMOUS": ("server", "allow_anonymous"),
             "LLM_MEMORY_SERVER_DEFAULT_TEAM": ("server", "default_team"),
             "LLM_MEMORY_SERVER_JWT_EXPIRY_HOURS": ("server", "jwt_expiry_hours"),
+            "LLM_MEMORY_LLM_PROVIDER": ("llm", "provider"),
+            "LLM_MEMORY_LLM_MODEL": ("llm", "model"),
+            "LLM_MEMORY_LLM_API_KEY": ("llm", "api_key"),
+            "LLM_MEMORY_LLM_BASE_URL": ("llm", "base_url"),
+            "LLM_MEMORY_LLM_TIMEOUT_SECONDS": ("llm", "timeout_seconds"),
+            "LLM_MEMORY_LLM_MAX_OUTPUT_TOKENS": ("llm", "max_output_tokens"),
+            "LLM_MEMORY_LLM_INTENT_AUTO_COMPLETE": ("llm", "intent_auto_complete"),
+            "LLM_MEMORY_LLM_INTENT_COMPLETION_THRESHOLD": (
+                "llm",
+                "intent_completion_threshold",
+            ),
+            "LLM_MEMORY_LLM_INTENT_SUGGESTION_THRESHOLD": (
+                "llm",
+                "intent_suggestion_threshold",
+            ),
+            "LLM_MEMORY_SERVER_SESSION_IDLE_HOURS": ("server", "session_idle_hours"),
+            "LLM_MEMORY_SERVER_SESSION_MAX_DAYS": ("server", "session_max_days"),
+            "LLM_MEMORY_SERVER_SESSION_COOKIE_SECURE": (
+                "server",
+                "session_cookie_secure",
+            ),
+            "LLM_MEMORY_BOOTSTRAP_ADMIN_USERNAME": (
+                "server",
+                "bootstrap_admin_username",
+            ),
+            "LLM_MEMORY_BOOTSTRAP_ADMIN_PASSWORD": (
+                "server",
+                "bootstrap_admin_password",
+            ),
         }
 
         for env_name, path in env_overrides.items():
@@ -305,13 +358,27 @@ class MemoryConfig(BaseSettings):
                 ("server", "auth_enabled"),
                 ("server", "cors_allow_credentials"),
                 ("server", "allow_anonymous"),
+                ("server", "session_cookie_secure"),
                 ("storage", "allow_fallback"),
+                ("llm", "intent_auto_complete"),
             }:
                 value = value.lower() in {"1", "true", "yes", "on"}
-            elif path == ("server", "jwt_expiry_hours"):
+            elif path in {
+                ("server", "jwt_expiry_hours"),
+                ("server", "session_idle_hours"),
+                ("server", "session_max_days"),
+            }:
                 value = int(value)
             elif path == ("storage", "connect_timeout_seconds"):
                 value = float(value)
+            elif path in {
+                ("llm", "timeout_seconds"),
+                ("llm", "intent_completion_threshold"),
+                ("llm", "intent_suggestion_threshold"),
+            }:
+                value = float(value)
+            elif path == ("llm", "max_output_tokens"):
+                value = int(value)
             elif path == ("server", "cors_origins"):
                 value = ServerConfig.parse_cors_origins(value)
             elif path == ("server", "api_keys"):
