@@ -1,8 +1,8 @@
 "use client"
 
 import Link from "next/link"
-import { usePathname, useSearchParams } from "next/navigation"
-import { Suspense, useEffect, useRef, useState } from "react"
+import { usePathname } from "next/navigation"
+import { useEffect, useRef, useState } from "react"
 import {
   Activity,
   Brain,
@@ -25,7 +25,7 @@ import {
   hasAuthCredentials,
   isApiError,
 } from "@/lib/api"
-import { PROJECT_QUERY_PARAM, projectHref } from "@/lib/project-selection"
+import { projectHref, useSelectedProjectId } from "@/lib/project-selection"
 import { cn } from "@/lib/utils"
 
 const navItems = [
@@ -42,9 +42,8 @@ type SystemHealth = "online" | "degraded" | "offline" | "auth_required"
 
 export function Sidebar() {
   const pathname = usePathname()
-  const searchParams = useSearchParams()
   const activePath = pathname === "/dashboard" ? "/" : pathname.replace(/^\/dashboard/, "")
-  const selectedRepoId = searchParams.get(PROJECT_QUERY_PARAM)
+  const selectedRepoId = useSelectedProjectId()
   const [systemHealth, setSystemHealth] = useState<SystemHealth>("online")
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [authenticated, setAuthenticated] = useState(false)
@@ -161,9 +160,7 @@ export function Sidebar() {
           {renderNavigation()}
         </nav>
         <div className="space-y-3 border-t border-border px-3 py-4">
-          <Suspense fallback={null}>
-            <ProjectSelector />
-          </Suspense>
+          <ProjectSelector />
           <div className="flex items-center justify-between px-4">
             <span className="text-sm text-muted-foreground">Theme</span>
             <ThemeToggle />
@@ -205,9 +202,7 @@ export function Sidebar() {
               {renderNavigation()}
             </nav>
             <div className="space-y-3 border-t border-border px-3 py-4">
-              <Suspense fallback={null}>
-                <ProjectSelector />
-              </Suspense>
+              <ProjectSelector />
               <div className="flex items-center justify-between px-4">
                 <span className="text-sm text-muted-foreground">Theme</span>
                 <ThemeToggle />

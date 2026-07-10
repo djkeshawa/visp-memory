@@ -37,6 +37,16 @@ class Repository:
     created_at: Optional[datetime] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Repository":
+        """Build a Repository from a storage dict, ignoring unknown keys.
+
+        Storage backends return raw node properties which may carry extra
+        normalized fields (e.g. ``tags``) that this entity does not model.
+        """
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
+
 
 @dataclass
 class RepositoryDependency:
@@ -54,11 +64,6 @@ class RepositoryManager:
 
     def __init__(self, storage: BaseStorage):
         self.storage = storage
-
-    @staticmethod
-    def _repository_from_storage(data: Dict[str, Any]) -> Repository:
-        allowed = {item.name for item in fields(Repository)}
-        return Repository(**{key: value for key, value in data.items() if key in allowed})
 
     def register(self, repo: Repository) -> str:
         """Register a new repository. Raises NotImplementedError if backend lacks support."""
@@ -81,7 +86,7 @@ class RepositoryManager:
             return None
         data = self.storage.get_repository(repo_id)
         if data:
-            return self._repository_from_storage(data)
+            return Repository.from_dict(data)
         return None
 
     def list_all(self, team_id: Optional[str] = None) -> List[Repository]:
@@ -89,7 +94,7 @@ class RepositoryManager:
         if not self.storage.get_capabilities().repositories:
             return []
         repos_data = self.storage.list_repositories(team_id=team_id)
-        return [self._repository_from_storage(repo) for repo in repos_data]
+        return [Repository.from_dict(repo) for repo in repos_data]
 
     def add_dependency(self, dep: RepositoryDependency) -> str:
         """Add a dependency relationship. Raises NotImplementedError if backend lacks support."""
