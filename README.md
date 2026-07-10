@@ -489,6 +489,12 @@ memory. Send `previous_fingerprint` on the next call to receive an empty payload
 when the brief has not changed. REST clients use `POST /context/brief` with the
 same fields.
 
+Task preparation uses hybrid associative retrieval: direct lexical/vector matches,
+exact file and symbol links, and degree-normalized Personalized PageRank are combined
+with reciprocal-rank fusion. Each evidence item includes `retrieval_channels` and
+`retrieval_factors`, so clients can inspect whether it was found directly, through a
+code entity, through the memory graph, or by multiple agreeing signals.
+
 ```json
 {
   "mcpServers": {

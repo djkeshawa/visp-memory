@@ -594,6 +594,18 @@ function normalizeTaskMemoryBrief(data: any): TaskMemoryBrief {
         files: Array.isArray(item.files) ? item.files.map(String) : [],
         symbols: Array.isArray(item.symbols) ? item.symbols.map(String) : [],
         sourceRevision: item.source_revision,
+        retrievalChannels: Array.isArray(item.retrieval_channels)
+            ? item.retrieval_channels.map(String)
+            : [],
+        retrievalFactors: {
+            directScore: Number(item.retrieval_factors?.direct_score || 0),
+            directRank: item.retrieval_factors?.direct_rank,
+            entityRank: item.retrieval_factors?.entity_rank,
+            graphRank: item.retrieval_factors?.graph_rank,
+            graphScore: Number(item.retrieval_factors?.graph_score || 0),
+            rrfScore: Number(item.retrieval_factors?.rrf_score || 0),
+            seedSpecificity: item.retrieval_factors?.seed_specificity,
+        },
     }))
     const sections = Object.fromEntries(
         sectionNames.map((name) => [name, normalizeItems(data.sections?.[name])]),
@@ -658,6 +670,14 @@ function normalizeTaskMemoryBrief(data: any): TaskMemoryBrief {
         abstentionReason: data.abstention_reason,
         truncated: Boolean(data.truncated),
         context: String(data.context || ""),
+        retrieval: {
+            strategy: String(data.retrieval?.strategy || "hybrid_rrf_ppr"),
+            candidateCount: Number(data.retrieval?.candidate_count || 0),
+            selectedCount: Number(data.retrieval?.selected_count || 0),
+            channelCounts: data.retrieval?.channel_counts && typeof data.retrieval.channel_counts === "object"
+                ? data.retrieval.channel_counts
+                : {},
+        },
         metrics: {
             candidateCount: Number(data.metrics?.candidate_count || 0),
             selectedCount: Number(data.metrics?.selected_count || 0),

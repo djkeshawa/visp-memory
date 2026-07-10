@@ -9,7 +9,7 @@ from collections.abc import Callable
 from typing import Any, Optional
 
 from llm_memory.core.clock import parse_utc, utc_now
-from llm_memory.core.ranking import rank_memory_results
+from llm_memory.core.hybrid_retrieval import HybridRetriever
 from llm_memory.core.tokens import estimate_tokens
 
 
@@ -30,19 +30,6 @@ class ContextCompiler:
         valid_to = parse_utc(metadata.get("valid_to"))
         return not ((valid_from and valid_from > as_of) or (valid_to and valid_to <= as_of))
 
-    @staticmethod
-    def _matches_entities(
-        memory: dict[str, Any], *, files: list[str], symbols: list[str]
-    ) -> bool:
-        metadata = memory.get("metadata") or {}
-        memory_files = set(metadata.get("files") or metadata.get("applies_to") or [])
-        memory_symbols = set(metadata.get("symbols") or [])
-        if not files and not symbols:
-            return True
-        file_match = bool(files and memory_files.intersection(files))
-        symbol_match = bool(symbols and memory_symbols.intersection(symbols))
-        return file_match or symbol_match
-
     def compile(
         self,
         query: str,
@@ -59,64 +46,21 @@ class ContextCompiler:
         as_of_time = parse_utc(as_of) or utc_now()
         files = files or []
         symbols = symbols or []
-        candidates: dict[str, dict[str, Any]] = {}
-        for layer in ("intent", "semantic", "episodic", "raw"):
-            for memory in self.storage.search_memories(
-                query=query,
-                repo_id=repo_id,
-                layer=layer,
-                status="active",
-                limit=40,
-            ):
-                if memory_filter and not memory_filter(memory):
-                    continue
-                metadata = memory.get("metadata") or {}
-                confidence = float(metadata.get("confidence", 0.5) or 0.0)
-                if confidence < min_confidence:
-                    continue
-                if not self._is_current(memory, as_of_time):
-                    continue
-                if not self._matches_entities(memory, files=files, symbols=symbols):
-                    continue
-                candidates[memory["id"]] = memory
+        def candidate_filter(memory: dict[str, Any]) -> bool:
+            if memory_filter and not memory_filter(memory):
+                return False
+            metadata = memory.get("metadata") or {}
+            confidence = float(metadata.get("confidence", 0.5) or 0.0)
+            return confidence >= min_confidence and self._is_current(memory, as_of_time)
 
-        # Text retrieval can miss a decision whose wording differs from the task even when
-        # both point at the same file or symbol. Add bounded entity-linked candidates before
-        # ranking so code-location evidence participates in the same scoring and budget rules.
-        if files or symbols:
-            for memory in self.storage.list_memories(
-                repo_id=repo_id,
-                status="active",
-                limit=500,
-            ):
-                if memory_filter and not memory_filter(memory):
-                    continue
-                metadata = memory.get("metadata") or {}
-                confidence = float(metadata.get("confidence", 0.5) or 0.0)
-                if confidence < min_confidence:
-                    continue
-                if not self._is_current(memory, as_of_time):
-                    continue
-                if not self._matches_entities(memory, files=files, symbols=symbols):
-                    continue
-                candidates.setdefault(memory["id"], memory)
-
-        direct = rank_memory_results(list(candidates.values()), query=query, limit=60)
-        for seed in direct[:5]:
-            for related in self.storage.get_related_memories(seed["id"]):
-                if memory_filter and not memory_filter(related):
-                    continue
-                if related.get("status", "active") != "active":
-                    continue
-                if repo_id and related.get("repo_id") != repo_id:
-                    continue
-                if not self._is_current(related, as_of_time):
-                    continue
-                related["similarity"] = max(float(related.get("similarity", 0.0)), 0.35)
-                related["graph_seed_id"] = seed["id"]
-                candidates.setdefault(related["id"], related)
-
-        ranked = rank_memory_results(list(candidates.values()), query=query, limit=80)
+        ranked = HybridRetriever(self.storage).retrieve(
+            query,
+            repo_id=repo_id,
+            files=files,
+            symbols=symbols,
+            limit=80,
+            candidate_filter=candidate_filter,
+        )
         selected: list[dict[str, Any]] = []
         selected_terms: list[set[str]] = []
         consumed_tokens = 0
@@ -155,7 +99,9 @@ class ContextCompiler:
                     "evidence": metadata.get("evidence") or [],
                     "files": metadata.get("files") or metadata.get("applies_to") or [],
                     "symbols": metadata.get("symbols") or [],
-                    "graph_seed_id": memory.get("graph_seed_id"),
+                    "retrieval_channels": memory.get("retrieval_channels") or [],
+                    "retrieval_factors": memory.get("retrieval_factors") or {},
+                    "ranking_explanation": memory.get("ranking_explanation") or [],
                     "token_cost": token_cost,
                 }
             )
@@ -185,6 +131,10 @@ class ContextCompiler:
             text = "\n\n".join(
                 f"[{item['id']}] ({item['layer']}) {item['content']}" for item in selected
             )
+        channel_counts: dict[str, int] = {}
+        for memory in ranked:
+            for channel in memory.get("retrieval_channels") or []:
+                channel_counts[channel] = channel_counts.get(channel, 0) + 1
         return {
             "query": query,
             "repo_id": repo_id,
@@ -197,4 +147,10 @@ class ContextCompiler:
             "abstention_reason": "Insufficient relevant evidence" if abstained else None,
             "items": [] if unchanged else selected,
             "context": text,
+            "retrieval": {
+                "strategy": "hybrid_rrf_ppr",
+                "candidate_count": len(ranked),
+                "selected_count": len(selected),
+                "channel_counts": channel_counts,
+            },
         }

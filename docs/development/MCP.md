@@ -110,6 +110,11 @@ Prepare before planning or editing:
 active intent, constraints, contradictions, and explicit unknowns. Reuse its
 fingerprint to avoid reinjecting an unchanged brief.
 
+The brief uses bounded hybrid retrieval across direct search, file/symbol matches,
+and specificity-seeded Personalized PageRank. Reciprocal-rank fusion combines the
+channels without allowing graph hubs to outrank a strong direct match. JSON responses
+include the contributing channels and score factors for every selected memory.
+
 Warn about a file:
 
 ```json

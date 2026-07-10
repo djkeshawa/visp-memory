@@ -16,7 +16,7 @@ def test_context_compiler_filters_temporal_facts_and_returns_deltas(tmp_path):
         },
         auto_link=False,
     )
-    storage.store_memory(
+    expired = storage.store_memory(
         "Authentication uses local storage tokens",
         layer="semantic",
         repo_id="repo-a",
@@ -27,6 +27,7 @@ def test_context_compiler_filters_temporal_facts_and_returns_deltas(tmp_path):
         },
         auto_link=False,
     )
+    storage.add_relationship(current, expired, "contradicts")
 
     compiler = ContextCompiler(storage)
     result = compiler.compile(

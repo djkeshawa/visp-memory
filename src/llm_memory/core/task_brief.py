@@ -520,10 +520,23 @@ class TaskMemoryBriefCompiler:
             ),
             "truncated": truncated,
             "context": "" if unchanged else context,
+            "retrieval": candidate_context.get("retrieval") or {},
             "metrics": {
-                "candidate_count": len(candidates),
+                "candidate_count": int(
+                    (candidate_context.get("retrieval") or {}).get(
+                        "candidate_count", len(candidates)
+                    )
+                ),
                 "selected_count": len(selected),
-                "omitted_count": max(0, len(candidates) - len(selected)),
+                "omitted_count": max(
+                    0,
+                    int(
+                        (candidate_context.get("retrieval") or {}).get(
+                            "candidate_count", len(candidates)
+                        )
+                    )
+                    - len(selected),
+                ),
                 "section_counts": section_counts,
             },
         }

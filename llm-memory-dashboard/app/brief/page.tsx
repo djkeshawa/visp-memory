@@ -305,6 +305,14 @@ export default function TaskBriefPage() {
                           <span className="text-xs text-muted-foreground">
                             {SECTION_LABELS[sectionFor(brief, item.id)]}
                           </span>
+                          {item.retrievalChannels.map((channel) => (
+                            <span
+                              key={`${item.citation}:${channel}`}
+                              className="rounded bg-secondary px-2 py-0.5 text-xs text-muted-foreground"
+                            >
+                              {channel}
+                            </span>
+                          ))}
                           {typeof item.confidence === "number" ? (
                             <span className="ml-auto text-xs tabular-nums text-muted-foreground">
                               {Math.round(item.confidence * 100)}%
@@ -315,6 +323,13 @@ export default function TaskBriefPage() {
                         {item.files.length || item.symbols.length ? (
                           <p className="mt-2 break-words text-xs text-muted-foreground">
                             {[...item.files, ...item.symbols].join(" | ")}
+                          </p>
+                        ) : null}
+                        {item.retrievalChannels.length ? (
+                          <p className="mt-2 text-xs tabular-nums text-muted-foreground">
+                            Direct {formatScore(item.retrievalFactors.directScore)} | Graph{" "}
+                            {formatScore(item.retrievalFactors.graphScore)} | Fusion{" "}
+                            {formatScore(item.retrievalFactors.rrfScore)}
                           </p>
                         ) : null}
                       </div>
@@ -340,6 +355,10 @@ function sectionFor(brief: TaskMemoryBrief, itemId: string): TaskBriefSectionNam
       brief.sections[section].some((item) => item.id === itemId),
     ) || "knowledge"
   )
+}
+
+function formatScore(value?: number): string {
+  return typeof value === "number" ? value.toFixed(3) : "0.000"
 }
 
 function Metric({

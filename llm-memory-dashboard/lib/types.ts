@@ -340,6 +340,16 @@ export interface TaskBriefItem {
   files: string[]
   symbols: string[]
   sourceRevision?: string | null
+  retrievalChannels: string[]
+  retrievalFactors: {
+    directScore?: number
+    directRank?: number | null
+    entityRank?: number | null
+    graphRank?: number | null
+    graphScore?: number
+    rrfScore?: number
+    seedSpecificity?: number | null
+  }
 }
 
 export interface TaskBriefCitation {
@@ -389,6 +399,12 @@ export interface TaskMemoryBrief {
   abstentionReason?: string | null
   truncated: boolean
   context: string
+  retrieval: {
+    strategy: string
+    candidateCount: number
+    selectedCount: number
+    channelCounts: Record<string, number>
+  }
   metrics: {
     candidateCount: number
     selectedCount: number

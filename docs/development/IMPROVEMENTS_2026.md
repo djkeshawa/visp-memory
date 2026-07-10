@@ -123,8 +123,8 @@ A second implementation pass delivered the top roadmap items below. Status marke
 - ✅ **CI evaluations** — the deterministic eval scripts (agent A/B, hallucination,
   intelligence, benchmark) now run as a CI job.
 
-Still open from the roadmap: full PPR with node-specificity seeding (item #1's second step),
-edge-level bi-temporal validity windows (item #2), sleep-time consolidation (#4), salience
+Still open from the roadmap: edge-level bi-temporal validity windows (item #2),
+sleep-time consolidation (#4), salience
 rating (#5), reflection with governance (#6), query-aware pruning (#7), working-memory tier (#8).
 
 ## 4. Research-grounded roadmap (papers, prioritized)
