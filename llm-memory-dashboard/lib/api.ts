@@ -26,6 +26,7 @@ import {
     Project,
     MemoryMergePreview,
     ModelRoutingStatus,
+    TaskMemoryBrief,
 } from "./types"
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_LLM_MEMORY_API_URL || ""
@@ -480,6 +481,35 @@ export async function testModelRouting(): Promise<void> {
     await request("/ai/test", { method: "POST" })
 }
 
+export async function prepareTaskMemoryBrief(payload: {
+    task: string
+    repoId?: string | null
+    tokenBudget?: number
+    files?: string[]
+    symbols?: string[]
+    intentId?: string | null
+    constraints?: string[]
+    previousFingerprint?: string | null
+    minConfidence?: number
+}): Promise<TaskMemoryBrief> {
+    const res = await request("/context/brief", {
+        method: "POST",
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+            task: payload.task,
+            repo_id: payload.repoId,
+            token_budget: payload.tokenBudget,
+            files: payload.files || [],
+            symbols: payload.symbols || [],
+            intent_id: payload.intentId,
+            constraints: payload.constraints || [],
+            previous_fingerprint: payload.previousFingerprint,
+            min_confidence: payload.minConfidence,
+        }),
+    })
+    return normalizeTaskMemoryBrief(await res.json())
+}
+
 export async function getMemories(
     repoId?: string | null,
     status = "active",
@@ -549,6 +579,111 @@ function normalizeMemory(item: any): Memory {
         accessCount: item.access_count,
         tags: item.tags,
         metadata: item.metadata,
+    }
+}
+
+function normalizeTaskMemoryBrief(data: any): TaskMemoryBrief {
+    const sectionNames = ["warnings", "decisions", "knowledge", "history"] as const
+    const normalizeItems = (items: any[] = []) => items.map((item) => ({
+        id: String(item.id),
+        content: String(item.content || ""),
+        layer: item.layer,
+        category: item.category,
+        citation: String(item.citation),
+        confidence: typeof item.confidence === "number" ? item.confidence : null,
+        files: Array.isArray(item.files) ? item.files.map(String) : [],
+        symbols: Array.isArray(item.symbols) ? item.symbols.map(String) : [],
+        sourceRevision: item.source_revision,
+        retrievalChannels: Array.isArray(item.retrieval_channels)
+            ? item.retrieval_channels.map(String)
+            : [],
+        retrievalFactors: {
+            directScore: Number(item.retrieval_factors?.direct_score || 0),
+            directRank: item.retrieval_factors?.direct_rank,
+            entityRank: item.retrieval_factors?.entity_rank,
+            graphRank: item.retrieval_factors?.graph_rank,
+            graphScore: Number(item.retrieval_factors?.graph_score || 0),
+            rrfScore: Number(item.retrieval_factors?.rrf_score || 0),
+            seedSpecificity: item.retrieval_factors?.seed_specificity,
+        },
+    }))
+    const sections = Object.fromEntries(
+        sectionNames.map((name) => [name, normalizeItems(data.sections?.[name])]),
+    ) as TaskMemoryBrief["sections"]
+    const sectionCounts = Object.fromEntries(
+        sectionNames.map((name) => [name, Number(data.metrics?.section_counts?.[name] || 0)]),
+    ) as TaskMemoryBrief["metrics"]["sectionCounts"]
+
+    return {
+        schemaVersion: String(data.schema_version || "1.0"),
+        task: String(data.task || ""),
+        repoId: data.repo_id,
+        asOf: data.as_of,
+        taskProfile: {
+            action: String(data.task_profile?.action || "general"),
+            keywords: Array.isArray(data.task_profile?.keywords) ? data.task_profile.keywords.map(String) : [],
+            files: Array.isArray(data.task_profile?.files) ? data.task_profile.files.map(String) : [],
+            symbols: Array.isArray(data.task_profile?.symbols) ? data.task_profile.symbols.map(String) : [],
+        },
+        intent: data.intent ? {
+            id: String(data.intent.id),
+            description: String(data.intent.description || ""),
+            priority: Number(data.intent.priority || 0),
+            status: String(data.intent.status || "active"),
+            acceptanceCriteria: Array.isArray(data.intent.acceptance_criteria)
+                ? data.intent.acceptance_criteria.map(String)
+                : [],
+        } : null,
+        constraints: Array.isArray(data.constraints) ? data.constraints.map(String) : [],
+        unknowns: Array.isArray(data.unknowns) ? data.unknowns.map(String) : [],
+        contradictions: Array.isArray(data.contradictions) ? data.contradictions.map((item: any) => ({
+            relationshipId: item.relationship_id,
+            relationship: String(item.relationship || "contradicts"),
+            citation: String(item.citation || ""),
+            memoryId: String(item.memory_id || ""),
+            otherMemoryId: String(item.other_memory_id || ""),
+            otherStatus: String(item.other_status || "unknown"),
+            otherSnippet: String(item.other_snippet || ""),
+            evidence: item.evidence && typeof item.evidence === "object" ? item.evidence : {},
+        })) : [],
+        sections,
+        citations: Array.isArray(data.citations) ? data.citations.map((item: any) => ({
+            citation: String(item.citation || ""),
+            memoryId: String(item.memory_id || ""),
+            layer: item.layer,
+            category: item.category,
+            repoId: item.repo_id,
+            confidence: typeof item.confidence === "number" ? item.confidence : null,
+            sourceRevision: item.source_revision,
+            sourceHash: item.source_hash,
+            observedAt: item.observed_at,
+            validFrom: item.valid_from,
+            validTo: item.valid_to,
+            files: Array.isArray(item.files) ? item.files.map(String) : [],
+            symbols: Array.isArray(item.symbols) ? item.symbols.map(String) : [],
+        })) : [],
+        tokenBudget: Number(data.token_budget || 0),
+        tokenCount: Number(data.token_count || 0),
+        fingerprint: String(data.fingerprint || ""),
+        unchanged: Boolean(data.unchanged),
+        abstained: Boolean(data.abstained),
+        abstentionReason: data.abstention_reason,
+        truncated: Boolean(data.truncated),
+        context: String(data.context || ""),
+        retrieval: {
+            strategy: String(data.retrieval?.strategy || "hybrid_rrf_ppr"),
+            candidateCount: Number(data.retrieval?.candidate_count || 0),
+            selectedCount: Number(data.retrieval?.selected_count || 0),
+            channelCounts: data.retrieval?.channel_counts && typeof data.retrieval.channel_counts === "object"
+                ? data.retrieval.channel_counts
+                : {},
+        },
+        metrics: {
+            candidateCount: Number(data.metrics?.candidate_count || 0),
+            selectedCount: Number(data.metrics?.selected_count || 0),
+            omittedCount: Number(data.metrics?.omitted_count || 0),
+            sectionCounts,
+        },
     }
 }
 

@@ -446,6 +446,7 @@ Add to your `claude_desktop_config.json`:
 ```
 
 ### Available Tools
+- `memory_prepare_task`: Build a cited, token-budgeted brief before planning or editing.
 - `memory_recall`: Search past events and knowledge.
 - `memory_record`: Save new findings or events.
 - `memory_decision`: Document architectural choices.
@@ -469,6 +470,30 @@ Every advertised MCP tool definition costs context tokens in *every* session. Se
 The `core` profile cuts tool-schema overhead by roughly 40% (~1,250 fewer tokens per
 session in a typical setup). Hidden tools still work if a client calls them by name;
 the profile only changes what is advertised.
+
+Prepare a task in one call:
+
+```json
+{
+  "task": "Refactor login without breaking API clients",
+  "files": ["src/auth.py"],
+  "symbols": ["login"],
+  "constraints": ["Preserve existing PAT scopes"],
+  "token_budget": 1200
+}
+```
+
+The response separates warnings, decisions, knowledge, and history; names active
+intent and constraints; reports contradictions and unknowns; and cites every
+memory. Send `previous_fingerprint` on the next call to receive an empty payload
+when the brief has not changed. REST clients use `POST /context/brief` with the
+same fields.
+
+Task preparation uses hybrid associative retrieval: direct lexical/vector matches,
+exact file and symbol links, and degree-normalized Personalized PageRank are combined
+with reciprocal-rank fusion. Each evidence item includes `retrieval_channels` and
+`retrieval_factors`, so clients can inspect whether it was found directly, through a
+code entity, through the memory graph, or by multiple agreeing signals.
 
 ```json
 {

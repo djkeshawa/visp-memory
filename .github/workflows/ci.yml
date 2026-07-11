@@ -98,6 +98,12 @@ jobs:
       - name: Memory intelligence evaluation
         run: python scripts/evaluate_memory_intelligence.py --json
 
+      - name: Task brief evaluation
+        run: python scripts/evaluate_task_brief.py
+
+      - name: Hybrid retrieval evaluation
+        run: python scripts/evaluate_hybrid_retrieval.py
+
       - name: Storage benchmark (smoke)
         run: python scripts/benchmark_memory.py --items 50 --json
 

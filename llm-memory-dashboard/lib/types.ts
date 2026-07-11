@@ -312,3 +312,103 @@ export interface PersonalAccessToken {
   revokedAt?: string | null
   token?: string
 }
+
+export type TaskBriefSectionName = "warnings" | "decisions" | "knowledge" | "history"
+
+export interface TaskBriefProfile {
+  action: string
+  keywords: string[]
+  files: string[]
+  symbols: string[]
+}
+
+export interface TaskBriefIntent {
+  id: string
+  description: string
+  priority: number
+  status: string
+  acceptanceCriteria: string[]
+}
+
+export interface TaskBriefItem {
+  id: string
+  content: string
+  layer?: string | null
+  category?: string | null
+  citation: string
+  confidence?: number | null
+  files: string[]
+  symbols: string[]
+  sourceRevision?: string | null
+  retrievalChannels: string[]
+  retrievalFactors: {
+    directScore?: number
+    directRank?: number | null
+    entityRank?: number | null
+    graphRank?: number | null
+    graphScore?: number
+    rrfScore?: number
+    seedSpecificity?: number | null
+  }
+}
+
+export interface TaskBriefCitation {
+  citation: string
+  memoryId: string
+  layer?: string | null
+  category?: string | null
+  repoId?: string | null
+  confidence?: number | null
+  sourceRevision?: string | null
+  sourceHash?: string | null
+  observedAt?: string | null
+  validFrom?: string | null
+  validTo?: string | null
+  files: string[]
+  symbols: string[]
+}
+
+export interface TaskBriefContradiction {
+  relationshipId?: string | null
+  relationship: string
+  citation: string
+  memoryId: string
+  otherMemoryId: string
+  otherStatus: string
+  otherSnippet: string
+  evidence: Record<string, unknown>
+}
+
+export interface TaskMemoryBrief {
+  schemaVersion: string
+  task: string
+  repoId?: string | null
+  asOf?: string | null
+  taskProfile: TaskBriefProfile
+  intent?: TaskBriefIntent | null
+  constraints: string[]
+  unknowns: string[]
+  contradictions: TaskBriefContradiction[]
+  sections: Record<TaskBriefSectionName, TaskBriefItem[]>
+  citations: TaskBriefCitation[]
+  tokenBudget: number
+  tokenCount: number
+  fingerprint: string
+  unchanged: boolean
+  abstained: boolean
+  abstentionReason?: string | null
+  truncated: boolean
+  context: string
+  retrieval: {
+    strategy: string
+    candidateCount: number
+    selectedCount: number
+    channelCounts: Record<string, number>
+  }
+  metrics: {
+    candidateCount: number
+    selectedCount: number
+    omittedCount: number
+    sectionCounts: Record<TaskBriefSectionName, number>
+  }
+}

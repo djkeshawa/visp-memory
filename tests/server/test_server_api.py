@@ -685,6 +685,56 @@ async def test_context_compile_returns_citations_and_unchanged_delta(client):
 
 
 @pytest.mark.asyncio
+async def test_task_memory_brief_returns_sections_unknowns_and_delta(client):
+    headers = {"X-API-KEY": "test_key"}
+    memory = await client.post(
+        "/memories",
+        json={
+            "content": "WARNING [auth]: preserve legacy API compatibility",
+            "layer": "semantic",
+            "category": "fragile_area",
+            "repo_id": "brief-repo",
+            "files": ["src/auth.py"],
+            "confidence": 0.96,
+            "source_revision": "brief123",
+        },
+        headers=headers,
+    )
+    assert memory.status_code == 200
+    response = await client.post(
+        "/context/brief",
+        json={
+            "task": "Update `src/auth.py` authentication",
+            "repo_id": "brief-repo",
+            "constraints": ["Do not expose credentials"],
+            "token_budget": 300,
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200
+    brief = response.json()
+    assert brief["sections"]["warnings"][0]["id"] == memory.json()["id"]
+    assert brief["citations"][0]["source_revision"] == "brief123"
+    assert brief["token_count"] <= 300
+    assert any("No active intent" in unknown for unknown in brief["unknowns"])
+
+    unchanged = await client.post(
+        "/context/brief",
+        json={
+            "task": "Update `src/auth.py` authentication",
+            "repo_id": "brief-repo",
+            "constraints": ["Do not expose credentials"],
+            "token_budget": 300,
+            "previous_fingerprint": brief["fingerprint"],
+        },
+        headers=headers,
+    )
+    assert unchanged.status_code == 200
+    assert unchanged.json()["unchanged"] is True
+    assert unchanged.json()["context"] == ""
+
+
+@pytest.mark.asyncio
 async def test_intents_preserve_repo_id(client):
     headers = {"X-API-KEY": "test_key"}
     payload = {"description": "Scoped Docker/Codex work", "priority": 2, "repo_id": "repo-a"}

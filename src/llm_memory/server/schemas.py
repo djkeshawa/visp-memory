@@ -359,6 +359,19 @@ class ContextCompileRequest(BaseModel):
     min_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
+class TaskMemoryBriefRequest(BaseModel):
+    task: str = Field(min_length=1, max_length=20000)
+    repo_id: Optional[str] = None
+    token_budget: int = Field(default=2000, ge=128, le=100000)
+    as_of: Optional[datetime] = None
+    files: List[str] = Field(default_factory=list)
+    symbols: List[str] = Field(default_factory=list)
+    intent_id: Optional[str] = None
+    constraints: List[str] = Field(default_factory=list)
+    previous_fingerprint: Optional[str] = None
+    min_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
 class ReflectionCreateRequest(BaseModel):
     repo_id: str
     title: str = Field(min_length=3, max_length=200)
