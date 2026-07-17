@@ -1,7 +1,7 @@
 # Multi-stage build for LLM Memory with Dashboard
 
 # Stage 1: Build Next.js dashboard
-FROM node:20.19.4-alpine3.22 AS frontend-builder
+FROM node:26.3.0-alpine3.22 AS frontend-builder
 
 WORKDIR /app/dashboard
 COPY llm-memory-dashboard/package*.json ./
@@ -10,7 +10,7 @@ COPY llm-memory-dashboard/ ./
 RUN npm run export
 
 # Stage 2: Build Python package
-FROM python:3.11.13-slim-bookworm AS python-builder
+FROM python:3.14.6-slim-bookworm AS python-builder
 
 WORKDIR /app
 COPY pyproject.toml uv.lock README.md LICENSE ./
@@ -22,7 +22,7 @@ RUN pip install --no-cache-dir build && \
     python -m build
 
 # Stage 3: Final runtime image
-FROM python:3.11.13-slim-bookworm
+FROM python:3.14.6-slim-bookworm
 
 # Install runtime dependencies
 RUN apt-get update && \
