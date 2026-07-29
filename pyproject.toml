@@ -4,14 +4,17 @@
 # `visp-memory-mcp` (MCP server).
 name = "visp-memory"
 version = "0.3.0"
-description = "Human-inspired memory system for LLMs - persistent context, compressed knowledge, and intent tracking"
+description = "Curated, auditable memory for coding agents - mines your git history, injects sparingly, quarantines untrusted memory"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "Apache-2.0"}
 authors = [
     {name = "Dineth Jayakody"}
 ]
-keywords = ["llm", "memory", "ai", "context", "embeddings", "chromadb"]
+keywords = [
+    "ai", "llm", "memory", "coding-agent", "mcp", "claude-code",
+    "context", "rag", "retrieval", "developer-tools",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
