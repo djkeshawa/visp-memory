@@ -200,15 +200,29 @@ jobs:
 
       - name: Build Executable (Windows)
         if: runner.os == 'Windows'
+        shell: bash
         run: |
-          python build_frontend.py
+          set -euo pipefail
           pyinstaller visp-memory.spec
+          # build_standalone.sh does this packaging on Linux/macOS, but Windows runs
+          # PyInstaller directly and it emits a bare dist/visp-memory.exe. That name
+          # does not match the upload glob below, so the upload found nothing, warned
+          # instead of failing, and the job still reported success -- every release so
+          # far shipped without a Windows binary.
+          mkdir -p dist/visp-memory-standalone
+          cp dist/visp-memory.exe dist/visp-memory-standalone/
+          cp README.md LICENSE NOTICE dist/visp-memory-standalone/
+          (cd dist && 7z a "visp-memory-standalone-Windows-x86_64.zip" visp-memory-standalone/)
+          ls -la dist/visp-memory-standalone-*
 
       - name: Upload Standalone Build
         uses: actions/upload-artifact@v4
         with:
           name: standalone-${{ runner.os }}
           path: dist/visp-memory-standalone-*
+          # Fail loudly instead of warning. A silent "no files found" is how the Windows
+          # binary went missing from every release without anyone noticing.
+          if-no-files-found: error
 
   publish-pypi:
     name: Publish to PyPI
@@ -234,6 +248,11 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
+          # PyPI versions are immutable, so a re-run of an already-published tag would
+          # otherwise fail here and block the jobs after it. This makes the release
+          # re-runnable: if a later step fails, the tag can be rebuilt without either
+          # burning a version number or leaving the GitHub Release unpublished.
+          skip-existing: true
 
   release:
     name: Create Release
@@ -248,8 +267,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download all artifacts
+      - name: Download release artifacts
         uses: actions/download-artifact@v4
+        with:
+          # Restricted to the artifacts this job actually publishes. An unfiltered
+          # download also pulls the `*.dockerbuild` build record that
+          # docker/build-push-action uploads, which fails to extract and took the whole
+          # release job down after PyPI had already published.
+          pattern: "{python-package,standalone-*}"
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
