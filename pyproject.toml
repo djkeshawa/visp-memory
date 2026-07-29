@@ -50,9 +50,13 @@ api = [
     "python-multipart>=0.0.32",
     "starlette>=1.3.1",
 ]
-# Floor raised from the meaningless >=0.1.0: the server uses the modern
-# mcp.server/mcp.types API, and an unbounded floor let resolvers pick anything.
-mcp = ["mcp>=1.0.0"]
+# Upper bound is deliberate. mcp 2.0 removed the `Server.list_tools` /
+# `Server.call_tool` decorator API this server is built on, so it does not merely
+# warn -- it raises AttributeError at server construction. The previous unbounded
+# `>=0.1.0` meant every fresh install resolved to 2.x and shipped a broken MCP
+# server. Porting to the 2.x API is tracked separately; until then, pin to what
+# actually works.
+mcp = ["mcp>=1.0.0,<2.0.0"]
 capture = [
     "defusedxml>=0.7.1",
     "gitpython>=3.1.0",
