@@ -4911,7 +4911,7 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.139.0" },
     { name = "gitpython", marker = "extra == 'capture'", specifier = ">=3.1.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28.0" },
-    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=0.1.0" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.0.0" },
     { name = "neo4j", marker = "extra == 'neo4j'", specifier = ">=5.15.0" },
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "ollama", marker = "extra == 'ollama'", specifier = ">=0.1.0" },

@@ -44,7 +44,6 @@ try:
     from mcp.server import Server
     from mcp.server.stdio import stdio_server
     from mcp.types import (
-        AnyUrl,
         GetPromptResult,
         Prompt,
         PromptArgument,
@@ -54,6 +53,14 @@ try:
         TextContent,
         Tool,
     )
+
+    # `AnyUrl` is a pydantic type that mcp.types re-exported up to 1.x and dropped in
+    # 2.0. Importing it from mcp.types made the whole block raise ImportError on mcp
+    # 2.x, silently setting MCP_AVAILABLE = False -- so a fresh `pip install
+    # visp-memory[mcp]` produced a server that reported itself as unavailable. It is
+    # only used as a type annotation, so take it from pydantic, which is a hard
+    # dependency and the original source in both versions.
+    from pydantic import AnyUrl
 
     MCP_AVAILABLE = True
 except ImportError:

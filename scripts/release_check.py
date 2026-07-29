@@ -124,21 +124,27 @@ def main() -> int:
             )
             run([str(python), "-m", "pip", "install", f"{wheel}[api,mcp]"])
             run([str(cli), "--help"])
-            run(
-                [
-                    str(python),
-                    "-c",
-                    (
-                        "from importlib.metadata import version; "
-                        "from pathlib import Path; "
-                        "import visp_memory.server.app as api; "
-                        "from visp_memory.interfaces.mcp import MCP_AVAILABLE; "
-                        "static = Path(api.__file__).parent / 'static'; "
-                        "assert version('visp-memory'); assert MCP_AVAILABLE; "
-                        "assert (static / 'index.html').is_file()"
-                    ),
-                ]
-            )
+
+            # The dashboard is only in the wheel when build_frontend.py ran first, so
+            # asserting it under --skip-frontend is self-contradictory: the flag says
+            # "do not build the frontend" and the check says "the frontend must be
+            # present". That combination failed every release attempt after the
+            # assertion was added. The shipped wheel is verified separately, in the
+            # release workflow's build-python job, which does build the frontend.
+            checks = [
+                "from importlib.metadata import version; "
+                "from pathlib import Path; "
+                "import visp_memory.server.app as api; "
+                "from visp_memory.interfaces.mcp import MCP_AVAILABLE; "
+                "assert version('visp-memory'); assert MCP_AVAILABLE"
+            ]
+            if not args.skip_frontend:
+                checks.append(
+                    "; static = Path(api.__file__).parent / 'static'; "
+                    "assert (static / 'index.html').is_file(), "
+                    "'dashboard assets missing from the wheel'"
+                )
+            run([str(python), "-c", "".join(checks)])
 
     if args.with_docker_build:
         run(["docker", "build", "-t", "visp-memory:release-check", "."])

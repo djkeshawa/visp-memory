@@ -78,6 +78,31 @@ jobs:
           python -m pip install twine
           python -m twine check dist/*
 
+      - name: Verify the wheel actually contains the dashboard
+        # This is the wheel that ships, and the only place the check is meaningful:
+        # it runs after build_frontend.py, unlike the quality gate which builds a
+        # throwaway wheel with --skip-frontend. Without this, a release could publish
+        # a dashboard-less wheel and nothing would notice.
+        run: |
+          python - <<'PY'
+          import sys, zipfile
+          from pathlib import Path
+
+          wheel = next(iter(sorted(Path("dist").glob("*.whl"))), None)
+          if wheel is None:
+              sys.exit("No wheel found in dist/")
+
+          names = zipfile.ZipFile(wheel).namelist()
+          index = "visp_memory/server/static/index.html"
+          if index not in names:
+              sys.exit(
+                  f"{wheel.name} is missing {index}. "
+                  "build_frontend.py must run before the package build."
+              )
+          assets = sum(1 for n in names if n.startswith("visp_memory/server/static/"))
+          print(f"{wheel.name}: dashboard present ({assets} static files)")
+          PY
+
       - name: Upload Python Package
         uses: actions/upload-artifact@v4
         with:
