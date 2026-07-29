@@ -66,9 +66,12 @@ export function Sidebar() {
     const checkSystemHealth = async () => {
       try {
         const runtime = await getRuntimeStatus()
-        const driverFailed =
-          runtime.embeddingDriverStatus === "failed" ||
-          runtime.embeddingDriverStatus === "fallback"
+        // "fallback" and "disabled" mean recall is running on keyword search rather
+        // than vectors. That is the default install and a supported configuration, not
+        // a fault -- every backend routes around noop embeddings deliberately. Flagging
+        // it as degraded showed "System Degraded" to every user on the lean install.
+        // Only a driver that genuinely failed, or storage that is not ready, is degraded.
+        const driverFailed = runtime.embeddingDriverStatus === "failed"
         setSystemHealth(runtime.storageReady === false || driverFailed ? "degraded" : "online")
       } catch (error) {
         setSystemHealth(isApiError(error) && error.status === 401 ? "auth_required" : "offline")
