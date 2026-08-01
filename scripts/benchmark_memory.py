@@ -13,6 +13,7 @@ from time import perf_counter
 from typing import Any, Callable
 
 from visp_memory import Memory, MemoryConfig
+from visp_memory.core.trust import WriteChannel
 
 
 def parse_args() -> argparse.Namespace:
@@ -76,9 +77,21 @@ def run_benchmark(args: argparse.Namespace, data_dir: Path) -> dict[str, Any]:
         ids = []
         for index in range(args.items):
             if index % 2:
-                ids.append(memory.learn(f"Benchmark knowledge item {index}", category="fact"))
+                ids.append(
+                    memory.learn(
+                        f"Benchmark knowledge item {index}",
+                        category="fact",
+                        _write_channel=WriteChannel.TEST_CAPTURE,
+                    )
+                )
             else:
-                ids.append(memory.record(f"Benchmark event item {index}", category="note"))
+                ids.append(
+                    memory.record(
+                        f"Benchmark event item {index}",
+                        category="note",
+                        _write_channel=WriteChannel.TEST_CAPTURE,
+                    )
+                )
         return ids
 
     metrics["operations"]["insert"] = time_call(insert_items)

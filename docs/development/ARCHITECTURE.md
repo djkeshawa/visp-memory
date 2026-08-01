@@ -655,8 +655,12 @@ package entrypoint rather than accepted from payload tags: CLI is authored; MCP,
 conversation capture, compression, and reflection are assisted; repository/test/Kit
 capture is derived; HTTP, import, and instruction ingestion are external; direct
 library, missing, and malformed cases are unknown. External and unknown memories are
-quarantined from injection. Trust falls with age so stale entries stop outranking newer
-information; explicit recall still returns everything. See [../TRUST.md](../TRUST.md).
+quarantined from prompt-adjacent output. One structured filter is shared by context,
+targeted relevance, SessionStart/task briefs, proactive recall, graph traversal, and the
+related-memory API. It records rejection counts and reasons at the prompt boundary; task
+briefs filter before budgeting, and graph edges touching rejected nodes are removed before
+traversal. Trust falls with age so stale entries stop outranking newer information;
+explicit primary recall still returns everything. See [../TRUST.md](../TRUST.md).
 
 ### `core/anchors.py`
 

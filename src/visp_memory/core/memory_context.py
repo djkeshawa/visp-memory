@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from visp_memory.core.clock import utc_now
+from visp_memory.core.trust import TrustFilterResult, filter_unsolicited
 
 
 def build_context(
@@ -16,6 +17,7 @@ def build_context(
 ) -> Dict[str, Any]:
     """Build structured context from a Memory instance."""
     context: Dict[str, Any] = {}
+    trust_results = []
     repo_id = repo_id if repo_id is not None else memory.config.repo_id
 
     if include_intent:
@@ -34,9 +36,15 @@ def build_context(
         }
 
     if include_knowledge:
-        warnings = memory.semantic.get_warnings(repo_id=repo_id)[:10]
-        conventions = memory.semantic.get_conventions(repo_id=repo_id)[:10]
-        known_issues = memory.semantic.get_known_issues(repo_id=repo_id)[:5]
+        warning_filter = filter_unsolicited(memory.semantic.get_warnings(repo_id=repo_id))
+        convention_filter = filter_unsolicited(
+            memory.semantic.get_conventions(repo_id=repo_id)
+        )
+        issue_filter = filter_unsolicited(memory.semantic.get_known_issues(repo_id=repo_id))
+        trust_results.extend([warning_filter, convention_filter, issue_filter])
+        warnings = warning_filter.allowed[:10]
+        conventions = convention_filter.allowed[:10]
+        known_issues = issue_filter.allowed[:5]
 
         context["knowledge"] = {
             "warnings": [warning["content"] for warning in warnings],
@@ -45,7 +53,11 @@ def build_context(
         }
 
     if include_history:
-        recent = memory.episodic.recent(limit=10, repo_id=repo_id)
+        recent_filter = filter_unsolicited(
+            memory.episodic.recent(limit=10, repo_id=repo_id)
+        )
+        trust_results.append(recent_filter)
+        recent = recent_filter.allowed
         context["history"] = {
             "recent_events": [
                 {
@@ -60,6 +72,7 @@ def build_context(
     context["meta"] = {
         "generated_at": utc_now().isoformat(),
         "stats": memory._storage.get_stats(repo_id=repo_id),
+        "trust_filter": TrustFilterResult.combine(trust_results).diagnostics(),
     }
     return context
 

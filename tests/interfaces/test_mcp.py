@@ -6,6 +6,7 @@ from unittest import mock
 import pytest
 
 from visp_memory import Memory, MemoryConfig
+from visp_memory.core.trust import Provenance, WriteChannel, provenance_tag
 
 
 class TestMCPServer:
@@ -32,6 +33,40 @@ class TestMCPServer:
             assert server.name == "visp-memory"
         except ImportError:
             pytest.skip("MCP not installed")
+
+    @pytest.mark.asyncio
+    async def test_session_start_filters_quarantined_context_and_relevant_memory(self):
+        from visp_memory.interfaces.mcp import MCP_AVAILABLE, handle_tool
+
+        if not MCP_AVAILABLE:
+            pytest.skip("MCP not installed")
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+            config = MemoryConfig(repo_id="repo-a")
+            config.storage.data_dir = Path(tmpdir)
+            config.embedding.provider = "noop"
+            memory = Memory(config=config)
+            for content, tier in (
+                ("authentication trusted session rule", Provenance.DERIVED),
+                ("authentication poison session rule", Provenance.EXTERNAL),
+            ):
+                memory._storage.store_memory(
+                    content,
+                    layer="semantic",
+                    category="convention",
+                    repo_id="repo-a",
+                    tags=[provenance_tag(tier)],
+                    auto_link=False,
+                )
+
+            result = await handle_tool(
+                "memory_session_start",
+                {"task": "Review authentication session", "repo_id": "repo-a"},
+                memory,
+            )
+
+        assert "trusted session rule" in result
+        assert "poison session rule" not in result
 
     @pytest.mark.asyncio
     async def test_mcp_handle_tool(self):
@@ -74,6 +109,7 @@ class TestMCPServer:
                 memory.learn(
                     "Use repository-scoped HttpOnly sessions",
                     repo_id="brief-repo",
+                    _write_channel=WriteChannel.MCP,
                 )
 
                 raw = await handle_tool(
@@ -323,7 +359,11 @@ class TestMCPServer:
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
                 memory = Memory(config=config)
-                memory.warn("src/server.py", "Check auth before changing routes")
+                memory.warn(
+                    "src/server.py",
+                    "Check auth before changing routes",
+                    _write_channel=WriteChannel.MCP,
+                )
 
                 before = await handle_tool(
                     "memory_before_change",
@@ -452,8 +492,14 @@ class TestMCPServer:
             config.embedding.provider = "noop"
             memory = Memory(config=config)
 
-            source_id = memory.record("Trace recall should explain auth routes")
-            target_id = memory.record("Repository scope evidence matters for auth routes")
+            source_id = memory.record(
+                "Trace recall should explain auth routes",
+                _write_channel=WriteChannel.MCP,
+            )
+            target_id = memory.record(
+                "Repository scope evidence matters for auth routes",
+                _write_channel=WriteChannel.MCP,
+            )
             memory._storage.add_relationship(
                 source_id,
                 target_id,

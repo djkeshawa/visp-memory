@@ -11,6 +11,8 @@ import hashlib
 from pathlib import Path
 from typing import Any, Dict, List
 
+from visp_memory.core.trust import TrustFilterResult, filter_unsolicited
+
 
 class ProactiveRecall:
     """
@@ -37,10 +39,19 @@ class ProactiveRecall:
             memory: Memory instance to recall from
         """
         self.memory = memory
+        self.last_trust_filter = TrustFilterResult.combine([]).diagnostics()
+
+    @staticmethod
+    def _trusted(
+        memories: List[Dict[str, Any]], reports: List[TrustFilterResult]
+    ) -> List[Dict[str, Any]]:
+        result = filter_unsolicited(memories)
+        reports.append(result)
+        return result.allowed
 
     def on_file_open(
         self, file_path: str, include_related: bool = True
-    ) -> Dict[str, List[Dict[str, Any]]]:
+    ) -> Dict[str, Any]:
         """
         Get relevant memories when opening a file.
 
@@ -56,6 +67,7 @@ class ProactiveRecall:
         """
         file_path = self._normalize_path(file_path)
         repo_id = self.memory.config.repo_id
+        trust_results: List[TrustFilterResult] = []
 
         results = {
             "warnings": [],
@@ -66,7 +78,9 @@ class ProactiveRecall:
         }
 
         # Get file-specific warnings
-        warnings = self.memory.semantic.get_warnings(file_path)
+        warnings = self._trusted(
+            self.memory.semantic.get_warnings(file_path), trust_results
+        )
         results["warnings"] = self.memory.rank_with_context(
             warnings,
             query=file_path,
@@ -78,8 +92,11 @@ class ProactiveRecall:
 
         # Search for bugs in this file
         bug_query = f"file:{file_path} bug"
-        bug_results = self.memory.episodic.search(
-            query=bug_query, category="bug_fixed", limit=5
+        bug_results = self._trusted(
+            self.memory.episodic.search(
+                query=bug_query, category="bug_fixed", limit=5
+            ),
+            trust_results,
         )
         results["bugs"] = self.memory.rank_with_context(
             bug_results,
@@ -91,8 +108,11 @@ class ProactiveRecall:
         )
 
         # Search for decisions affecting this file
-        decision_results = self.memory.episodic.search(
-            query=file_path, category="architecture_decision", limit=3
+        decision_results = self._trusted(
+            self.memory.episodic.search(
+                query=file_path, category="architecture_decision", limit=3
+            ),
+            trust_results,
         )
         results["decisions"] = self.memory.rank_with_context(
             decision_results,
@@ -104,7 +124,9 @@ class ProactiveRecall:
         )
 
         # Get general knowledge about this file/module
-        knowledge_results = self.memory.semantic.relevant_for(files=[file_path], limit=5)
+        knowledge_results = self._trusted(
+            self.memory.semantic.relevant_for(files=[file_path], limit=5), trust_results
+        )
         results["knowledge"] = self.memory.rank_with_context(
             knowledge_results,
             query=file_path,
@@ -115,7 +137,9 @@ class ProactiveRecall:
         )
 
         # Get recent changes to this file (from git capture)
-        recent = self.memory.episodic.search(query=file_path, limit=3)
+        recent = self._trusted(
+            self.memory.episodic.search(query=file_path, limit=3), trust_results
+        )
         recent_changes = [
             r for r in recent if file_path.lower() in r.get("content", "").lower()
         ]
@@ -128,6 +152,8 @@ class ProactiveRecall:
             min_score=None,
         )
 
+        self.last_trust_filter = TrustFilterResult.combine(trust_results).diagnostics()
+        results["trust_filter"] = self.last_trust_filter
         return results
 
     def on_error(
@@ -160,16 +186,21 @@ class ProactiveRecall:
         # Search for similar bugs and known issues
         repo_id = self.memory.config.repo_id
         files = [self._normalize_path(file_path)] if file_path else None
-        similar_bugs = self.memory.episodic.search(query=query, category="bug_fixed", limit=limit)
+        trust_results: List[TrustFilterResult] = []
+        similar_bugs = self._trusted(
+            self.memory.episodic.search(query=query, category="bug_fixed", limit=limit),
+            trust_results,
+        )
 
-        similar_issues = self.memory.semantic.search(
-            query=query, category="known_issue", limit=limit
+        similar_issues = self._trusted(
+            self.memory.semantic.search(query=query, category="known_issue", limit=limit),
+            trust_results,
         )
 
         # Combine and deduplicate
         all_results = similar_bugs + similar_issues
 
-        return self.memory.rank_with_context(
+        ranked = self.memory.rank_with_context(
             all_results,
             query=query,
             repo_id=repo_id,
@@ -178,10 +209,12 @@ class ProactiveRecall:
             limit=limit,
             min_score=None,
         )
+        self.last_trust_filter = TrustFilterResult.combine(trust_results).diagnostics()
+        return ranked
 
     def on_directory(
         self, dir_path: str, recursive: bool = False
-    ) -> Dict[str, List[Dict[str, Any]]]:
+    ) -> Dict[str, Any]:
         """
         Aggregate knowledge for an entire directory.
 
@@ -200,11 +233,14 @@ class ProactiveRecall:
         # case-insensitively, so compare against a lowercased key.
         dir_key = dir_path.lower()
         repo_id = self.memory.config.repo_id
+        trust_results: List[TrustFilterResult] = []
 
         results = {"warnings": [], "conventions": [], "patterns": [], "recent_activity": []}
 
         # Get all warnings mentioning this directory
-        all_warnings = self.memory.semantic.get_warnings()
+        all_warnings = self._trusted(
+            self.memory.semantic.get_warnings(), trust_results
+        )
         dir_warnings = [
             w
             for w in all_warnings
@@ -221,7 +257,9 @@ class ProactiveRecall:
         )
 
         # Get conventions for this directory
-        all_conventions = self.memory.semantic.get_conventions()
+        all_conventions = self._trusted(
+            self.memory.semantic.get_conventions(), trust_results
+        )
         dir_conventions = [c for c in all_conventions if dir_key in c.get("content", "").lower()]
         results["conventions"] = self.memory.rank_with_context(
             dir_conventions,
@@ -233,7 +271,10 @@ class ProactiveRecall:
         )
 
         # Search for patterns in this directory
-        pattern_results = self.memory.semantic.search(query=dir_path, category="pattern", limit=10)
+        pattern_results = self._trusted(
+            self.memory.semantic.search(query=dir_path, category="pattern", limit=10),
+            trust_results,
+        )
         results["patterns"] = self.memory.rank_with_context(
             pattern_results,
             query=dir_path,
@@ -244,7 +285,7 @@ class ProactiveRecall:
         )
 
         # Get recent activity in this directory
-        recent = self.memory.episodic.recent(limit=20)
+        recent = self._trusted(self.memory.episodic.recent(limit=20), trust_results)
         dir_recent = [r for r in recent if dir_key in r.get("content", "").lower()]
         results["recent_activity"] = self.memory.rank_with_context(
             dir_recent,
@@ -255,6 +296,8 @@ class ProactiveRecall:
             min_score=None,
         )
 
+        self.last_trust_filter = TrustFilterResult.combine(trust_results).diagnostics()
+        results["trust_filter"] = self.last_trust_filter
         return results
 
     def format_injection(

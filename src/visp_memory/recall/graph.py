@@ -12,6 +12,7 @@ from visp_memory.core.ranking import (
     rank_memory_results,
     text_similarity,
 )
+from visp_memory.core.trust import TrustFilterResult, filter_unsolicited
 
 # Spreading-activation constants (HippoRAG-style associative recall, cheap variant).
 # Each hop attenuates the signal by ACTIVATION_HOP_DECAY; a damped fixed-point pass
@@ -86,8 +87,13 @@ class GraphRecall:
         token_budget: int = 2000,
         limit: int = 25,
     ) -> dict[str, Any]:
-        relationships = self._relationships(repo_id, relationship_filter)
-        nodes, edges, omitted = self._expand([memory_id], relationships, repo_id, depth, limit)
+        relationships, omitted = self._trusted_relationships(
+            self._relationships(repo_id, relationship_filter), repo_id
+        )
+        nodes, edges, expanded_omitted = self._expand(
+            [memory_id], relationships, repo_id, depth, limit
+        )
+        omitted.extend(expanded_omitted)
         self._apply_activation(nodes, edges, {memory_id: 1.0})
         return self._result(
             mode="neighbors",
@@ -111,8 +117,13 @@ class GraphRecall:
     ) -> dict[str, Any]:
         seeds = self._search(query, repo_id, limit)
         seed_ids = [item["id"] for item in seeds if item.get("id")]
-        relationships = self._relationships(repo_id, relationship_filter)
-        nodes, edges, omitted = self._expand(seed_ids, relationships, repo_id, depth, limit * 6)
+        relationships, omitted = self._trusted_relationships(
+            self._relationships(repo_id, relationship_filter), repo_id
+        )
+        nodes, edges, expanded_omitted = self._expand(
+            seed_ids, relationships, repo_id, depth, limit * 6
+        )
+        omitted.extend(expanded_omitted)
 
         seed_scores = {item["id"]: item.get("relevance_score", 0.0) for item in seeds}
         self._apply_activation(nodes, edges, {seed_id: 1.0 for seed_id in seed_ids})
@@ -150,10 +161,11 @@ class GraphRecall:
         max_hops: int = 4,
         token_budget: int = 2000,
     ) -> dict[str, Any]:
-        relationships = self._relationships(repo_id)
+        relationships, omitted = self._trusted_relationships(
+            self._relationships(repo_id), repo_id
+        )
         max_hops = self._bounded_int(max_hops, 1, self.MAX_HOPS)
         edge_path = self._shortest_edge_path(source_id, target_id, relationships, max_hops)
-        omitted = []
         if edge_path is None:
             edge_path = []
             omitted.append(
@@ -164,10 +176,12 @@ class GraphRecall:
                 }
             )
 
-        node_ids = [source_id, target_id]
-        for edge in edge_path:
-            node_ids.extend([edge["source_id"], edge["target_id"]])
-        nodes = self._nodes_for_ids(node_ids, repo_id)
+        node_ids = [source_id]
+        if edge_path:
+            node_ids.append(target_id)
+            for edge in edge_path:
+                node_ids.extend([edge["source_id"], edge["target_id"]])
+        nodes = self._nodes_for_ids(node_ids, repo_id, omitted=omitted)
         edges = [self._edge_payload(edge) for edge in edge_path]
         return self._result(
             mode="path",
@@ -191,11 +205,14 @@ class GraphRecall:
     ) -> dict[str, Any]:
         seeds = self._search(query, repo_id, limit)
         seed_ids = [item["id"] for item in seeds if item.get("id")]
-        relationships = self._relationships(repo_id)
-        omitted = []
+        relationships, omitted = self._trusted_relationships(
+            self._relationships(repo_id), repo_id
+        )
 
         if memory_id in seed_ids:
-            nodes = self._nodes_for_ids([memory_id], repo_id, query=query)
+            nodes = self._nodes_for_ids(
+                [memory_id], repo_id, query=query, omitted=omitted
+            )
             edges = []
             explanation = "Memory is directly relevant to the query."
         else:
@@ -204,11 +221,15 @@ class GraphRecall:
                 node_ids = [memory_id]
                 for edge in path:
                     node_ids.extend([edge["source_id"], edge["target_id"]])
-                nodes = self._nodes_for_ids(node_ids, repo_id, query=query)
+                nodes = self._nodes_for_ids(
+                    node_ids, repo_id, query=query, omitted=omitted
+                )
                 edges = [self._edge_payload(edge) for edge in path]
                 explanation = "Memory is relevant through an evidence-backed relationship path."
             else:
-                nodes = self._nodes_for_ids([memory_id], repo_id, query=query)
+                nodes = self._nodes_for_ids(
+                    [memory_id], repo_id, query=query, omitted=omitted
+                )
                 edges = []
                 explanation = "No relationship path from query seeds was found."
                 omitted.append(
@@ -287,6 +308,40 @@ class GraphRecall:
             ),
         )
 
+    def _trusted_relationships(
+        self, relationships: list[dict[str, Any]], repo_id: str | None
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        node_ids = {
+            memory_id
+            for relationship in relationships
+            for memory_id in (
+                relationship.get("source_id"),
+                relationship.get("target_id"),
+            )
+            if memory_id
+        }
+        memories = []
+        for memory_id in sorted(node_ids):
+            memory = self.storage.get_memory(memory_id)
+            if memory and (repo_id is None or memory.get("repo_id") == repo_id):
+                memories.append(memory)
+        trust_filter = filter_unsolicited(memories)
+        trusted_ids = {memory["id"] for memory in trust_filter.allowed}
+        trusted_relationships = [
+            relationship
+            for relationship in relationships
+            if relationship.get("source_id") in trusted_ids
+            and relationship.get("target_id") in trusted_ids
+        ]
+        return trusted_relationships, self._trust_omissions(trust_filter)
+
+    @staticmethod
+    def _trust_omissions(result: TrustFilterResult) -> list[dict[str, Any]]:
+        return [
+            {"type": "trust", "count": 1, **rejection.as_dict()}
+            for rejection in result.rejected
+        ]
+
     def _expand(
         self,
         seed_ids: list[str],
@@ -306,15 +361,19 @@ class GraphRecall:
             node_id, distance, path_confidence, is_seed = queue.popleft()
             if node_id in visited:
                 continue
-            memory = self._memory(node_id, repo_id)
+            previous_omissions = len(omitted)
+            memory = self._memory(node_id, repo_id, omitted=omitted)
             if not memory:
-                omitted.append(
-                    {
-                        "type": "node",
-                        "count": 1,
-                        "reason": f"Memory {node_id} was not found or is outside the repo scope.",
-                    }
-                )
+                if len(omitted) == previous_omissions:
+                    omitted.append(
+                        {
+                            "type": "node",
+                            "count": 1,
+                            "reason": (
+                                f"Memory {node_id} was not found or is outside the repo scope."
+                            ),
+                        }
+                    )
                 continue
             visited[node_id] = self._node_payload(
                 memory,
@@ -368,7 +427,11 @@ class GraphRecall:
         return list(visited.values()), list(edge_map.values()), omitted
 
     def _nodes_for_ids(
-        self, memory_ids: list[str], repo_id: str | None, query: str | None = None
+        self,
+        memory_ids: list[str],
+        repo_id: str | None,
+        query: str | None = None,
+        omitted: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         nodes = []
         seen = set()
@@ -376,7 +439,7 @@ class GraphRecall:
             if memory_id in seen:
                 continue
             seen.add(memory_id)
-            memory = self._memory(memory_id, repo_id)
+            memory = self._memory(memory_id, repo_id, omitted=omitted)
             if memory:
                 node = self._node_payload(memory, distance=index, path_confidence=1.0)
                 if query:
@@ -392,13 +455,23 @@ class GraphRecall:
                 nodes.append(node)
         return nodes
 
-    def _memory(self, memory_id: str, repo_id: str | None) -> dict[str, Any] | None:
+    def _memory(
+        self,
+        memory_id: str,
+        repo_id: str | None,
+        omitted: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any] | None:
         memory = self.storage.get_memory(memory_id)
         if not memory:
             return None
         if repo_id is not None and memory.get("repo_id") != repo_id:
             return None
-        return memory
+        trust_filter = filter_unsolicited([memory])
+        if trust_filter.allowed:
+            return trust_filter.allowed[0]
+        if omitted is not None:
+            omitted.extend(self._trust_omissions(trust_filter))
+        return None
 
     def _neighbors(
         self, node_id: str, relationships: list[dict[str, Any]]

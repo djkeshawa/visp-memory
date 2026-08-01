@@ -931,6 +931,7 @@ class TestSearch:
             "Fixed bug in auth/refresh.py",
             category="bug_fixed",
             context={"files": ["auth/refresh.py"]},
+            _write_channel=WriteChannel.TEST_CAPTURE,
         )
 
         result = ProactiveRecall(memory).on_file_open("auth/refresh.py")
@@ -1026,12 +1027,21 @@ class TestRepositoryIsolation:
         config.embedding.provider = "noop"
         memory = Memory(config=config)
 
-        memory.learn("Repo A auth knowledge")
-        memory.learn("Repo B auth knowledge", repo_id="repo-b")
-        memory.warn("auth/login.py", "Repo A warning")
-        memory.warn("auth/login.py", "Repo B warning", repo_id="repo-b")
-        memory.record("Repo A auth history")
-        memory.record("Repo B auth history", repo_id="repo-b")
+        memory.learn("Repo A auth knowledge", _write_channel=WriteChannel.CLI)
+        memory.learn(
+            "Repo B auth knowledge", repo_id="repo-b", _write_channel=WriteChannel.CLI
+        )
+        memory.warn("auth/login.py", "Repo A warning", _write_channel=WriteChannel.CLI)
+        memory.warn(
+            "auth/login.py",
+            "Repo B warning",
+            repo_id="repo-b",
+            _write_channel=WriteChannel.CLI,
+        )
+        memory.record("Repo A auth history", _write_channel=WriteChannel.CLI)
+        memory.record(
+            "Repo B auth history", repo_id="repo-b", _write_channel=WriteChannel.CLI
+        )
 
         relevant = memory.relevant_for(task="auth", files=["auth/login.py"], limit=10)
 
@@ -1046,17 +1056,29 @@ class TestRepositoryIsolation:
         config.embedding.provider = "noop"
         memory = Memory(config=config)
 
-        memory.warn("deploy", "Repo A warning")
-        memory.semantic.convention("Repo A convention", repo_id="repo-a")
-        memory.semantic.known_issue("Repo A issue", repo_id="repo-a")
-        memory.record("Repo A event")
+        memory.warn("deploy", "Repo A warning", _write_channel=WriteChannel.CLI)
+        memory.semantic.convention(
+            "Repo A convention", repo_id="repo-a", _write_channel=WriteChannel.CLI
+        )
+        memory.semantic.known_issue(
+            "Repo A issue", repo_id="repo-a", _write_channel=WriteChannel.CLI
+        )
+        memory.record("Repo A event", _write_channel=WriteChannel.CLI)
         memory.goal("Repo A goal")
         memory.working_on("Repo A task")
 
-        memory.warn("deploy", "Repo B warning", repo_id="repo-b")
-        memory.semantic.convention("Repo B convention", repo_id="repo-b")
-        memory.semantic.known_issue("Repo B issue", repo_id="repo-b")
-        memory.record("Repo B event", repo_id="repo-b")
+        memory.warn(
+            "deploy", "Repo B warning", repo_id="repo-b", _write_channel=WriteChannel.CLI
+        )
+        memory.semantic.convention(
+            "Repo B convention", repo_id="repo-b", _write_channel=WriteChannel.CLI
+        )
+        memory.semantic.known_issue(
+            "Repo B issue", repo_id="repo-b", _write_channel=WriteChannel.CLI
+        )
+        memory.record(
+            "Repo B event", repo_id="repo-b", _write_channel=WriteChannel.CLI
+        )
         memory.goal("Repo B goal", repo_id="repo-b")
         memory.working_on("Repo B task", repo_id="repo-b")
 
@@ -1355,14 +1377,17 @@ class TestGraphRecall:
         source_id = memory.record(
             "Auth route checks repository scope before returning memories",
             importance=0.9,
+            _write_channel=WriteChannel.TEST_CAPTURE,
         )
         bug_id = memory.record(
             "Bug fixed where graph route leaked cross repository memories",
             importance=0.8,
+            _write_channel=WriteChannel.TEST_CAPTURE,
         )
         knowledge_id = memory.learn(
             "Use require_repo_scope_access before graph recall traversal",
             importance=0.7,
+            _write_channel=WriteChannel.TEST_CAPTURE,
         )
         memory._storage.add_relationship(
             source_id,
@@ -1424,13 +1449,22 @@ class TestGraphRecall:
         memory = Memory(config=config)
 
         source_id = memory._storage.store_memory(
-            "Source alpha", repo_id="repo-a", auto_link=False
+            "Source alpha",
+            repo_id="repo-a",
+            tags=[provenance_tag(Provenance.DERIVED)],
+            auto_link=False,
         )
         middle_id = memory._storage.store_memory(
-            "Bridge beta", repo_id="repo-a", auto_link=False
+            "Bridge beta",
+            repo_id="repo-a",
+            tags=[provenance_tag(Provenance.DERIVED)],
+            auto_link=False,
         )
         target_id = memory._storage.store_memory(
-            "Target gamma", repo_id="repo-a", auto_link=False
+            "Target gamma",
+            repo_id="repo-a",
+            tags=[provenance_tag(Provenance.DERIVED)],
+            auto_link=False,
         )
         memory._storage.add_relationship(source_id, middle_id, "first", strength=0.7)
         memory._storage.add_relationship(middle_id, target_id, "second", strength=0.8)
@@ -1453,6 +1487,7 @@ class TestGraphRecall:
                     "category": "note",
                     "importance": 0.8,
                     "repo_id": "repo-a",
+                    "tags": [provenance_tag(Provenance.DERIVED)],
                 },
                 "b": {
                     "id": "b",
@@ -1461,6 +1496,7 @@ class TestGraphRecall:
                     "category": "fact",
                     "importance": 0.7,
                     "repo_id": "repo-a",
+                    "tags": [provenance_tag(Provenance.DERIVED)],
                 },
             }
 

@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 from visp_memory.core.context_compiler import ContextCompiler
 from visp_memory.core.tokens import estimate_tokens
+from visp_memory.core.trust import TrustFilterResult, filter_unsolicited
 
 SECTION_ORDER = ("warnings", "decisions", "knowledge", "history")
 WARNING_CATEGORIES = {
@@ -408,6 +409,15 @@ class TaskMemoryBriefCompiler:
                 *resolved_constraints,
             ]
         )[:20000]
+        trust_assessments: dict[str, TrustFilterResult] = {}
+
+        def compiler_filter(item: dict[str, Any]) -> bool:
+            if memory_filter and not memory_filter(item):
+                return False
+            result = filter_unsolicited([item])
+            trust_assessments[str(item.get("id"))] = result
+            return bool(result.allowed)
+
         candidate_context = ContextCompiler(self.storage).compile(
             query,
             repo_id=repo_id,
@@ -416,9 +426,16 @@ class TaskMemoryBriefCompiler:
             files=profile["files"],
             symbols=profile["symbols"],
             min_confidence=min_confidence,
-            memory_filter=memory_filter,
+            memory_filter=compiler_filter,
         )
+        trust_filter = TrustFilterResult.combine(trust_assessments.values())
         candidates = candidate_context["items"]
+
+        def eligible_memory(item: dict[str, Any]) -> bool:
+            return (not memory_filter or memory_filter(item)) and bool(
+                filter_unsolicited([item]).allowed
+            )
+
         unknowns = []
         if not intent:
             unknowns.append(
@@ -429,6 +446,12 @@ class TaskMemoryBriefCompiler:
             unknowns.append(
                 "No sufficiently relevant current memory evidence was found. Inspect the "
                 "source of truth instead of inferring project behavior."
+            )
+        if trust_filter.rejected:
+            reasons = sorted({item.reason for item in trust_filter.rejected})
+            unknowns.append(
+                f"The trust policy omitted {len(trust_filter.rejected)} memory "
+                f"candidate(s): {'; '.join(reasons)}."
             )
         for file_path in profile["files"]:
             if candidates and not any(
@@ -441,7 +464,7 @@ class TaskMemoryBriefCompiler:
             trial = [*selected, candidate]
             sections, _ = self._shape_sections(trial)
             contradictions = self._contradictions(
-                trial, repo_id=repo_id, memory_filter=memory_filter
+                trial, repo_id=repo_id, memory_filter=eligible_memory
             )
             rendered = self._render(
                 task=task,
@@ -460,7 +483,7 @@ class TaskMemoryBriefCompiler:
             unknowns.append("Relevant evidence did not fit within the requested token budget.")
         sections, citations = self._shape_sections(selected)
         contradictions = self._contradictions(
-            selected, repo_id=repo_id, memory_filter=memory_filter
+            selected, repo_id=repo_id, memory_filter=eligible_memory
         )
         context = self._render(
             task=task,
@@ -491,6 +514,7 @@ class TaskMemoryBriefCompiler:
             ],
             "contradictions": contradictions,
             "unknowns": unknowns,
+            "trust_filter": trust_filter.diagnostics(),
         }
         fingerprint = hashlib.sha256(
             json.dumps(fingerprint_payload, sort_keys=True, default=str).encode("utf-8")
@@ -507,6 +531,7 @@ class TaskMemoryBriefCompiler:
             "intent": intent,
             "constraints": resolved_constraints,
             "unknowns": [] if unchanged else unknowns,
+            "trust_filter": trust_filter.diagnostics(),
             "contradictions": [] if unchanged else contradictions,
             "sections": {name: [] for name in SECTION_ORDER} if unchanged else sections,
             "citations": [] if unchanged else citations,

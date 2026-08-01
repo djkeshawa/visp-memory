@@ -10,6 +10,7 @@ from visp_memory.core.ranking import rank_memory_results
 from visp_memory.core.trust import (
     WriteChannel,
     channel_policy,
+    filter_unsolicited,
     with_channel_provenance,
 )
 from visp_memory.server.auth import UserContext, get_current_user
@@ -272,12 +273,13 @@ async def get_related_memories(
         not_found_detail="Memory not found",
     )
     related = storage.get_related_memories(memory_id, relationship=relationship)
-    visible = [
+    access_visible = [
         item
         for item in related
         if item.get("repo_id") == source.get("repo_id")
         and can_access_scoped_record(storage, item, user, scope_field="metadata")
     ]
+    visible = filter_unsolicited(access_visible).allowed
     return [
         {
             **_memory_response_payload(item),

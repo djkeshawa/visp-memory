@@ -64,6 +64,23 @@ payload claim: HTTP clients cannot choose it, imports cannot preserve a trusted 
 unknown channel names fail closed. Raw storage writes that omit provenance remain
 unlabelled and are assessed as `unknown`.
 
+### Unsolicited-read boundary
+
+The same trust gate runs before memory is placed into prompt-adjacent output. It covers
+`Memory.context()` in text and JSON form, every `Memory.relevant_for()` group, MCP
+SessionStart, task briefs, proactive file/error/directory recall, graph
+trace/neighbors/path traversal, and related-memory HTTP output. Rejected graph nodes
+cannot be used as hidden bridges between trusted nodes.
+
+The shared filter returns structured counts and per-memory rejection reasons. Context,
+task-brief, proactive, and graph results expose additive diagnostics where their existing
+shape permits it. This makes restrictive behavior measurable without returning the
+rejected content itself.
+
+Explicit primary recall remains different: a user who deliberately asks to inspect
+memory can still retrieve quarantined records. Query-driven context compilation and
+explicit MCP warning/convention resources retain that same inspection behavior.
+
 ### Trust decay
 
 Trust falls with age on a per-tier half-life, so a memory that has not been reconfirmed
@@ -73,7 +90,7 @@ memory cannot earn immortality by being retrieved often.
 
 ### What this does not do
 
-Nothing here deletes anything. Quarantine and decay affect **injection eligibility only**.
+Nothing here deletes anything. Quarantine and decay affect **prompt eligibility only**.
 Explicit `visp-memory recall` still returns everything, because hiding data from the user
 is a different and worse failure than injecting it into a prompt.
 

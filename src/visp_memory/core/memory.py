@@ -24,7 +24,7 @@ from visp_memory.core.remote_storage import RemoteStorage
 from visp_memory.core.repository import RepositoryManager
 from visp_memory.core.storage import LocalStorage
 from visp_memory.core.team import TeamManager
-from visp_memory.core.trust import WriteChannel
+from visp_memory.core.trust import TrustFilterResult, WriteChannel, filter_unsolicited
 from visp_memory.layers.episodic import EpisodeCategory, EpisodicMemory
 from visp_memory.layers.intent import IntentMemory, IntentPriority
 from visp_memory.layers.semantic import KnowledgeCategory, SemanticMemory
@@ -911,7 +911,7 @@ class Memory:
 
     def relevant_for(
         self, task: str = None, files: List[str] = None, limit: int = 15
-    ) -> Dict[str, List[Dict[str, Any]]]:
+    ) -> Dict[str, Any]:
         """
         Get memories relevant to a task or set of files.
 
@@ -941,6 +941,13 @@ class Memory:
         # Get relevant history
         if task:
             results["history"] = self.episodic.search(task, limit=limit // 2, repo_id=repo_id)
+
+        trust_results = []
+        for group in ("knowledge", "warnings", "history"):
+            filtered = filter_unsolicited(results[group])
+            results[group] = filtered.allowed
+            trust_results.append(filtered)
+        results["trust_filter"] = TrustFilterResult.combine(trust_results).diagnostics()
 
         return results
 

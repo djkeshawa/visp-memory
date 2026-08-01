@@ -82,6 +82,21 @@ read-only. HTTP and import payloads may carry ordinary tags, but self-claimed pr
 is removed. Raw storage calls that provide no provenance remain unlabelled and therefore
 assess as `unknown`; explicit recall still exposes quarantined records.
 
+### Read-time enforcement
+
+Trust is checked again before any guarded result is returned to prompt-adjacent callers
+or formatted into prompt content. Task briefs filter before token selection, and graph
+relationships are filtered before traversal. The guarded surfaces are full context,
+targeted `relevant_for` groups, MCP SessionStart, task briefs, proactive
+file/error/directory recall, graph traversal, and related-memory HTTP output. Graph
+traversal removes relationships touching a rejected node, so quarantine cannot be used
+as an invisible path between trusted endpoints.
+
+Structured diagnostics report considered, allowed, quarantined, and below-threshold
+counts plus stable per-memory reasons. They are additive to existing result shapes. A
+direct explicit recall remains an inspection operation and may return quarantined data;
+callers must not copy such results into prompts without applying the unsolicited filter.
+
 ## Provider Boundaries
 
 Embedding and LLM providers are configuration boundaries. `noop` and local

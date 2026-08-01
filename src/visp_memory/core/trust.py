@@ -234,6 +234,63 @@ class TrustAssessment:
         return not self.quarantined and self.trust >= DEFAULT_MIN_TRUST
 
 
+@dataclass(frozen=True)
+class TrustRejection:
+    """Structured rejection retained by unsolicited-read surfaces for reporting."""
+
+    memory: dict[str, Any]
+    assessment: TrustAssessment
+
+    @property
+    def reason(self) -> str:
+        return self.assessment.reason
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "memory_id": self.memory.get("id"),
+            "provenance": self.assessment.tier.value,
+            "trust": round(self.assessment.trust, 4),
+            "quarantined": self.assessment.quarantined,
+            "reason": self.assessment.reason,
+        }
+
+
+@dataclass(frozen=True)
+class TrustFilterResult:
+    """Allowed memories plus stable rejection diagnostics for one trust boundary."""
+
+    allowed: list[dict[str, Any]]
+    rejected: list[TrustRejection]
+    considered_count: int
+
+    @classmethod
+    def combine(cls, results: Iterable["TrustFilterResult"]) -> "TrustFilterResult":
+        items = list(results)
+        return cls(
+            allowed=[memory for result in items for memory in result.allowed],
+            rejected=[rejection for result in items for rejection in result.rejected],
+            considered_count=sum(result.considered_count for result in items),
+        )
+
+    @property
+    def quarantined_count(self) -> int:
+        return sum(item.assessment.quarantined for item in self.rejected)
+
+    @property
+    def below_trust_count(self) -> int:
+        return len(self.rejected) - self.quarantined_count
+
+    def diagnostics(self) -> dict[str, Any]:
+        return {
+            "considered_count": self.considered_count,
+            "allowed_count": len(self.allowed),
+            "rejected_count": len(self.rejected),
+            "quarantined_count": self.quarantined_count,
+            "below_trust_count": self.below_trust_count,
+            "rejected": [item.as_dict() for item in self.rejected],
+        }
+
+
 def assess(
     memory: dict[str, Any],
     *,
@@ -281,19 +338,19 @@ def assess(
     return TrustAssessment(tier=tier, trust=trust, quarantined=False, reason=reason)
 
 
-def filter_injectable(
+def filter_unsolicited(
     memories: list[dict[str, Any]],
     *,
     min_trust: float = DEFAULT_MIN_TRUST,
     now=None,
-) -> tuple[list[dict[str, Any]], list[tuple[dict[str, Any], TrustAssessment]]]:
-    """Split memories into (injectable, rejected-with-reason).
+) -> TrustFilterResult:
+    """Apply the common trust gate for prompt-adjacent, unsolicited memory reads.
 
     Each returned memory carries its assessment under ``trust`` / ``provenance`` so
     downstream reporting can explain the decision without recomputing it.
     """
     allowed: list[dict[str, Any]] = []
-    rejected: list[tuple[dict[str, Any], TrustAssessment]] = []
+    rejected: list[TrustRejection] = []
 
     for memory in memories:
         assessment = assess(memory, min_trust=min_trust, now=now)
@@ -303,6 +360,24 @@ def filter_injectable(
             enriched["provenance"] = assessment.tier.value
             allowed.append(enriched)
         else:
-            rejected.append((memory, assessment))
+            rejected.append(TrustRejection(memory=memory, assessment=assessment))
 
-    return allowed, rejected
+    return TrustFilterResult(
+        allowed=allowed,
+        rejected=rejected,
+        considered_count=len(memories),
+    )
+
+
+def filter_injectable(
+    memories: list[dict[str, Any]],
+    *,
+    min_trust: float = DEFAULT_MIN_TRUST,
+    now=None,
+) -> tuple[list[dict[str, Any]], list[tuple[dict[str, Any], TrustAssessment]]]:
+    """Compatibility tuple wrapper around the structured unsolicited trust filter."""
+    result = filter_unsolicited(memories, min_trust=min_trust, now=now)
+
+    return result.allowed, [
+        (rejection.memory, rejection.assessment) for rejection in result.rejected
+    ]

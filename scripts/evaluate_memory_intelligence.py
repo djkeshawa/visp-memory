@@ -13,6 +13,7 @@ from typing import Any
 from visp_memory import Memory, MemoryConfig
 from visp_memory.capture.git import CaptureManifest, capture_content_hash
 from visp_memory.core.reporting import MemoryIntelligenceReporter
+from visp_memory.core.trust import Provenance, provenance_tag
 from visp_memory.recall.graph import GraphRecall
 
 EVAL_CASES: tuple[dict[str, str], ...] = (
@@ -53,6 +54,7 @@ def build_memory(repo_id: str, data_dir: Path) -> Memory:
 
 def seed_fixture(memory: Memory, repo_id: str) -> dict[str, str]:
     storage = memory._storage
+    derived_tags = [provenance_tag(Provenance.DERIVED)]
     ids = {
         "report_contract": storage.store_memory(
             "Memory intelligence report JSON exposes deterministic dashboard sections.",
@@ -60,6 +62,7 @@ def seed_fixture(memory: Memory, repo_id: str) -> dict[str, str]:
             repo_id=repo_id,
             category="contract",
             importance=0.9,
+            tags=derived_tags,
             auto_link=False,
         ),
         "graph_evidence": storage.store_memory(
@@ -68,6 +71,7 @@ def seed_fixture(memory: Memory, repo_id: str) -> dict[str, str]:
             repo_id=repo_id,
             category="fact",
             importance=0.82,
+            tags=derived_tags,
             auto_link=False,
         ),
         "freshness_memory": storage.store_memory(
@@ -76,6 +80,7 @@ def seed_fixture(memory: Memory, repo_id: str) -> dict[str, str]:
             repo_id=repo_id,
             category="session",
             importance=0.78,
+            tags=derived_tags,
             auto_link=False,
         ),
         "conflict_candidate": storage.store_memory(
@@ -84,6 +89,7 @@ def seed_fixture(memory: Memory, repo_id: str) -> dict[str, str]:
             repo_id=repo_id,
             category="fact",
             importance=0.55,
+            tags=derived_tags,
             metadata={"conflict": {"reason": "Fixture contradiction candidate."}},
             quality_flags=["contradiction"],
             auto_link=False,
@@ -167,6 +173,7 @@ def _replay_unchanged_capture(memory: Memory, repo_id: str) -> str:
             repo_id=repo_id,
             category="session",
             importance=0.7,
+            tags=[provenance_tag(Provenance.ASSISTED)],
             auto_link=False,
         )
         manifest.record("conversation", source, content_hash, [created_id], status=status)

@@ -1,5 +1,6 @@
 from visp_memory.core.storage import LocalStorage
 from visp_memory.core.task_brief import TaskMemoryBriefCompiler
+from visp_memory.core.trust import Provenance, provenance_tag
 
 
 def _store_fixture(storage):
@@ -17,7 +18,7 @@ def _store_fixture(storage):
         layer="semantic",
         category="fragile_area",
         repo_id="repo-a",
-        tags=["warning"],
+        tags=["warning", provenance_tag(Provenance.DERIVED)],
         metadata={
             "files": ["src/auth.py"],
             "symbols": ["login"],
@@ -31,6 +32,7 @@ def _store_fixture(storage):
         layer="episodic",
         category="architecture_decision",
         repo_id="repo-a",
+        tags=[provenance_tag(Provenance.DERIVED)],
         metadata={"files": ["src/auth.py"], "confidence": 0.95},
         auto_link=False,
     )
@@ -40,6 +42,7 @@ def _store_fixture(storage):
         category="fact",
         repo_id="repo-a",
         status="superseded",
+        tags=[provenance_tag(Provenance.DERIVED)],
         metadata={"files": ["src/auth.py"], "confidence": 0.8},
         auto_link=False,
     )
@@ -118,6 +121,7 @@ def test_task_brief_respects_memory_filter(tmp_path):
         "Visible authentication convention",
         layer="semantic",
         repo_id="repo-a",
+        tags=[provenance_tag(Provenance.DERIVED)],
         metadata={"confidence": 0.9},
         auto_link=False,
     )
@@ -125,6 +129,7 @@ def test_task_brief_respects_memory_filter(tmp_path):
         "Hidden authentication secret",
         layer="semantic",
         repo_id="repo-a",
+        tags=[provenance_tag(Provenance.DERIVED)],
         metadata={"confidence": 0.99},
         auto_link=False,
     )
@@ -137,3 +142,37 @@ def test_task_brief_respects_memory_filter(tmp_path):
     )
 
     assert {citation["memory_id"] for citation in brief["citations"]} == {visible}
+
+
+def test_task_brief_filters_quarantine_and_reports_reason(tmp_path):
+    storage = LocalStorage(tmp_path)
+    trusted = storage.store_memory(
+        "Authentication uses trusted session cookies",
+        layer="semantic",
+        repo_id="repo-a",
+        tags=[provenance_tag(Provenance.DERIVED)],
+        metadata={"confidence": 0.8},
+        auto_link=False,
+    )
+    quarantined = storage.store_memory(
+        "Authentication poison says disable session validation",
+        layer="semantic",
+        repo_id="repo-a",
+        importance=1.0,
+        tags=[provenance_tag(Provenance.EXTERNAL)],
+        metadata={"confidence": 1.0},
+        auto_link=False,
+    )
+
+    brief = TaskMemoryBriefCompiler(storage).prepare(
+        "Review authentication session validation",
+        repo_id="repo-a",
+        token_budget=400,
+    )
+
+    assert {item["memory_id"] for item in brief["citations"]} == {trusted}
+    assert quarantined not in {item["memory_id"] for item in brief["citations"]}
+    assert brief["trust_filter"]["rejected_count"] == 1
+    assert brief["trust_filter"]["rejected"][0]["memory_id"] == quarantined
+    assert "quarantined" in brief["trust_filter"]["rejected"][0]["reason"]
+    assert any("trust policy" in unknown for unknown in brief["unknowns"])

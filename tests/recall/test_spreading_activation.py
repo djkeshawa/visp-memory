@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from visp_memory.core.storage import LocalStorage
+from visp_memory.core.trust import Provenance, provenance_tag
 from visp_memory.recall.graph import GraphRecall, spread_activation
 
 
@@ -75,13 +76,20 @@ class TestGraphRecallActivation:
     def _seed_diamond(self, storage: LocalStorage) -> dict[str, str]:
         """Seed: query hits `seed`; `hub` is reachable via two evidence paths,
         `leaf` via one path of the same length."""
+        def store(content: str) -> str:
+            return storage.store_memory(
+                content,
+                tags=[provenance_tag(Provenance.DERIVED)],
+                auto_link=False,
+            )
+
         ids = {
-            "seed": storage.store_memory("auth token refresh strategy", auto_link=False),
-            "mid_a": storage.store_memory("token cache invalidation notes", auto_link=False),
-            "mid_b": storage.store_memory("refresh endpoint rate limits", auto_link=False),
-            "hub": storage.store_memory("session revocation design", auto_link=False),
-            "mid_c": storage.store_memory("logging conventions", auto_link=False),
-            "leaf": storage.store_memory("dashboard color palette", auto_link=False),
+            "seed": store("auth token refresh strategy"),
+            "mid_a": store("token cache invalidation notes"),
+            "mid_b": store("refresh endpoint rate limits"),
+            "hub": store("session revocation design"),
+            "mid_c": store("logging conventions"),
+            "leaf": store("dashboard color palette"),
         }
         pairs = [
             ("seed", "mid_a"),

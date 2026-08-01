@@ -11,11 +11,13 @@ from pathlib import Path
 from visp_memory.core.storage import LocalStorage
 from visp_memory.core.task_brief import TaskMemoryBriefCompiler
 from visp_memory.core.tokens import estimate_tokens
+from visp_memory.core.trust import Provenance, provenance_tag
 
 
 def evaluate() -> dict:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
         storage = LocalStorage(Path(directory))
+        derived_tags = [provenance_tag(Provenance.DERIVED)]
         intent_id = storage.set_intent(
             "Harden dashboard authentication",
             priority=3,
@@ -30,6 +32,7 @@ def evaluate() -> dict:
             layer="semantic",
             category="fragile_area",
             repo_id="evaluation",
+            tags=derived_tags,
             metadata={"files": ["src/auth.py"], "confidence": 0.98},
             auto_link=False,
         )
@@ -38,6 +41,7 @@ def evaluate() -> dict:
             layer="episodic",
             category="architecture_decision",
             repo_id="evaluation",
+            tags=derived_tags,
             metadata={"files": ["src/auth.py"], "confidence": 0.96},
             auto_link=False,
         )
@@ -46,6 +50,7 @@ def evaluate() -> dict:
             layer="semantic",
             category="fact",
             repo_id="evaluation",
+            tags=derived_tags,
             metadata={"files": ["src/auth.py"], "confidence": 0.94},
             auto_link=False,
         )
@@ -55,6 +60,7 @@ def evaluate() -> dict:
             category="fact",
             repo_id="evaluation",
             status="superseded",
+            tags=derived_tags,
             metadata={"files": ["src/auth.py"], "confidence": 0.8},
             auto_link=False,
         )
@@ -73,6 +79,7 @@ def evaluate() -> dict:
                 f"Unrelated build pipeline observation {index}",
                 layer="episodic",
                 repo_id="evaluation",
+                tags=derived_tags,
                 metadata={"files": ["src/build.py"], "confidence": 0.8},
                 auto_link=False,
             )

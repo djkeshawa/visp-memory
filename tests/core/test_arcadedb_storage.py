@@ -13,6 +13,7 @@ from visp_memory.core.arcadedb_storage import (
     ArcadeDbStorage,
     load_arcadedb_driver,
 )
+from visp_memory.core.trust import Provenance, provenance_tag
 
 
 class FakeArcadeDbModule:
@@ -610,12 +611,14 @@ def test_arcadedb_graph_recall_uses_public_memory_contract(fake_arcadedb, tmp_pa
         "ArcadeDB graph recall auth route memory",
         repo_id="repo-a",
         importance=0.9,
+        tags=[provenance_tag(Provenance.DERIVED)],
         auto_link=False,
     )
     target_id = memory._storage.store_memory(
         "Repository scope evidence explains access controls",
         repo_id="repo-a",
         importance=0.8,
+        tags=[provenance_tag(Provenance.DERIVED)],
         auto_link=False,
     )
     memory._storage.add_relationship(

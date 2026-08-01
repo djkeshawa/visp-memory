@@ -2,7 +2,7 @@ import sqlite3
 
 import pytest
 
-from visp_memory.core.trust import Provenance, assess, provenance_of
+from visp_memory.core.trust import Provenance, assess, provenance_of, provenance_tag
 from visp_memory.server import app as server_app
 from visp_memory.server.app import app
 
@@ -158,8 +158,7 @@ async def test_related_memories_and_sessions_round_trip(client):
 
     related = await client.get(f"/memories/{source_id}/related", headers=headers)
     assert related.status_code == 200
-    assert related.json()[0]["id"] == target_id
-    assert related.json()[0]["relationship"] == "supports"
+    assert related.json() == []
 
     started = await client.post("/sessions", headers=headers)
     assert started.status_code == 200
@@ -171,6 +170,38 @@ async def test_related_memories_and_sessions_round_trip(client):
     )
     assert completed.status_code == 200
     assert completed.json() == {"id": session_id, "status": "completed"}
+
+
+@pytest.mark.asyncio
+async def test_related_memories_filter_quarantine_with_trusted_control(client):
+    headers = {"X-API-KEY": "test_key"}
+    source_id = app.state.storage.store_memory(
+        "Trusted related source",
+        repo_id="repo-a",
+        tags=[provenance_tag(Provenance.DERIVED)],
+        auto_link=False,
+    )
+    trusted_id = app.state.storage.store_memory(
+        "Trusted related target",
+        repo_id="repo-a",
+        tags=[provenance_tag(Provenance.DERIVED)],
+        auto_link=False,
+    )
+    quarantined_id = app.state.storage.store_memory(
+        "Poison related target",
+        repo_id="repo-a",
+        importance=1.0,
+        tags=[provenance_tag(Provenance.EXTERNAL)],
+        auto_link=False,
+    )
+    app.state.storage.add_relationship(source_id, trusted_id, "supports")
+    app.state.storage.add_relationship(source_id, quarantined_id, "supports")
+
+    response = await client.get(f"/memories/{source_id}/related", headers=headers)
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == [trusted_id]
+    assert quarantined_id not in {item["id"] for item in response.json()}
 
 
 @pytest.mark.asyncio
@@ -740,6 +771,19 @@ async def test_task_memory_brief_returns_sections_unknowns_and_delta(client):
         headers=headers,
     )
     assert memory.status_code == 200
+    trusted_id = app.state.storage.store_memory(
+        "WARNING [auth]: trusted legacy API compatibility",
+        layer="semantic",
+        category="fragile_area",
+        repo_id="brief-repo",
+        tags=[provenance_tag(Provenance.DERIVED)],
+        metadata={
+            "files": ["src/auth.py"],
+            "confidence": 0.96,
+            "source_revision": "brief123",
+        },
+        auto_link=False,
+    )
     response = await client.post(
         "/context/brief",
         json={
@@ -752,7 +796,10 @@ async def test_task_memory_brief_returns_sections_unknowns_and_delta(client):
     )
     assert response.status_code == 200
     brief = response.json()
-    assert brief["sections"]["warnings"][0]["id"] == memory.json()["id"]
+    assert brief["sections"]["warnings"][0]["id"] == trusted_id
+    assert memory.json()["id"] not in {
+        citation["memory_id"] for citation in brief["citations"]
+    }
     assert brief["citations"][0]["source_revision"] == "brief123"
     assert brief["token_count"] <= 300
     assert any("No active intent" in unknown for unknown in brief["unknowns"])
@@ -1234,20 +1281,18 @@ async def test_graph_endpoint_filters_relationships_by_repo(client):
 @pytest.mark.asyncio
 async def test_graph_recall_trace_endpoint_returns_evidence(client):
     headers = {"X-API-KEY": "test_key"}
-    source = (
-        await client.post(
-            "/memories",
-            json={"content": "Graph recall auth route memory", "repo_id": "repo-a"},
-            headers=headers,
-        )
-    ).json()["id"]
-    target = (
-        await client.post(
-            "/memories",
-            json={"content": "Graph recall repository scope evidence", "repo_id": "repo-a"},
-            headers=headers,
-        )
-    ).json()["id"]
+    source = app.state.storage.store_memory(
+        "Graph recall auth route memory",
+        repo_id="repo-a",
+        tags=[provenance_tag(Provenance.DERIVED)],
+        auto_link=False,
+    )
+    target = app.state.storage.store_memory(
+        "Graph recall repository scope evidence",
+        repo_id="repo-a",
+        tags=[provenance_tag(Provenance.DERIVED)],
+        auto_link=False,
+    )
     await client.post(
         "/relationships",
         json={
