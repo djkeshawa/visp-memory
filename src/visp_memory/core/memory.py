@@ -16,6 +16,11 @@ from typing import Any, Dict, List, Optional
 from visp_memory.config import MemoryConfig
 from visp_memory.core.arcadedb_storage import ArcadeDbStorage
 from visp_memory.core.compression import MemoryCompressor, create_llm_compressor
+from visp_memory.core.eligibility import (
+    EligibilityFilterResult,
+    filter_recall_eligible,
+    require_repo_id,
+)
 from visp_memory.core.memory_context import build_context, format_context_text
 from visp_memory.core.memory_import_export import export_memory, import_memories
 from visp_memory.core.neo4j_storage import Neo4jStorage
@@ -504,6 +509,9 @@ class Memory:
         session_id: str = None,
         constraints: List[str] = None,
         dependencies: List[str] = None,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of: Any = None,
     ) -> List[Dict[str, Any]]:
         """
         Search across all memory layers.
@@ -520,8 +528,7 @@ class Memory:
         layers = layers or ["episodic", "semantic", "intent"]
         results = []
 
-        # Use configured repo_id if not provided
-        search_repo_id = repo_id or self.config.repo_id
+        search_repo_id = require_repo_id(repo_id or self.config.repo_id)
 
         for layer in layers:
             layer_results = self._storage.search_memories(
@@ -530,11 +537,24 @@ class Memory:
                 repo_id=search_repo_id,
                 limit=limit,
                 status=status,
+                environment=environment,
+                task_type=task_type,
+                as_of=as_of,
             )
             results.extend(layer_results)
 
-        ranked = self.rank_with_context(
+        eligibility = filter_recall_eligible(
             results,
+            repo_id=search_repo_id,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
+        )
+        self.last_recall_eligibility_result = eligibility
+        self.last_recall_eligibility = eligibility.diagnostics()
+
+        ranked = self.rank_with_context(
+            eligibility.allowed,
             query=query,
             repo_id=search_repo_id,
             task=task,
@@ -835,6 +855,9 @@ class Memory:
         depth: int = 1,
         token_budget: int = 2000,
         limit: int = 25,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of: Any = None,
     ) -> Dict[str, Any]:
         """Return a compact relationship neighborhood for a memory."""
         from visp_memory.recall.graph import GraphRecall
@@ -846,6 +869,9 @@ class Memory:
             depth=depth,
             token_budget=token_budget,
             limit=limit,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
         )
 
     def graph_path(
@@ -855,6 +881,9 @@ class Memory:
         repo_id: str = None,
         max_hops: int = 4,
         token_budget: int = 2000,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of: Any = None,
     ) -> Dict[str, Any]:
         """Return the shortest evidence-backed relationship path between two memories."""
         from visp_memory.recall.graph import GraphRecall
@@ -865,6 +894,9 @@ class Memory:
             repo_id=repo_id or self.config.repo_id,
             max_hops=max_hops,
             token_budget=token_budget,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
         )
 
     def graph_trace(
@@ -875,6 +907,9 @@ class Memory:
         token_budget: int = 2000,
         limit: int = 5,
         relationship_filter: str = None,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of: Any = None,
     ) -> Dict[str, Any]:
         """Return ranked seed memories plus evidence-backed relationship context."""
         from visp_memory.recall.graph import GraphRecall
@@ -886,6 +921,9 @@ class Memory:
             token_budget=token_budget,
             limit=limit,
             relationship_filter=relationship_filter,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
         )
 
     def graph_why_relevant(
@@ -896,6 +934,9 @@ class Memory:
         depth: int = 2,
         token_budget: int = 2000,
         limit: int = 5,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of: Any = None,
     ) -> Dict[str, Any]:
         """Explain why a specific memory is relevant to a query."""
         from visp_memory.recall.graph import GraphRecall
@@ -907,10 +948,20 @@ class Memory:
             depth=depth,
             token_budget=token_budget,
             limit=limit,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
         )
 
     def relevant_for(
-        self, task: str = None, files: List[str] = None, limit: int = 15
+        self,
+        task: str = None,
+        files: List[str] = None,
+        limit: int = 15,
+        repo_id: str = None,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of: Any = None,
     ) -> Dict[str, Any]:
         """
         Get memories relevant to a task or set of files.
@@ -926,10 +977,16 @@ class Memory:
         results = {"knowledge": [], "warnings": [], "history": []}
 
         # Get relevant semantic knowledge
-        repo_id = self.config.repo_id
+        repo_id = require_repo_id(repo_id or self.config.repo_id)
         if task or files:
             results["knowledge"] = self.semantic.relevant_for(
-                files=files, query=task, limit=limit, repo_id=repo_id
+                files=files,
+                query=task,
+                limit=limit,
+                repo_id=repo_id,
+                environment=environment,
+                task_type=task_type,
+                as_of=as_of,
             )
 
         # Get warnings for files
@@ -940,14 +997,33 @@ class Memory:
 
         # Get relevant history
         if task:
-            results["history"] = self.episodic.search(task, limit=limit // 2, repo_id=repo_id)
+            results["history"] = self.episodic.search(
+                task,
+                limit=limit // 2,
+                repo_id=repo_id,
+                environment=environment,
+                task_type=task_type,
+                as_of=as_of,
+            )
 
         trust_results = []
+        eligibility_results = []
         for group in ("knowledge", "warnings", "history"):
-            filtered = filter_unsolicited(results[group])
+            eligibility = filter_recall_eligible(
+                results[group],
+                repo_id=repo_id,
+                environment=environment,
+                task_type=task_type,
+                as_of=as_of,
+            )
+            eligibility_results.append(eligibility)
+            filtered = filter_unsolicited(eligibility.allowed)
             results[group] = filtered.allowed
             trust_results.append(filtered)
         results["trust_filter"] = TrustFilterResult.combine(trust_results).diagnostics()
+        results["eligibility_filter"] = EligibilityFilterResult.combine(
+            eligibility_results
+        ).diagnostics()
 
         return results
 
@@ -962,6 +1038,9 @@ class Memory:
         include_intent: bool = True,
         format: str = "text",
         repo_id: str = None,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of: Any = None,
     ) -> Any:
         """
         Generate full context for an LLM.
@@ -985,6 +1064,9 @@ class Memory:
             include_knowledge=include_knowledge,
             include_intent=include_intent,
             repo_id=repo_id,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
         )
 
         if format == "json":

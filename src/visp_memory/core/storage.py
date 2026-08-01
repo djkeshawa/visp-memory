@@ -1291,6 +1291,7 @@ class LocalStorage(BaseStorage):
         limit: int = 10,
         min_importance: float = 0.0,
         status: str = "active",
+        **_kwargs,
     ) -> List[Dict[str, Any]]:
         """
         Semantic search across memories.

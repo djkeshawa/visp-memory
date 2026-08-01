@@ -27,6 +27,9 @@ class BaseMemoryLayer(ABC):
         category: str = None,
         limit: int = 10,
         repo_id: str = None,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of: Any = None,
     ) -> List[Dict[str, Any]]:
         """
         Search memories in this layer.
@@ -42,7 +45,14 @@ class BaseMemoryLayer(ABC):
             List of matching memories
         """
         return self.storage.search_memories(
-            query=query, layer=layer, category=category, limit=limit, repo_id=repo_id
+            query=query,
+            layer=layer,
+            category=category,
+            limit=limit,
+            repo_id=repo_id,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
         )
 
     def list_items(

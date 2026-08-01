@@ -5,6 +5,7 @@ Connects to the Central Memory Server via HTTP.
 """
 
 import logging
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 try:
@@ -151,7 +152,11 @@ class RemoteStorage(BaseStorage):
     def search_memories(self, query: str, repo_id: str = None, **kwargs) -> List[Dict[str, Any]]:
         """Search across memories."""
         try:
-            filters = {key: value for key, value in kwargs.items() if value is not None}
+            filters = {
+                key: self._serialize_request_value(value)
+                for key, value in kwargs.items()
+                if value is not None
+            }
             layer = filters.pop("layer", None)
             if layer and "layers" not in filters:
                 filters["layers"] = [layer]
@@ -165,6 +170,15 @@ class RemoteStorage(BaseStorage):
             return self._response_json(response, "search memories", list)
         except requests.RequestException as e:
             raise self._write_error("search memories", e) from e
+
+    @classmethod
+    def _serialize_request_value(cls, value: Any) -> Any:
+        """Convert runtime scope values to HTTP-client-safe representations."""
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, (list, tuple)):
+            return [cls._serialize_request_value(item) for item in value]
+        return value
 
     def list_memories(self, repo_id: str = None, **kwargs) -> List[Dict[str, Any]]:
         """List memories with optional filtering."""
@@ -336,13 +350,27 @@ class RemoteStorage(BaseStorage):
             raise self._write_error("add relationship", e) from e
 
     def get_related_memories(
-        self, memory_id: str, relationship: str = None
+        self,
+        memory_id: str,
+        relationship: str = None,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of: Any = None,
     ) -> List[Dict[str, Any]]:
         try:
-            params = {"relationship": relationship} if relationship else None
+            params = {
+                key: self._serialize_request_value(value)
+                for key, value in {
+                    "relationship": relationship,
+                    "environment": environment,
+                    "task_type": task_type,
+                    "as_of": as_of,
+                }.items()
+                if value is not None
+            }
             response = self.session.get(
                 f"{self.server_url}/memories/{memory_id}/related",
-                params=params,
+                params=params or None,
             )
             if response.status_code == 404:
                 return []

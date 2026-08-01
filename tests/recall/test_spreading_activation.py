@@ -79,6 +79,7 @@ class TestGraphRecallActivation:
         def store(content: str) -> str:
             return storage.store_memory(
                 content,
+                repo_id="repo-a",
                 tags=[provenance_tag(Provenance.DERIVED)],
                 auto_link=False,
             )
@@ -112,7 +113,11 @@ class TestGraphRecallActivation:
     def test_trace_ranks_convergent_node_above_single_path_node(self, storage):
         ids = self._seed_diamond(storage)
         result = GraphRecall(storage).trace(
-            query="auth token refresh strategy", depth=2, token_budget=10000, limit=5
+            query="auth token refresh strategy",
+            repo_id="repo-a",
+            depth=2,
+            token_budget=10000,
+            limit=5,
         )
 
         by_id = {node["id"]: node for node in result["nodes"]}
@@ -125,7 +130,11 @@ class TestGraphRecallActivation:
     def test_neighbors_exposes_activation_factor(self, storage):
         ids = self._seed_diamond(storage)
         result = GraphRecall(storage).neighbors(
-            memory_id=ids["seed"], depth=2, token_budget=10000, limit=25
+            memory_id=ids["seed"],
+            repo_id="repo-a",
+            depth=2,
+            token_budget=10000,
+            limit=25,
         )
         assert result["nodes"], "expected expanded neighborhood"
         for node in result["nodes"]:

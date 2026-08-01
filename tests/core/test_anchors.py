@@ -117,6 +117,7 @@ class TestInjectionIntegration:
                 "content": "WARNING [session.py]: cache writes race under refresh",
                 "relevance_score": 0.20,
                 "category": "fact",
+                "repo_id": "repo-a",
                 "tags": [_DERIVED_TAG],
             },
         ]
@@ -126,6 +127,7 @@ class TestInjectionIntegration:
             files=["session.py"],
             corpus_size=50,
             repo_root=tmp_path,
+            repo_id="repo-a",
         )
         assert [m["id"] for m in result.memories] == ["anchored"]
         assert result.anchored_hits == 1
@@ -140,6 +142,7 @@ class TestInjectionIntegration:
                 "content": "WARNING [removed_module.py]: careful with the global lock",
                 "relevance_score": 0.99,
                 "category": "fragile_area",
+                "repo_id": "repo-a",
                 "tags": [_DERIVED_TAG],
             },
             {
@@ -147,6 +150,7 @@ class TestInjectionIntegration:
                 "content": "WARNING [live.py]: unrelated but resolvable",
                 "relevance_score": 0.10,
                 "category": "fragile_area",
+                "repo_id": "repo-a",
                 "tags": [_DERIVED_TAG],
             },
         ]
@@ -156,6 +160,7 @@ class TestInjectionIntegration:
             files=["removed_module.py"],
             corpus_size=50,
             repo_root=tmp_path,
+            repo_id="repo-a",
         )
         assert result.dropped_stale_anchor == 1
         assert "stale" not in [m["id"] for m in result.memories]
@@ -168,6 +173,7 @@ class TestInjectionIntegration:
                 "content": "WARNING [src/auth.py]: mutex required around refresh",
                 "relevance_score": 0.99,
                 "category": "fragile_area",
+                "repo_id": "repo-a",
                 "tags": [_DERIVED_TAG],
             },
         ]
@@ -177,6 +183,7 @@ class TestInjectionIntegration:
             files=["src/auth.py"],
             corpus_size=50,
             repo_root=tmp_path,
+            repo_id="repo-a",
         )
         assert not result.abstained
         assert result.dropped_stale_anchor == 0
@@ -188,6 +195,7 @@ class TestInjectionIntegration:
                 "content": "WARNING [removed_module.py]: careful",
                 "relevance_score": 0.99,
                 "category": "fragile_area",
+                "repo_id": "repo-a",
                 "tags": [_DERIVED_TAG],
             },
         ]
@@ -197,6 +205,7 @@ class TestInjectionIntegration:
             files=["removed_module.py"],
             corpus_size=50,
             repo_root=tmp_path,
+            repo_id="repo-a",
             policy=InjectionPolicy(drop_stale_anchors=False),
         )
         assert not result.abstained

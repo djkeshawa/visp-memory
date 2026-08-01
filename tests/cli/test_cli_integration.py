@@ -473,6 +473,48 @@ class TestCLIBasicCommands:
 class TestCLIRecallCommand:
     """Test recall/search functionality."""
 
+    def test_recall_context_and_inject_accept_runtime_scope(self, cli_env):
+        """Primary read commands expose environment and task-type scope."""
+        runner.invoke(app, ["init", "--type", "code", "--repo", "repo-a"])
+
+        recall = runner.invoke(
+            app,
+            [
+                "recall",
+                "authentication",
+                "--environment",
+                "production",
+                "--task-type",
+                "deployment",
+            ],
+        )
+        context = runner.invoke(
+            app,
+            [
+                "context",
+                "--environment",
+                "production",
+                "--task-type",
+                "deployment",
+            ],
+        )
+        inject = runner.invoke(
+            app,
+            [
+                "inject",
+                "--task",
+                "deploy authentication",
+                "--environment",
+                "production",
+                "--task-type",
+                "deployment",
+            ],
+        )
+
+        assert recall.exit_code == 0
+        assert context.exit_code == 0
+        assert inject.exit_code == 0
+
     def test_recall_basic(self, cli_env):
         """Test basic recall command."""
         runner.invoke(app, ["init", "--type", "code"])

@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
 from visp_memory.core.clock import utc_now
+from visp_memory.core.eligibility import normalize_optional_scope_values, require_repo_id
 from visp_memory.core.ranking import projected_importance
 from visp_memory.core.storage import BaseStorage
 from visp_memory.core.tokens import compute_savings
@@ -26,6 +27,40 @@ COMPRESSION_PROMPT_HEADER = (
     "Focus on patterns, rules, or insights that would help future decision-making.\n"
     "Be concise but preserve essential information."
 )
+
+
+def _shared_compression_scope(
+    memories: List[Dict[str, Any]],
+) -> Optional[tuple[str, Dict[str, List[str]]]]:
+    """Return one canonical source scope, or refuse ambiguous compression input."""
+    try:
+        repo_ids = [require_repo_id(memory.get("repo_id")) for memory in memories]
+    except ValueError:
+        return None
+    if len(set(repo_ids)) != 1:
+        return None
+
+    inherited: Dict[str, List[str]] = {}
+    for field in ("environment", "task_type"):
+        normalized: List[tuple[str, ...]] = []
+        for memory in memories:
+            metadata = memory.get("metadata")
+            if metadata is None:
+                value = None
+            elif not isinstance(metadata, dict):
+                return None
+            else:
+                value = metadata.get(field)
+            try:
+                normalized.append(normalize_optional_scope_values(value, field=field))
+            except ValueError:
+                return None
+        if len(set(normalized)) != 1:
+            return None
+        if normalized[0]:
+            inherited[field] = list(normalized[0])
+
+    return repo_ids[0], inherited
 
 
 class MemoryCompressor:
@@ -92,6 +127,11 @@ class MemoryCompressor:
         if not episodes:
             return None
 
+        compression_scope = _shared_compression_scope(episodes)
+        if compression_scope is None:
+            return None
+        repo_id, inherited_scope = compression_scope
+
         contents = [ep["content"] for ep in episodes]
         source_ids = [ep["id"] for ep in episodes]
 
@@ -131,6 +171,7 @@ class MemoryCompressor:
         semantic_id = self.storage.store_memory(
             content=compressed,
             layer="semantic",
+            repo_id=repo_id,
             category=category,
             importance=importance,
             tags=with_channel_provenance(all_tags, write_channel),
@@ -139,6 +180,7 @@ class MemoryCompressor:
                 "compressed_at": utc_now().isoformat(),
                 "token_savings": savings.as_dict(),
                 "write_channel": write_channel.value,
+                **inherited_scope,
             },
             source_ids=source_ids,
             source=policy.source,
@@ -296,6 +338,11 @@ class MemoryCompressor:
         if not memories or len(memories) < 3:
             return None
 
+        compression_scope = _shared_compression_scope(memories)
+        if compression_scope is None:
+            return None
+        repo_id, inherited_scope = compression_scope
+
         contents = [m["content"] for m in memories]
         source_ids = [m["id"] for m in memories]
 
@@ -333,6 +380,7 @@ class MemoryCompressor:
         principle_id = self.storage.store_memory(
             content=compressed,
             layer="semantic",
+            repo_id=repo_id,
             category="principle",
             importance=importance,
             tags=with_channel_provenance(
@@ -344,6 +392,7 @@ class MemoryCompressor:
                 "compressed_at": utc_now().isoformat(),
                 "token_savings": savings.as_dict(),
                 "write_channel": write_channel.value,
+                **inherited_scope,
             },
             source_ids=source_ids,
             source=policy.source,
@@ -394,13 +443,23 @@ class MemoryCompressor:
         old_episodes = [ep for ep in episodes if _is_old_uncompressed(ep)]
 
         if len(old_episodes) >= min_episodes:
-            # Group by category
-            by_category = defaultdict(list)
+            # Group only records whose repository and entity scope can be inherited.
+            compatible_groups = defaultdict(list)
             for ep in old_episodes:
-                by_category[ep.get("category", "general")].append(ep)
+                scope = _shared_compression_scope([ep])
+                if scope is None:
+                    continue
+                repo_id, inherited = scope
+                key = (
+                    ep.get("category", "general"),
+                    repo_id,
+                    tuple(inherited.get("environment", [])),
+                    tuple(inherited.get("task_type", [])),
+                )
+                compatible_groups[key].append(ep)
 
             # Compress categories
-            for category, cat_episodes in by_category.items():
+            for (category, *_scope), cat_episodes in compatible_groups.items():
                 if len(cat_episodes) >= category_threshold:
                     semantic_id = self.compress_episodes_to_semantic(
                         cat_episodes, category=category
@@ -420,11 +479,21 @@ class MemoryCompressor:
 
         # Cluster them (naive approach: group by auto-extracted topics/tags would be better)
         # For now, we'll try to group by category/tags
-        by_category = defaultdict(list)
+        compatible_groups = defaultdict(list)
         for m in facts:
-            by_category[m.get("category", "general")].append(m)
+            scope = _shared_compression_scope([m])
+            if scope is None:
+                continue
+            repo_id, inherited = scope
+            key = (
+                m.get("category", "general"),
+                repo_id,
+                tuple(inherited.get("environment", [])),
+                tuple(inherited.get("task_type", [])),
+            )
+            compatible_groups[key].append(m)
 
-        for _category, items in by_category.items():
+        for items in compatible_groups.values():
             if len(items) >= 5:  # Need more evidence for a principle
                 # Only check items not already supporting a principle to avoid loops
                 # (Ideally we checks relationships, but simplified for MVP)

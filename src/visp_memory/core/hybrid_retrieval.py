@@ -186,6 +186,9 @@ class HybridRetriever:
         symbols: Optional[list[str]] = None,
         limit: int = 80,
         candidate_filter: Optional[Callable[[dict[str, Any]], bool]] = None,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of: Any = None,
     ) -> list[dict[str, Any]]:
         """Return explainable hybrid results without relying on backend-specific queries."""
         files = files or []
@@ -199,6 +202,9 @@ class HybridRetriever:
                 layer=layer,
                 status="active",
                 limit=40,
+                environment=environment,
+                task_type=task_type,
+                as_of=as_of,
             ):
                 if candidate_filter and not candidate_filter(memory):
                     continue

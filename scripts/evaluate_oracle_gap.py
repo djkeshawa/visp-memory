@@ -261,7 +261,7 @@ class Outcome:
 
 def _build_store(tmp: Path) -> tuple[Memory, dict[str, str]]:
     """Seed a fresh store and return it plus a memory-id -> seed-key map."""
-    config = MemoryConfig()
+    config = MemoryConfig(repo_id="evaluation")
     config.storage.data_dir = tmp / "data"
     config.embedding.provider = "noop"  # deterministic, no network
     memory = Memory(config=config)
@@ -352,6 +352,7 @@ def run(policy: Optional[InjectionPolicy] = None) -> dict[str, Any]:
                 task=case.task,
                 files=files,
                 corpus_size=corpus_size,
+                repo_id="evaluation",
                 policy=policy,
             )
             policy_keys = [id_to_key.get(m.get("id"), "?") for m in result.memories]

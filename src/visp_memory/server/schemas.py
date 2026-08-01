@@ -5,8 +5,9 @@ Pydantic schemas for the Memory Server API.
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from visp_memory.core.eligibility import normalize_scope_values
 from visp_memory.core.ranking import DEFAULT_RECALL_MIN_SCORE
 
 MemoryLayer = Literal["raw", "episodic", "semantic", "intent"]
@@ -16,7 +17,21 @@ RelationshipConfidence = Literal["observed", "inferred", "ambiguous", "manual"]
 MAX_QUERY_LIMIT = 200
 
 
-class MemoryCreate(BaseModel):
+class ScopedRequest(BaseModel):
+    """Normalize optional environment and task constraints at the API boundary."""
+
+    environment: Optional[List[str]] = None
+    task_type: Optional[List[str]] = None
+
+    @field_validator("environment", "task_type", mode="before")
+    @classmethod
+    def normalize_scope(cls, value, info):
+        if value is None:
+            return None
+        return list(normalize_scope_values(value, field=info.field_name))
+
+
+class MemoryCreate(ScopedRequest):
     content: str = Field(min_length=1)
     layer: MemoryLayer = "episodic"
     category: str = "note"
@@ -91,6 +106,8 @@ class MemoryResponse(BaseModel):
     lineage: List[str] = Field(default_factory=list)
     pinned: bool = False
     hold: bool = False
+    environment: List[str] = Field(default_factory=list)
+    task_type: List[str] = Field(default_factory=list)
 
 
 class RelatedMemoryResponse(MemoryResponse):
@@ -115,13 +132,14 @@ class SessionCompleteResponse(BaseModel):
     intent_evaluations: Optional[List[Dict[str, Any]]] = None
 
 
-class SearchQuery(BaseModel):
+class SearchQuery(ScopedRequest):
     query: str = Field(min_length=1)
     layers: Optional[List[MemoryLayer]] = None
     repo_id: Optional[str] = None
     status: MemoryStatus = "active"
     limit: int = Field(default=10, ge=1, le=MAX_QUERY_LIMIT)
     min_score: float = Field(default=DEFAULT_RECALL_MIN_SCORE, ge=0.0, le=1.0)
+    as_of: Optional[datetime] = None
 
 
 GraphRecallMode = Literal["neighbors", "path", "trace", "why_relevant"]
@@ -138,39 +156,43 @@ class RelationshipEvidence(BaseModel):
     created_at: Optional[datetime] = None
 
 
-class GraphTraceRequest(BaseModel):
+class GraphTraceRequest(ScopedRequest):
     query: str = Field(min_length=1)
     repo_id: Optional[str] = None
     depth: int = Field(default=2, ge=0, le=4)
     token_budget: int = Field(default=2000, ge=1, le=100000)
     limit: int = Field(default=5, ge=1, le=50)
     relationship_filter: Optional[str] = None
+    as_of: Optional[datetime] = None
 
 
-class GraphNeighborsRequest(BaseModel):
+class GraphNeighborsRequest(ScopedRequest):
     memory_id: str = Field(min_length=1)
     repo_id: Optional[str] = None
     relationship_filter: Optional[str] = None
     depth: int = Field(default=1, ge=0, le=4)
     token_budget: int = Field(default=2000, ge=1, le=100000)
     limit: int = Field(default=25, ge=1, le=100)
+    as_of: Optional[datetime] = None
 
 
-class GraphPathRequest(BaseModel):
+class GraphPathRequest(ScopedRequest):
     source_id: str = Field(min_length=1)
     target_id: str = Field(min_length=1)
     repo_id: Optional[str] = None
     max_hops: int = Field(default=4, ge=1, le=6)
     token_budget: int = Field(default=2000, ge=1, le=100000)
+    as_of: Optional[datetime] = None
 
 
-class GraphWhyRelevantRequest(BaseModel):
+class GraphWhyRelevantRequest(ScopedRequest):
     query: str = Field(min_length=1)
     memory_id: str = Field(min_length=1)
     repo_id: Optional[str] = None
     depth: int = Field(default=2, ge=0, le=4)
     token_budget: int = Field(default=2000, ge=1, le=100000)
     limit: int = Field(default=5, ge=1, le=50)
+    as_of: Optional[datetime] = None
 
 
 class GraphRecallNode(BaseModel):
@@ -343,13 +365,14 @@ class QualityDuplicateResponse(BaseModel):
     candidates: List[DuplicateCandidate]
 
 
-class AskMemoryRequest(BaseModel):
+class AskMemoryRequest(ScopedRequest):
     query: str = Field(min_length=1)
     repo_id: Optional[str] = None
     layers: Optional[List[MemoryLayer]] = None
     category: Optional[str] = None
     limit: int = Field(default=5, ge=1, le=20)
     require_citations: bool = True
+    as_of: Optional[datetime] = None
 
 
 class AskMemoryCitation(BaseModel):
@@ -370,7 +393,7 @@ class AskMemoryResponse(BaseModel):
     model: Optional[str] = None
 
 
-class ContextCompileRequest(BaseModel):
+class ContextCompileRequest(ScopedRequest):
     query: str = Field(min_length=1, max_length=20000)
     repo_id: Optional[str] = None
     token_budget: int = Field(default=2000, ge=64, le=100000)
@@ -381,7 +404,7 @@ class ContextCompileRequest(BaseModel):
     min_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
-class TaskMemoryBriefRequest(BaseModel):
+class TaskMemoryBriefRequest(ScopedRequest):
     task: str = Field(min_length=1, max_length=20000)
     repo_id: Optional[str] = None
     token_budget: int = Field(default=2000, ge=128, le=100000)

@@ -461,7 +461,7 @@ async def test_non_admin_memory_routes_are_scoped_to_current_team(client):
 
         leaked_recall = await client.post(
             "/recall",
-            json={"query": "private", "limit": 10},
+            json={"query": "private", "limit": 10, "repo_id": "repo-alpha"},
         )
         assert leaked_recall.status_code == 200
         assert [memory["id"] for memory in leaked_recall.json()] == [alpha_memory_id]
@@ -524,7 +524,7 @@ async def test_non_admin_intent_routes_are_scoped_to_current_team(client):
         )
     )
     try:
-        own_intents = await client.get("/intents")
+        own_intents = await client.get("/intents?repo_id=repo-alpha")
         assert own_intents.status_code == 200
         assert [intent["id"] for intent in own_intents.json()] == [alpha_intent_id]
 
@@ -606,7 +606,7 @@ async def test_non_admin_relationship_routes_are_scoped_to_current_team(client):
         )
     )
     try:
-        relationships = await client.get("/relationships")
+        relationships = await client.get("/relationships?repo_id=repo-alpha")
         assert relationships.status_code == 200
         assert [relationship["id"] for relationship in relationships.json()] == [
             alpha_relationship_id

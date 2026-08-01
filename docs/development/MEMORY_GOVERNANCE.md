@@ -88,14 +88,24 @@ Trust is checked again before any guarded result is returned to prompt-adjacent 
 or formatted into prompt content. Task briefs filter before token selection, and graph
 relationships are filtered before traversal. The guarded surfaces are full context,
 targeted `relevant_for` groups, MCP SessionStart, task briefs, proactive
-file/error/directory recall, graph traversal, and related-memory HTTP output. Graph
-traversal removes relationships touching a rejected node, so quarantine cannot be used
-as an invisible path between trusted endpoints.
+file/error/directory recall, graph traversal, related-memory HTTP output, and `/ai/ask`.
+Graph traversal removes relationships touching a rejected node before traversal, so a
+rejected record cannot be used as an invisible path between trusted endpoints.
+
+Before trust, the shared eligibility policy requires one non-empty repository ID and
+checks time and runtime scope. `valid_from` is inclusive and `valid_to` is exclusive.
+Declared `environment` and `task_type` values are normalized and require an intersecting
+caller value. Malformed timestamps, metadata, or scope values fail closed. Relationship
+sources, targets, contradiction snippets, and answer citations use the same inputs.
+Compression inherits repository/environment/task scope only from uniformly scoped
+sources; mixed or malformed groups are refused and automatic compression groups by the
+canonical scope.
 
 Structured diagnostics report considered, allowed, quarantined, and below-threshold
 counts plus stable per-memory reasons. They are additive to existing result shapes. A
-direct explicit recall remains an inspection operation and may return quarantined data;
-callers must not copy such results into prompts without applying the unsolicited filter.
+direct explicit recall remains an inspection operation and may return quarantined data
+only when it is temporally valid and within the required caller scope; callers must not
+copy such results into prompts without applying the unsolicited filter.
 
 ## Provider Boundaries
 

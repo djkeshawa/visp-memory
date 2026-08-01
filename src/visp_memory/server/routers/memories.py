@@ -1,10 +1,14 @@
 from datetime import datetime
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from visp_memory.config import load_config
 from visp_memory.core.clock import utc_now
+from visp_memory.core.eligibility import (
+    filter_recall_eligible,
+    normalize_scope_values,
+)
 from visp_memory.core.lifecycle import LifecycleError
 from visp_memory.core.ranking import rank_memory_results
 from visp_memory.core.trust import (
@@ -53,6 +57,8 @@ PROVENANCE_FIELDS = (
     "lineage",
     "pinned",
     "hold",
+    "environment",
+    "task_type",
 )
 
 
@@ -71,6 +77,15 @@ def _as_optional_datetime(value):
 
 def _memory_response_payload(memory: dict):
     metadata = memory.get("metadata", {})
+
+    def response_scope(field):
+        if field not in metadata or metadata[field] is None:
+            return []
+        try:
+            return list(normalize_scope_values(metadata[field], field=field))
+        except ValueError:
+            return []
+
     return {
         "id": memory["id"],
         "content": memory["content"],
@@ -108,6 +123,8 @@ def _memory_response_payload(memory: dict):
         "lineage": metadata.get("lineage", memory.get("source_ids", [])),
         "pinned": bool(metadata.get("pinned", False)),
         "hold": bool(metadata.get("hold", False)),
+        "environment": response_scope("environment"),
+        "task_type": response_scope("task_type"),
     }
 
 
@@ -261,6 +278,9 @@ async def get_related_memories(
     request: Request,
     memory_id: str,
     relationship: str = None,
+    environment: List[str] = Query(default=None),
+    task_type: List[str] = Query(default=None),
+    as_of: datetime = None,
     user: UserContext = Depends(get_current_user),
 ):
     """Return visible memories directly related to a memory."""
@@ -272,6 +292,15 @@ async def get_related_memories(
         scope_field="metadata",
         not_found_detail="Memory not found",
     )
+    source_eligibility = filter_recall_eligible(
+        [source],
+        repo_id=source["repo_id"],
+        environment=environment,
+        task_type=task_type,
+        as_of=as_of,
+    )
+    if not source_eligibility.allowed:
+        return []
     related = storage.get_related_memories(memory_id, relationship=relationship)
     access_visible = [
         item
@@ -279,7 +308,14 @@ async def get_related_memories(
         if item.get("repo_id") == source.get("repo_id")
         and can_access_scoped_record(storage, item, user, scope_field="metadata")
     ]
-    visible = filter_unsolicited(access_visible).allowed
+    eligible = filter_recall_eligible(
+        access_visible,
+        repo_id=source["repo_id"],
+        environment=environment,
+        task_type=task_type,
+        as_of=as_of,
+    ).allowed
+    visible = filter_unsolicited(eligible, now=as_of).allowed
     return [
         {
             **_memory_response_payload(item),
@@ -575,7 +611,7 @@ async def update_memory(
         # existing values, and strip them entirely when absent so a caller cannot
         # introduce a team_id/author_id (which drives record visibility) on a record
         # that derived its scope from the repo.
-        for reserved_key in ("author_id", "team_id"):
+        for reserved_key in ("author_id", "team_id", "environment", "task_type"):
             if reserved_key in existing_metadata:
                 metadata[reserved_key] = existing_metadata[reserved_key]
             else:
@@ -624,6 +660,13 @@ async def recall(
             for r in layer_results
             if can_access_scoped_record(storage, r, user, scope_field="metadata")
         )
+    results = filter_recall_eligible(
+        results,
+        repo_id=recall_repo_id,
+        environment=query.environment,
+        task_type=query.task_type,
+        as_of=query.as_of,
+    ).allowed
     results = rank_memory_results(
         results, query=query.query, limit=query.limit, min_score=query.min_score
     )

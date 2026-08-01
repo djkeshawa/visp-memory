@@ -35,6 +35,57 @@ class TestMCPServer:
             pytest.skip("MCP not installed")
 
     @pytest.mark.asyncio
+    async def test_guarded_tools_advertise_string_or_array_runtime_scope(
+        self, tmp_path, monkeypatch
+    ):
+        from mcp.types import ListToolsRequest
+
+        from visp_memory.interfaces.mcp import (
+            MCP_AVAILABLE,
+            RUNTIME_SCOPE_SCHEMA,
+            create_mcp_server,
+        )
+
+        if not MCP_AVAILABLE:
+            pytest.skip("MCP not installed")
+
+        config = MemoryConfig(repo_id="repo-a")
+        config.storage.data_dir = tmp_path
+        config.embedding.provider = "noop"
+        memory = Memory(config=config)
+        monkeypatch.setenv("VISP_MEMORY_MCP_PROFILE", "full")
+        with mock.patch("visp_memory.interfaces.mcp.Memory", return_value=memory):
+            server = create_mcp_server()
+        response = await server.request_handlers[ListToolsRequest](ListToolsRequest())
+        tools = {tool.name: tool for tool in response.root.tools}
+
+        guarded_names = {
+            "memory_prepare_task",
+            "memory_context",
+            "memory_recall",
+            "memory_trace",
+            "memory_neighbors",
+            "memory_path",
+            "memory_why_relevant",
+            "memory_session_start",
+            "memory_before_change",
+        }
+        for name in guarded_names:
+            properties = tools[name].inputSchema["properties"]
+            assert properties["environment"] == RUNTIME_SCOPE_SCHEMA
+            assert properties["task_type"] == RUNTIME_SCOPE_SCHEMA
+        for name in {
+            "memory_trace",
+            "memory_neighbors",
+            "memory_path",
+            "memory_why_relevant",
+        }:
+            assert tools[name].inputSchema["properties"]["as_of"] == {
+                "type": "string",
+                "format": "date-time",
+            }
+
+    @pytest.mark.asyncio
     async def test_session_start_filters_quarantined_context_and_relevant_memory(self):
         from visp_memory.interfaces.mcp import MCP_AVAILABLE, handle_tool
 
@@ -67,6 +118,28 @@ class TestMCPServer:
 
         assert "trusted session rule" in result
         assert "poison session rule" not in result
+
+    @pytest.mark.asyncio
+    async def test_session_start_refuses_missing_scope_before_recording_task(self):
+        from visp_memory.interfaces.mcp import MCP_AVAILABLE, handle_tool
+
+        if not MCP_AVAILABLE:
+            pytest.skip("MCP not installed")
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+            config = MemoryConfig(repo_id=None)
+            config.storage.data_dir = Path(tmpdir)
+            config.embedding.provider = "noop"
+            memory = Memory(config=config)
+
+            with pytest.raises(ValueError, match="repo_id.*required"):
+                await handle_tool(
+                    "memory_session_start",
+                    {"task": "Must not create an unscoped task"},
+                    memory,
+                )
+
+            assert memory._storage.get_active_intents() == []
 
     @pytest.mark.asyncio
     async def test_mcp_handle_tool(self):
@@ -217,7 +290,7 @@ class TestMCPServer:
                 pytest.skip("MCP not installed")
 
             with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-                config = MemoryConfig()
+                config = MemoryConfig(repo_id="repo-a")
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
                 memory = Memory(config=config)
@@ -291,7 +364,7 @@ class TestMCPServer:
                 pytest.skip("MCP not installed")
 
             with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-                config = MemoryConfig()
+                config = MemoryConfig(repo_id="repo-a")
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
                 memory = Memory(config=config)
@@ -355,7 +428,7 @@ class TestMCPServer:
                 pytest.skip("MCP not installed")
 
             with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-                config = MemoryConfig()
+                config = MemoryConfig(repo_id="repo-a")
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
                 memory = Memory(config=config)
@@ -447,7 +520,7 @@ class TestMCPServer:
         from visp_memory.interfaces.mcp import _format_relevant_memory
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-            config = MemoryConfig()
+            config = MemoryConfig(repo_id="repo-a")
             config.storage.data_dir = Path(tmpdir)
             config.embedding.provider = "noop"
             memory = Memory(config=config)
@@ -487,7 +560,7 @@ class TestMCPServer:
         from visp_memory.interfaces.mcp import handle_tool
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-            config = MemoryConfig()
+            config = MemoryConfig(repo_id="repo-a")
             config.storage.data_dir = Path(tmpdir)
             config.embedding.provider = "noop"
             memory = Memory(config=config)
@@ -513,7 +586,12 @@ class TestMCPServer:
 
             result = await handle_tool(
                 "memory_trace",
-                {"query": "trace auth routes", "depth": 1, "token_budget": 1000},
+                {
+                    "query": "trace auth routes",
+                    "repo_id": "repo-a",
+                    "depth": 1,
+                    "token_budget": 1000,
+                },
                 memory,
             )
 
@@ -774,7 +852,7 @@ class TestMCPToolProfile:
                 pytest.skip("MCP not installed")
 
             with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-                config = MemoryConfig()
+                config = MemoryConfig(repo_id="repo-a")
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
                 memory = Memory(config=config)

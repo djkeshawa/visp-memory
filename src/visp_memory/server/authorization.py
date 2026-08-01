@@ -27,8 +27,22 @@ def require_admin(user: UserContext) -> None:
         )
 
 
-def require_repo_scope_access(storage: Any, repo_id: Optional[str], user: UserContext) -> None:
+def require_repo_scope_access(
+    storage: Any,
+    repo_id: Optional[str],
+    user: UserContext,
+    *,
+    allow_global: bool = False,
+) -> None:
     """Hide registered repositories outside the current non-admin user's team."""
+    if not isinstance(repo_id, str) or not repo_id.strip():
+        if allow_global:
+            require_admin(user)
+            return
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="repo_id is required",
+        )
     if user.auth_type == "pat" and user.repo_ids and repo_id not in user.repo_ids:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
     if user.is_admin:

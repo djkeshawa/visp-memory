@@ -8,7 +8,13 @@ import re
 from collections.abc import Callable
 from typing import Any, Optional
 
+from visp_memory.core.clock import parse_utc
 from visp_memory.core.context_compiler import ContextCompiler
+from visp_memory.core.eligibility import (
+    filter_recall_eligible,
+    normalize_optional_scope_values,
+    require_repo_id,
+)
 from visp_memory.core.tokens import estimate_tokens
 from visp_memory.core.trust import TrustFilterResult, filter_unsolicited
 
@@ -392,7 +398,16 @@ class TaskMemoryBriefCompiler:
         previous_fingerprint: Optional[str] = None,
         min_confidence: float = 0.0,
         memory_filter: Optional[Callable[[dict[str, Any]], bool]] = None,
+        environment: Any = None,
+        task_type: Any = None,
     ) -> dict[str, Any]:
+        repo_id = require_repo_id(repo_id)
+        environment = list(
+            normalize_optional_scope_values(environment, field="environment")
+        ) or None
+        task_type = list(
+            normalize_optional_scope_values(task_type, field="task_type")
+        ) or None
         files = files or []
         symbols = symbols or []
         token_budget = max(64, int(token_budget))
@@ -427,13 +442,27 @@ class TaskMemoryBriefCompiler:
             symbols=profile["symbols"],
             min_confidence=min_confidence,
             memory_filter=compiler_filter,
+            environment=environment,
+            task_type=task_type,
         )
         trust_filter = TrustFilterResult.combine(trust_assessments.values())
         candidates = candidate_context["items"]
 
         def eligible_memory(item: dict[str, Any]) -> bool:
-            return (not memory_filter or memory_filter(item)) and bool(
-                filter_unsolicited([item]).allowed
+            if memory_filter and not memory_filter(item):
+                return False
+            eligibility = filter_recall_eligible(
+                [item],
+                repo_id=repo_id,
+                environment=environment,
+                task_type=task_type,
+                as_of=as_of,
+            )
+            return bool(eligibility.allowed) and bool(
+                filter_unsolicited(
+                    eligibility.allowed,
+                    now=parse_utc(as_of) if as_of is not None else None,
+                ).allowed
             )
 
         unknowns = []
@@ -499,6 +528,8 @@ class TaskMemoryBriefCompiler:
         fingerprint_payload = {
             "task": task,
             "repo_id": repo_id,
+            "environment": environment,
+            "task_type": task_type,
             "profile": profile,
             "intent": intent,
             "constraints": resolved_constraints,
@@ -526,6 +557,8 @@ class TaskMemoryBriefCompiler:
             "schema_version": "1.0",
             "task": task,
             "repo_id": repo_id,
+            "environment": environment,
+            "task_type": task_type,
             "as_of": candidate_context["as_of"],
             "task_profile": profile,
             "intent": intent,

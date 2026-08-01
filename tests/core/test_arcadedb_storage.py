@@ -287,7 +287,13 @@ def test_arcadedb_memory_crud_list_search_stats_and_projects(fake_arcadedb, tmp_
 
     assert [item["id"] for item in storage.list_memories(repo_id="repo-a")] == [repo_a]
 
-    results = storage.search_memories("embedded graph", repo_id="repo-a")
+    results = storage.search_memories(
+        "embedded graph",
+        repo_id="repo-a",
+        environment=["prod"],
+        task_type="deploy",
+        as_of="2026-01-15T12:00:00+00:00",
+    )
     assert [item["id"] for item in results] == [repo_a]
     assert results[0]["similarity"] > 0
 

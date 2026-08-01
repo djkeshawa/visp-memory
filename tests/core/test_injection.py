@@ -8,8 +8,10 @@ confident, irrelevant memory steering the assistant.
 from visp_memory.core.injection import (
     InjectionPolicy,
     format_injection,
-    select_for_injection,
     task_signal,
+)
+from visp_memory.core.injection import (
+    select_for_injection as _select_for_injection,
 )
 from visp_memory.core.trust import Provenance, provenance_tag
 
@@ -40,8 +42,13 @@ def _memory(content, score=0.9, memory_id="m1", category="knowledge", tags=None)
         "content": content,
         "relevance_score": score,
         "category": category,
+        "repo_id": "repo-a",
         "tags": tags if tags is not None else [provenance_tag(Provenance.DERIVED)],
     }
+
+
+def select_for_injection(candidates, **kwargs):
+    return _select_for_injection(candidates, repo_id="repo-a", **kwargs)
 
 
 class TestAbstention:

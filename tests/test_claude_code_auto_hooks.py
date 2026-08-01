@@ -20,7 +20,7 @@ from visp_memory.hooks.claude_code_auto import (
 @pytest.fixture
 def memory():
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-        config = MemoryConfig()
+        config = MemoryConfig(repo_id="repo-a")
         config.storage.data_dir = Path(tmpdir)
         config.embedding.provider = "noop"
         yield Memory(config=config)
@@ -29,7 +29,11 @@ def memory():
 class TestSessionStartHandler:
     def test_injects_project_memory_context(self, memory):
         memory.goal("Ship the auth rewrite", priority=2)
-        memory.warn("auth.py", "Race condition in token refresh")
+        memory.warn(
+            "auth.py",
+            "Race condition in token refresh",
+            _write_channel=WriteChannel.CLI,
+        )
 
         output = handle_session_start({"session_id": "s1"}, memory=memory)
 

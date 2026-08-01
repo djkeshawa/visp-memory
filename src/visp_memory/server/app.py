@@ -527,6 +527,9 @@ async def graph_recall_trace(
         token_budget=payload.token_budget,
         limit=payload.limit,
         relationship_filter=payload.relationship_filter,
+        environment=payload.environment,
+        task_type=payload.task_type,
+        as_of=payload.as_of,
     )
     return _filter_graph_recall_result(result, user)
 
@@ -544,6 +547,9 @@ async def graph_recall_neighbors(
         depth=payload.depth,
         token_budget=payload.token_budget,
         limit=payload.limit,
+        environment=payload.environment,
+        task_type=payload.task_type,
+        as_of=payload.as_of,
     )
     return _filter_graph_recall_result(result, user)
 
@@ -560,6 +566,9 @@ async def graph_recall_path(
         repo_id=graph_repo_id,
         max_hops=payload.max_hops,
         token_budget=payload.token_budget,
+        environment=payload.environment,
+        task_type=payload.task_type,
+        as_of=payload.as_of,
     )
     return _filter_graph_recall_result(result, user)
 
@@ -577,6 +586,9 @@ async def graph_recall_why_relevant(
         depth=payload.depth,
         token_budget=payload.token_budget,
         limit=payload.limit,
+        environment=payload.environment,
+        task_type=payload.task_type,
+        as_of=payload.as_of,
     )
     return _filter_graph_recall_result(result, user)
 

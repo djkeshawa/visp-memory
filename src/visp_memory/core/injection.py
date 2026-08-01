@@ -38,6 +38,9 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
+from visp_memory.core.clock import parse_utc
+from visp_memory.core.eligibility import filter_recall_eligible, require_repo_id
+
 # Roughly four characters per token for English prose and identifiers. Used only for
 # reporting; nothing branches on the exact value.
 _CHARS_PER_TOKEN = 4
@@ -177,7 +180,9 @@ class InjectionResult:
     dropped_quarantined: int = 0
     dropped_untrusted: int = 0
     dropped_stale_anchor: int = 0
+    dropped_ineligible: int = 0
     anchored_hits: int = 0
+    eligibility_filter: dict[str, Any] = field(default_factory=dict)
 
     @property
     def abstained(self) -> bool:
@@ -200,6 +205,7 @@ class InjectionResult:
             + self.dropped_quarantined
             + self.dropped_untrusted
             + self.dropped_stale_anchor
+            + self.dropped_ineligible
         )
 
     def summary(self) -> str:
@@ -226,8 +232,10 @@ class InjectionResult:
             "dropped_quarantined": self.dropped_quarantined,
             "dropped_untrusted": self.dropped_untrusted,
             "dropped_stale_anchor": self.dropped_stale_anchor,
+            "dropped_ineligible": self.dropped_ineligible,
             "anchored_hits": self.anchored_hits,
             "memory_ids": [memory.get("id") for memory in self.memories],
+            "eligibility_filter": self.eligibility_filter,
         }
 
 
@@ -268,6 +276,10 @@ def task_signal(task: Optional[str], files: Optional[Iterable[str]] = None) -> i
 def select_for_injection(
     candidates: list[dict[str, Any]],
     *,
+    repo_id: Optional[str] = None,
+    environment: Any = None,
+    task_type: Any = None,
+    as_of: Any = None,
     task: Optional[str] = None,
     files: Optional[Iterable[str]] = None,
     corpus_size: Optional[int] = None,
@@ -283,11 +295,27 @@ def select_for_injection(
     ``repo_root`` enables staleness checking: memories whose anchored files have all been
     deleted are withheld. Omitted means "do not check the filesystem".
     """
+    repo_id = require_repo_id(repo_id)
     policy = policy or InjectionPolicy()
     result = InjectionResult(considered=len(candidates))
 
+    eligibility = filter_recall_eligible(
+        candidates,
+        repo_id=repo_id,
+        environment=environment,
+        task_type=task_type,
+        as_of=as_of,
+    )
+    candidates = eligibility.allowed
+    result.eligibility_filter = eligibility.diagnostics()
+    result.dropped_ineligible = len(eligibility.rejected)
+
     if not candidates:
-        result.reason = "no candidates"
+        result.reason = (
+            "every candidate was temporally invalid or out of scope"
+            if eligibility.rejected
+            else "no candidates"
+        )
         return result
 
     # Trust gate runs first: a poisoned or stale memory that would have won on relevance
@@ -474,6 +502,9 @@ def gather_candidates(
     files: Optional[Iterable[str]] = None,
     repo_id: Optional[str] = None,
     limit: int = CANDIDATE_LIMIT,
+    environment: Any = None,
+    task_type: Any = None,
+    as_of: Any = None,
 ) -> list[dict[str, Any]]:
     """Collect ranked recall candidates for the injection policy to judge.
 
@@ -494,6 +525,9 @@ def gather_candidates(
             min_score=CANDIDATE_MIN_SCORE,
             task=task,
             files=list(files) if files else None,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
         )
     except Exception:  # fail-open: injection is never worth breaking a session for
         return []
@@ -507,13 +541,25 @@ def inject_for_task(
     repo_id: Optional[str] = None,
     policy: Optional[InjectionPolicy] = None,
     repo_root: Optional[Any] = None,
+    environment: Any = None,
+    task_type: Any = None,
+    as_of: Any = None,
 ) -> InjectionResult:
     """Gather candidates and apply the policy in one step.
 
     ``repo_root`` defaults to the working directory so anchor staleness is checked
     against the tree the developer is actually in.
     """
-    candidates = gather_candidates(memory, task=task, files=files, repo_id=repo_id)
+    repo_id = require_repo_id(repo_id or memory.config.repo_id)
+    candidates = gather_candidates(
+        memory,
+        task=task,
+        files=files,
+        repo_id=repo_id,
+        environment=environment,
+        task_type=task_type,
+        as_of=as_of,
+    )
 
     if repo_root is None:
         from pathlib import Path as _Path
@@ -536,6 +582,10 @@ def inject_for_task(
         corpus_size=corpus_size,
         policy=policy,
         repo_root=repo_root,
+        repo_id=repo_id,
+        environment=environment,
+        task_type=task_type,
+        as_of=as_of,
     )
 
 
@@ -549,6 +599,9 @@ def build_session_brief(
     repo_id: Optional[str] = None,
     max_warnings: int = DEFAULT_SESSION_WARNINGS,
     max_chars: int = DEFAULT_SESSION_CHARS,
+    environment: Any = None,
+    task_type: Any = None,
+    as_of: Any = None,
 ) -> str:
     """Build the compact brief injected when a coding session begins.
 
@@ -567,6 +620,7 @@ def build_session_brief(
 
     Returns an empty string when there is nothing worth saying.
     """
+    repo_id = require_repo_id(repo_id or memory.config.repo_id)
     sections: list[str] = []
 
     try:
@@ -592,7 +646,18 @@ def build_session_brief(
             sections.append("### Current direction\n" + "\n".join(intent_lines))
 
     try:
-        warnings = memory.semantic.get_warnings(repo_id=repo_id)[:max_warnings]
+        from visp_memory.core.trust import filter_unsolicited
+
+        eligible = filter_recall_eligible(
+            memory.semantic.get_warnings(repo_id=repo_id),
+            repo_id=repo_id,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
+        ).allowed
+        warnings = filter_unsolicited(
+            eligible, now=parse_utc(as_of) if as_of is not None else None
+        ).allowed[:max_warnings]
     except Exception:
         warnings = []
 

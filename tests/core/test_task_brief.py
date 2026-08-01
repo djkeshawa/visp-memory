@@ -176,3 +176,44 @@ def test_task_brief_filters_quarantine_and_reports_reason(tmp_path):
     assert brief["trust_filter"]["rejected"][0]["memory_id"] == quarantined
     assert "quarantined" in brief["trust_filter"]["rejected"][0]["reason"]
     assert any("trust policy" in unknown for unknown in brief["unknowns"])
+
+
+def test_task_brief_filters_contradiction_other_side_by_runtime_scope(tmp_path):
+    storage = LocalStorage(tmp_path)
+    selected = storage.store_memory(
+        "Production authentication deployment convention",
+        layer="semantic",
+        repo_id="repo-a",
+        tags=[provenance_tag(Provenance.DERIVED)],
+        metadata={
+            "confidence": 0.9,
+            "environment": "prod",
+            "task_type": "deploy",
+        },
+        auto_link=False,
+    )
+    dev_only = storage.store_memory(
+        "Development-only contradictory authentication convention",
+        layer="semantic",
+        repo_id="repo-a",
+        tags=[provenance_tag(Provenance.DERIVED)],
+        metadata={
+            "confidence": 0.9,
+            "environment": "dev",
+            "task_type": "deploy",
+        },
+        auto_link=False,
+    )
+    storage.add_relationship(selected, dev_only, "contradicts")
+
+    brief = TaskMemoryBriefCompiler(storage).prepare(
+        "Review production authentication deployment",
+        repo_id="repo-a",
+        environment="prod",
+        task_type="deploy",
+        as_of="2026-01-15T12:00:00+00:00",
+        token_budget=500,
+    )
+
+    assert selected in {item["memory_id"] for item in brief["citations"]}
+    assert brief["contradictions"] == []

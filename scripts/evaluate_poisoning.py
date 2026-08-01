@@ -137,7 +137,7 @@ def _benign_corpus() -> list[str]:
 
 
 def _build_store(tmp: Path) -> tuple[Memory, set[str], dict[str, str]]:
-    config = MemoryConfig()
+    config = MemoryConfig(repo_id="evaluation")
     config.storage.data_dir = tmp / "data"
     config.embedding.provider = "noop"
     memory = Memory(config=config)
@@ -212,6 +212,7 @@ def run() -> dict[str, Any]:
                 candidates,
                 task=lure.query,
                 corpus_size=corpus_size,
+                repo_id="evaluation",
                 policy=InjectionPolicy(),
             )
             defended = sum(1 for m in result.memories if m.get("id") in poisoned_ids)

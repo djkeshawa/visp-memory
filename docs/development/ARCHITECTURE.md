@@ -633,7 +633,7 @@ Current FastAPI server has no authentication. **Add authentication for productio
 
 ---
 
-## Selection, Trust, and Anchoring
+## Selection, Eligibility, Trust, and Anchoring
 
 Four modules govern what actually reaches an assistant's prompt. They run in this order,
 and each can independently decide the answer is "nothing".
@@ -647,6 +647,14 @@ abstain-by-default. Every decision is recorded on `InjectionResult` so the polic
 measurable rather than asserted. See
 [INJECTION_POLICY.md](INJECTION_POLICY.md) for the evidence and threshold calibration.
 
+### `core/eligibility.py`
+
+The shared fail-closed read boundary requires a repository ID, applies inclusive
+`valid_from` and exclusive `valid_to` bounds, and matches normalized `environment` and
+`task_type` scopes. It runs before ranking, prompt budgeting, trust, relationship
+traversal, contradiction rendering, and guarded answer generation. Compression uses the
+same canonical scope values and refuses mixed or malformed source groups.
+
 ### `core/trust.py`
 
 Provenance tiers (`authored`, `derived`, `assisted`, `external`, `unknown`) with
@@ -657,10 +665,11 @@ capture is derived; HTTP, import, and instruction ingestion are external; direct
 library, missing, and malformed cases are unknown. External and unknown memories are
 quarantined from prompt-adjacent output. One structured filter is shared by context,
 targeted relevance, SessionStart/task briefs, proactive recall, graph traversal, and the
-related-memory API. It records rejection counts and reasons at the prompt boundary; task
-briefs filter before budgeting, and graph edges touching rejected nodes are removed before
-traversal. Trust falls with age so stale entries stop outranking newer information;
-explicit primary recall still returns everything. See [../TRUST.md](../TRUST.md).
+related-memory and guarded-answer APIs. It records rejection counts and reasons at the
+prompt boundary; task briefs filter before budgeting, and graph edges touching rejected
+nodes are removed before traversal. Trust falls with age so stale entries stop outranking
+newer information; explicit primary recall may return quarantined data only after
+eligibility succeeds. See [../TRUST.md](../TRUST.md).
 
 ### `core/anchors.py`
 

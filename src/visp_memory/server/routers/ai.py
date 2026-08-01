@@ -1,9 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from visp_memory.config import load_config
+from visp_memory.core.eligibility import filter_recall_eligible
 from visp_memory.core.model_router import ModelUnavailableError
 from visp_memory.core.ranking import rank_memory_results
 from visp_memory.core.reflection import ReflectionEngine
+from visp_memory.core.trust import filter_unsolicited
 from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import (
     can_access_scoped_record,
@@ -66,7 +68,17 @@ async def ask_memory(
             if can_access_scoped_record(storage, result, user, scope_field="metadata")
         )
 
-    ranked = rank_memory_results(results, query=payload.query, limit=payload.limit)
+    eligible = filter_recall_eligible(
+        results,
+        repo_id=repo_id,
+        environment=payload.environment,
+        task_type=payload.task_type,
+        as_of=payload.as_of,
+    )
+    guarded = filter_unsolicited(eligible.allowed, now=payload.as_of)
+    ranked = rank_memory_results(
+        guarded.allowed, query=payload.query, limit=payload.limit
+    )
     citations = [
         AskMemoryCitation(
             memory_id=result["id"],

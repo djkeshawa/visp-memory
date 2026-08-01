@@ -17,7 +17,7 @@ from visp_memory.core.trust import Provenance, WriteChannel, assess, provenance_
 def memory():
     """Create a memory instance with temp directory."""
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-        config = MemoryConfig()
+        config = MemoryConfig(repo_id="repo-a")
         config.storage.data_dir = Path(tmpdir)
         config.embedding.provider = "noop"
         yield Memory(config=config)
@@ -226,7 +226,15 @@ def test_archived_memories_are_excluded_from_default_list_and_search(tmp_path):
     all_ids = {item["id"] for item in storage.list_memories(status="all")}
     assert {active_id, archived_id}.issubset(all_ids)
 
-    search_ids = {item["id"] for item in storage.search_memories("deploy")}
+    search_ids = {
+        item["id"]
+        for item in storage.search_memories(
+            "deploy",
+            environment=["prod"],
+            task_type="deploy",
+            as_of="2026-01-15T12:00:00+00:00",
+        )
+    }
     assert active_id in search_ids
     assert archived_id not in search_ids
 

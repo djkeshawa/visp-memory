@@ -52,7 +52,7 @@ def project(tmp_path: Path) -> Path:
 @pytest.fixture
 def memory():
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-        config = MemoryConfig()
+        config = MemoryConfig(repo_id="repo-a")
         config.storage.data_dir = Path(tmpdir)
         config.embedding.provider = "noop"
         yield Memory(config=config)

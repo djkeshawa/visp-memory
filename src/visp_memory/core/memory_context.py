@@ -5,6 +5,11 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from visp_memory.core.clock import utc_now
+from visp_memory.core.eligibility import (
+    EligibilityFilterResult,
+    filter_recall_eligible,
+    require_repo_id,
+)
 from visp_memory.core.trust import TrustFilterResult, filter_unsolicited
 
 
@@ -14,11 +19,28 @@ def build_context(
     include_knowledge: bool,
     include_intent: bool,
     repo_id: str = None,
+    environment: Any = None,
+    task_type: Any = None,
+    as_of: Any = None,
 ) -> Dict[str, Any]:
     """Build structured context from a Memory instance."""
     context: Dict[str, Any] = {}
     trust_results = []
-    repo_id = repo_id if repo_id is not None else memory.config.repo_id
+    eligibility_results = []
+    repo_id = require_repo_id(
+        repo_id if repo_id is not None else memory.config.repo_id
+    )
+
+    def eligible(memories):
+        result = filter_recall_eligible(
+            memories,
+            repo_id=repo_id,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
+        )
+        eligibility_results.append(result)
+        return result.allowed
 
     if include_intent:
         intent_summary = memory.intent.summarize(repo_id=repo_id)
@@ -36,11 +58,15 @@ def build_context(
         }
 
     if include_knowledge:
-        warning_filter = filter_unsolicited(memory.semantic.get_warnings(repo_id=repo_id))
-        convention_filter = filter_unsolicited(
-            memory.semantic.get_conventions(repo_id=repo_id)
+        warning_filter = filter_unsolicited(
+            eligible(memory.semantic.get_warnings(repo_id=repo_id))
         )
-        issue_filter = filter_unsolicited(memory.semantic.get_known_issues(repo_id=repo_id))
+        convention_filter = filter_unsolicited(
+            eligible(memory.semantic.get_conventions(repo_id=repo_id))
+        )
+        issue_filter = filter_unsolicited(
+            eligible(memory.semantic.get_known_issues(repo_id=repo_id))
+        )
         trust_results.extend([warning_filter, convention_filter, issue_filter])
         warnings = warning_filter.allowed[:10]
         conventions = convention_filter.allowed[:10]
@@ -54,7 +80,7 @@ def build_context(
 
     if include_history:
         recent_filter = filter_unsolicited(
-            memory.episodic.recent(limit=10, repo_id=repo_id)
+            eligible(memory.episodic.recent(limit=10, repo_id=repo_id))
         )
         trust_results.append(recent_filter)
         recent = recent_filter.allowed
@@ -73,6 +99,9 @@ def build_context(
         "generated_at": utc_now().isoformat(),
         "stats": memory._storage.get_stats(repo_id=repo_id),
         "trust_filter": TrustFilterResult.combine(trust_results).diagnostics(),
+        "eligibility_filter": EligibilityFilterResult.combine(
+            eligibility_results
+        ).diagnostics(),
     }
     return context
 

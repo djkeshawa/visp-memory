@@ -35,6 +35,8 @@ async def compile_context(
         memory_filter=lambda memory: can_access_scoped_record(
             storage, memory, user, scope_field="metadata"
         ),
+        environment=payload.environment,
+        task_type=payload.task_type,
     )
 
 
@@ -63,4 +65,6 @@ async def prepare_task_brief(
         memory_filter=lambda memory: can_access_scoped_record(
             storage, memory, user, scope_field="metadata"
         ),
+        environment=payload.environment,
+        task_type=payload.task_type,
     )

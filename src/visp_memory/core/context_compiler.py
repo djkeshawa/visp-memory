@@ -9,6 +9,13 @@ from collections.abc import Callable
 from typing import Any, Optional
 
 from visp_memory.core.clock import parse_utc, utc_now
+from visp_memory.core.eligibility import (
+    EligibilityFilterResult,
+    EligibilityRejection,
+    assess_recall_eligibility,
+    normalize_optional_scope_values,
+    require_repo_id,
+)
 from visp_memory.core.hybrid_retrieval import HybridRetriever
 from visp_memory.core.tokens import estimate_tokens
 
@@ -23,13 +30,6 @@ class ContextCompiler:
     def _terms(content: str) -> set[str]:
         return set(re.findall(r"[a-z0-9_./-]+", content.casefold()))
 
-    @staticmethod
-    def _is_current(memory: dict[str, Any], as_of) -> bool:
-        metadata = memory.get("metadata") or {}
-        valid_from = parse_utc(metadata.get("valid_from"))
-        valid_to = parse_utc(metadata.get("valid_to"))
-        return not ((valid_from and valid_from > as_of) or (valid_to and valid_to <= as_of))
-
     def compile(
         self,
         query: str,
@@ -42,16 +42,43 @@ class ContextCompiler:
         previous_fingerprint: Optional[str] = None,
         min_confidence: float = 0.0,
         memory_filter: Optional[Callable[[dict[str, Any]], bool]] = None,
+        environment: Any = None,
+        task_type: Any = None,
     ) -> dict[str, Any]:
+        repo_id = require_repo_id(repo_id)
+        environment = list(
+            normalize_optional_scope_values(environment, field="environment")
+        ) or None
+        task_type = list(
+            normalize_optional_scope_values(task_type, field="task_type")
+        ) or None
         as_of_time = parse_utc(as_of) or utc_now()
+        if as_of is not None and parse_utc(as_of) is None:
+            raise ValueError("as_of must be a valid timestamp")
         files = files or []
         symbols = symbols or []
+        eligibility_rejections: dict[str, EligibilityRejection] = {}
+        eligibility_allowed: dict[str, dict[str, Any]] = {}
+
         def candidate_filter(memory: dict[str, Any]) -> bool:
             if memory_filter and not memory_filter(memory):
                 return False
+            eligibility = assess_recall_eligibility(
+                memory,
+                repo_id=repo_id,
+                environment=environment,
+                task_type=task_type,
+                as_of=as_of_time,
+            )
+            if not eligibility.eligible:
+                eligibility_rejections[str(memory.get("id"))] = EligibilityRejection(
+                    memory, eligibility
+                )
+                return False
+            eligibility_allowed[str(memory.get("id"))] = memory
             metadata = memory.get("metadata") or {}
             confidence = float(metadata.get("confidence", 0.5) or 0.0)
-            return confidence >= min_confidence and self._is_current(memory, as_of_time)
+            return confidence >= min_confidence
 
         ranked = HybridRetriever(self.storage).retrieve(
             query,
@@ -60,6 +87,9 @@ class ContextCompiler:
             symbols=symbols,
             limit=80,
             candidate_filter=candidate_filter,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of_time,
         )
         selected: list[dict[str, Any]] = []
         selected_terms: list[set[str]] = []
@@ -108,15 +138,19 @@ class ContextCompiler:
             selected_terms.append(content_terms)
             consumed_tokens += token_cost
 
-        fingerprint_payload = [
-            {
-                "id": item["id"],
-                "content": item["content"],
-                "valid_to": item["valid_to"],
-                "confidence": item["confidence"],
-            }
-            for item in selected
-        ]
+        fingerprint_payload = {
+            "environment": environment,
+            "task_type": task_type,
+            "items": [
+                {
+                    "id": item["id"],
+                    "content": item["content"],
+                    "valid_to": item["valid_to"],
+                    "confidence": item["confidence"],
+                }
+                for item in selected
+            ],
+        }
         fingerprint = hashlib.sha256(
             json.dumps(fingerprint_payload, sort_keys=True, default=str).encode("utf-8")
         ).hexdigest()[:24]
@@ -138,6 +172,8 @@ class ContextCompiler:
         return {
             "query": query,
             "repo_id": repo_id,
+            "environment": environment,
+            "task_type": task_type,
             "as_of": as_of_time.isoformat(),
             "token_budget": token_budget,
             "token_count": consumed_tokens if not unchanged else 0,
@@ -153,4 +189,9 @@ class ContextCompiler:
                 "selected_count": len(selected),
                 "channel_counts": channel_counts,
             },
+            "eligibility_filter": EligibilityFilterResult(
+                allowed=list(eligibility_allowed.values()),
+                rejected=list(eligibility_rejections.values()),
+                considered_count=len(eligibility_allowed) + len(eligibility_rejections),
+            ).diagnostics(),
         }

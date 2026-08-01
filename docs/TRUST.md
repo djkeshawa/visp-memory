@@ -69,8 +69,16 @@ unlabelled and are assessed as `unknown`.
 The same trust gate runs before memory is placed into prompt-adjacent output. It covers
 `Memory.context()` in text and JSON form, every `Memory.relevant_for()` group, MCP
 SessionStart, task briefs, proactive file/error/directory recall, graph
-trace/neighbors/path traversal, and related-memory HTTP output. Rejected graph nodes
-cannot be used as hidden bridges between trusted nodes.
+trace/neighbors/path traversal, related-memory HTTP output, and `/ai/ask`. Rejected graph
+nodes cannot be used as hidden bridges between trusted nodes, and guarded answer surfaces
+never copy quarantined records into model prompts.
+
+Trust runs only after the shared eligibility gate. Guarded and explicit recall require a
+non-empty repository scope. `valid_from` is inclusive, `valid_to` is exclusive, and
+malformed bounds fail closed. A record that declares `environment` or `task_type` is
+returned only when the caller supplies a matching normalized scope. Relationship sources
+and targets use the same rules. Compression preserves scope only when every source has
+the same valid repository and identical normalized runtime scope.
 
 The shared filter returns structured counts and per-memory rejection reasons. Context,
 task-brief, proactive, and graph results expose additive diagnostics where their existing
@@ -78,8 +86,10 @@ shape permits it. This makes restrictive behavior measurable without returning t
 rejected content itself.
 
 Explicit primary recall remains different: a user who deliberately asks to inspect
-memory can still retrieve quarantined records. Query-driven context compilation and
-explicit MCP warning/convention resources retain that same inspection behavior.
+memory can still retrieve quarantined records, but only while they are temporally valid
+and within the required repository/environment/task scope. Standalone query-driven
+context compilation remains an explicit inspection surface: it always applies eligibility
+but does not apply the unsolicited trust gate unless a guarded caller supplies one.
 
 ### Trust decay
 
@@ -91,8 +101,9 @@ memory cannot earn immortality by being retrieved often.
 ### What this does not do
 
 Nothing here deletes anything. Quarantine and decay affect **prompt eligibility only**.
-Explicit `visp-memory recall` still returns everything, because hiding data from the user
-is a different and worse failure than injecting it into a prompt.
+Explicit `visp-memory recall` still returns quarantined records that are currently valid
+and in the caller's governed scope. It never turns missing repository scope into a global
+read.
 
 Governed package entrypoints replace self-claimed provenance labels. This is still not
 cryptographic attestation: an attacker with direct database or raw-storage mutation

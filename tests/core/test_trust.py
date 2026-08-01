@@ -27,6 +27,7 @@ def _memory(tier=None, days_old=0, access_count=0, **extra):
         "content": "Some memory",
         "created_at": created.isoformat(),
         "access_count": access_count,
+        "repo_id": "repo-a",
         "tags": [provenance_tag(tier)] if tier else [],
         "relevance_score": 0.9,
     }
@@ -100,7 +101,10 @@ class TestQuarantine:
     def test_quarantined_memory_is_excluded_from_injection(self):
         poisoned = _memory(Provenance.EXTERNAL, relevance_score=0.99)
         result = select_for_injection(
-            [poisoned], task="deploy the release to production", corpus_size=50
+            [poisoned],
+            task="deploy the release to production",
+            corpus_size=50,
+            repo_id="repo-a",
         )
         assert result.abstained
         assert result.dropped_quarantined == 1
@@ -177,6 +181,7 @@ class TestFiltering:
             [poisoned],
             task="deploy the release to production",
             corpus_size=50,
+            repo_id="repo-a",
             policy=InjectionPolicy(enforce_trust=False),
         )
         assert not result.abstained

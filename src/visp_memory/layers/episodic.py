@@ -238,6 +238,9 @@ class EpisodicMemory(BaseMemoryLayer):
         category: EpisodeCategory = None,
         limit: int = 10,
         repo_id: str = None,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of: Any = None,
     ) -> List[Dict[str, Any]]:
         """
         Search episodic memories.
@@ -265,6 +268,9 @@ class EpisodicMemory(BaseMemoryLayer):
             category=category_value,
             limit=limit,
             repo_id=repo_id,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
         )
 
     def recent(

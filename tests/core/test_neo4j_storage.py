@@ -489,7 +489,12 @@ def test_neo4j_search_excludes_raw_layer_by_default():
 
     storage.driver.session_obj.query_results["toLower(m.content) CONTAINS"] = factory
 
-    storage.search_memories("anything")
+    storage.search_memories(
+        "anything",
+        environment=["prod"],
+        task_type="deploy",
+        as_of="2026-01-15T12:00:00+00:00",
+    )
 
     assert captured.get("ran") is True
     query = storage.driver.session_obj.calls[0][0]

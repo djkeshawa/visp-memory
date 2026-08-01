@@ -68,6 +68,7 @@ except ImportError:
 
 from visp_memory import Memory
 from visp_memory.core.clock import parse_utc, utc_now
+from visp_memory.core.eligibility import require_repo_id
 from visp_memory.core.ranking import projected_importance
 from visp_memory.core.trust import WriteChannel
 
@@ -80,6 +81,12 @@ logger = logging.getLogger("visp-memory-mcp")
 # in the handlers below. These allow-lists are the canonical sets.
 VALID_LAYERS = frozenset({"raw", "episodic", "semantic", "intent"})
 VALID_INTENT_STATUSES = frozenset({"active", "completed", "closed"})
+RUNTIME_SCOPE_SCHEMA = {
+    "oneOf": [
+        {"type": "string"},
+        {"type": "array", "items": {"type": "string"}},
+    ]
+}
 
 # Every MCP tool definition (name + description + input schema) is loaded into the
 # assistant's context on every session. With the full surface that is several
@@ -174,6 +181,8 @@ def create_mcp_server() -> "Server":
                             "description": "The concrete task the LLM is about to perform",
                         },
                         "repo_id": {"type": "string"},
+                        "environment": RUNTIME_SCOPE_SCHEMA,
+                        "task_type": RUNTIME_SCOPE_SCHEMA,
                         "files": {"type": "array", "items": {"type": "string"}},
                         "symbols": {"type": "array", "items": {"type": "string"}},
                         "intent_id": {"type": "string"},
@@ -229,6 +238,8 @@ def create_mcp_server() -> "Server":
                             "description": "Optional task query for compact ranked context",
                         },
                         "repo_id": {"type": "string"},
+                        "environment": RUNTIME_SCOPE_SCHEMA,
+                        "task_type": RUNTIME_SCOPE_SCHEMA,
                         "token_budget": {
                             "type": "integer",
                             "minimum": 64,
@@ -278,6 +289,8 @@ def create_mcp_server() -> "Server":
                                 "Filter by repository/project ID for isolation (optional)"
                             ),
                         },
+                        "environment": RUNTIME_SCOPE_SCHEMA,
+                        "task_type": RUNTIME_SCOPE_SCHEMA,
                         "log_utility": {
                             "type": "boolean",
                             "default": False,
@@ -356,6 +369,9 @@ def create_mcp_server() -> "Server":
                         "depth": {"type": "integer", "default": 2},
                         "token_budget": {"type": "integer", "default": 2000},
                         "limit": {"type": "integer", "default": 5},
+                        "environment": RUNTIME_SCOPE_SCHEMA,
+                        "task_type": RUNTIME_SCOPE_SCHEMA,
+                        "as_of": {"type": "string", "format": "date-time"},
                     },
                     "required": ["query"],
                 },
@@ -372,6 +388,9 @@ def create_mcp_server() -> "Server":
                         "depth": {"type": "integer", "default": 1},
                         "token_budget": {"type": "integer", "default": 2000},
                         "limit": {"type": "integer", "default": 25},
+                        "environment": RUNTIME_SCOPE_SCHEMA,
+                        "task_type": RUNTIME_SCOPE_SCHEMA,
+                        "as_of": {"type": "string", "format": "date-time"},
                     },
                     "required": ["memory_id"],
                 },
@@ -387,6 +406,9 @@ def create_mcp_server() -> "Server":
                         "repo_id": {"type": "string", "description": "Repository/project ID"},
                         "max_hops": {"type": "integer", "default": 4},
                         "token_budget": {"type": "integer", "default": 2000},
+                        "environment": RUNTIME_SCOPE_SCHEMA,
+                        "task_type": RUNTIME_SCOPE_SCHEMA,
+                        "as_of": {"type": "string", "format": "date-time"},
                     },
                     "required": ["source_id", "target_id"],
                 },
@@ -403,6 +425,9 @@ def create_mcp_server() -> "Server":
                         "depth": {"type": "integer", "default": 2},
                         "token_budget": {"type": "integer", "default": 2000},
                         "limit": {"type": "integer", "default": 5},
+                        "environment": RUNTIME_SCOPE_SCHEMA,
+                        "task_type": RUNTIME_SCOPE_SCHEMA,
+                        "as_of": {"type": "string", "format": "date-time"},
                     },
                     "required": ["query", "memory_id"],
                 },
@@ -487,8 +512,13 @@ def create_mcp_server() -> "Server":
                         },
                         "repo_id": {
                             "type": "string",
-                            "description": "Repository/project ID (optional)",
+                            "description": (
+                                "Repository/project ID; may use the configured repository "
+                                "but never global scope"
+                            ),
                         },
+                        "environment": RUNTIME_SCOPE_SCHEMA,
+                        "task_type": RUNTIME_SCOPE_SCHEMA,
                     },
                 },
             ),
@@ -506,6 +536,15 @@ def create_mcp_server() -> "Server":
                             "items": {"type": "string"},
                             "description": "Files about to be edited",
                         },
+                        "repo_id": {
+                            "type": "string",
+                            "description": (
+                                "Repository/project ID; may use the configured repository "
+                                "but never global scope"
+                            ),
+                        },
+                        "environment": RUNTIME_SCOPE_SCHEMA,
+                        "task_type": RUNTIME_SCOPE_SCHEMA,
                     },
                 },
             ),
@@ -1324,6 +1363,8 @@ def _handle_context(args: dict[str, Any], memory: Memory) -> str:
             files=args.get("files") or [],
             symbols=args.get("symbols") or [],
             previous_fingerprint=args.get("previous_fingerprint"),
+            environment=args.get("environment"),
+            task_type=args.get("task_type"),
         )
         if fmt == "json":
             return json.dumps(compiled, indent=2, default=str)
@@ -1337,7 +1378,13 @@ def _handle_context(args: dict[str, Any], memory: Memory) -> str:
             f"{compiled['context']}"
         )
     include_history = args.get("include_history", True)
-    ctx = memory.context(format=fmt, include_history=include_history)
+    ctx = memory.context(
+        format=fmt,
+        include_history=include_history,
+        repo_id=args.get("repo_id"),
+        environment=args.get("environment"),
+        task_type=args.get("task_type"),
+    )
     if fmt == "json":
         return json.dumps(ctx, indent=2, default=str)
     return ctx
@@ -1360,6 +1407,8 @@ def _handle_task_brief(args: dict[str, Any], memory: Memory) -> str:
         constraints=args.get("constraints") or [],
         previous_fingerprint=args.get("previous_fingerprint"),
         min_confidence=float(args.get("min_confidence", 0.0)),
+        environment=args.get("environment"),
+        task_type=args.get("task_type"),
     )
     if args.get("format", "text") == "json":
         return json.dumps(brief, indent=2, default=str)
@@ -1393,6 +1442,8 @@ def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
             session_id=args.get("session_id"),
             constraints=args.get("constraints"),
             dependencies=args.get("dependencies"),
+            environment=args.get("environment"),
+            task_type=args.get("task_type"),
         )
         if not results:
             return "No memories found matching query."
@@ -1644,18 +1695,30 @@ def _handle_workflow(name: str, args: dict[str, Any], memory: Memory) -> str:
     if name == "memory_session_start":
         task = args.get("task")
         files = args.get("files")
-        repo_id = args.get("repo_id")
+        repo_id = require_repo_id(args.get("repo_id") or memory.config.repo_id)
 
         lines = ["# Visp Memory Session Context"]
         if task:
             intent_id = memory.working_on(task=task, files=files, repo_id=repo_id)
             lines.append(f"\nCurrent task recorded (ID: {intent_id}): {task}")
 
-        context = memory.context(format="text", include_history=True)
+        context = memory.context(
+            format="text",
+            include_history=True,
+            repo_id=repo_id,
+            environment=args.get("environment"),
+            task_type=args.get("task_type"),
+        )
         lines.append(f"\n{context}")
 
         if task or files:
-            relevant = memory.relevant_for(task=task, files=files)
+            relevant = memory.relevant_for(
+                task=task,
+                files=files,
+                repo_id=repo_id,
+                environment=args.get("environment"),
+                task_type=args.get("task_type"),
+            )
             lines.append("\n## Task-Relevant Memory")
             lines.append(_format_relevant_memory(relevant, memory))
 
@@ -1664,7 +1727,13 @@ def _handle_workflow(name: str, args: dict[str, Any], memory: Memory) -> str:
     if name == "memory_before_change":
         task = args.get("task")
         files = args.get("files")
-        relevant = memory.relevant_for(task=task, files=files)
+        relevant = memory.relevant_for(
+            task=task,
+            files=files,
+            repo_id=args.get("repo_id"),
+            environment=args.get("environment"),
+            task_type=args.get("task_type"),
+        )
         header = "# Before Changing Code"
         if files:
             header += f"\nFiles: {', '.join(files)}"
@@ -1727,6 +1796,9 @@ def _handle_graph_recall(name: str, args: dict[str, Any], memory: Memory) -> str
                 depth=args.get("depth", 2),
                 token_budget=args.get("token_budget", 2000),
                 limit=args.get("limit", 5),
+                environment=args.get("environment"),
+                task_type=args.get("task_type"),
+                as_of=args.get("as_of"),
             )
         )
 
@@ -1739,6 +1811,9 @@ def _handle_graph_recall(name: str, args: dict[str, Any], memory: Memory) -> str
                 depth=args.get("depth", 1),
                 token_budget=args.get("token_budget", 2000),
                 limit=args.get("limit", 25),
+                environment=args.get("environment"),
+                task_type=args.get("task_type"),
+                as_of=args.get("as_of"),
             )
         )
 
@@ -1750,6 +1825,9 @@ def _handle_graph_recall(name: str, args: dict[str, Any], memory: Memory) -> str
                 repo_id=args.get("repo_id"),
                 max_hops=args.get("max_hops", 4),
                 token_budget=args.get("token_budget", 2000),
+                environment=args.get("environment"),
+                task_type=args.get("task_type"),
+                as_of=args.get("as_of"),
             )
         )
 
@@ -1762,6 +1840,9 @@ def _handle_graph_recall(name: str, args: dict[str, Any], memory: Memory) -> str
                 depth=args.get("depth", 2),
                 token_budget=args.get("token_budget", 2000),
                 limit=args.get("limit", 5),
+                environment=args.get("environment"),
+                task_type=args.get("task_type"),
+                as_of=args.get("as_of"),
             )
         )
 

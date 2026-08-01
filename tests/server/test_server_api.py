@@ -9,7 +9,7 @@ from visp_memory.server.app import app
 
 @pytest.mark.asyncio
 async def test_root_endpoint(client):
-    response = await client.get("/", headers={"X-API-KEY": "test_key"})
+    response = await client.get("/?repo_id=repo-a", headers={"X-API-KEY": "test_key"})
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "online"
@@ -205,6 +205,82 @@ async def test_related_memories_filter_quarantine_with_trusted_control(client):
 
 
 @pytest.mark.asyncio
+async def test_related_memories_filter_temporal_and_runtime_scope(client):
+    headers = {"X-API-KEY": "test_key"}
+    source_id = app.state.storage.store_memory(
+        "Scoped related source",
+        repo_id="repo-a",
+        tags=[provenance_tag(Provenance.DERIVED)],
+        auto_link=False,
+    )
+
+    def target(content, metadata):
+        memory_id = app.state.storage.store_memory(
+            content,
+            repo_id="repo-a",
+            tags=[provenance_tag(Provenance.DERIVED)],
+            metadata=metadata,
+            auto_link=False,
+        )
+        app.state.storage.add_relationship(source_id, memory_id, "supports")
+        return memory_id
+
+    visible = target(
+        "Production deployment related target",
+        {"environment": "prod", "task_type": "deploy"},
+    )
+    target(
+        "Development deployment related target",
+        {"environment": "dev", "task_type": "deploy"},
+    )
+    target(
+        "Expired production related target",
+        {
+            "environment": "prod",
+            "task_type": "deploy",
+            "valid_to": "2026-01-15T12:00:00+00:00",
+        },
+    )
+
+    response = await client.get(
+        f"/memories/{source_id}/related",
+        params={
+            "environment": "prod",
+            "task_type": "deploy",
+            "as_of": "2026-01-15T12:00:00+00:00",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == [visible]
+
+    ineligible_source = app.state.storage.store_memory(
+        "Development-only related source",
+        repo_id="repo-a",
+        tags=[provenance_tag(Provenance.DERIVED)],
+        metadata={"environment": "dev"},
+        auto_link=False,
+    )
+    universal_target = app.state.storage.store_memory(
+        "Universal target must not bridge from an ineligible source",
+        repo_id="repo-a",
+        tags=[provenance_tag(Provenance.DERIVED)],
+        auto_link=False,
+    )
+    app.state.storage.add_relationship(ineligible_source, universal_target, "supports")
+
+    blocked = await client.get(
+        f"/memories/{ineligible_source}/related",
+        params={"environment": "prod"},
+        headers=headers,
+    )
+
+    assert blocked.status_code == 200
+    assert blocked.json() == []
+
+
+@pytest.mark.asyncio
 async def test_favicon_head_does_not_error(client):
     response = await client.head("/favicon.ico")
     assert response.status_code == 200
@@ -232,7 +308,7 @@ async def test_memories_endpoint_protected(client):
 @pytest.mark.asyncio
 async def test_memories_endpoint_with_api_key(client):
     headers = {"X-API-KEY": "test_key"}
-    response = await client.get("/memories", headers=headers)
+    response = await client.get("/memories?repo_id=repo-a", headers=headers)
     assert response.status_code == 200
     assert isinstance(response.json(), list)
 
@@ -244,6 +320,7 @@ async def test_create_memory_with_attribution(client):
         "content": "Test memory with attribution",
         "layer": "episodic",
         "category": "test",
+        "repo_id": "repo-a",
     }
     response = await client.post("/memories", json=payload, headers=headers)
     assert response.status_code == 200
@@ -316,7 +393,7 @@ async def test_update_memory_rejects_invalid_payloads(client, payload):
     headers = {"X-API-KEY": "test_key"}
     create_response = await client.post(
         "/memories",
-        json={"content": "Update validation target"},
+        json={"content": "Update validation target", "repo_id": "repo-a"},
         headers=headers,
     )
     assert create_response.status_code == 200
@@ -332,7 +409,7 @@ async def test_memory_responses_use_persisted_accessed_at(client):
     headers = {"X-API-KEY": "test_key"}
     create_response = await client.post(
         "/memories",
-        json={"content": "Timestamp target", "layer": "episodic"},
+        json={"content": "Timestamp target", "layer": "episodic", "repo_id": "repo-a"},
         headers=headers,
     )
     assert create_response.status_code == 200
@@ -345,7 +422,7 @@ async def test_memory_responses_use_persisted_accessed_at(client):
         )
         conn.commit()
 
-    list_response = await client.get("/memories", headers=headers)
+    list_response = await client.get("/memories?repo_id=repo-a", headers=headers)
     assert list_response.status_code == 200
     listed = next(memory for memory in list_response.json() if memory["id"] == mem_id)
     assert listed["accessed_at"] == "2000-01-01T00:00:00"
@@ -360,22 +437,37 @@ async def test_list_memories_filters_by_layer_and_category(client):
     headers = {"X-API-KEY": "test_key"}
     await client.post(
         "/memories",
-        json={"content": "Regular event", "layer": "episodic", "category": "note"},
+        json={
+            "content": "Regular event",
+            "layer": "episodic",
+            "category": "note",
+            "repo_id": "repo-a",
+        },
         headers=headers,
     )
     await client.post(
         "/memories",
-        json={"content": "Fragile auth warning", "layer": "semantic", "category": "fragile_area"},
+        json={
+            "content": "Fragile auth warning",
+            "layer": "semantic",
+            "category": "fragile_area",
+            "repo_id": "repo-a",
+        },
         headers=headers,
     )
     await client.post(
         "/memories",
-        json={"content": "Team convention", "layer": "semantic", "category": "convention"},
+        json={
+            "content": "Team convention",
+            "layer": "semantic",
+            "category": "convention",
+            "repo_id": "repo-a",
+        },
         headers=headers,
     )
 
     response = await client.get(
-        "/memories?layer=semantic&category=fragile_area",
+        "/memories?repo_id=repo-a&layer=semantic&category=fragile_area",
         headers=headers,
     )
 
@@ -447,7 +539,7 @@ async def test_archived_memory_is_hidden_from_default_list_and_recall(client):
     headers = {"X-API-KEY": "test_key"}
     create_response = await client.post(
         "/memories",
-        json={"content": "Archive target memory", "layer": "episodic"},
+        json={"content": "Archive target memory", "layer": "episodic", "repo_id": "repo-a"},
         headers=headers,
     )
     assert create_response.status_code == 200
@@ -461,11 +553,13 @@ async def test_archived_memory_is_hidden_from_default_list_and_recall(client):
     )
     assert patch_response.status_code == 200
 
-    list_response = await client.get("/memories", headers=headers)
+    list_response = await client.get("/memories?repo_id=repo-a", headers=headers)
     assert list_response.status_code == 200
     assert all(memory["id"] != mem_id for memory in list_response.json())
 
-    archived_response = await client.get("/memories?status=archived", headers=headers)
+    archived_response = await client.get(
+        "/memories?repo_id=repo-a&status=archived", headers=headers
+    )
     assert archived_response.status_code == 200
     archived = archived_response.json()
     assert [memory["id"] for memory in archived] == [mem_id]
@@ -473,7 +567,7 @@ async def test_archived_memory_is_hidden_from_default_list_and_recall(client):
 
     recall_response = await client.post(
         "/recall",
-        json={"query": "Archive target memory", "limit": 10},
+        json={"query": "Archive target memory", "limit": 10, "repo_id": "repo-a"},
         headers=headers,
     )
     assert recall_response.status_code == 200
@@ -664,7 +758,7 @@ async def test_memory_merge_preview_execute_and_undo(client):
 @pytest.mark.asyncio
 async def test_intents_endpoint(client):
     headers = {"X-API-KEY": "test_key"}
-    response = await client.get("/intents", headers=headers)
+    response = await client.get("/intents?repo_id=repo-a", headers=headers)
     assert response.status_code == 200
     assert isinstance(response.json(), list)
 
@@ -839,7 +933,7 @@ async def test_intents_preserve_repo_id(client):
 @pytest.mark.asyncio
 async def test_complete_intent_endpoint_records_outcome_without_status_change(client):
     headers = {"X-API-KEY": "test_key"}
-    payload = {"description": "Ship remote done support", "priority": 2}
+    payload = {"description": "Ship remote done support", "priority": 2, "repo_id": "repo-a"}
 
     create_response = await client.post("/intents", json=payload, headers=headers)
     assert create_response.status_code == 200
@@ -855,7 +949,7 @@ async def test_complete_intent_endpoint_records_outcome_without_status_change(cl
         "outcome_recorded": True,
     }
 
-    list_response = await client.get("/intents", headers=headers)
+    list_response = await client.get("/intents?repo_id=repo-a", headers=headers)
     assert list_response.status_code == 200
     refreshed = next(intent for intent in list_response.json() if intent["id"] == intent_id)
     outcome = refreshed["context"]["outcome_history"][-1]
@@ -970,11 +1064,11 @@ async def test_recall_endpoint(client):
     # First create a memory to recall
     await client.post(
         "/memories",
-        json={"content": "Recall target", "layer": "episodic"},
+        json={"content": "Recall target", "layer": "episodic", "repo_id": "repo-a"},
         headers=headers,
     )
 
-    payload = {"query": "target", "limit": 10}
+    payload = {"query": "target", "limit": 10, "repo_id": "repo-a"}
     response = await client.post("/recall", json=payload, headers=headers)
     assert response.status_code == 200
     assert len(response.json()) > 0
@@ -988,13 +1082,17 @@ async def test_recall_endpoint_filters_low_relevance_results_by_default(client):
     headers = {"X-API-KEY": "test_key"}
     await client.post(
         "/memories",
-        json={"content": "OpenRouter cloud embeddings power project recall", "layer": "semantic"},
+        json={
+            "content": "OpenRouter cloud embeddings power project recall",
+            "layer": "semantic",
+            "repo_id": "repo-a",
+        },
         headers=headers,
     )
 
     response = await client.post(
         "/recall",
-        json={"query": "banana bread recipe", "limit": 10},
+        json={"query": "banana bread recipe", "limit": 10, "repo_id": "repo-a"},
         headers=headers,
     )
 
@@ -1005,23 +1103,19 @@ async def test_recall_endpoint_filters_low_relevance_results_by_default(client):
 @pytest.mark.asyncio
 async def test_ask_memory_returns_scoped_citations(client):
     headers = {"X-API-KEY": "test_key"}
-    await client.post(
-        "/memories",
-        json={
-            "content": "Use OpenRouter embeddings for cloud recall",
-            "layer": "semantic",
-            "repo_id": "repo-a",
-        },
-        headers=headers,
+    app.state.storage.store_memory(
+        "Use OpenRouter embeddings for cloud recall",
+        layer="semantic",
+        repo_id="repo-a",
+        tags=[provenance_tag(Provenance.DERIVED)],
+        auto_link=False,
     )
-    await client.post(
-        "/memories",
-        json={
-            "content": "Repo B uses a different provider",
-            "layer": "semantic",
-            "repo_id": "repo-b",
-        },
-        headers=headers,
+    app.state.storage.store_memory(
+        "Repo B uses a different provider",
+        layer="semantic",
+        repo_id="repo-b",
+        tags=[provenance_tag(Provenance.DERIVED)],
+        auto_link=False,
     )
 
     response = await client.post(
@@ -1041,11 +1135,64 @@ async def test_ask_memory_returns_scoped_citations(client):
 
 
 @pytest.mark.asyncio
+async def test_ask_memory_filters_trust_temporal_and_runtime_scope(client):
+    headers = {"X-API-KEY": "test_key"}
+
+    def store(content, metadata, tier=Provenance.DERIVED):
+        return app.state.storage.store_memory(
+            content,
+            layer="semantic",
+            repo_id="repo-a",
+            tags=[provenance_tag(tier)],
+            metadata=metadata,
+            auto_link=False,
+        )
+
+    visible = store(
+        "Scoped deployment answer evidence",
+        {"environment": "prod", "task_type": "deploy"},
+    )
+    store(
+        "Scoped deployment answer expired evidence",
+        {
+            "environment": "prod",
+            "task_type": "deploy",
+            "valid_to": "2026-01-15T12:00:00+00:00",
+        },
+    )
+    store(
+        "Scoped deployment answer dev evidence",
+        {"environment": "dev", "task_type": "deploy"},
+    )
+    store(
+        "Scoped deployment answer poison evidence",
+        {"environment": "prod", "task_type": "deploy"},
+        Provenance.EXTERNAL,
+    )
+
+    response = await client.post(
+        "/ai/ask",
+        json={
+            "query": "Scoped deployment answer evidence",
+            "repo_id": "repo-a",
+            "environment": "prod",
+            "task_type": "deploy",
+            "as_of": "2026-01-15T12:00:00+00:00",
+            "limit": 20,
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert [item["memory_id"] for item in response.json()["citations"]] == [visible]
+
+
+@pytest.mark.asyncio
 async def test_ask_memory_excludes_archived_memories(client):
     headers = {"X-API-KEY": "test_key"}
     create_response = await client.post(
         "/memories",
-        json={"content": "Archived answer source", "layer": "semantic"},
+        json={"content": "Archived answer source", "layer": "semantic", "repo_id": "repo-a"},
         headers=headers,
     )
     mem_id = create_response.json()["id"]
@@ -1057,7 +1204,7 @@ async def test_ask_memory_excludes_archived_memories(client):
 
     response = await client.post(
         "/ai/ask",
-        json={"query": "Archived answer source"},
+        json={"query": "Archived answer source", "repo_id": "repo-a"},
         headers=headers,
     )
 
@@ -1370,7 +1517,9 @@ async def test_memory_intelligence_report_endpoint_returns_public_contract(clien
 async def test_memory_intelligence_report_text_endpoint(client):
     headers = {"X-API-KEY": "test_key"}
 
-    response = await client.get("/reports/memory-intelligence/text", headers=headers)
+    response = await client.get(
+        "/reports/memory-intelligence/text?repo_id=repo-a", headers=headers
+    )
 
     assert response.status_code == 200
     assert "Memory Intelligence Report" in response.text

@@ -5,6 +5,11 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from typing import Any
 
+from visp_memory.core.clock import parse_utc
+from visp_memory.core.eligibility import (
+    filter_recall_eligible,
+    require_repo_id,
+)
 from visp_memory.core.ranking import (
     clamp_score,
     graph_edge_score,
@@ -86,12 +91,27 @@ class GraphRecall:
         depth: int = 1,
         token_budget: int = 2000,
         limit: int = 25,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of: Any = None,
     ) -> dict[str, Any]:
+        repo_id = require_repo_id(repo_id)
         relationships, omitted = self._trusted_relationships(
-            self._relationships(repo_id, relationship_filter), repo_id
+            self._relationships(repo_id, relationship_filter),
+            repo_id,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
         )
         nodes, edges, expanded_omitted = self._expand(
-            [memory_id], relationships, repo_id, depth, limit
+            [memory_id],
+            relationships,
+            repo_id,
+            depth,
+            limit,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
         )
         omitted.extend(expanded_omitted)
         self._apply_activation(nodes, edges, {memory_id: 1.0})
@@ -114,14 +134,37 @@ class GraphRecall:
         token_budget: int = 2000,
         limit: int = 5,
         relationship_filter: str | None = None,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of: Any = None,
     ) -> dict[str, Any]:
-        seeds = self._search(query, repo_id, limit)
-        seed_ids = [item["id"] for item in seeds if item.get("id")]
-        relationships, omitted = self._trusted_relationships(
-            self._relationships(repo_id, relationship_filter), repo_id
+        repo_id = require_repo_id(repo_id)
+        seeds, omitted = self._search(
+            query,
+            repo_id,
+            limit,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
         )
+        seed_ids = [item["id"] for item in seeds if item.get("id")]
+        relationships, relationship_omitted = self._trusted_relationships(
+            self._relationships(repo_id, relationship_filter),
+            repo_id,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
+        )
+        omitted.extend(relationship_omitted)
         nodes, edges, expanded_omitted = self._expand(
-            seed_ids, relationships, repo_id, depth, limit * 6
+            seed_ids,
+            relationships,
+            repo_id,
+            depth,
+            limit * 6,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
         )
         omitted.extend(expanded_omitted)
 
@@ -160,9 +203,17 @@ class GraphRecall:
         repo_id: str | None = None,
         max_hops: int = 4,
         token_budget: int = 2000,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of: Any = None,
     ) -> dict[str, Any]:
+        repo_id = require_repo_id(repo_id)
         relationships, omitted = self._trusted_relationships(
-            self._relationships(repo_id), repo_id
+            self._relationships(repo_id),
+            repo_id,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
         )
         max_hops = self._bounded_int(max_hops, 1, self.MAX_HOPS)
         edge_path = self._shortest_edge_path(source_id, target_id, relationships, max_hops)
@@ -181,7 +232,14 @@ class GraphRecall:
             node_ids.append(target_id)
             for edge in edge_path:
                 node_ids.extend([edge["source_id"], edge["target_id"]])
-        nodes = self._nodes_for_ids(node_ids, repo_id, omitted=omitted)
+        nodes = self._nodes_for_ids(
+            node_ids,
+            repo_id,
+            omitted=omitted,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
+        )
         edges = [self._edge_payload(edge) for edge in edge_path]
         return self._result(
             mode="path",
@@ -202,16 +260,38 @@ class GraphRecall:
         depth: int = 2,
         token_budget: int = 2000,
         limit: int = 5,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of: Any = None,
     ) -> dict[str, Any]:
-        seeds = self._search(query, repo_id, limit)
-        seed_ids = [item["id"] for item in seeds if item.get("id")]
-        relationships, omitted = self._trusted_relationships(
-            self._relationships(repo_id), repo_id
+        repo_id = require_repo_id(repo_id)
+        seeds, omitted = self._search(
+            query,
+            repo_id,
+            limit,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
         )
+        seed_ids = [item["id"] for item in seeds if item.get("id")]
+        relationships, relationship_omitted = self._trusted_relationships(
+            self._relationships(repo_id),
+            repo_id,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
+        )
+        omitted.extend(relationship_omitted)
 
         if memory_id in seed_ids:
             nodes = self._nodes_for_ids(
-                [memory_id], repo_id, query=query, omitted=omitted
+                [memory_id],
+                repo_id,
+                query=query,
+                omitted=omitted,
+                environment=environment,
+                task_type=task_type,
+                as_of=as_of,
             )
             edges = []
             explanation = "Memory is directly relevant to the query."
@@ -222,13 +302,25 @@ class GraphRecall:
                 for edge in path:
                     node_ids.extend([edge["source_id"], edge["target_id"]])
                 nodes = self._nodes_for_ids(
-                    node_ids, repo_id, query=query, omitted=omitted
+                    node_ids,
+                    repo_id,
+                    query=query,
+                    omitted=omitted,
+                    environment=environment,
+                    task_type=task_type,
+                    as_of=as_of,
                 )
                 edges = [self._edge_payload(edge) for edge in path]
                 explanation = "Memory is relevant through an evidence-backed relationship path."
             else:
                 nodes = self._nodes_for_ids(
-                    [memory_id], repo_id, query=query, omitted=omitted
+                    [memory_id],
+                    repo_id,
+                    query=query,
+                    omitted=omitted,
+                    environment=environment,
+                    task_type=task_type,
+                    as_of=as_of,
                 )
                 edges = []
                 explanation = "No relationship path from query seeds was found."
@@ -278,18 +370,37 @@ class GraphRecall:
             )
 
     def _search(
-        self, query: str, repo_id: str | None, limit: int
-    ) -> list[dict[str, Any]]:
+        self,
+        query: str,
+        repo_id: str,
+        limit: int,
+        *,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of: Any = None,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         try:
             results = self.storage.search_memories(
                 query=query,
                 repo_id=repo_id,
                 limit=limit,
                 status="active",
+                environment=environment,
+                task_type=task_type,
+                as_of=as_of,
             )
         except TypeError:
             results = self.storage.search_memories(query=query, repo_id=repo_id, limit=limit)
-        return rank_memory_results(results, query=query, limit=limit, min_score=None)
+        allowed, omitted = self._guard_memories(
+            results,
+            repo_id,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
+        )
+        return rank_memory_results(
+            allowed, query=query, limit=limit, min_score=None
+        ), omitted
 
     def _relationships(
         self, repo_id: str | None, relationship_filter: str | None = None
@@ -309,7 +420,13 @@ class GraphRecall:
         )
 
     def _trusted_relationships(
-        self, relationships: list[dict[str, Any]], repo_id: str | None
+        self,
+        relationships: list[dict[str, Any]],
+        repo_id: str,
+        *,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of: Any = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         node_ids = {
             memory_id
@@ -323,17 +440,50 @@ class GraphRecall:
         memories = []
         for memory_id in sorted(node_ids):
             memory = self.storage.get_memory(memory_id)
-            if memory and (repo_id is None or memory.get("repo_id") == repo_id):
+            if memory:
                 memories.append(memory)
-        trust_filter = filter_unsolicited(memories)
-        trusted_ids = {memory["id"] for memory in trust_filter.allowed}
+        guarded, omitted = self._guard_memories(
+            memories,
+            repo_id,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
+        )
+        trusted_ids = {memory["id"] for memory in guarded}
         trusted_relationships = [
             relationship
             for relationship in relationships
             if relationship.get("source_id") in trusted_ids
             and relationship.get("target_id") in trusted_ids
         ]
-        return trusted_relationships, self._trust_omissions(trust_filter)
+        return trusted_relationships, omitted
+
+    def _guard_memories(
+        self,
+        memories: list[dict[str, Any]],
+        repo_id: str,
+        *,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of: Any = None,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        eligibility = filter_recall_eligible(
+            memories,
+            repo_id=repo_id,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
+        )
+        trust = filter_unsolicited(
+            eligibility.allowed,
+            now=parse_utc(as_of) if as_of is not None else None,
+        )
+        omissions = [
+            {"type": "eligibility", "count": 1, **rejection.as_dict()}
+            for rejection in eligibility.rejected
+        ]
+        omissions.extend(self._trust_omissions(trust))
+        return trust.allowed, omissions
 
     @staticmethod
     def _trust_omissions(result: TrustFilterResult) -> list[dict[str, Any]]:
@@ -349,6 +499,10 @@ class GraphRecall:
         repo_id: str | None,
         depth: int,
         limit: int,
+        *,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of: Any = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
         depth = self._bounded_int(depth, 0, self.MAX_DEPTH)
         limit = self._bounded_int(limit, 1, 200)
@@ -362,7 +516,14 @@ class GraphRecall:
             if node_id in visited:
                 continue
             previous_omissions = len(omitted)
-            memory = self._memory(node_id, repo_id, omitted=omitted)
+            memory = self._memory(
+                node_id,
+                repo_id,
+                omitted=omitted,
+                environment=environment,
+                task_type=task_type,
+                as_of=as_of,
+            )
             if not memory:
                 if len(omitted) == previous_omissions:
                     omitted.append(
@@ -432,6 +593,9 @@ class GraphRecall:
         repo_id: str | None,
         query: str | None = None,
         omitted: list[dict[str, Any]] | None = None,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of: Any = None,
     ) -> list[dict[str, Any]]:
         nodes = []
         seen = set()
@@ -439,7 +603,14 @@ class GraphRecall:
             if memory_id in seen:
                 continue
             seen.add(memory_id)
-            memory = self._memory(memory_id, repo_id, omitted=omitted)
+            memory = self._memory(
+                memory_id,
+                repo_id,
+                omitted=omitted,
+                environment=environment,
+                task_type=task_type,
+                as_of=as_of,
+            )
             if memory:
                 node = self._node_payload(memory, distance=index, path_confidence=1.0)
                 if query:
@@ -460,17 +631,24 @@ class GraphRecall:
         memory_id: str,
         repo_id: str | None,
         omitted: list[dict[str, Any]] | None = None,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of: Any = None,
     ) -> dict[str, Any] | None:
         memory = self.storage.get_memory(memory_id)
         if not memory:
             return None
-        if repo_id is not None and memory.get("repo_id") != repo_id:
-            return None
-        trust_filter = filter_unsolicited([memory])
-        if trust_filter.allowed:
-            return trust_filter.allowed[0]
+        guarded, guard_omissions = self._guard_memories(
+            [memory],
+            require_repo_id(repo_id),
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
+        )
+        if guarded:
+            return guarded[0]
         if omitted is not None:
-            omitted.extend(self._trust_omissions(trust_filter))
+            omitted.extend(guard_omissions)
         return None
 
     def _neighbors(

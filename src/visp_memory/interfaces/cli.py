@@ -550,8 +550,11 @@ def init(
         raise typer.Exit(1)
 
     # Create config
+    project_name = name or Path.cwd().name
     config = MemoryConfig(
-        project_name=name or Path.cwd().name, project_type=project_type, repo_id=repo
+        project_name=project_name,
+        project_type=project_type,
+        repo_id=repo or project_name,
     )
     config.storage.data_dir = Path(data_dir) / "data"
 
@@ -919,6 +922,10 @@ def recall(
     limit: int = typer.Option(10, "--limit", "-n", help="Maximum results"),
     layer: str = typer.Option(None, "--layer", "-l", help="Filter by layer"),
     repo: str = typer.Option(None, "--repo", "-r", help="Filter by repository"),
+    environment: str = typer.Option(
+        None, "--environment", help="Runtime environment scope"
+    ),
+    task_type: str = typer.Option(None, "--task-type", help="Task type scope"),
     status: str = typer.Option("active", "--status", help="Filter by memory status"),
     log_utility: bool = typer.Option(False, "--log-utility", help="Log surfaced results"),
     task_id: str = typer.Option(
@@ -937,6 +944,8 @@ def recall(
         status=status,
         log_utility=log_utility,
         task_id=task_id,
+        environment=environment,
+        task_type=task_type,
     )
 
     if not results:
@@ -1013,6 +1022,10 @@ def context(
     no_history: bool = typer.Option(False, "--no-history", help="Exclude history"),
     no_knowledge: bool = typer.Option(False, "--no-knowledge", help="Exclude knowledge"),
     no_intent: bool = typer.Option(False, "--no-intent", help="Exclude intent"),
+    environment: str = typer.Option(
+        None, "--environment", help="Runtime environment scope"
+    ),
+    task_type: str = typer.Option(None, "--task-type", help="Task type scope"),
 ):
     """Get full context for LLM injection."""
     memory = get_memory()
@@ -1022,6 +1035,8 @@ def context(
         include_knowledge=not no_knowledge,
         include_intent=not no_intent,
         format=format,
+        environment=environment,
+        task_type=task_type,
     )
 
     if format == "json":
@@ -1821,6 +1836,10 @@ def inject(
     task: str = typer.Option(None, "--task", "-t", help="Task description"),
     format: str = typer.Option("markdown", "--format", help="Output format: markdown, plain, json"),
     max_length: int = typer.Option(2000, "--max-length", "-m", help="Max output length"),
+    environment: str = typer.Option(
+        None, "--environment", help="Runtime environment scope"
+    ),
+    task_type: str = typer.Option(None, "--task-type", help="Task type scope"),
 ):
     """
     Inject relevant memory context for files or task.
@@ -1831,7 +1850,7 @@ def inject(
     from visp_memory.recall.proactive import ProactiveRecall
 
     memory = get_memory()
-    recall = ProactiveRecall(memory)
+    recall = ProactiveRecall(memory, environment=environment, task_type=task_type)
 
     if files and task:
         # Comprehensive context for task with files

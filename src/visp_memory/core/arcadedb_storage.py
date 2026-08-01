@@ -617,6 +617,7 @@ class ArcadeDbStorage(BaseStorage):
         limit: int = 10,
         min_importance: float = 0.0,
         status: str = "active",
+        **_kwargs,
     ) -> List[Dict[str, Any]]:
         # When no layer is requested, exclude the 'raw' layer from search results
         # (canonical SQLite behavior: search only episodic/semantic/intent). An explicit

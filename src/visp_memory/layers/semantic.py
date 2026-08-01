@@ -249,6 +249,9 @@ class SemanticMemory(BaseMemoryLayer):
         category: KnowledgeCategory = None,
         limit: int = 10,
         repo_id: str = None,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of: Any = None,
     ) -> List[Dict[str, Any]]:
         """
         Search semantic knowledge.
@@ -276,6 +279,9 @@ class SemanticMemory(BaseMemoryLayer):
             category=category_value,
             limit=limit,
             repo_id=repo_id,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
         )
 
     def get_warnings(self, area: str = None, repo_id: str = None) -> List[Dict[str, Any]]:
@@ -318,7 +324,14 @@ class SemanticMemory(BaseMemoryLayer):
         )
 
     def relevant_for(
-        self, files: List[str] = None, query: str = None, limit: int = 10, repo_id: str = None
+        self,
+        files: List[str] = None,
+        query: str = None,
+        limit: int = 10,
+        repo_id: str = None,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of: Any = None,
     ) -> List[Dict[str, Any]]:
         """
         Get knowledge relevant to specific files or a query.
@@ -337,12 +350,26 @@ class SemanticMemory(BaseMemoryLayer):
         # Search by files
         if files:
             for file in files:
-                file_results = self.search(file, limit=5, repo_id=repo_id)
+                file_results = self.search(
+                    file,
+                    limit=5,
+                    repo_id=repo_id,
+                    environment=environment,
+                    task_type=task_type,
+                    as_of=as_of,
+                )
                 results.extend(file_results)
 
         # Search by query
         if query:
-            query_results = self.search(query, limit=limit, repo_id=repo_id)
+            query_results = self.search(
+                query,
+                limit=limit,
+                repo_id=repo_id,
+                environment=environment,
+                task_type=task_type,
+                as_of=as_of,
+            )
             results.extend(query_results)
 
         ranked = rank_memory_results(results, query=query or " ".join(files or []), limit=limit)

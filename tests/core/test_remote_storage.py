@@ -1,7 +1,16 @@
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
 import pytest
 import requests
 
+from visp_memory import Memory, MemoryConfig
+from visp_memory.core.hybrid_retrieval import HybridRetriever
 from visp_memory.core.remote_storage import RemoteStorage, RemoteStorageError
+from visp_memory.layers.episodic import EpisodicMemory
+from visp_memory.layers.semantic import SemanticMemory
+from visp_memory.recall.graph import GraphRecall
+from visp_memory.recall.proactive import ProactiveRecall
 
 
 class FakeResponse:
@@ -26,6 +35,7 @@ class FakeSession:
         self.last_get_params = None
         self.last_post_url = None
         self.last_post_json = None
+        self.post_calls = []
         self.last_patch_url = None
         self.last_patch_json = None
         self.last_get_url = None
@@ -33,6 +43,7 @@ class FakeSession:
     def post(self, url, json=None):
         self.last_post_url = url
         self.last_post_json = json
+        self.post_calls.append((url, json))
         return self.response
 
     def get(self, url, params=None):
@@ -108,6 +119,137 @@ def test_remote_storage_search_maps_layer_to_api_layers_payload():
         "limit": 5,
         "layers": ["episodic"],
     }
+
+
+def test_remote_storage_search_forwards_runtime_scope_and_serializes_datetime():
+    storage = remote_storage_with(FakeResponse(200, []))
+    as_of = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
+
+    assert storage.search_memories(
+        "auth",
+        repo_id="repo-a",
+        environment=["prod", "staging"],
+        task_type="deploy",
+        as_of=as_of,
+    ) == []
+    assert storage.session.last_post_json == {
+        "query": "auth",
+        "repo_id": "repo-a",
+        "environment": ["prod", "staging"],
+        "task_type": "deploy",
+        "as_of": "2026-01-15T12:00:00+00:00",
+    }
+
+
+def test_memory_recall_forwards_scope_before_remote_server_filter(tmp_path):
+    scoped = {
+        "id": "scoped-1",
+        "content": "Production authentication deployment",
+        "layer": "semantic",
+        "category": "fact",
+        "repo_id": "repo-a",
+        "metadata": {"environment": "prod", "task_type": "deploy"},
+        "tags": [],
+    }
+
+    class ScopedSession(FakeSession):
+        def post(self, url, json=None):
+            self.last_post_url = url
+            self.last_post_json = json
+            if json.get("environment") == "prod" and json.get("task_type") == "deploy":
+                return FakeResponse(200, [scoped])
+            return FakeResponse(200, [])
+
+    remote = RemoteStorage.__new__(RemoteStorage)
+    remote.server_url = "http://memory.example"
+    remote.session = ScopedSession(FakeResponse(200, []))
+    config = MemoryConfig(repo_id="repo-a")
+    config.storage.data_dir = tmp_path
+    config.embedding.provider = "noop"
+    memory = Memory(config=config)
+    memory._storage = remote
+
+    results = memory.recall(
+        "authentication deployment",
+        environment="prod",
+        task_type="deploy",
+        as_of=datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
+        min_score=0.0,
+    )
+
+    assert [item["id"] for item in results] == ["scoped-1"]
+    assert results[0]["metadata"] == scoped["metadata"]
+    assert remote.session.last_post_json["environment"] == "prod"
+    assert remote.session.last_post_json["task_type"] == "deploy"
+    assert remote.session.last_post_json["as_of"] == "2026-01-15T12:00:00+00:00"
+
+
+def test_hybrid_retriever_forwards_runtime_scope_to_remote_direct_search():
+    storage = remote_storage_with(FakeResponse(200, []))
+    as_of = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
+
+    assert HybridRetriever(storage).retrieve(
+        "authentication deployment",
+        repo_id="repo-a",
+        environment=["prod", "staging"],
+        task_type="deploy",
+        as_of=as_of,
+    ) == []
+
+    recall_payloads = [
+        payload for url, payload in storage.session.post_calls if url.endswith("/recall")
+    ]
+    assert len(recall_payloads) == 4
+    assert all(payload["environment"] == ["prod", "staging"] for payload in recall_payloads)
+    assert all(payload["task_type"] == "deploy" for payload in recall_payloads)
+    assert all(payload["as_of"] == "2026-01-15T12:00:00+00:00" for payload in recall_payloads)
+
+
+def test_graph_recall_forwards_runtime_scope_to_remote_seed_search():
+    storage = remote_storage_with(FakeResponse(200, []))
+    as_of = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
+
+    result = GraphRecall(storage).trace(
+        "authentication deployment",
+        repo_id="repo-a",
+        environment="prod",
+        task_type=["deploy", "review"],
+        as_of=as_of,
+    )
+
+    assert result["nodes"] == []
+    assert storage.session.last_post_json["environment"] == "prod"
+    assert storage.session.last_post_json["task_type"] == ["deploy", "review"]
+    assert storage.session.last_post_json["as_of"] == "2026-01-15T12:00:00+00:00"
+
+
+def test_proactive_searches_forward_runtime_scope_to_remote_layers():
+    storage = remote_storage_with(FakeResponse(200, []))
+    memory = SimpleNamespace(
+        config=SimpleNamespace(repo_id="repo-a"),
+        episodic=EpisodicMemory(storage),
+        semantic=SemanticMemory(storage),
+        rank_with_context=lambda memories, **kwargs: memories,
+    )
+    as_of = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
+
+    assert ProactiveRecall(
+        memory,
+        environment=["prod", "staging"],
+        task_type="deploy",
+        as_of=as_of,
+    ).on_error("authentication failed") == []
+
+    recall_payloads = [
+        payload for url, payload in storage.session.post_calls if url.endswith("/recall")
+    ]
+    assert [payload["layers"] for payload in recall_payloads] == [
+        ["episodic"],
+        ["semantic"],
+    ]
+    assert all(payload["environment"] == ["prod", "staging"] for payload in recall_payloads)
+    assert all(payload["task_type"] == ["deploy"] for payload in recall_payloads)
+    assert all(payload["as_of"] == "2026-01-15T12:00:00+00:00" for payload in recall_payloads)
 
 
 def test_remote_storage_add_relationship_sends_evidence_payload():
@@ -211,9 +353,21 @@ def test_remote_storage_related_memories_calls_authenticated_api_contract():
     payload = [{"id": "memory-2", "relationship": "supports", "strength": 0.9}]
     storage = remote_storage_with(FakeResponse(200, payload))
 
-    assert storage.get_related_memories("memory-1", relationship="supports") == payload
+    as_of = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
+    assert storage.get_related_memories(
+        "memory-1",
+        relationship="supports",
+        environment=["prod", "staging"],
+        task_type="deploy",
+        as_of=as_of,
+    ) == payload
     assert storage.session.last_get_url == "http://memory.example/memories/memory-1/related"
-    assert storage.session.last_get_params == {"relationship": "supports"}
+    assert storage.session.last_get_params == {
+        "relationship": "supports",
+        "environment": ["prod", "staging"],
+        "task_type": "deploy",
+        "as_of": "2026-01-15T12:00:00+00:00",
+    }
 
 
 def test_remote_storage_related_memories_returns_empty_only_for_404():
