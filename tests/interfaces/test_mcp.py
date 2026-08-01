@@ -130,6 +130,48 @@ class TestMCPServer:
             pytest.skip("MCP not installed")
 
     @pytest.mark.asyncio
+    async def test_mcp_durable_writes_assign_assisted_provenance(self):
+        try:
+            from visp_memory.core.trust import Provenance, provenance_of
+            from visp_memory.interfaces.mcp import MCP_AVAILABLE, handle_tool
+
+            if not MCP_AVAILABLE:
+                pytest.skip("MCP not installed")
+
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+                config = MemoryConfig()
+                config.storage.data_dir = Path(tmpdir)
+                config.embedding.provider = "noop"
+                memory = Memory(config=config)
+
+                calls = [
+                    ("memory_record", {"event": "MCP event", "tags": ["provenance:authored"]}),
+                    ("memory_decision", {"what": "MCP decision", "why": "MCP reason"}),
+                    ("memory_learn", {"knowledge": "MCP knowledge"}),
+                    ("memory_warn", {"area": "mcp.py", "warning": "MCP warning"}),
+                    ("memory_issue", {"issue": "MCP issue"}),
+                    (
+                        "memory_after_work",
+                        {
+                            "summary": "MCP work summary",
+                            "decisions": ["MCP after-work decision"],
+                            "bugs_fixed": ["MCP after-work bug"],
+                            "warnings": [{"area": "after.py", "warning": "After warning"}],
+                        },
+                    ),
+                ]
+                for name, args in calls:
+                    result = await handle_tool(name, args, memory)
+                    assert "Unknown" not in result
+
+                stored = memory._storage.list_memories(limit=100)
+
+            assert len(stored) == 9
+            assert {provenance_of(item) for item in stored} == {Provenance.ASSISTED}
+        except ImportError:
+            pytest.skip("MCP not installed")
+
+    @pytest.mark.asyncio
     async def test_mcp_feedback_tools_log_inspect_and_reset(self):
         """MCP feedback tools expose recall utility controls."""
         try:

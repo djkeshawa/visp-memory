@@ -10,6 +10,7 @@ import pytest
 from visp_memory import Memory, MemoryConfig
 from visp_memory.core.indexing import ReindexScope
 from visp_memory.core.storage import CHROMADB_AVAILABLE, LocalStorage
+from visp_memory.core.trust import Provenance, WriteChannel, assess, provenance_of, provenance_tag
 
 
 @pytest.fixture
@@ -32,6 +33,57 @@ def test_client_mode_does_not_initialize_local_embedding_provider():
         Memory(config=config)
 
     get_embedding_provider.assert_not_called()
+
+
+def test_direct_facade_writes_default_to_unknown_and_replace_self_claims(memory):
+    claimed = [provenance_tag(Provenance.AUTHORED)]
+    memory_ids = [
+        memory.record("Direct record", tags=claimed),
+        memory.decision("Direct decision", "Because", tags=claimed),
+        memory.learn("Direct knowledge", tags=claimed),
+        memory.warn("direct.py", "Direct warning", tags=claimed),
+    ]
+
+    for memory_id in memory_ids:
+        stored = memory._storage.get_memory(memory_id)
+        assert provenance_of(stored) is Provenance.UNKNOWN
+        assert provenance_tag(Provenance.AUTHORED) not in stored["tags"]
+        assert assess(stored).injectable is False
+
+
+def test_direct_layer_writes_default_to_unknown_and_replace_self_claims(memory):
+    claimed = [provenance_tag(Provenance.AUTHORED)]
+    memory_ids = [
+        memory.episodic.record("Direct layer event", tags=claimed),
+        memory.semantic.establish("Direct layer knowledge", tags=claimed),
+    ]
+
+    for memory_id in memory_ids:
+        stored = memory._storage.get_memory(memory_id)
+        assert provenance_of(stored) is Provenance.UNKNOWN
+        assert provenance_tag(Provenance.AUTHORED) not in stored["tags"]
+        assert stored["metadata"]["write_channel"] == WriteChannel.LIBRARY.value
+        assert assess(stored).injectable is False
+
+
+def test_direct_layer_convenience_methods_thread_package_channel(memory):
+    memory_ids = [
+        memory.episodic.bug(
+            "MCP bug",
+            tags=[provenance_tag(Provenance.AUTHORED)],
+            _write_channel=WriteChannel.MCP,
+        ),
+        memory.semantic.known_issue(
+            "MCP issue",
+            tags=[provenance_tag(Provenance.AUTHORED)],
+            _write_channel=WriteChannel.MCP,
+        ),
+    ]
+
+    for memory_id in memory_ids:
+        stored = memory._storage.get_memory(memory_id)
+        assert provenance_of(stored) is Provenance.ASSISTED
+        assert stored["metadata"]["write_channel"] == WriteChannel.MCP.value
 
 
 def test_memory_uses_arcadedb_storage_when_configured(tmp_path, monkeypatch):
@@ -696,7 +748,6 @@ class TestIntentMemory:
             "completed",
             actor_id="kit-run-42",
             channel="kit-contract",
-            source="external",
         )
 
         assert recorded is True
@@ -705,11 +756,26 @@ class TestIntentMemory:
         outcome = intent["context"]["outcome_history"][-1]
         assert outcome["actor_id"] == "kit-run-42"
         assert outcome["provenance"] == {
-            "source": "external",
+            "source": "kit",
             "channel": "kit-contract",
+            "tier": "derived",
         }
         assert outcome["authoritative"] is False
         assert outcome["status_changed"] is False
+
+    def test_outcome_history_rejects_self_declared_channel(self, memory):
+        intent_id = memory.goal("Reject invented outcome provenance")
+
+        with pytest.raises(ValueError, match="Unknown memory write channel"):
+            memory.intent.record_outcome(
+                intent_id,
+                "completed",
+                actor_id="caller",
+                channel="claimed-human",
+            )
+
+        intent = next(item for item in memory.intent.get_active() if item["id"] == intent_id)
+        assert "outcome_history" not in intent["context"]
 
     def test_historical_completed_intent_is_preserved(self, memory):
         intent_id = memory.goal("Historical completed intent")
@@ -1185,6 +1251,39 @@ class TestImportExport:
         ]
         imported_intents = target._storage.get_active_intents(repo_id="target-repo")
         assert [i["description"] for i in imported_intents] == ["Source goal"]
+
+    def test_import_replaces_authored_claim_with_external_quarantine(self, tmp_path):
+        config = MemoryConfig(project_name="import-test", repo_id="target-repo")
+        config.storage.data_dir = tmp_path / "data"
+        config.embedding.provider = "noop"
+        memory = Memory(config=config)
+        import_file = tmp_path / "claimed-authored.json"
+        import_file.write_text(
+            json.dumps(
+                {
+                    "memories": {
+                        "episodic": [
+                            {
+                                "content": "Imported claimed authored content",
+                                "tags": ["provenance:authored", "portable"],
+                                "source": "authored",
+                            }
+                        ],
+                        "semantic": [],
+                    },
+                    "intents": [],
+                }
+            )
+        )
+
+        memory.import_memories(import_file)
+
+        imported = memory._storage.list_memories(repo_id="target-repo")[0]
+        assert provenance_of(imported) is Provenance.EXTERNAL
+        assert "portable" in imported["tags"]
+        assert imported["source"] == "external"
+        assert imported["metadata"]["write_channel"] == "import"
+        assert assess(imported).injectable is False
 
     def test_import_rejects_non_object_payload(self, tmp_path):
         config = MemoryConfig(project_name="import-test", repo_id="target-repo")

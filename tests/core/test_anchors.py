@@ -8,6 +8,9 @@ from visp_memory.core.anchors import (
     inspect,
 )
 from visp_memory.core.injection import InjectionPolicy, select_for_injection
+from visp_memory.core.trust import Provenance, provenance_tag
+
+_DERIVED_TAG = provenance_tag(Provenance.DERIVED)
 
 
 class TestExtraction:
@@ -114,7 +117,7 @@ class TestInjectionIntegration:
                 "content": "WARNING [session.py]: cache writes race under refresh",
                 "relevance_score": 0.20,
                 "category": "fact",
-                "tags": [],
+                "tags": [_DERIVED_TAG],
             },
         ]
         result = select_for_injection(
@@ -137,14 +140,14 @@ class TestInjectionIntegration:
                 "content": "WARNING [removed_module.py]: careful with the global lock",
                 "relevance_score": 0.99,
                 "category": "fragile_area",
-                "tags": [],
+                "tags": [_DERIVED_TAG],
             },
             {
                 "id": "live",
                 "content": "WARNING [live.py]: unrelated but resolvable",
                 "relevance_score": 0.10,
                 "category": "fragile_area",
-                "tags": [],
+                "tags": [_DERIVED_TAG],
             },
         ]
         result = select_for_injection(
@@ -165,7 +168,7 @@ class TestInjectionIntegration:
                 "content": "WARNING [src/auth.py]: mutex required around refresh",
                 "relevance_score": 0.99,
                 "category": "fragile_area",
-                "tags": [],
+                "tags": [_DERIVED_TAG],
             },
         ]
         result = select_for_injection(
@@ -185,7 +188,7 @@ class TestInjectionIntegration:
                 "content": "WARNING [removed_module.py]: careful",
                 "relevance_score": 0.99,
                 "category": "fragile_area",
-                "tags": [],
+                "tags": [_DERIVED_TAG],
             },
         ]
         result = select_for_injection(

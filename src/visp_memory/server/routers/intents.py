@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from visp_memory.config import load_config
 from visp_memory.core.clock import utc_now
+from visp_memory.core.trust import WriteChannel
 from visp_memory.layers.intent import IntentMemory
 from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import (
@@ -170,8 +171,7 @@ async def complete_intent(
     recorded = IntentMemory(storage).complete(
         intent_id,
         actor_id=user.user_id,
-        channel="rest",
-        source="external",
+        channel=WriteChannel.REST,
     )
     if not recorded:
         raise HTTPException(status_code=404, detail="Intent not found")
@@ -205,8 +205,7 @@ async def close_intent(
     recorded = IntentMemory(storage).close(
         intent_id,
         actor_id=user.user_id,
-        channel="rest",
-        source="external",
+        channel=WriteChannel.REST,
     )
     if not recorded:
         raise HTTPException(status_code=404, detail="Intent not found")
@@ -304,8 +303,7 @@ async def reopen_intent(
         intent_id,
         "active",
         actor_id=user.user_id,
-        channel="rest",
-        source="external",
+        channel=WriteChannel.REST,
     )
     if not recorded:
         raise HTTPException(status_code=404, detail="Intent not found")

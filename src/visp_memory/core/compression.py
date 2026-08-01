@@ -18,6 +18,7 @@ from visp_memory.core.clock import utc_now
 from visp_memory.core.ranking import projected_importance
 from visp_memory.core.storage import BaseStorage
 from visp_memory.core.tokens import compute_savings
+from visp_memory.core.trust import WriteChannel, channel_policy, with_channel_provenance
 
 COMPRESSION_PROMPT_HEADER = (
     "Compress these {count} related memories into a single piece of actionable "
@@ -125,18 +126,22 @@ class MemoryCompressor:
         savings = compute_savings(contents, compressed)
 
         # Store semantic memory
+        write_channel = WriteChannel.COMPRESSION
+        policy = channel_policy(write_channel)
         semantic_id = self.storage.store_memory(
             content=compressed,
             layer="semantic",
             category=category,
             importance=importance,
-            tags=list(all_tags),
+            tags=with_channel_provenance(all_tags, write_channel),
             metadata={
                 "compressed_from": len(episodes),
                 "compressed_at": utc_now().isoformat(),
                 "token_savings": savings.as_dict(),
+                "write_channel": write_channel.value,
             },
             source_ids=source_ids,
+            source=policy.source,
         )
 
         # Mark episodes as compressed
@@ -323,19 +328,25 @@ class MemoryCompressor:
         savings = compute_savings(contents, compressed)
 
         # Store principle
+        write_channel = WriteChannel.COMPRESSION
+        policy = channel_policy(write_channel)
         principle_id = self.storage.store_memory(
             content=compressed,
             layer="semantic",
             category="principle",
             importance=importance,
-            tags=["compressed", "principle"],
+            tags=with_channel_provenance(
+                ["compressed", "principle"], write_channel
+            ),
             metadata={
                 "compressed_from": len(memories),
                 "level": 2,
                 "compressed_at": utc_now().isoformat(),
                 "token_savings": savings.as_dict(),
+                "write_channel": write_channel.value,
             },
             source_ids=source_ids,
+            source=policy.source,
         )
 
         # Link source memories to this principle (don't mark as compressed/hidden,

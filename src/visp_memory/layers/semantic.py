@@ -18,6 +18,12 @@ from typing import Any, Dict, List
 from visp_memory.core.clock import utc_now
 from visp_memory.core.ranking import rank_memory_results
 from visp_memory.core.storage import BaseStorage
+from visp_memory.core.trust import (
+    WriteChannel,
+    channel_policy,
+    parse_write_channel,
+    with_channel_provenance,
+)
 from visp_memory.layers.base import BaseMemoryLayer
 
 
@@ -68,6 +74,8 @@ class SemanticMemory(BaseMemoryLayer):
         source_episodes: List[str] = None,
         repo_id: str = None,
         tags: List[str] = None,
+        *,
+        _write_channel: WriteChannel | str = WriteChannel.LIBRARY,
     ) -> str:
         """
         Establish a piece of knowledge.
@@ -91,7 +99,13 @@ class SemanticMemory(BaseMemoryLayer):
                 importance=0.9
             )
         """
-        metadata = {"established_at": utc_now().isoformat(), "applies_to": applies_to or []}
+        write_channel = parse_write_channel(_write_channel)
+        policy = channel_policy(write_channel)
+        metadata = {
+            "established_at": utc_now().isoformat(),
+            "applies_to": applies_to or [],
+            "write_channel": write_channel.value,
+        }
 
         return self.storage.store_memory(
             content=knowledge,
@@ -99,9 +113,10 @@ class SemanticMemory(BaseMemoryLayer):
             category=category.value if isinstance(category, KnowledgeCategory) else category,
             importance=importance,
             repo_id=repo_id,
-            tags=tags or [],
+            tags=with_channel_provenance(tags, write_channel),
             metadata=metadata,
             source_ids=source_episodes or [],
+            source=policy.source,
         )
 
     def warn(
@@ -111,6 +126,8 @@ class SemanticMemory(BaseMemoryLayer):
         severity: float = 0.7,
         repo_id: str = None,
         tags: List[str] = None,
+        *,
+        _write_channel: WriteChannel | str = WriteChannel.LIBRARY,
     ) -> str:
         """
         Establish a warning about a fragile area.
@@ -140,6 +157,7 @@ class SemanticMemory(BaseMemoryLayer):
             applies_to=[area],
             repo_id=repo_id,
             tags=["warning"] + (tags or []),
+            _write_channel=_write_channel,
         )
 
     def convention(
@@ -149,6 +167,8 @@ class SemanticMemory(BaseMemoryLayer):
         importance: float = 0.5,
         repo_id: str = None,
         tags: List[str] = None,
+        *,
+        _write_channel: WriteChannel | str = WriteChannel.LIBRARY,
     ) -> str:
         """
         Establish a convention or best practice.
@@ -178,6 +198,7 @@ class SemanticMemory(BaseMemoryLayer):
             importance=importance,
             repo_id=repo_id,
             tags=tags,
+            _write_channel=_write_channel,
         )
 
     def known_issue(
@@ -187,6 +208,8 @@ class SemanticMemory(BaseMemoryLayer):
         priority: float = 0.5,
         repo_id: str = None,
         tags: List[str] = None,
+        *,
+        _write_channel: WriteChannel | str = WriteChannel.LIBRARY,
     ) -> str:
         """
         Document a known issue.
@@ -217,6 +240,7 @@ class SemanticMemory(BaseMemoryLayer):
             importance=priority,
             repo_id=repo_id,
             tags=["known_issue"] + (tags or []),
+            _write_channel=_write_channel,
         )
 
     def search(

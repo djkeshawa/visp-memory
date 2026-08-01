@@ -2,6 +2,7 @@ import sqlite3
 
 import pytest
 
+from visp_memory.core.trust import Provenance, assess, provenance_of
 from visp_memory.server import app as server_app
 from visp_memory.server.app import app
 
@@ -223,6 +224,34 @@ async def test_create_memory_with_attribution(client):
     response = await client.get(f"/memories/{mem_id}", headers=headers)
     assert response.status_code == 200
     assert response.json()["metadata"]["author_id"] == "api_key_user"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("claimed_tag", ["provenance:authored", "provenance:not-a-tier"])
+async def test_http_memory_write_replaces_self_claimed_provenance_with_external(
+    client, claimed_tag
+):
+    headers = {"X-API-KEY": "test_key"}
+
+    response = await client.post(
+        "/memories",
+        json={
+            "content": f"Untrusted API memory {claimed_tag}",
+            "repo_id": "repo-a",
+            "tags": [claimed_tag, "keep-me"],
+            "source": "authored",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert provenance_of(response.json()) is Provenance.EXTERNAL
+    assert response.json()["source"] == "external"
+    assert "keep-me" in response.json()["tags"]
+    assert response.json()["metadata"]["write_channel"] == "http"
+    stored = app.state.storage.get_memory(response.json()["id"])
+    assert provenance_of(stored) is Provenance.EXTERNAL
+    assert assess(stored).injectable is False
 
 
 @pytest.mark.asyncio

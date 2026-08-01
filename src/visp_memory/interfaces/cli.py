@@ -34,7 +34,7 @@ from visp_memory.config import load_config
 from visp_memory.core.clock import parse_utc, utc_now
 from visp_memory.core.ranking import projected_importance
 from visp_memory.core.reporting import MemoryIntelligenceReporter
-from visp_memory.core.trust import Provenance, provenance_tag
+from visp_memory.core.trust import WriteChannel
 
 app = typer.Typer(
     name="visp-memory", help="Human-inspired memory system for LLMs", no_args_is_help=True
@@ -606,7 +606,13 @@ def record(
 ):
     """Record an episodic memory (something that happened)."""
     memory = get_memory()
-    mem_id = memory.record(event, category=category, importance=importance, repo_id=repo)
+    mem_id = memory.record(
+        event,
+        category=category,
+        importance=importance,
+        repo_id=repo,
+        _write_channel=WriteChannel.CLI,
+    )
     console.print(f"[green]Recorded:[/green] {event[:60]}...")
     console.print(f"[dim]ID: {mem_id}[/dim]")
 
@@ -621,7 +627,11 @@ def decision(
     """Record an architecture/design decision."""
     memory = get_memory()
     memory.decision(
-        what, why, alternatives, repo_id=repo, tags=[provenance_tag(Provenance.AUTHORED)]
+        what,
+        why,
+        alternatives,
+        repo_id=repo,
+        _write_channel=WriteChannel.CLI,
     )
     console.print(f"[green]Decision recorded:[/green] {what}")
     console.print(f"[dim]Reasoning: {why}[/dim]")
@@ -638,7 +648,12 @@ def bug(
     """Record a bug discovery or fix."""
     memory = get_memory()
     memory.episodic.bug(
-        description, cause=cause, fix=fix, files=files, repo_id=_repo_scope(memory, repo)
+        description,
+        cause=cause,
+        fix=fix,
+        files=files,
+        repo_id=_repo_scope(memory, repo),
+        _write_channel=WriteChannel.CLI,
     )
     status = "fixed" if fix else "found"
     console.print(f"[green]Bug {status}:[/green] {description}")
@@ -658,7 +673,13 @@ def learn(
 ):
     """Establish semantic knowledge (something learned)."""
     memory = get_memory()
-    memory.learn(knowledge, category=category, importance=importance, repo_id=repo)
+    memory.learn(
+        knowledge,
+        category=category,
+        importance=importance,
+        repo_id=repo,
+        _write_channel=WriteChannel.CLI,
+    )
     console.print(f"[green]Established:[/green] {knowledge[:60]}...")
 
 
@@ -672,7 +693,11 @@ def warn(
     """Add a warning about a fragile area."""
     memory = get_memory()
     memory.warn(
-        area, warning, severity, repo_id=repo, tags=[provenance_tag(Provenance.AUTHORED)]
+        area,
+        warning,
+        severity,
+        repo_id=repo,
+        _write_channel=WriteChannel.CLI,
     )
     console.print(f"[yellow]Warning added for {area}:[/yellow] {warning}")
 
@@ -685,7 +710,12 @@ def convention(
 ):
     """Establish a convention or best practice."""
     memory = get_memory()
-    memory.semantic.convention(rule, rationale, repo_id=_repo_scope(memory, repo))
+    memory.semantic.convention(
+        rule,
+        rationale,
+        repo_id=_repo_scope(memory, repo),
+        _write_channel=WriteChannel.CLI,
+    )
     console.print(f"[green]Convention established:[/green] {rule}")
 
 
@@ -699,7 +729,11 @@ def issue(
     """Document a known issue."""
     memory = get_memory()
     memory.semantic.known_issue(
-        description, workaround, priority, repo_id=_repo_scope(memory, repo)
+        description,
+        workaround,
+        priority,
+        repo_id=_repo_scope(memory, repo),
+        _write_channel=WriteChannel.CLI,
     )
     console.print(f"[yellow]Known issue documented:[/yellow] {description}")
 
@@ -757,7 +791,7 @@ def working(
 def done():
     """Record a task completion outcome without changing intent status."""
     memory = get_memory()
-    recorded = memory.done(actor_id="local-user", channel="cli", source="authored")
+    recorded = memory.done(actor_id="local-user", channel=WriteChannel.CLI)
     console.print(
         f"[green]Recorded {recorded} task outcome(s); intent status unchanged[/green]"
     )
@@ -825,8 +859,7 @@ def intent_update(
         priority=priority,
         status=status,
         actor_id="local-user",
-        channel="cli",
-        source="authored",
+        channel=WriteChannel.CLI,
     )
     if not updated:
         console.print(f"[red]Intent not found:[/red] {intent_id}")
@@ -848,8 +881,7 @@ def intent_complete(intent_id: str = typer.Argument(..., help="Intent ID to comp
     completed = memory.intent.complete(
         intent_id,
         actor_id="local-user",
-        channel="cli",
-        source="authored",
+        channel=WriteChannel.CLI,
     )
     if not completed:
         console.print(f"[red]Intent not found:[/red] {intent_id}")
@@ -867,8 +899,7 @@ def intent_close(intent_id: str = typer.Argument(..., help="Intent ID to close")
     closed = memory.intent.close(
         intent_id,
         actor_id="local-user",
-        channel="cli",
-        source="authored",
+        channel=WriteChannel.CLI,
     )
     if not closed:
         console.print(f"[red]Intent not found:[/red] {intent_id}")

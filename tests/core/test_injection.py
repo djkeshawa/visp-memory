@@ -11,6 +11,7 @@ from visp_memory.core.injection import (
     select_for_injection,
     task_signal,
 )
+from visp_memory.core.trust import Provenance, provenance_tag
 
 _SUBJECTS = [
     "alembic migrations run offline",
@@ -39,7 +40,7 @@ def _memory(content, score=0.9, memory_id="m1", category="knowledge", tags=None)
         "content": content,
         "relevance_score": score,
         "category": category,
-        "tags": tags or [],
+        "tags": tags if tags is not None else [provenance_tag(Provenance.DERIVED)],
     }
 
 

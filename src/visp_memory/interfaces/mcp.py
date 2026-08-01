@@ -69,6 +69,7 @@ except ImportError:
 from visp_memory import Memory
 from visp_memory.core.clock import parse_utc, utc_now
 from visp_memory.core.ranking import projected_importance
+from visp_memory.core.trust import WriteChannel
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -1678,6 +1679,7 @@ def _handle_workflow(name: str, args: dict[str, Any], memory: Memory) -> str:
             category=args.get("category", "note"),
             importance=0.7,
             repo_id=repo_id,
+            _write_channel=WriteChannel.MCP,
         )
         recorded = [f"Recorded summary (ID: {summary_id})"]
 
@@ -1686,6 +1688,7 @@ def _handle_workflow(name: str, args: dict[str, Any], memory: Memory) -> str:
                 what=decision,
                 why="Recorded from Codex end-of-work summary.",
                 repo_id=repo_id,
+                _write_channel=WriteChannel.MCP,
             )
             recorded.append(f"Recorded decision (ID: {decision_id}): {decision}")
 
@@ -1695,6 +1698,7 @@ def _handle_workflow(name: str, args: dict[str, Any], memory: Memory) -> str:
                 category="bug_fixed",
                 importance=0.8,
                 repo_id=repo_id,
+                _write_channel=WriteChannel.MCP,
             )
             recorded.append(f"Recorded bug fix (ID: {bug_id}): {bug}")
 
@@ -1704,6 +1708,7 @@ def _handle_workflow(name: str, args: dict[str, Any], memory: Memory) -> str:
                 warning=item["warning"],
                 severity=0.8,
                 repo_id=repo_id,
+                _write_channel=WriteChannel.MCP,
             )
             recorded.append(f"Recorded warning (ID: {warning_id}): {item['area']}")
 
@@ -1771,6 +1776,7 @@ def _handle_recording(name: str, args: dict[str, Any], memory: Memory) -> str:
             category=args.get("category", "note"),
             importance=args.get("importance", 0.5),
             repo_id=args.get("repo_id"),
+            _write_channel=WriteChannel.MCP,
         )
         return f"Recorded event (ID: {mem_id}): {args['event']}"
 
@@ -1780,6 +1786,7 @@ def _handle_recording(name: str, args: dict[str, Any], memory: Memory) -> str:
             why=args["why"],
             alternatives=args.get("alternatives"),
             repo_id=args.get("repo_id"),
+            _write_channel=WriteChannel.MCP,
         )
         return f"Decision recorded (ID: {mem_id}): {args['what']}"
 
@@ -1795,6 +1802,7 @@ def _handle_knowledge(name: str, args: dict[str, Any], memory: Memory) -> str:
             importance=args.get("importance", 0.6),
             repo_id=args.get("repo_id"),
             detect_conflicts=args.get("detect_conflicts", False),
+            _write_channel=WriteChannel.MCP,
         )
         return f"Knowledge established (ID: {mem_id}): {args['knowledge']}"
 
@@ -1804,6 +1812,7 @@ def _handle_knowledge(name: str, args: dict[str, Any], memory: Memory) -> str:
             warning=args["warning"],
             severity=args.get("severity", 0.7),
             repo_id=args.get("repo_id"),
+            _write_channel=WriteChannel.MCP,
         )
         return f"Warning added for {args['area']}: {args['warning']}"
 
@@ -1813,6 +1822,7 @@ def _handle_knowledge(name: str, args: dict[str, Any], memory: Memory) -> str:
             workaround=args.get("workaround"),
             priority=args.get("priority", 0.5),
             repo_id=args.get("repo_id"),
+            _write_channel=WriteChannel.MCP,
         )
         return f"Known issue documented: {args['issue']}"
 
@@ -1837,7 +1847,7 @@ def _handle_intent(name: str, args: dict[str, Any], memory: Memory) -> str:
         return f"Working on: {args['task']}"
 
     elif name == "memory_done":
-        recorded = memory.done(actor_id="mcp-client", channel="mcp", source="assisted")
+        recorded = memory.done(actor_id="mcp-client", channel=WriteChannel.MCP)
         return f"Recorded {recorded} task outcome(s); intent status unchanged"
 
     elif name == "memory_update_intent":
@@ -1858,8 +1868,7 @@ def _handle_intent(name: str, args: dict[str, Any], memory: Memory) -> str:
             args["intent_id"],
             **update_data,
             actor_id="mcp-client",
-            channel="mcp",
-            source="assisted",
+            channel=WriteChannel.MCP,
         )
         if not updated:
             return f"Intent not found: {args['intent_id']}"
@@ -1874,8 +1883,7 @@ def _handle_intent(name: str, args: dict[str, Any], memory: Memory) -> str:
         closed = memory.intent.close(
             args["intent_id"],
             actor_id="mcp-client",
-            channel="mcp",
-            source="assisted",
+            channel=WriteChannel.MCP,
         )
         if not closed:
             return f"Intent not found: {args['intent_id']}"
@@ -2042,8 +2050,7 @@ def _handle_maintenance(name: str, args: dict[str, Any], memory: Memory) -> str:
             return "Set confirm=true to record outcomes for all active goals."
         recorded = memory.intent.clear_all(
             actor_id="mcp-client",
-            channel="mcp",
-            source="assisted",
+            channel=WriteChannel.MCP,
         )
         return f"Recorded {recorded} goal outcomes; intent status unchanged."
 

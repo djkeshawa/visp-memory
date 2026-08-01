@@ -22,11 +22,21 @@ class MemoryCreate(BaseModel):
     category: str = "note"
     importance: float = Field(default=0.5, ge=0.0, le=1.0)
     repo_id: Optional[str] = None
-    tags: List[str] = Field(default_factory=list)
+    tags: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Caller tags. Any provenance:* value is replaced by the server-owned HTTP tier."
+        ),
+    )
     metadata: Dict[str, Any] = Field(default_factory=dict)
     source_ids: List[str] = Field(default_factory=list)
     status: MemoryStatus = "active"
-    source: Optional[str] = None
+    source: Optional[str] = Field(
+        default=None,
+        deprecated=(
+            "Accepted for compatibility but ignored on writes; the server assigns provenance."
+        ),
+    )
     quality_flags: List[str] = Field(default_factory=list)
     title: Optional[str] = None
     summary: Optional[str] = None

@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from visp_memory.core.clock import utc_now
 from visp_memory.core.storage import BaseStorage
+from visp_memory.core.trust import WriteChannel, channel_policy, parse_write_channel
 from visp_memory.layers.base import BaseMemoryLayer
 
 
@@ -178,8 +179,7 @@ class IntentMemory(BaseMemoryLayer):
         outcome: str,
         *,
         actor_id: str = "library-caller",
-        channel: str = "library",
-        source: str = "external",
+        channel: WriteChannel | str = WriteChannel.LIBRARY,
     ) -> bool:
         """
         Append a provenance-bearing external outcome without changing status.
@@ -198,6 +198,8 @@ class IntentMemory(BaseMemoryLayer):
         if intent is None:
             return False
 
+        parsed_channel = parse_write_channel(channel)
+        policy = channel_policy(parsed_channel)
         context = dict(intent.get("context") or {})
         history = list(context.get("outcome_history") or [])
         history.append(
@@ -205,7 +207,11 @@ class IntentMemory(BaseMemoryLayer):
                 "outcome": outcome,
                 "recorded_at": utc_now().isoformat(),
                 "actor_id": actor_id,
-                "provenance": {"source": source, "channel": channel},
+                "provenance": {
+                    "source": policy.source,
+                    "channel": parsed_channel.value,
+                    "tier": policy.provenance.value,
+                },
                 "authoritative": False,
                 "status_changed": False,
             }
@@ -218,8 +224,7 @@ class IntentMemory(BaseMemoryLayer):
         intent_id: str,
         *,
         actor_id: str = "library-caller",
-        channel: str = "library",
-        source: str = "external",
+        channel: WriteChannel | str = WriteChannel.LIBRARY,
     ) -> bool:
         """Record a completion outcome without changing intent status.
 
@@ -231,7 +236,6 @@ class IntentMemory(BaseMemoryLayer):
             "completed",
             actor_id=actor_id,
             channel=channel,
-            source=source,
         )
 
     def update(
@@ -243,8 +247,7 @@ class IntentMemory(BaseMemoryLayer):
         context: Dict[str, Any] = None,
         *,
         actor_id: str = "library-caller",
-        channel: str = "library",
-        source: str = "external",
+        channel: WriteChannel | str = WriteChannel.LIBRARY,
     ) -> bool:
         """Update content fields and record any requested status as history."""
         if isinstance(priority, IntentPriority):
@@ -264,7 +267,6 @@ class IntentMemory(BaseMemoryLayer):
                 status,
                 actor_id=actor_id,
                 channel=channel,
-                source=source,
             )
         return updated or outcome_recorded
 
@@ -273,8 +275,7 @@ class IntentMemory(BaseMemoryLayer):
         intent_id: str,
         *,
         actor_id: str = "library-caller",
-        channel: str = "library",
-        source: str = "external",
+        channel: WriteChannel | str = WriteChannel.LIBRARY,
     ) -> bool:
         """Record a close outcome without changing intent status."""
         return self.record_outcome(
@@ -282,7 +283,6 @@ class IntentMemory(BaseMemoryLayer):
             "closed",
             actor_id=actor_id,
             channel=channel,
-            source=source,
         )
 
     def clear_task(
@@ -290,8 +290,7 @@ class IntentMemory(BaseMemoryLayer):
         repo_id: str = None,
         *,
         actor_id: str = "library-caller",
-        channel: str = "library",
-        source: str = "external",
+        channel: WriteChannel | str = WriteChannel.LIBRARY,
     ) -> int:
         """
         Record completion outcomes for matching ``WORKING ON`` intents.
@@ -311,7 +310,6 @@ class IntentMemory(BaseMemoryLayer):
                     intent["id"],
                     actor_id=actor_id,
                     channel=channel,
-                    source=source,
                 ):
                     cleared += 1
 
@@ -321,8 +319,7 @@ class IntentMemory(BaseMemoryLayer):
         self,
         *,
         actor_id: str = "library-caller",
-        channel: str = "library",
-        source: str = "external",
+        channel: WriteChannel | str = WriteChannel.LIBRARY,
     ) -> int:
         """
         Record completion outcomes for all active intents/goals.
@@ -337,7 +334,6 @@ class IntentMemory(BaseMemoryLayer):
                 intent["id"],
                 actor_id=actor_id,
                 channel=channel,
-                source=source,
             ):
                 recorded += 1
         return recorded

@@ -34,18 +34,35 @@ trusted.
 
 | Tier | Source | Base trust | Half-life | Auto-injected |
 |---|---|---|---|---|
-| `authored` | A human wrote it (CLI, dashboard) | 1.00 | 540 days | Yes |
-| `derived` | Mined from this repository: commits, tests, instruction files | 0.90 | 270 days | Yes |
+| `authored` | A human used a local CLI write command | 1.00 | 540 days | Yes |
+| `derived` | Produced by a package-owned repository or workflow adapter: git, test capture, bootstrap, Kit outcome contracts | 0.90 | 270 days | Yes |
 | `assisted` | Written by an assistant during a session | 0.70 | 120 days | Yes |
-| `unknown` | Unlabelled | 0.60 | 120 days | Yes |
-| `external` | Content from outside the repository: fetched pages, pasted documents | — | — | **Never** |
+| `unknown` | Direct library writes, unlabelled records, or malformed provenance | — | — | **Never** |
+| `external` | HTTP/REST writes, imports, and instruction-file ingestion | — | — | **Never** |
 
-`external` is the quarantine tier, and it is exactly the channel MemoryGraft uses. The
-cost of quarantining it is close to zero, because such memories are rare and remain fully
-available to explicit recall.
+`external` is the quarantine tier, and it is exactly the channel MemoryGraft uses.
+External records remain fully available to explicit recall.
 
-`unknown` is treated conservatively rather than optimistically. An unlabelled memory is
-not assumed trustworthy.
+`unknown` is also quarantined. A missing, malformed, or direct-library provenance claim
+is never upgraded merely because its payload says `provenance:authored`.
+
+### Write-channel ownership
+
+Provenance is assigned by an immutable package policy, not accepted from memory content,
+request fields, imported tags, or other payload data.
+
+| Package write channel | Assigned tier |
+|---|---|
+| Direct `Memory`, `EpisodicMemory`, or `SemanticMemory` library call | `unknown` |
+| Local CLI write command | `authored` |
+| MCP, conversation capture, compression, or reflection | `assisted` |
+| Git capture, test capture, bootstrap, or Kit outcome contract | `derived` |
+| HTTP/REST, import, or instruction ingestion | `external` |
+
+The internal `_write_channel` argument is for package adapters. It is not a supported
+payload claim: HTTP clients cannot choose it, imports cannot preserve a trusted tier, and
+unknown channel names fail closed. Raw storage writes that omit provenance remain
+unlabelled and are assessed as `unknown`.
 
 ### Trust decay
 
@@ -60,9 +77,9 @@ Nothing here deletes anything. Quarantine and decay affect **injection eligibili
 Explicit `visp-memory recall` still returns everything, because hiding data from the user
 is a different and worse failure than injecting it into a prompt.
 
-It also does not defend against an attacker who can write memories carrying a *trusted*
-provenance label. That requires the cryptographic-attestation half of MemoryGraft's
-proposal, which is not implemented.
+Governed package entrypoints replace self-claimed provenance labels. This is still not
+cryptographic attestation: an attacker with direct database or raw-storage mutation
+access is outside this policy boundary.
 
 ## Measured results
 

@@ -122,6 +122,28 @@ class TestCLIBasicCommands:
         assert result.exit_code == 0
         assert "Established" in result.output
 
+    def test_human_write_commands_assign_authored_provenance(self, cli_env):
+        runner.invoke(app, ["init", "--type", "code"])
+        commands = [
+            ["record", "CLI event"],
+            ["decision", "CLI decision", "CLI rationale"],
+            ["bug", "CLI bug", "--fix", "CLI fix"],
+            ["learn", "CLI knowledge"],
+            ["warn", "cli.py", "CLI warning"],
+            ["convention", "CLI convention"],
+            ["issue", "CLI issue"],
+        ]
+
+        for command in commands:
+            assert runner.invoke(app, command).exit_code == 0
+
+        from visp_memory import Memory
+        from visp_memory.core.trust import Provenance, provenance_of
+
+        stored = Memory()._storage.list_memories(limit=100)
+        assert len(stored) == len(commands)
+        assert {provenance_of(item) for item in stored} == {Provenance.AUTHORED}
+
     def test_repo_option_does_not_leak_between_commands(self, cli_env):
         """A --repo override should apply only to the command that supplied it."""
         runner.invoke(app, ["init", "--type", "code", "--repo", "default-repo"])

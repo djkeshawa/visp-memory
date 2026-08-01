@@ -7,6 +7,11 @@ from visp_memory.config import load_config
 from visp_memory.core.clock import utc_now
 from visp_memory.core.lifecycle import LifecycleError
 from visp_memory.core.ranking import rank_memory_results
+from visp_memory.core.trust import (
+    WriteChannel,
+    channel_policy,
+    with_channel_provenance,
+)
 from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import (
     can_access_scoped_record,
@@ -201,6 +206,7 @@ async def create_memory(
     # Add author attribution to metadata
     metadata = dict(memory.metadata or {})
     metadata["author_id"] = user.user_id
+    metadata["write_channel"] = WriteChannel.HTTP.value
     if user.team_id:
         metadata["team_id"] = user.team_id
     for field in PROVENANCE_FIELDS:
@@ -210,17 +216,18 @@ async def create_memory(
         if value not in (None, [], ""):
             metadata[field] = value
 
+    http_policy = channel_policy(WriteChannel.HTTP)
     mem_id = storage.store_memory(
         content=memory.content,
         layer=memory.layer,
         category=memory.category,
         importance=memory.importance,
         repo_id=memory_repo_id,
-        tags=memory.tags,
+        tags=with_channel_provenance(memory.tags, WriteChannel.HTTP),
         metadata=metadata,
         source_ids=memory.source_ids,
         status=memory.status,
-        source=memory.source,
+        source=http_policy.source,
         quality_flags=memory.quality_flags,
     )
     append_audit_event(
@@ -232,16 +239,7 @@ async def create_memory(
         target_id=mem_id,
         metadata={"layer": memory.layer, "category": memory.category},
     )
-    return {
-        "id": mem_id,
-        **memory.model_dump(),
-        "metadata": metadata,
-        "repo_id": memory_repo_id,
-        "created_at": utc_now(),
-        "accessed_at": utc_now(),
-        "similarity": None,
-        "relevance_score": None,
-    }
+    return _memory_response_payload(storage.get_memory(mem_id))
 
 
 @router.get("/memories/{memory_id}", response_model=MemoryResponse)

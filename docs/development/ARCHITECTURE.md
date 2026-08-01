@@ -650,11 +650,13 @@ measurable rather than asserted. See
 ### `core/trust.py`
 
 Provenance tiers (`authored`, `derived`, `assisted`, `external`, `unknown`) with
-per-tier trust decay. Memories originating outside the repository are quarantined from
-injection entirely, because that is the channel poisoning attacks arrive through. Trust
-falls with age so stale entries stop outranking newer information; repeated use
-reinforces it, capped so nothing becomes permanent. Affects injection eligibility only —
-explicit recall still returns everything. See [../TRUST.md](../TRUST.md).
+per-tier trust decay and a read-only write-channel policy. Provenance is assigned by the
+package entrypoint rather than accepted from payload tags: CLI is authored; MCP,
+conversation capture, compression, and reflection are assisted; repository/test/Kit
+capture is derived; HTTP, import, and instruction ingestion are external; direct
+library, missing, and malformed cases are unknown. External and unknown memories are
+quarantined from injection. Trust falls with age so stale entries stop outranking newer
+information; explicit recall still returns everything. See [../TRUST.md](../TRUST.md).
 
 ### `core/anchors.py`
 

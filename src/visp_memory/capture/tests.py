@@ -11,6 +11,7 @@ from defusedxml import ElementTree
 from defusedxml.common import DefusedXmlException
 
 from visp_memory.capture.git import CaptureManifest, capture_content_hash
+from visp_memory.core.trust import WriteChannel
 
 MAX_JUNIT_REPORT_BYTES = 10 * 1024 * 1024
 
@@ -100,8 +101,10 @@ class TestCapture:
                                 "details": details[:500]
                                 if details
                                 else None,  # Truncate stack trace
+                                "write_channel": WriteChannel.TEST_CAPTURE.value,
                             },
                             tags=["test", "failure", "auto-captured"],
+                            _write_channel=WriteChannel.TEST_CAPTURE,
                         )
                         memory_ids.append(mem_id)
 

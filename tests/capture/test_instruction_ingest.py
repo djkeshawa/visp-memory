@@ -12,6 +12,7 @@ from visp_memory.capture.instructions import (
     ingest_instructions,
     split_sections,
 )
+from visp_memory.core.trust import Provenance, assess, provenance_of
 
 CLAUDE_MD = """Project uses uv for dependency management and pytest for tests.
 
@@ -85,7 +86,10 @@ def test_ingest_stores_sections_with_provenance(memory, project):
     sample = rows[0]
     assert sample["metadata"]["source_file"]
     assert sample["metadata"]["content_hash"]
+    assert sample["metadata"]["write_channel"] == "instruction"
     assert "imported_instruction" in sample["tags"]
+    assert provenance_of(sample) is Provenance.EXTERNAL
+    assert assess(sample).injectable is False
 
 
 def test_reingest_is_idempotent(memory, project):

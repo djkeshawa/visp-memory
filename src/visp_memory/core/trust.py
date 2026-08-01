@@ -18,15 +18,15 @@ This module supplies the missing dimension.
 **Provenance tiers.** Where a memory came from bounds how far it can be trusted:
 
 - ``authored``  -- a human wrote it (CLI, dashboard). Highest trust, slowest decay.
-- ``derived``   -- mined from the repository itself: commits, tests, instruction files.
+- ``derived``   -- mined from the repository itself: commits and test results.
   The repository is the ground truth being described, so this is nearly as good.
 - ``assisted``  -- written by an assistant during a session. Usually right, but it is a
   model's summary of a model's work, so it decays faster and needs corroboration.
-- ``external``  -- originated in content from outside the repository: a fetched page, a
-  pasted document, a third-party file. **Never auto-injected.** This is precisely the
-  channel MemoryGraft uses, and quarantining it costs almost nothing because such
-  memories are rare and can still be recalled deliberately.
-- ``unknown``   -- unlabelled. Treated conservatively rather than optimistically.
+- ``external``  -- originated in content outside a trusted package adapter: imports,
+  instruction files, and HTTP/REST payloads. **Never auto-injected.** This is precisely
+  the channel MemoryGraft uses, and quarantined records remain available to explicit
+  recall.
+- ``unknown``   -- unlabelled or malformed. Quarantined rather than trusted by default.
 
 **Trust decay.** Trust falls with age on a per-tier half-life, so a memory that has not
 been reconfirmed stops outranking newer information instead of competing with it forever.
@@ -42,7 +42,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Iterable, Optional
+from types import MappingProxyType
+from typing import Any, Iterable, Mapping, Optional
 
 from visp_memory.core.clock import parse_utc, utc_now
 
@@ -72,6 +73,25 @@ class Provenance(str, Enum):
             return cls.UNKNOWN
 
 
+class WriteChannel(str, Enum):
+    """Package-owned write entrypoints that assign provenance."""
+
+    LIBRARY = "library"
+    CLI = "cli"
+    MCP = "mcp"
+    HTTP = "http"
+    REST = "rest"
+    IMPORT = "import"
+    INSTRUCTION = "instruction"
+    CONVERSATION = "conversation"
+    COMPRESSION = "compression"
+    REFLECTION = "reflection"
+    TEST_CAPTURE = "test_capture"
+    GIT = "git"
+    BOOTSTRAP = "bootstrap"
+    KIT_CONTRACT = "kit-contract"
+
+
 @dataclass(frozen=True)
 class TierPolicy:
     """Per-tier trust parameters."""
@@ -81,13 +101,44 @@ class TierPolicy:
     injectable: bool = True
 
 
+@dataclass(frozen=True)
+class ChannelPolicy:
+    """Provenance assigned by one package adapter, never by its payload."""
+
+    provenance: Provenance
+    source: str
+
+
+_CHANNEL_POLICIES = {
+    WriteChannel.LIBRARY: ChannelPolicy(Provenance.UNKNOWN, "unknown"),
+    WriteChannel.CLI: ChannelPolicy(Provenance.AUTHORED, "authored"),
+    WriteChannel.MCP: ChannelPolicy(Provenance.ASSISTED, "assisted"),
+    WriteChannel.HTTP: ChannelPolicy(Provenance.EXTERNAL, "external"),
+    WriteChannel.REST: ChannelPolicy(Provenance.EXTERNAL, "external"),
+    WriteChannel.IMPORT: ChannelPolicy(Provenance.EXTERNAL, "external"),
+    WriteChannel.INSTRUCTION: ChannelPolicy(Provenance.EXTERNAL, "external"),
+    WriteChannel.CONVERSATION: ChannelPolicy(Provenance.ASSISTED, "assisted"),
+    WriteChannel.COMPRESSION: ChannelPolicy(Provenance.ASSISTED, "assisted"),
+    WriteChannel.REFLECTION: ChannelPolicy(Provenance.ASSISTED, "assisted"),
+    WriteChannel.TEST_CAPTURE: ChannelPolicy(Provenance.DERIVED, "derived"),
+    WriteChannel.GIT: ChannelPolicy(Provenance.DERIVED, "derived"),
+    WriteChannel.BOOTSTRAP: ChannelPolicy(Provenance.DERIVED, "derived"),
+    WriteChannel.KIT_CONTRACT: ChannelPolicy(Provenance.DERIVED, "kit"),
+}
+CHANNEL_POLICIES: Mapping[WriteChannel, ChannelPolicy] = MappingProxyType(_CHANNEL_POLICIES)
+
+
 # Half-lives are deliberately long: this guards against *stale* memory, not against
 # memory existing. A convention written a year ago is usually still a convention.
 TIER_POLICIES: dict[Provenance, TierPolicy] = {
     Provenance.AUTHORED: TierPolicy(base_trust=1.00, halflife_days=540),
     Provenance.DERIVED: TierPolicy(base_trust=0.90, halflife_days=270),
     Provenance.ASSISTED: TierPolicy(base_trust=0.70, halflife_days=120),
-    Provenance.UNKNOWN: TierPolicy(base_trust=0.60, halflife_days=120),
+    Provenance.UNKNOWN: TierPolicy(
+        base_trust=0.0,
+        halflife_days=120,
+        injectable=False,
+    ),
     # Quarantined: base trust is irrelevant because injectable is False.
     Provenance.EXTERNAL: TierPolicy(base_trust=0.30, halflife_days=60, injectable=False),
 }
@@ -132,6 +183,28 @@ def with_provenance(tags: Optional[Iterable[str]], tier: Provenance | str) -> li
     return kept
 
 
+def parse_write_channel(channel: WriteChannel | str) -> WriteChannel:
+    """Parse a package-owned channel, refusing invented values."""
+    if isinstance(channel, WriteChannel):
+        return channel
+    try:
+        return WriteChannel(str(channel).strip())
+    except (ValueError, AttributeError) as exc:
+        raise ValueError(f"Unknown memory write channel: {channel!r}") from exc
+
+
+def channel_policy(channel: WriteChannel | str) -> ChannelPolicy:
+    """Return the immutable policy for a package-owned write channel."""
+    return CHANNEL_POLICIES[parse_write_channel(channel)]
+
+
+def with_channel_provenance(
+    tags: Optional[Iterable[str]], channel: WriteChannel | str
+) -> list[str]:
+    """Replace payload provenance with the tier owned by ``channel``."""
+    return with_provenance(tags, channel_policy(channel).provenance)
+
+
 def age_days(memory: dict[str, Any], *, now=None) -> float:
     """Age in days, or 0.0 when the timestamp is missing or unparseable."""
     created = memory.get("created_at")
@@ -172,14 +245,18 @@ def assess(
     policy = TIER_POLICIES.get(tier, TIER_POLICIES[Provenance.UNKNOWN])
 
     if not policy.injectable:
+        if tier is Provenance.UNKNOWN:
+            reason = "quarantined: provenance is missing or malformed"
+        else:
+            reason = (
+                "quarantined: originated outside this repository, so it is the channel "
+                "poisoned memories arrive through"
+            )
         return TrustAssessment(
             tier=tier,
             trust=0.0,
             quarantined=True,
-            reason=(
-                "quarantined: originated outside this repository, so it is the channel "
-                "poisoned memories arrive through"
-            ),
+            reason=reason,
         )
 
     days = age_days(memory, now=now)

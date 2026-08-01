@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from visp_memory import Memory, MemoryConfig
+from visp_memory.core.trust import Provenance, provenance_of
 
 
 @pytest.fixture
@@ -44,6 +45,8 @@ def test_compression_records_auditable_token_savings(memory):
 
     semantic = memory._storage.get_memory(semantic_id)
     savings = semantic["metadata"]["token_savings"]
+    assert semantic["metadata"]["write_channel"] == "compression"
+    assert provenance_of(semantic) is Provenance.ASSISTED
 
     # Source material (4 detailed episodes) should cost more than the compact result.
     assert savings["source_tokens"] > savings["result_tokens"]

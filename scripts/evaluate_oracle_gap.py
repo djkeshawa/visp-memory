@@ -51,6 +51,7 @@ from visp_memory.core.injection import (
     gather_candidates,
     select_for_injection,
 )
+from visp_memory.core.trust import WriteChannel
 
 # Characters per token, matching visp_memory.core.injection.
 _CHARS_PER_TOKEN = 4
@@ -271,6 +272,7 @@ def _build_store(tmp: Path) -> tuple[Memory, dict[str, str]]:
             knowledge=seed.content,
             category=seed.category,
             importance=seed.importance,
+            _write_channel=WriteChannel.TEST_CAPTURE,
         )
         id_to_key[memory_id] = seed.key
     return memory, id_to_key

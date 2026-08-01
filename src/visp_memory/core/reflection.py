@@ -8,6 +8,7 @@ from typing import Any
 
 from visp_memory.core.clock import utc_now_iso
 from visp_memory.core.model_router import ModelRouter
+from visp_memory.core.trust import WriteChannel, channel_policy, with_channel_provenance
 
 
 class ReflectionEngine:
@@ -105,6 +106,8 @@ class ReflectionEngine:
             float((memory.get("metadata") or {}).get("confidence", 0.5))
             for memory in evidence
         ]
+        write_channel = WriteChannel.REFLECTION
+        policy = channel_policy(write_channel)
         metadata = {
             "title": title,
             "reflection": True,
@@ -116,6 +119,7 @@ class ReflectionEngine:
             "model": model,
             "derived_at": utc_now_iso(),
             "derived_by": actor_id,
+            "write_channel": write_channel.value,
         }
         memory_id = self.storage.store_memory(
             content,
@@ -124,7 +128,10 @@ class ReflectionEngine:
             repo_id=repo_id,
             source_ids=[memory["id"] for memory in evidence],
             metadata=metadata,
-            tags=["runbook", "reflection"],
+            tags=with_channel_provenance(
+                ["runbook", "reflection"], write_channel
+            ),
+            source=policy.source,
             auto_link=False,
         )
         return {"id": memory_id, "content": content, "metadata": metadata}

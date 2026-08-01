@@ -66,7 +66,7 @@ class TestHonestScoping:
         completed = subprocess.run(
             [sys.executable, str(SCRIPT)], check=True, capture_output=True, text=True
         )
-        # The defence covers externally-sourced poisoning only; an attacker who can
-        # write a trusted provenance label is out of scope and must be said so.
+        # Governed entrypoints replace trusted-label claims, but direct storage mutation
+        # remains outside a non-cryptographic package policy and must be said so.
         assert "does not defend" in completed.stdout
-        assert "trusted provenance label" in completed.stdout
+        assert "raw-storage mutation" in completed.stdout

@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 from visp_memory.capture.git import CaptureManifest, capture_content_hash
 from visp_memory.core.llm import LLMClient, create_llm_client
 from visp_memory.core.memory import Memory
+from visp_memory.core.trust import Provenance, WriteChannel
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +138,7 @@ If nothing relevant is found for a category, return an empty list.
                     why=d.get("why", "Unknown"),
                     alternatives=d.get("alternatives"),
                     repo_id=repo_id,
+                    _write_channel=WriteChannel.CONVERSATION,
                 )
                 output_memory_ids.append(str(memory_id))
 
@@ -146,6 +148,7 @@ If nothing relevant is found for a category, return an empty list.
                     category=learning.get("category", "fact"),
                     importance=learning.get("importance", 0.5),
                     repo_id=repo_id,
+                    _write_channel=WriteChannel.CONVERSATION,
                 )
                 output_memory_ids.append(str(memory_id))
 
@@ -157,6 +160,7 @@ If nothing relevant is found for a category, return an empty list.
                     category="bug_found",
                     context={"cause": b.get("cause"), "fix": b.get("fix")},
                     repo_id=repo_id,
+                    _write_channel=WriteChannel.CONVERSATION,
                 )
                 output_memory_ids.append(str(memory_id))
 
@@ -168,6 +172,8 @@ If nothing relevant is found for a category, return an empty list.
                         "captured_as": "task",
                         "source": source,
                         "status": task.get("status", "todo"),
+                        "provenance": Provenance.ASSISTED.value,
+                        "write_channel": WriteChannel.CONVERSATION.value,
                     },
                 )
                 output_memory_ids.append(str(memory_id))

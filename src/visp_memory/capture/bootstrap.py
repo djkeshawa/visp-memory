@@ -34,14 +34,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from visp_memory.core.trust import Provenance, provenance_tag
+from visp_memory.core.trust import WriteChannel
 
 logger = logging.getLogger(__name__)
-
-# Everything the bootstrap writes is derived from the repository itself, which is the
-# ground truth being described -- not from any external source. Labelling it explicitly
-# means the trust layer can tell it apart from a memory that arrived via a fetched page.
-_DERIVED_TAG = provenance_tag(Provenance.DERIVED)
 
 # Conventional-commit prefixes with no durable recall value. A memory store full of
 # these dilutes every query that follows.
@@ -281,7 +276,8 @@ def bootstrap_project(
                     f"out — check the history before proposing it again."
                 ),
                 severity=0.8,
-                tags=[_DERIVED_TAG, "git"],
+                tags=["git"],
+                _write_channel=WriteChannel.BOOTSTRAP,
             )
             report.memory_ids.append(memory_id)
             report.warnings += 1
@@ -301,7 +297,8 @@ def bootstrap_project(
                     f"for regressions."
                 ),
                 severity=0.7,
-                tags=[_DERIVED_TAG, "git"],
+                tags=["git"],
+                _write_channel=WriteChannel.BOOTSTRAP,
             )
             report.memory_ids.append(memory_id)
             report.warnings += 1
@@ -314,7 +311,10 @@ def bootstrap_project(
         reason = body or subject
         try:
             memory_id = memory.decision(
-                what=subject, why=reason[:1000], tags=[_DERIVED_TAG, "git"]
+                what=subject,
+                why=reason[:1000],
+                tags=["git"],
+                _write_channel=WriteChannel.BOOTSTRAP,
             )
             report.memory_ids.append(memory_id)
             report.decisions += 1

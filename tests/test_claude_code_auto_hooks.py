@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from visp_memory import Memory, MemoryConfig
+from visp_memory.core.trust import WriteChannel
 from visp_memory.hooks.claude_code_auto import (
     PRE_TOOL_USE_MATCHER,
     handle_pre_tool_use,
@@ -55,7 +56,11 @@ class TestSessionStartHandler:
 
 class TestPreToolUseHandler:
     def test_injects_file_warnings_before_read(self, memory):
-        memory.warn("src/auth.py", "Mutex required around token refresh")
+        memory.warn(
+            "src/auth.py",
+            "Mutex required around token refresh",
+            _write_channel=WriteChannel.CLI,
+        )
 
         output = handle_pre_tool_use(
             {
@@ -73,7 +78,11 @@ class TestPreToolUseHandler:
         assert "permissionDecision" not in specific
 
     def test_same_file_injected_once_per_session(self, memory):
-        memory.warn("src/auth.py", "Mutex required around token refresh")
+        memory.warn(
+            "src/auth.py",
+            "Mutex required around token refresh",
+            _write_channel=WriteChannel.CLI,
+        )
         payload = {
             "session_id": "s2",
             "tool_name": "Edit",
@@ -84,7 +93,11 @@ class TestPreToolUseHandler:
         assert handle_pre_tool_use(payload, memory=memory) is None
 
     def test_different_sessions_do_not_share_state(self, memory):
-        memory.warn("src/auth.py", "Mutex required around token refresh")
+        memory.warn(
+            "src/auth.py",
+            "Mutex required around token refresh",
+            _write_channel=WriteChannel.CLI,
+        )
         base = {"tool_name": "Read", "tool_input": {"file_path": "src/auth.py"}}
 
         assert handle_pre_tool_use({**base, "session_id": "a"}, memory=memory) is not None

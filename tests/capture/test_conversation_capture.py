@@ -3,7 +3,9 @@ from unittest.mock import Mock, patch
 import pytest
 
 from visp_memory.capture.conversation import ConversationCapture
+from visp_memory.config import MemoryConfig
 from visp_memory.core.memory import Memory
+from visp_memory.core.trust import Provenance, WriteChannel, provenance_of
 
 
 @pytest.fixture
@@ -56,11 +58,19 @@ def test_conversation_capture_parsing(mock_memory):
 
         # Check calls
         mock_memory.decision.assert_called_with(
-            what="Use Redis", why="Speed", alternatives=["Memcached"], repo_id="test-repo"
+            what="Use Redis",
+            why="Speed",
+            alternatives=["Memcached"],
+            repo_id="test-repo",
+            _write_channel=WriteChannel.CONVERSATION,
         )
 
         mock_memory.learn.assert_called_with(
-            knowledge="Python 3.12 is faster", category="fact", importance=0.8, repo_id="test-repo"
+            knowledge="Python 3.12 is faster",
+            category="fact",
+            importance=0.8,
+            repo_id="test-repo",
+            _write_channel=WriteChannel.CONVERSATION,
         )
 
         mock_memory.record.assert_called()
@@ -70,6 +80,7 @@ def test_conversation_capture_parsing(mock_memory):
         # passed via `context` (episodic.record has no `metadata` kwarg).
         assert "bug_found" == call_args["category"]
         assert call_args["context"]["cause"] == "No lock"
+        assert call_args["_write_channel"] is WriteChannel.CONVERSATION
 
         mock_memory.intent.set_goal.assert_called_with(
             goal="Refactor auth",
@@ -78,6 +89,8 @@ def test_conversation_capture_parsing(mock_memory):
                 "captured_as": "task",
                 "source": "conversation",
                 "status": "todo",
+                "provenance": "assisted",
+                "write_channel": "conversation",
             },
         )
 
@@ -108,6 +121,34 @@ def test_conversation_capture_skips_unchanged_text(mock_memory, tmp_path):
     assert first["capture_manifest"]["status"] == "changed"
     assert second["capture_manifest"]["status"] == "unchanged"
     mock_memory.decision.assert_not_called()
+
+
+def test_conversation_extraction_persists_assisted_provenance(tmp_path):
+    config = MemoryConfig(repo_id="repo-a")
+    config.storage.data_dir = tmp_path / "memory"
+    config.embedding.provider = "noop"
+    config.capture.llm_provider = "openai"
+    config.quality.write_reconciliation = False
+    memory = Memory(config=config)
+    client = Mock()
+    client.completion.return_value = """
+    {
+      "decisions": [{"what": "Use Redis", "why": "Speed"}],
+      "learnings": [{"knowledge": "Rotate tokens"}],
+      "bugs": [{"description": "Race condition"}],
+      "tasks": [{"description": "Refactor auth", "status": "todo"}]
+    }
+    """
+
+    with patch("visp_memory.capture.conversation.create_llm_client", return_value=client):
+        ConversationCapture(memory).parse_text("conversation", dry_run=False)
+
+    stored = memory._storage.list_memories(repo_id="repo-a", limit=100)
+    assert len(stored) == 3
+    assert {provenance_of(item) for item in stored} == {Provenance.ASSISTED}
+    task = memory.intent.get_active(repo_id="repo-a")[0]
+    assert task["context"]["provenance"] == "assisted"
+    assert task["context"]["write_channel"] == "conversation"
 
 
 def test_conversation_capture_config_error(mock_memory):

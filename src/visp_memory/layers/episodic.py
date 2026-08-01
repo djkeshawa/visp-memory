@@ -16,6 +16,12 @@ from typing import Any, Dict, List
 
 from visp_memory.core.clock import utc_now
 from visp_memory.core.storage import BaseStorage
+from visp_memory.core.trust import (
+    WriteChannel,
+    channel_policy,
+    parse_write_channel,
+    with_channel_provenance,
+)
 from visp_memory.layers.base import BaseMemoryLayer
 
 
@@ -63,6 +69,8 @@ class EpisodicMemory(BaseMemoryLayer):
         repo_id: str = None,
         context: Dict[str, Any] = None,
         tags: List[str] = None,
+        *,
+        _write_channel: WriteChannel | str = WriteChannel.LIBRARY,
     ) -> str:
         """
         Record an episodic memory (something that happened).
@@ -85,7 +93,13 @@ class EpisodicMemory(BaseMemoryLayer):
                 context={"files": ["auth/token.py"], "issue": "#142"}
             )
         """
-        metadata = {"recorded_at": utc_now().isoformat(), **(context or {})}
+        write_channel = parse_write_channel(_write_channel)
+        policy = channel_policy(write_channel)
+        metadata = {
+            "recorded_at": utc_now().isoformat(),
+            **(context or {}),
+            "write_channel": write_channel.value,
+        }
 
         return self.storage.store_memory(
             content=content,
@@ -93,8 +107,9 @@ class EpisodicMemory(BaseMemoryLayer):
             repo_id=repo_id,
             category=category.value if isinstance(category, EpisodeCategory) else category,
             importance=importance,
-            tags=tags or [],
+            tags=with_channel_provenance(tags, write_channel),
             metadata=metadata,
+            source=policy.source,
         )
 
     def decision(
@@ -105,6 +120,8 @@ class EpisodicMemory(BaseMemoryLayer):
         importance: float = 0.7,
         repo_id: str = None,
         tags: List[str] = None,
+        *,
+        _write_channel: WriteChannel | str = WriteChannel.LIBRARY,
     ) -> str:
         """
         Record an architecture/design decision.
@@ -137,6 +154,7 @@ class EpisodicMemory(BaseMemoryLayer):
             repo_id=repo_id,
             context={"alternatives": alternatives or []},
             tags=tags,
+            _write_channel=_write_channel,
         )
 
     def bug(
@@ -147,6 +165,9 @@ class EpisodicMemory(BaseMemoryLayer):
         files: List[str] = None,
         importance: float = 0.6,
         repo_id: str = None,
+        tags: List[str] = None,
+        *,
+        _write_channel: WriteChannel | str = WriteChannel.LIBRARY,
     ) -> str:
         """
         Record a bug discovery or fix.
@@ -175,11 +196,18 @@ class EpisodicMemory(BaseMemoryLayer):
             importance=importance,
             repo_id=repo_id,
             context={"files": files or []},
-            tags=["bug"],
+            tags=["bug", *(tags or [])],
+            _write_channel=_write_channel,
         )
 
     def discovery(
-        self, insight: str, context: str = None, importance: float = 0.5, repo_id: str = None
+        self,
+        insight: str,
+        context: str = None,
+        importance: float = 0.5,
+        repo_id: str = None,
+        *,
+        _write_channel: WriteChannel | str = WriteChannel.LIBRARY,
     ) -> str:
         """
         Record a discovery or learning.
@@ -201,6 +229,7 @@ class EpisodicMemory(BaseMemoryLayer):
             category=EpisodeCategory.DISCOVERY,
             importance=importance,
             repo_id=repo_id,
+            _write_channel=_write_channel,
         )
 
     def search(

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from visp_memory.core.clock import utc_now_iso
+from visp_memory.core.trust import WriteChannel, channel_policy, with_channel_provenance
 
 INSTRUCTION_CATEGORY = "instruction"
 INSTRUCTION_TAG = "imported_instruction"
@@ -166,14 +167,15 @@ def ingest_instructions(
                 category=INSTRUCTION_CATEGORY,
                 importance=importance,
                 repo_id=repo_id,
-                tags=[INSTRUCTION_TAG],
+                tags=with_channel_provenance([INSTRUCTION_TAG], WriteChannel.INSTRUCTION),
                 metadata={
                     "source_file": relative,
                     "section": title,
                     "content_hash": section_hash,
                     "ingested_at": utc_now_iso(),
+                    "write_channel": WriteChannel.INSTRUCTION.value,
                 },
-                source="instruction_ingest",
+                source=channel_policy(WriteChannel.INSTRUCTION).source,
             )
             report.stored += 1
             report.memory_ids.append(memory_id)

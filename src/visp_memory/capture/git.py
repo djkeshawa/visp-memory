@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from visp_memory.core.clock import utc_now
-from visp_memory.core.trust import Provenance, provenance_tag
+from visp_memory.core.trust import WriteChannel
 
 try:
     import git
@@ -153,8 +153,6 @@ class CaptureManifest:
 
 # Commits are mined from the repository itself, which is the ground truth being
 # described, so they are `derived` rather than external content.
-_DERIVED_TAG = provenance_tag(Provenance.DERIVED)
-
 
 class CommitType(str, Enum):
     """Conventional commit types mapped to episode categories."""
@@ -265,7 +263,8 @@ class GitCapture:
                 "insertions": commit.stats.total["insertions"],
                 "deletions": commit.stats.total["deletions"],
             },
-            tags=["git", "auto-captured", _DERIVED_TAG],
+            tags=["git", "auto-captured"],
+            _write_channel=WriteChannel.GIT,
         )
         manifest.record("git_commit", commit.hexsha, content_hash, [memory_id], status=status)
 
@@ -318,7 +317,8 @@ class GitCapture:
                 "branch": branch,
                 "commits_merged": len(commits),
             },
-            tags=["git", "merge", "auto-captured", _DERIVED_TAG],
+            tags=["git", "merge", "auto-captured"],
+            _write_channel=WriteChannel.GIT,
         )
         manifest.record("git_merge", merge_commit.hexsha, content_hash, [memory_id], status=status)
 

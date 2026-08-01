@@ -24,6 +24,7 @@ from visp_memory.core.remote_storage import RemoteStorage
 from visp_memory.core.repository import RepositoryManager
 from visp_memory.core.storage import LocalStorage
 from visp_memory.core.team import TeamManager
+from visp_memory.core.trust import WriteChannel
 from visp_memory.layers.episodic import EpisodeCategory, EpisodicMemory
 from visp_memory.layers.intent import IntentMemory, IntentPriority
 from visp_memory.layers.semantic import KnowledgeCategory, SemanticMemory
@@ -192,6 +193,8 @@ class Memory:
         Returns:
             Memory ID
         """
+        write_channel = kwargs.pop("_write_channel", WriteChannel.LIBRARY)
+
         try:
             cat = EpisodeCategory(category)
         except ValueError:
@@ -201,7 +204,13 @@ class Memory:
         if kwargs.get("repo_id") is None and self.config.repo_id:
             kwargs["repo_id"] = self.config.repo_id
 
-        return self.episodic.record(content=event, category=cat, importance=importance, **kwargs)
+        return self.episodic.record(
+            content=event,
+            category=cat,
+            importance=importance,
+            _write_channel=write_channel,
+            **kwargs,
+        )
 
     def decision(
         self,
@@ -210,6 +219,8 @@ class Memory:
         alternatives: List[str] = None,
         repo_id: str = None,
         tags: List[str] = None,
+        *,
+        _write_channel: WriteChannel = WriteChannel.LIBRARY,
     ) -> str:
         """
         Quick method to record a decision.
@@ -219,14 +230,19 @@ class Memory:
             why: Why this choice was made
             alternatives: What alternatives were considered
             repo_id: Optional repository context (defaults to config.repo_id)
-            tags: Tags to attach, including the `provenance:` label used by the
-                trust layer to decide whether this may be auto-injected
+            tags: Organizational tags. Caller-supplied provenance labels are replaced
+                by the package-owned write-channel policy.
 
         Returns:
             Memory ID
         """
         return self.episodic.decision(
-            what, why, alternatives, repo_id=repo_id or self.config.repo_id, tags=tags
+            what,
+            why,
+            alternatives,
+            repo_id=repo_id or self.config.repo_id,
+            tags=tags,
+            _write_channel=_write_channel,
         )
 
     def learn(
@@ -235,6 +251,8 @@ class Memory:
         category: str = "fact",
         importance: float = 0.6,
         repo_id: str = None,
+        *,
+        _write_channel: WriteChannel = WriteChannel.LIBRARY,
         **kwargs,
     ) -> str:
         """
@@ -283,6 +301,7 @@ class Memory:
             category=cat,
             importance=importance,
             repo_id=effective_repo_id,
+            _write_channel=_write_channel,
             **kwargs,
         )
 
@@ -391,6 +410,8 @@ class Memory:
         severity: float = 0.7,
         repo_id: str = None,
         tags: List[str] = None,
+        *,
+        _write_channel: WriteChannel = WriteChannel.LIBRARY,
     ) -> str:
         """
         Quick method to establish a warning.
@@ -400,14 +421,19 @@ class Memory:
             warning: What to watch out for
             severity: How serious
             repo_id: Optional repository context
-            tags: Tags to attach, including the `provenance:` label used by the
-                trust layer to decide whether this may be auto-injected
+            tags: Organizational tags. Caller-supplied provenance labels are replaced
+                by the package-owned write-channel policy.
 
         Returns:
             Memory ID
         """
         return self.semantic.warn(
-            area, warning, severity, repo_id=repo_id or self.config.repo_id, tags=tags
+            area,
+            warning,
+            severity,
+            repo_id=repo_id or self.config.repo_id,
+            tags=tags,
+            _write_channel=_write_channel,
         )
 
     def goal(
@@ -450,15 +476,13 @@ class Memory:
         self,
         *,
         actor_id: str = "library-caller",
-        channel: str = "library",
-        source: str = "external",
+        channel: WriteChannel | str = WriteChannel.LIBRARY,
     ) -> int:
         """Record task completion outcomes without changing intent status."""
         return self.intent.clear_task(
             repo_id=self.config.repo_id,
             actor_id=actor_id,
             channel=channel,
-            source=source,
         )
 
     # =========================================================================

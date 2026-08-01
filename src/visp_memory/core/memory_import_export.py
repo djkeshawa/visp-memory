@@ -8,6 +8,7 @@ from typing import Any, Dict
 
 from visp_memory.capture.git import CaptureManifest
 from visp_memory.core.clock import utc_now
+from visp_memory.core.trust import WriteChannel, channel_policy, with_channel_provenance
 
 REDACTED_SECRET = "***REDACTED***"
 _SENSITIVE_CONFIG_KEYS = {
@@ -146,15 +147,20 @@ def import_memories(memory: Any, path: Path) -> None:
     """Import memories from a JSON export into a Memory instance."""
     data = _validate_import_data(json.loads(Path(path).read_text(encoding="utf-8")))
 
+    import_policy = channel_policy(WriteChannel.IMPORT)
     for mem in data.get("memories", {}).get("episodic", []):
         memory._storage.store_memory(
             content=mem["content"],
             layer="episodic",
             category=mem.get("category", "note"),
             importance=mem.get("importance", 0.5),
-            tags=mem.get("tags", []),
-            metadata=mem.get("metadata", {}),
+            tags=with_channel_provenance(mem.get("tags"), WriteChannel.IMPORT),
+            metadata={
+                **(mem.get("metadata") or {}),
+                "write_channel": WriteChannel.IMPORT.value,
+            },
             repo_id=mem.get("repo_id") or memory.config.repo_id,
+            source=import_policy.source,
         )
 
     for mem in data.get("memories", {}).get("semantic", []):
@@ -163,9 +169,13 @@ def import_memories(memory: Any, path: Path) -> None:
             layer="semantic",
             category=mem.get("category", "fact"),
             importance=mem.get("importance", 0.5),
-            tags=mem.get("tags", []),
-            metadata=mem.get("metadata", {}),
+            tags=with_channel_provenance(mem.get("tags"), WriteChannel.IMPORT),
+            metadata={
+                **(mem.get("metadata") or {}),
+                "write_channel": WriteChannel.IMPORT.value,
+            },
             repo_id=mem.get("repo_id") or memory.config.repo_id,
+            source=import_policy.source,
         )
 
     for intent in data.get("intents", []):

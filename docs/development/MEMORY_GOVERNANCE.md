@@ -60,6 +60,28 @@ are deliberately left untouched, because silently corrupting a legitimate memory
 worse failure than missing one. It is a safety net for accidental capture, **not** a
 guarantee — do not deliberately store secrets and rely on it.
 
+## Provenance Ownership And Quarantine
+
+Write provenance is owned by package adapters. Caller tags, import fields, HTTP request
+fields, and memory content cannot select a more trusted tier. The durable episodic and
+semantic layers replace payload provenance at their write choke points; channel-specific
+capture and import paths apply the same central policy before storage.
+
+| Write path | Provenance | Injection policy |
+|---|---|---|
+| Direct public library call | `unknown` | Quarantined |
+| CLI write command | `authored` | Eligible subject to trust and decay |
+| MCP, conversation capture, compression, or reflection | `assisted` | Eligible subject to trust and decay |
+| Git/test capture, bootstrap, Kit outcome contract | `derived` | Eligible subject to trust and decay |
+| HTTP/REST, import, instruction ingestion | `external` | Quarantined |
+| Missing or malformed provenance | `unknown` | Quarantined |
+
+`_write_channel` is an internal adapter argument, not an end-user provenance API. Only
+package-owned adapters pass it, unknown values are rejected, and the mapping itself is
+read-only. HTTP and import payloads may carry ordinary tags, but self-claimed provenance
+is removed. Raw storage calls that provide no provenance remain unlabelled and therefore
+assess as `unknown`; explicit recall still exposes quarantined records.
+
 ## Provider Boundaries
 
 Embedding and LLM providers are configuration boundaries. `noop` and local

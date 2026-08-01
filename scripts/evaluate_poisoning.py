@@ -42,7 +42,7 @@ from typing import Any
 
 from visp_memory import Memory, MemoryConfig
 from visp_memory.core.injection import InjectionPolicy, gather_candidates, select_for_injection
-from visp_memory.core.trust import Provenance, provenance_tag
+from visp_memory.core.trust import WriteChannel
 
 # MemoryGraft's ratio: 10 poisoned among 100 benign.
 BENIGN_COUNT = 100
@@ -147,7 +147,7 @@ def _build_store(tmp: Path) -> tuple[Memory, set[str], dict[str, str]]:
             knowledge=content,
             category="fact",
             importance=0.6,
-            tags=[provenance_tag(Provenance.DERIVED)],
+            _write_channel=WriteChannel.TEST_CAPTURE,
         )
 
     # The legitimate answer each attack tries to displace, correctly provenanced.
@@ -157,7 +157,7 @@ def _build_store(tmp: Path) -> tuple[Memory, set[str], dict[str, str]]:
             knowledge=lure.safe,
             category="convention",
             importance=0.8,
-            tags=[provenance_tag(Provenance.AUTHORED)],
+            _write_channel=WriteChannel.CLI,
         )
 
     poisoned_ids: set[str] = set()
@@ -181,7 +181,7 @@ def _build_store(tmp: Path) -> tuple[Memory, set[str], dict[str, str]]:
             knowledge=content,
             category="convention",
             importance=0.95,  # crafted records assert their own authority
-            tags=[provenance_tag(Provenance.EXTERNAL)],
+            _write_channel=WriteChannel.IMPORT,
         )
         poisoned_ids.add(memory_id)
 
@@ -306,10 +306,9 @@ def _print_report(report: dict[str, Any]) -> None:
     else:
         print("WARNING: poisoned records survived the defence.")
     print()
-    print("Scope: this validates provenance quarantine against externally-sourced")
-    print("poisoning. It does not defend against an attacker who can write memories")
-    print("with a trusted provenance label -- that requires the signing half of the")
-    print("proposal, which is not implemented.")
+    print("Scope: this validates package-owned provenance assignment and quarantine")
+    print("against externally sourced poisoning. It does not defend direct database or")
+    print("raw-storage mutation; that requires cryptographic attestation beyond this policy.")
 
 
 def main() -> int:

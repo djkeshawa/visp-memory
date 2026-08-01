@@ -2,15 +2,20 @@
 
 from datetime import timedelta
 
+import pytest
+
 from visp_memory.core.clock import utc_now
 from visp_memory.core.injection import InjectionPolicy, select_for_injection
 from visp_memory.core.trust import (
-    DEFAULT_MIN_TRUST,
+    CHANNEL_POLICIES,
     Provenance,
+    WriteChannel,
     assess,
+    channel_policy,
     filter_injectable,
     provenance_of,
     provenance_tag,
+    with_channel_provenance,
     with_provenance,
 )
 
@@ -55,6 +60,30 @@ class TestProvenanceTagRoundTrip:
         assert provenance_tag(Provenance.ASSISTED) not in tags
         assert "git" in tags
 
+    def test_every_declared_tier_is_reachable_from_a_channel_or_unknown_input(self):
+        reachable = {policy.provenance for policy in CHANNEL_POLICIES.values()}
+        reachable.add(provenance_of({"tags": []}))
+
+        assert reachable == set(Provenance)
+
+    def test_channel_policy_mapping_is_read_only(self):
+        with pytest.raises(TypeError):
+            CHANNEL_POLICIES[WriteChannel.CLI] = CHANNEL_POLICIES[WriteChannel.LIBRARY]
+
+    def test_channel_policy_replaces_self_claimed_provenance(self):
+        tags = with_channel_provenance(
+            ["user-tag", provenance_tag(Provenance.AUTHORED)],
+            WriteChannel.MCP,
+        )
+
+        assert provenance_of({"tags": tags}) is Provenance.ASSISTED
+        assert provenance_tag(Provenance.AUTHORED) not in tags
+        assert "user-tag" in tags
+
+    def test_unknown_channel_is_refused(self):
+        with pytest.raises(ValueError, match="Unknown memory write channel"):
+            channel_policy("self-declared-channel")
+
 
 class TestQuarantine:
     def test_external_memory_is_never_injectable(self):
@@ -75,6 +104,22 @@ class TestQuarantine:
         )
         assert result.abstained
         assert result.dropped_quarantined == 1
+
+    @pytest.mark.parametrize(
+        "memory",
+        [
+            {"tags": []},
+            {"tags": ["provenance:not-a-tier"]},
+            {"tags": None, "source": "not-a-tier"},
+        ],
+    )
+    def test_missing_or_malformed_provenance_is_quarantined(self, memory):
+        assessment = assess({"id": "unknown", "content": "data", **memory})
+
+        assert assessment.tier is Provenance.UNKNOWN
+        assert assessment.quarantined is True
+        assert assessment.injectable is False
+        assert "missing or malformed" in assessment.reason
 
 
 class TestTrustDecay:
@@ -106,9 +151,10 @@ class TestTrustDecay:
         ancient = assess(_memory(Provenance.ASSISTED, days_old=2000, access_count=50))
         assert not ancient.injectable
 
-    def test_missing_timestamp_does_not_crash_or_zero_trust(self):
+    def test_missing_timestamp_does_not_bypass_unknown_quarantine(self):
         assessment = assess({"id": "x", "content": "y", "tags": []})
-        assert assessment.trust >= DEFAULT_MIN_TRUST
+        assert assessment.trust == 0.0
+        assert assessment.quarantined is True
 
 
 class TestFiltering:

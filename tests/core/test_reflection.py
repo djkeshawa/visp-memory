@@ -2,6 +2,7 @@ from visp_memory.config import LLMConfig
 from visp_memory.core.model_router import ModelRouter
 from visp_memory.core.reflection import ReflectionEngine
 from visp_memory.core.storage import LocalStorage
+from visp_memory.core.trust import Provenance, provenance_of
 
 
 def test_reflection_proposals_preserve_evidence_lineage(tmp_path):
@@ -31,3 +32,5 @@ def test_reflection_proposals_preserve_evidence_lineage(tmp_path):
     assert memory["category"] == "runbook"
     assert memory["source_ids"] == evidence_ids
     assert memory["metadata"]["lineage"] == evidence_ids
+    assert memory["metadata"]["write_channel"] == "reflection"
+    assert provenance_of(memory) is Provenance.ASSISTED

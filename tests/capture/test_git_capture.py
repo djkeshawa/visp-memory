@@ -1,6 +1,7 @@
 from visp_memory import Memory, MemoryConfig
 from visp_memory.capture.git import CaptureManifest, GitCapture, capture_content_hash
 from visp_memory.capture.tests import TestCapture
+from visp_memory.core.trust import Provenance, provenance_of
 
 
 def test_post_commit_hook_uses_cli_ref_option():
@@ -59,5 +60,8 @@ def test_test_capture_skips_unchanged_report(tmp_path):
     second = capture.on_pytest_session(str(report))
 
     assert len(first) == 1
+    captured = memory._storage.get_memory(first[0])
+    assert provenance_of(captured) is Provenance.DERIVED
+    assert captured["metadata"]["write_channel"] == "test_capture"
     assert second == []
     assert capture.last_manifest_report == {"changed": 0, "unchanged": 1, "stale": 0}
