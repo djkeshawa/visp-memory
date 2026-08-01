@@ -524,6 +524,26 @@ def test_neo4j_double_close_is_safe():
     assert storage.driver is None
 
 
+def test_neo4j_intent_status_mutations_are_ineffective():
+    storage = neo4j_storage_with_delete_count(1)
+
+    assert storage.complete_intent("intent-1") is False
+    assert storage.update_intent("intent-1", status="completed") is False
+    assert storage.driver.session_obj.calls == []
+
+
+def test_neo4j_mixed_intent_update_omits_status():
+    storage = neo4j_storage_with_delete_count(1)
+
+    assert storage.update_intent(
+        "intent-1", description="Updated description", status="completed"
+    ) is True
+
+    query, params = storage.driver.session_obj.calls[0]
+    assert "i.description = $description" in query
+    assert "status" not in params
+
+
 def test_neo4j_search_includes_raw_when_layer_requested():
     storage = neo4j_storage_with_delete_count(0)
     captured = {}

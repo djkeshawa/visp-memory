@@ -172,17 +172,67 @@ class IntentMemory(BaseMemoryLayer):
             context={"files": files or [], "notes": notes},
         )
 
-    def complete(self, intent_id: str) -> bool:
+    def record_outcome(
+        self,
+        intent_id: str,
+        outcome: str,
+        *,
+        actor_id: str = "library-caller",
+        channel: str = "library",
+        source: str = "external",
+    ) -> bool:
         """
-        Mark an intent as completed.
+        Append a provenance-bearing external outcome without changing status.
 
-        Args:
-            intent_id: ID of the intent to complete
+        Intent status belongs to the external workflow authority. This history is
+        informational and deliberately cannot make the recorded outcome current.
+        """
+        intent = next(
+            (
+                item
+                for item in self.storage.get_active_intents(repo_id=None, status="all")
+                if item["id"] == intent_id
+            ),
+            None,
+        )
+        if intent is None:
+            return False
+
+        context = dict(intent.get("context") or {})
+        history = list(context.get("outcome_history") or [])
+        history.append(
+            {
+                "outcome": outcome,
+                "recorded_at": utc_now().isoformat(),
+                "actor_id": actor_id,
+                "provenance": {"source": source, "channel": channel},
+                "authoritative": False,
+                "status_changed": False,
+            }
+        )
+        context["outcome_history"] = history
+        return self.storage.update_intent(intent_id, context=context)
+
+    def complete(
+        self,
+        intent_id: str,
+        *,
+        actor_id: str = "library-caller",
+        channel: str = "library",
+        source: str = "external",
+    ) -> bool:
+        """Record a completion outcome without changing intent status.
 
         Returns:
-            True if successful
+            True if the non-authoritative history entry was stored.
         """
-        return self.storage.complete_intent(intent_id)
+        return self.record_outcome(
+            intent_id,
+            "completed",
+            actor_id=actor_id,
+            channel=channel,
+            source=source,
+        )
 
     def update(
         self,
@@ -191,25 +241,60 @@ class IntentMemory(BaseMemoryLayer):
         priority: IntentPriority | int = None,
         status: str = None,
         context: Dict[str, Any] = None,
+        *,
+        actor_id: str = "library-caller",
+        channel: str = "library",
+        source: str = "external",
     ) -> bool:
-        """Update an intent's mutable fields."""
+        """Update content fields and record any requested status as history."""
         if isinstance(priority, IntentPriority):
             priority = priority.value
-        return self.storage.update_intent(
+        updated = False
+        if description is not None or priority is not None or context is not None:
+            updated = self.storage.update_intent(
+                intent_id,
+                description=description,
+                priority=priority,
+                context=context,
+            )
+        outcome_recorded = False
+        if status is not None:
+            outcome_recorded = self.record_outcome(
+                intent_id,
+                status,
+                actor_id=actor_id,
+                channel=channel,
+                source=source,
+            )
+        return updated or outcome_recorded
+
+    def close(
+        self,
+        intent_id: str,
+        *,
+        actor_id: str = "library-caller",
+        channel: str = "library",
+        source: str = "external",
+    ) -> bool:
+        """Record a close outcome without changing intent status."""
+        return self.record_outcome(
             intent_id,
-            description=description,
-            priority=priority,
-            status=status,
-            context=context,
+            "closed",
+            actor_id=actor_id,
+            channel=channel,
+            source=source,
         )
 
-    def close(self, intent_id: str) -> bool:
-        """Close an intent without marking it completed."""
-        return self.update(intent_id, status="closed")
-
-    def clear_task(self, repo_id: str = None) -> int:
+    def clear_task(
+        self,
+        repo_id: str = None,
+        *,
+        actor_id: str = "library-caller",
+        channel: str = "library",
+        source: str = "external",
+    ) -> int:
         """
-        Clear "WORKING ON" intents (task complete).
+        Record completion outcomes for matching ``WORKING ON`` intents.
 
         Args:
             repo_id: Optional repository filter.
@@ -222,22 +307,40 @@ class IntentMemory(BaseMemoryLayer):
 
         for intent in intents:
             if intent["description"].startswith("WORKING ON:"):
-                self.complete(intent["id"])
-                cleared += 1
+                if self.complete(
+                    intent["id"],
+                    actor_id=actor_id,
+                    channel=channel,
+                    source=source,
+                ):
+                    cleared += 1
 
         return cleared
 
-    def clear_all(self) -> int:
+    def clear_all(
+        self,
+        *,
+        actor_id: str = "library-caller",
+        channel: str = "library",
+        source: str = "external",
+    ) -> int:
         """
-        Clear all active intents/goals.
+        Record completion outcomes for all active intents/goals.
 
         Returns:
             Number of intents cleared
         """
         intents = self.get_active()
+        recorded = 0
         for intent in intents:
-            self.complete(intent["id"])
-        return len(intents)
+            if self.complete(
+                intent["id"],
+                actor_id=actor_id,
+                channel=channel,
+                source=source,
+            ):
+                recorded += 1
+        return recorded
 
     def get_active(self, repo_id: str = None) -> List[Dict[str, Any]]:
         """Get all active intents, ordered by priority."""

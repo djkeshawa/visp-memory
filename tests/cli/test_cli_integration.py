@@ -570,8 +570,8 @@ class TestCLIListCommands:
         # Check that the goal appears in output (case-insensitive)
         assert "implement feature x" in result.output.lower()
 
-    def test_intent_subcommands_update_close_and_list_by_status(self, cli_env):
-        """Intent subcommands should update and close intents by ID."""
+    def test_intent_subcommands_update_and_record_close_outcome(self, cli_env):
+        """Intent close records history but cannot transition workflow state."""
         runner.invoke(app, ["init", "--type", "code"])
         runner.invoke(app, ["goal", "Original feature goal", "--priority", "1"])
 
@@ -593,19 +593,24 @@ class TestCLIListCommands:
             ],
         )
         close = runner.invoke(app, ["intent", "close", intent_id])
-        closed = runner.invoke(app, ["intent", "list", "--status", "closed"])
         active = runner.invoke(app, ["list-intents"])
 
         assert update.exit_code == 0
         assert close.exit_code == 0
-        assert closed.exit_code == 0
         assert active.exit_code == 0
-        assert "Updated feature goal" in closed.output
-        assert "CRITICAL" in closed.output
-        assert "Updated feature goal" not in active.output
+        assert "status unchanged" in close.output.lower()
+        assert "Updated feature goal" in active.output
+        assert "CRITICAL" in active.output
 
-    def test_intent_complete_subcommand(self, cli_env):
-        """Intent complete should mark a specific intent completed."""
+        refreshed = Memory().intent.get_active()[0]
+        outcome = refreshed["context"]["outcome_history"][-1]
+        assert outcome["outcome"] == "closed"
+        assert outcome["provenance"]["source"] == "authored"
+        assert outcome["provenance"]["channel"] == "cli"
+        assert outcome["status_changed"] is False
+
+    def test_intent_complete_subcommand_records_non_authoritative_outcome(self, cli_env):
+        """Intent complete preserves compatibility without changing status."""
         runner.invoke(app, ["init", "--type", "code"])
         runner.invoke(app, ["goal", "Complete this goal"])
 
@@ -615,11 +620,37 @@ class TestCLIListCommands:
         intent_id = memory.intent.get_active()[0]["id"]
 
         complete = runner.invoke(app, ["intent", "complete", intent_id])
-        completed = runner.invoke(app, ["list-intents", "--status", "completed"])
+        active = runner.invoke(app, ["list-intents"])
 
         assert complete.exit_code == 0
-        assert completed.exit_code == 0
-        assert "Complete this goal" in completed.output
+        assert "status unchanged" in complete.output.lower()
+        assert "Complete this goal" in active.output
+
+        refreshed = Memory().intent.get_active()[0]
+        assert refreshed["status"] == "active"
+        outcome = refreshed["context"]["outcome_history"][-1]
+        assert outcome["outcome"] == "completed"
+        assert outcome["provenance"]["source"] == "authored"
+
+    def test_intent_update_status_records_outcome_without_transition(self, cli_env):
+        runner.invoke(app, ["init", "--type", "code"])
+        runner.invoke(app, ["goal", "Keep status external"])
+
+        from visp_memory import Memory
+
+        memory = Memory()
+        intent_id = memory.intent.get_active()[0]["id"]
+
+        updated = runner.invoke(
+            app,
+            ["intent", "update", intent_id, "--status", "completed"],
+        )
+
+        assert updated.exit_code == 0
+        assert "status unchanged" in updated.output.lower()
+        refreshed = Memory().intent.get_active()[0]
+        assert refreshed["id"] == intent_id
+        assert refreshed["context"]["outcome_history"][-1]["provenance"]["channel"] == "cli"
 
     def test_list_commands_use_configured_repo(self, cli_env):
         """List commands should not show records from other repos by default."""
@@ -790,12 +821,13 @@ class TestCLIWorkingAndDone:
         assert "Current task set" in result.output or "Working on" in result.output
 
     def test_done_command(self, cli_env):
-        """Test clearing current task."""
+        """Done records an outcome without clearing current task."""
         runner.invoke(app, ["init", "--type", "code"])
         runner.invoke(app, ["working", "Some task"])
 
         result = runner.invoke(app, ["done"])
         assert result.exit_code == 0
+        assert "status unchanged" in result.output.lower()
 
 
 class TestCLIEdgeCases:

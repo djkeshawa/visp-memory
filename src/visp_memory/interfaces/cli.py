@@ -9,7 +9,7 @@ Usage:
     visp-memory warn "area" "warning"   # Add a warning
     visp-memory goal "..."              # Set a goal
     visp-memory working "task"          # Set current task
-    visp-memory done                    # Clear current task
+    visp-memory done                    # Record task outcome; status is unchanged
     visp-memory recall "query"          # Search memories
     visp-memory context                 # Get full context
     visp-memory brief "task"            # Prepare a cited task brief
@@ -755,10 +755,12 @@ def working(
 
 @app.command()
 def done():
-    """Clear current task (mark as done)."""
+    """Record a task completion outcome without changing intent status."""
     memory = get_memory()
-    cleared = memory.done()
-    console.print(f"[green]Cleared {cleared} task(s)[/green]")
+    recorded = memory.done(actor_id="local-user", channel="cli", source="authored")
+    console.print(
+        f"[green]Recorded {recorded} task outcome(s); intent status unchanged[/green]"
+    )
 
 
 @intent_app.command("list")
@@ -802,7 +804,10 @@ def intent_update(
     status: Optional[str] = typer.Option(
         None,
         "--status",
-        help="Set status: active, completed, or closed",
+        help=(
+            "Deprecated compatibility input: record active, completed, or closed "
+            "as outcome history; stored status is unchanged"
+        ),
     ),
 ):
     """Update an intent by ID."""
@@ -819,36 +824,57 @@ def intent_update(
         description=description,
         priority=priority,
         status=status,
+        actor_id="local-user",
+        channel="cli",
+        source="authored",
     )
     if not updated:
         console.print(f"[red]Intent not found:[/red] {intent_id}")
         raise typer.Exit(code=1)
 
-    console.print(f"[green]Intent updated:[/green] {intent_id}")
+    if status is not None:
+        console.print(
+            f"[green]Intent updated; {status} outcome recorded, status unchanged:[/green] "
+            f"{intent_id}"
+        )
+    else:
+        console.print(f"[green]Intent updated:[/green] {intent_id}")
 
 
 @intent_app.command("complete")
 def intent_complete(intent_id: str = typer.Argument(..., help="Intent ID to complete")):
-    """Mark an intent as completed by ID."""
+    """Record a completion outcome without changing intent status."""
     memory = get_memory()
-    completed = memory.intent.complete(intent_id)
+    completed = memory.intent.complete(
+        intent_id,
+        actor_id="local-user",
+        channel="cli",
+        source="authored",
+    )
     if not completed:
         console.print(f"[red]Intent not found:[/red] {intent_id}")
         raise typer.Exit(code=1)
 
-    console.print(f"[green]Intent completed:[/green] {intent_id}")
+    console.print(
+        f"[green]Completion outcome recorded; intent status unchanged:[/green] {intent_id}"
+    )
 
 
 @intent_app.command("close")
 def intent_close(intent_id: str = typer.Argument(..., help="Intent ID to close")):
-    """Close an intent by ID without marking it completed."""
+    """Record a close outcome without changing intent status."""
     memory = get_memory()
-    closed = memory.intent.close(intent_id)
+    closed = memory.intent.close(
+        intent_id,
+        actor_id="local-user",
+        channel="cli",
+        source="authored",
+    )
     if not closed:
         console.print(f"[red]Intent not found:[/red] {intent_id}")
         raise typer.Exit(code=1)
 
-    console.print(f"[green]Intent closed:[/green] {intent_id}")
+    console.print(f"[green]Close outcome recorded; intent status unchanged:[/green] {intent_id}")
 
 
 # =============================================================================

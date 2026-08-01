@@ -486,8 +486,15 @@ def test_arcadedb_intents_stats_and_project_ids(fake_arcadedb, tmp_path):
     assert stats["active_intents"] == 1
     assert storage.list_project_ids() == ["repo-a", "repo-intent"]
 
-    assert storage.complete_intent(intent_id) is True
-    assert storage.get_active_intents(repo_id="repo-intent") == []
+    assert storage.complete_intent(intent_id) is False
+    assert storage.update_intent(intent_id, status="completed") is False
+    assert storage.update_intent(
+        intent_id,
+        description="Updated ArcadeDB description",
+        status="completed",
+    ) is True
+    assert storage.get_active_intents(repo_id="repo-intent")[0]["id"] == intent_id
+    assert storage.get_active_intents(repo_id="repo-intent")[0]["status"] == "active"
 
 
 def test_arcadedb_repositories_dependencies_users_and_teams(fake_arcadedb, tmp_path):

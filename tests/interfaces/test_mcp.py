@@ -172,8 +172,8 @@ class TestMCPServer:
             pytest.skip("MCP not installed")
 
     @pytest.mark.asyncio
-    async def test_mcp_clear_goals_requires_confirmation(self):
-        """memory_clear_goals must not wipe goals without confirm=true."""
+    async def test_mcp_clear_goals_requires_confirmation_and_preserves_status(self):
+        """memory_clear_goals records assisted history and never clears status."""
         try:
             from visp_memory.interfaces.mcp import MCP_AVAILABLE, handle_tool
 
@@ -190,11 +190,16 @@ class TestMCPServer:
                 guarded = await handle_tool("memory_clear_goals", {}, memory)
                 assert "confirm=true" in guarded
 
-                # The goal must still exist, so confirming now clears exactly one.
-                cleared = await handle_tool(
+                # The goal must still exist, so confirming records exactly one outcome.
+                recorded = await handle_tool(
                     "memory_clear_goals", {"confirm": True}, memory
                 )
-                assert "Cleared 1 goals" in cleared
+                assert "Recorded 1 goal outcomes" in recorded
+                goal = memory.intent.get_active()[0]
+                assert goal["status"] == "active"
+                outcome = goal["context"]["outcome_history"][-1]
+                assert outcome["provenance"]["channel"] == "mcp"
+                assert outcome["status_changed"] is False
         except ImportError:
             pytest.skip("MCP not installed")
 
@@ -306,8 +311,8 @@ class TestMCPServer:
             pytest.skip("MCP not installed")
 
     @pytest.mark.asyncio
-    async def test_mcp_update_close_intent_and_decay_preview(self):
-        """MCP exposes intent lifecycle controls and decay preview."""
+    async def test_mcp_update_records_close_request_and_decay_preview(self):
+        """MCP can update content but only records requested workflow outcomes."""
         try:
             from visp_memory.interfaces.mcp import MCP_AVAILABLE, handle_tool
 
@@ -342,9 +347,16 @@ class TestMCPServer:
                 )
 
                 assert "Intent updated" in update
-                assert "Intent closed" in close
+                assert "status unchanged" in close.lower()
                 assert "likely_to_decay" in preview
                 assert memory_id in preview
+                active = next(
+                    item for item in memory.intent.get_active() if item["id"] == intent_id
+                )
+                outcome = active["context"]["outcome_history"][-1]
+                assert outcome["outcome"] == "closed"
+                assert outcome["provenance"]["channel"] == "mcp"
+                assert outcome["status_changed"] is False
         except ImportError:
             pytest.skip("MCP not installed")
 
@@ -582,8 +594,8 @@ class TestMCPToolProfile:
             pytest.skip("MCP not installed")
 
     @pytest.mark.asyncio
-    async def test_mcp_update_intent_accepts_valid_status(self):
-        """A valid status update goes through on memory_update_intent."""
+    async def test_mcp_update_intent_records_valid_status_without_transition(self):
+        """A valid status becomes assisted history, not workflow state."""
         try:
             from visp_memory.interfaces.mcp import MCP_AVAILABLE, handle_tool
 
@@ -602,11 +614,38 @@ class TestMCPToolProfile:
                     {"intent_id": intent_id, "status": "completed"},
                     memory,
                 )
-                # A completed intent is no longer active.
-                active_ids = {i["id"] for i in memory.intent.get_active()}
+                active = next(i for i in memory.intent.get_active() if i["id"] == intent_id)
 
-            assert "Intent updated" in result
-            assert intent_id not in active_ids
+            assert "status unchanged" in result.lower()
+            assert active["status"] == "active"
+            outcome = active["context"]["outcome_history"][-1]
+            assert outcome["outcome"] == "completed"
+            assert outcome["provenance"]["source"] == "assisted"
+            assert outcome["status_changed"] is False
+        except ImportError:
+            pytest.skip("MCP not installed")
+
+    @pytest.mark.asyncio
+    async def test_mcp_done_records_outcome_without_clearing_task(self):
+        try:
+            from visp_memory.interfaces.mcp import MCP_AVAILABLE, handle_tool
+
+            if not MCP_AVAILABLE:
+                pytest.skip("MCP not installed")
+
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+                config = MemoryConfig()
+                config.storage.data_dir = Path(tmpdir)
+                config.embedding.provider = "noop"
+                memory = Memory(config=config)
+                intent_id = memory.working_on("Keep workflow authority external")
+
+                result = await handle_tool("memory_done", {}, memory)
+                active = next(i for i in memory.intent.get_active() if i["id"] == intent_id)
+
+            assert "status unchanged" in result.lower()
+            assert active["status"] == "active"
+            assert active["context"]["outcome_history"][-1]["provenance"]["channel"] == "mcp"
         except ImportError:
             pytest.skip("MCP not installed")
 

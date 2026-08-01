@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from visp_memory.config import MemoryConfig, ServerConfig
+from visp_memory.config import LLMConfig, MemoryConfig, ServerConfig
 from visp_memory.core.embeddings import NoOpProvider
 from visp_memory.server import app as server_app
 from visp_memory.server.app import (
@@ -12,6 +12,7 @@ from visp_memory.server.app import (
     get_server_embedding_fn,
     get_server_embedding_runtime,
 )
+from visp_memory.server.schemas import IntentEvaluationRequest
 
 
 def test_default_cors_options_are_not_wildcard():
@@ -69,6 +70,19 @@ def test_file_config_env_overrides_include_deployment_settings(monkeypatch):
     assert config.server.allow_anonymous is True
     assert config.server.api_keys == ["key-one", "key-two"]
     assert config.server.jwt_expiry_hours == 12
+
+
+def test_legacy_auto_complete_config_and_env_are_accepted_but_deprecated(monkeypatch):
+    config = MemoryConfig(llm={"intent_auto_complete": True})
+    monkeypatch.setenv("VISP_MEMORY_LLM_INTENT_AUTO_COMPLETE", "false")
+
+    config.apply_env_overrides()
+
+    with pytest.warns(DeprecationWarning, match="ineffective"):
+        assert config.llm.intent_auto_complete is False
+    assert LLMConfig.model_json_schema()["properties"]["intent_auto_complete"]["deprecated"]
+    request_schema = IntentEvaluationRequest.model_json_schema()
+    assert request_schema["properties"]["allow_auto_complete"]["deprecated"]
 
 
 def test_dashboard_file_path_resolves_exported_routes(tmp_path, monkeypatch):

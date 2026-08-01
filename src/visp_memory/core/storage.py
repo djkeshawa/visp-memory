@@ -167,7 +167,7 @@ class BaseStorage(ABC):
 
     @abstractmethod
     def complete_intent(self, intent_id: str) -> bool:
-        """Complete an intent."""
+        """Deprecated compatibility surface; intent status is externally owned."""
         pass
 
     @abstractmethod
@@ -1692,8 +1692,8 @@ class LocalStorage(BaseStorage):
             return [self._row_to_dict(row) for row in cursor.fetchall()]
 
     def complete_intent(self, intent_id: str) -> bool:
-        """Mark an intent as completed."""
-        return self.update_intent(intent_id, status="completed")
+        """Keep the legacy surface without changing externally owned status."""
+        return False
 
     def update_intent(
         self,
@@ -1713,9 +1713,9 @@ class LocalStorage(BaseStorage):
         if priority is not None:
             updates.append("priority = ?")
             params.append(priority)
-        if status is not None:
-            updates.append("status = ?")
-            params.append(status)
+        # Historical status rows remain readable, but Memory never creates a
+        # workflow-state transition. ``status`` stays accepted for one
+        # compatibility cycle and is deliberately ignored.
         if context is not None:
             updates.append("context = ?")
             params.append(self._json_serialize(context))

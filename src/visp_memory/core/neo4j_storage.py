@@ -1041,10 +1041,10 @@ class Neo4jStorage(BaseStorage):
             return [self._intent_node_to_dict(dict(rec["i"])) for rec in result]
 
     def complete_intent(self, intent_id: str) -> bool:
-        return self.update_intent(intent_id, status="completed")
+        return False
 
     def update_intent(self, intent_id: str, **kwargs) -> bool:
-        allowed_fields = {"description", "priority", "status", "context"}
+        allowed_fields = {"description", "priority", "context"}
         params = {"id": intent_id}
         clauses = []
 

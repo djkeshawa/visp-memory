@@ -232,27 +232,6 @@ async def create_memory(
         target_id=mem_id,
         metadata={"layer": memory.layer, "category": memory.category},
     )
-    if memory_repo_id:
-        evaluations = request.app.state.intent_evaluator.evaluate_repository(
-            memory_repo_id,
-            summary=memory.content,
-            memory_ids=[mem_id],
-            actor_id=user.user_id,
-        )
-        for evaluation in evaluations:
-            if evaluation["decision"] == "completed":
-                append_audit_event(
-                    storage,
-                    event_type="intent.evaluation_completed",
-                    actor_id=user.user_id,
-                    repo_id=memory_repo_id,
-                    target_type="intent",
-                    target_id=evaluation["intent_id"],
-                    metadata={
-                        "confidence": evaluation["confidence"],
-                        "memory_id": mem_id,
-                    },
-                )
     return {
         "id": mem_id,
         **memory.model_dump(),

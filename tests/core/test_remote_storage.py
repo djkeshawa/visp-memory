@@ -173,18 +173,18 @@ def test_remote_storage_list_sends_supported_filters_without_none_values():
     }
 
 
-def test_remote_storage_complete_intent_calls_intent_endpoint():
+def test_remote_storage_complete_intent_is_ineffective_without_network_call():
     storage = remote_storage_with(FakeResponse(200, {"status": "completed"}))
 
-    assert storage.complete_intent("intent-1") is True
-    assert storage.session.last_post_url == "http://memory.example/intents/intent-1/complete"
-    assert storage.session.last_post_json is None
+    assert storage.complete_intent("intent-1") is False
+    assert storage.session.last_post_url is None
 
 
-def test_remote_storage_complete_intent_returns_false_for_missing_intent():
+def test_remote_storage_complete_intent_does_not_probe_missing_intent():
     storage = remote_storage_with(FakeResponse(404, {"detail": "Intent not found"}))
 
     assert storage.complete_intent("missing") is False
+    assert storage.session.last_post_url is None
 
 
 def test_remote_storage_update_intent_calls_patch_endpoint():
@@ -193,6 +193,18 @@ def test_remote_storage_update_intent_calls_patch_endpoint():
     assert storage.update_intent("intent-1", description="New goal", priority=3) is True
     assert storage.session.last_patch_url == "http://memory.example/intents/intent-1"
     assert storage.session.last_patch_json == {"description": "New goal", "priority": 3}
+
+
+def test_remote_storage_update_intent_omits_status():
+    storage = remote_storage_with(FakeResponse(200, {"status": "updated"}))
+
+    assert storage.update_intent("intent-1", status="completed") is False
+    assert storage.session.last_patch_url is None
+
+    assert storage.update_intent(
+        "intent-1", description="New goal", status="completed"
+    ) is True
+    assert storage.session.last_patch_json == {"description": "New goal"}
 
 
 def test_remote_storage_related_memories_calls_authenticated_api_contract():

@@ -1,15 +1,15 @@
-"""Evidence-gated automatic intent completion."""
+"""Advisory intent completion-signal evaluation."""
 
 from __future__ import annotations
 
 import re
-from typing import Any, Optional
+from typing import Any
 
 from visp_memory.config import LLMConfig
 from visp_memory.core.clock import utc_now_iso
-from visp_memory.core.model_router import ModelRouter, ModelUnavailableError
+from visp_memory.core.model_router import ModelRouter
 
-EVALUATOR_VERSION = "intent-evidence-v1"
+EVALUATOR_VERSION = "intent-advisory-v2"
 COMPLETION_TERMS = {
     "achieved",
     "complete",
@@ -37,7 +37,7 @@ STOP_WORDS = {
 
 
 class IntentEvaluator:
-    """Evaluate completion signals without allowing model-only closure."""
+    """Evaluate completion signals without changing workflow state."""
 
     def __init__(self, storage, model_router: ModelRouter, config: LLMConfig):
         self.storage = storage
@@ -80,10 +80,10 @@ class IntentEvaluator:
         test_passed = "test" in evidence_terms and bool(
             {"pass", "passed", "passing", "green"} & evidence_terms
         )
-        objective_evidence = bool(evidence_memories) and completion_language
+        completion_signal = bool(evidence_memories) and completion_language
 
         deterministic_confidence = 0.0
-        if objective_evidence:
+        if completion_signal:
             deterministic_confidence += 0.45
         deterministic_confidence += min(0.25, overlap * 0.5)
         if completion_language:
@@ -92,48 +92,10 @@ class IntentEvaluator:
             deterministic_confidence += 0.1
         deterministic_confidence = round(min(1.0, deterministic_confidence), 4)
 
-        model_confidence: Optional[float] = None
-        model_reason: Optional[str] = None
-        provider: Optional[str] = None
-        model: Optional[str] = None
-        if self.model_router.configured and evidence_text:
-            try:
-                model_payload, route = self.model_router.complete_json(
-                    "intent_verification",
-                    (
-                        "Return JSON with keys achieved (boolean), confidence (0 to 1), "
-                        "and reason.\n\nIntent:\n"
-                        f"{intent.get('description', '')}\n\nEvidence:\n{evidence_text[:6000]}"
-                    ),
-                    system_prompt=(
-                        "You verify whether objective evidence proves a software task intent. "
-                        "Be conservative and do not infer completion from plans or promises."
-                    ),
-                )
-                model_confidence = max(0.0, min(float(model_payload.get("confidence", 0)), 1.0))
-                if not model_payload.get("achieved", False):
-                    model_confidence = min(model_confidence, 0.49)
-                model_reason = str(model_payload.get("reason", ""))[:1000]
-                provider = route["provider"]
-                model = route["model"]
-            except (ModelUnavailableError, ValueError, TypeError, KeyError):
-                model_reason = "Model verification was unavailable or malformed"
-
         confidence = deterministic_confidence
-        if model_confidence is not None:
-            confidence = round(max(confidence, 0.65 * model_confidence + 0.35 * confidence), 4)
 
-        threshold = self.config.intent_completion_threshold
         suggestion_threshold = self.config.intent_suggestion_threshold
-        auto_completed = bool(
-            allow_auto_complete
-            and self.config.intent_auto_complete
-            and objective_evidence
-            and confidence >= threshold
-        )
-        if auto_completed:
-            decision = "completed"
-        elif confidence >= suggestion_threshold:
+        if confidence >= suggestion_threshold:
             decision = "suggested"
         else:
             decision = "incomplete"
@@ -142,28 +104,26 @@ class IntentEvaluator:
             "decision": decision,
             "confidence": confidence,
             "deterministic_confidence": deterministic_confidence,
-            "model_confidence": model_confidence,
-            "objective_evidence": objective_evidence,
+            "model_confidence": None,
+            # Kept for response compatibility. A Memory record is never objective
+            # completion evidence for an external workflow authority.
+            "objective_evidence": False,
+            "completion_signal": completion_signal,
             "evidence_memory_ids": [memory["id"] for memory in evidence_memories],
             "summary": summary[:2000],
-            "reason": model_reason,
-            "provider": provider,
-            "model": model,
+            "reason": None,
+            "provider": None,
+            "model": None,
             "evaluator_version": EVALUATOR_VERSION,
             "evaluated_at": utc_now_iso(),
             "evaluated_by": actor_id,
+            "authoritative": False,
+            "status_changed": False,
+            "deprecated_inputs": {
+                "allow_auto_complete": "accepted_but_ineffective",
+                "intent_auto_complete": "accepted_but_ineffective",
+            },
         }
-        context = dict(intent.get("context") or {})
-        history = list(context.get("completion_history") or [])[-19:]
-        history.append(evaluation)
-        context["completion_evaluation"] = evaluation
-        context["completion_history"] = history
-        updates: dict[str, Any] = {"context": context}
-        if auto_completed:
-            updates["status"] = "completed"
-            context["completed_automatically"] = True
-            context["completed_at"] = evaluation["evaluated_at"]
-        self.storage.update_intent(intent["id"], **updates)
         return {"intent_id": intent["id"], **evaluation}
 
     def evaluate_repository(

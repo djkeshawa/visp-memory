@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from visp_memory.config import load_config
 from visp_memory.core.clock import utc_now
+from visp_memory.layers.intent import IntentMemory
 from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import (
     can_access_scoped_record,
@@ -21,6 +22,9 @@ from visp_memory.server.schemas import (
 )
 
 router = APIRouter(prefix="/intents", tags=["intents"])
+STATUS_AUTHORITY_DETAIL = (
+    "Visp Memory does not change intent status; use an external workflow authority"
+)
 
 
 def _as_datetime(value):
@@ -124,6 +128,8 @@ async def update_intent(
     update_data = {k: v for k, v in update.model_dump().items() if v is not None}
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields to update")
+    if "status" in update_data:
+        raise HTTPException(status_code=409, detail=STATUS_AUTHORITY_DETAIL)
 
     if "context" in update_data and not user.is_admin:
         context = dict(update_data["context"] or {})
@@ -161,18 +167,30 @@ async def complete_intent(
     require_scoped_record_access(
         storage, intent, user, scope_field="context", not_found_detail="Intent not found"
     )
-    success = storage.complete_intent(intent_id)
-    if not success:
+    recorded = IntentMemory(storage).complete(
+        intent_id,
+        actor_id=user.user_id,
+        channel="rest",
+        source="external",
+    )
+    if not recorded:
         raise HTTPException(status_code=404, detail="Intent not found")
     append_audit_event(
         storage,
-        event_type="intent.completed",
+        event_type="intent.outcome_recorded",
         actor_id=user.user_id,
         repo_id=intent.get("repo_id"),
         target_type="intent",
         target_id=intent_id,
+        metadata={"outcome": "completed", "authoritative": False, "status_changed": False},
     )
-    return {"status": "completed", "id": intent_id}
+    return {
+        "id": intent_id,
+        "status": intent.get("status", "active"),
+        "authoritative": False,
+        "status_changed": False,
+        "outcome_recorded": True,
+    }
 
 
 @router.post("/{intent_id}/close")
@@ -184,18 +202,30 @@ async def close_intent(
     require_scoped_record_access(
         storage, intent, user, scope_field="context", not_found_detail="Intent not found"
     )
-    success = storage.update_intent(intent_id, status="closed")
-    if not success:
+    recorded = IntentMemory(storage).close(
+        intent_id,
+        actor_id=user.user_id,
+        channel="rest",
+        source="external",
+    )
+    if not recorded:
         raise HTTPException(status_code=404, detail="Intent not found")
     append_audit_event(
         storage,
-        event_type="intent.closed",
+        event_type="intent.outcome_recorded",
         actor_id=user.user_id,
         repo_id=intent.get("repo_id"),
         target_type="intent",
         target_id=intent_id,
+        metadata={"outcome": "closed", "authoritative": False, "status_changed": False},
     )
-    return {"status": "closed", "id": intent_id}
+    return {
+        "id": intent_id,
+        "status": intent.get("status", "active"),
+        "authoritative": False,
+        "status_changed": False,
+        "outcome_recorded": True,
+    }
 
 
 @router.post("/{intent_id}/evaluate")
@@ -218,7 +248,7 @@ async def evaluate_intent(
         summary=payload.summary,
         memory_ids=payload.memory_ids,
         actor_id=user.user_id,
-        allow_auto_complete=payload.allow_auto_complete,
+        allow_auto_complete=payload.model_dump()["allow_auto_complete"],
     )
     append_audit_event(
         storage,
@@ -270,17 +300,28 @@ async def reopen_intent(
         scope_field="context",
         not_found_detail="Intent not found",
     )
-    context = dict(intent.get("context") or {})
-    context.pop("completed_automatically", None)
-    context.pop("completed_at", None)
-    if not storage.update_intent(intent_id, status="active", context=context):
+    recorded = IntentMemory(storage).record_outcome(
+        intent_id,
+        "active",
+        actor_id=user.user_id,
+        channel="rest",
+        source="external",
+    )
+    if not recorded:
         raise HTTPException(status_code=404, detail="Intent not found")
     append_audit_event(
         storage,
-        event_type="intent.reopened",
+        event_type="intent.outcome_recorded",
         actor_id=user.user_id,
         repo_id=intent.get("repo_id"),
         target_type="intent",
         target_id=intent_id,
+        metadata={"outcome": "active", "authoritative": False, "status_changed": False},
     )
-    return {"status": "active", "id": intent_id}
+    return {
+        "id": intent_id,
+        "status": intent.get("status", "active"),
+        "authoritative": False,
+        "status_changed": False,
+        "outcome_recorded": True,
+    }

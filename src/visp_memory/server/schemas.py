@@ -241,7 +241,13 @@ class IntentCreate(BaseModel):
 class IntentUpdate(BaseModel):
     description: Optional[str] = Field(default=None, min_length=1)
     priority: Optional[int] = None
-    status: Optional[IntentStatus] = None
+    status: Optional[IntentStatus] = Field(
+        default=None,
+        deprecated=(
+            "Intent status is externally owned. REST status updates are rejected; "
+            "use an outcome-history surface to retain an external decision."
+        ),
+    )
     context: Optional[Dict[str, Any]] = None
 
 
@@ -255,7 +261,13 @@ class IntentResponse(IntentCreate):
 class IntentEvaluationRequest(BaseModel):
     summary: str = Field(min_length=1, max_length=20000)
     memory_ids: List[str] = Field(default_factory=list)
-    allow_auto_complete: bool = True
+    allow_auto_complete: bool = Field(
+        default=True,
+        deprecated=(
+            "Accepted for one compatibility cycle but ineffective: "
+            "evaluation is advisory and never changes intent status."
+        ),
+    )
 
 
 class DecayPreviewItem(BaseModel):

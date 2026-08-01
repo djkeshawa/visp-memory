@@ -610,7 +610,7 @@ async def test_intents_endpoint(client):
 
 
 @pytest.mark.asyncio
-async def test_intent_is_completed_automatically_from_captured_evidence(client):
+async def test_captured_completion_language_only_produces_advisory_evaluation(client):
     headers = {"X-API-KEY": "test_key"}
     intent = await client.post(
         "/intents",
@@ -628,16 +628,26 @@ async def test_intent_is_completed_automatically_from_captured_evidence(client):
     )
     assert evidence.status_code == 200
 
-    completed = await client.get(
-        "/intents?repo_id=intent-auto&status=completed", headers=headers
+    active = await client.get(
+        "/intents?repo_id=intent-auto&status=active", headers=headers
     )
-    completed_intent = next(item for item in completed.json() if item["id"] == intent.json()["id"])
-    evaluation = completed_intent["context"]["completion_evaluation"]
-    assert evaluation["objective_evidence"] is True
-    assert evaluation["decision"] == "completed"
+    active_intent = next(item for item in active.json() if item["id"] == intent.json()["id"])
+    assert active_intent["status"] == "active"
+    assert "completion_evaluation" not in active_intent["context"]
 
-    reopened = await client.post(f"/intents/{intent.json()['id']}/reopen", headers=headers)
-    assert reopened.status_code == 200
+    evaluation_response = await client.post(
+        f"/intents/{intent.json()['id']}/evaluate",
+        json={
+            "summary": "Implemented secure login and all tests passed",
+            "memory_ids": [evidence.json()["id"]],
+            "allow_auto_complete": True,
+        },
+        headers=headers,
+    )
+    evaluation = evaluation_response.json()
+    assert evaluation["decision"] == "suggested"
+    assert evaluation["authoritative"] is False
+    assert evaluation["status_changed"] is False
 
 
 @pytest.mark.asyncio
@@ -751,7 +761,7 @@ async def test_intents_preserve_repo_id(client):
 
 
 @pytest.mark.asyncio
-async def test_complete_intent_endpoint_marks_intent_inactive(client):
+async def test_complete_intent_endpoint_records_outcome_without_status_change(client):
     headers = {"X-API-KEY": "test_key"}
     payload = {"description": "Ship remote done support", "priority": 2}
 
@@ -761,15 +771,26 @@ async def test_complete_intent_endpoint_marks_intent_inactive(client):
 
     complete_response = await client.post(f"/intents/{intent_id}/complete", headers=headers)
     assert complete_response.status_code == 200
-    assert complete_response.json() == {"status": "completed", "id": intent_id}
+    assert complete_response.json() == {
+        "id": intent_id,
+        "status": "active",
+        "authoritative": False,
+        "status_changed": False,
+        "outcome_recorded": True,
+    }
 
     list_response = await client.get("/intents", headers=headers)
     assert list_response.status_code == 200
-    assert all(intent["id"] != intent_id for intent in list_response.json())
+    refreshed = next(intent for intent in list_response.json() if intent["id"] == intent_id)
+    outcome = refreshed["context"]["outcome_history"][-1]
+    assert outcome["outcome"] == "completed"
+    assert outcome["provenance"]["source"] == "external"
+    assert outcome["provenance"]["channel"] == "rest"
+    assert outcome["status_changed"] is False
 
 
 @pytest.mark.asyncio
-async def test_intents_can_be_listed_updated_and_closed(client):
+async def test_intents_can_be_listed_updated_and_close_is_history_only(client):
     headers = {"X-API-KEY": "test_key"}
     create_response = await client.post(
         "/intents",
@@ -790,19 +811,40 @@ async def test_intents_can_be_listed_updated_and_closed(client):
 
     close_response = await client.post(f"/intents/{intent_id}/close", headers=headers)
     assert close_response.status_code == 200
-    assert close_response.json() == {"status": "closed", "id": intent_id}
+    assert close_response.json()["status"] == "active"
+    assert close_response.json()["status_changed"] is False
 
     active_response = await client.get("/intents?repo_id=repo-a", headers=headers)
     assert active_response.status_code == 200
-    assert all(intent["id"] != intent_id for intent in active_response.json())
+    assert any(intent["id"] == intent_id for intent in active_response.json())
 
     closed_response = await client.get(
         "/intents?repo_id=repo-a&status=closed",
         headers=headers,
     )
     assert closed_response.status_code == 200
-    assert closed_response.json()[0]["id"] == intent_id
-    assert closed_response.json()[0]["status"] == "closed"
+    assert closed_response.json() == []
+
+
+@pytest.mark.asyncio
+async def test_generic_intent_status_update_is_rejected(client):
+    headers = {"X-API-KEY": "test_key"}
+    created = await client.post(
+        "/intents",
+        json={"description": "Keep status external", "repo_id": "repo-a"},
+        headers=headers,
+    )
+
+    response = await client.patch(
+        f"/intents/{created.json()['id']}",
+        json={"status": "completed"},
+        headers=headers,
+    )
+
+    assert response.status_code == 409
+    assert "does not change intent status" in response.json()["detail"]
+    active = await client.get("/intents?repo_id=repo-a", headers=headers)
+    assert any(item["id"] == created.json()["id"] for item in active.json())
 
 
 @pytest.mark.asyncio
@@ -813,6 +855,37 @@ async def test_complete_intent_endpoint_returns_404_for_missing_intent(client):
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Intent not found"
+
+
+@pytest.mark.asyncio
+async def test_reopen_endpoint_preserves_historical_status_and_records_history(client):
+    headers = {"X-API-KEY": "test_key"}
+    created = await client.post(
+        "/intents",
+        json={"description": "Historical completed goal", "repo_id": "repo-a"},
+        headers=headers,
+    )
+    intent_id = created.json()["id"]
+    with app.state.storage._get_db() as conn:
+        conn.execute("UPDATE intents SET status = 'completed' WHERE id = ?", (intent_id,))
+        conn.commit()
+
+    reopened = await client.post(f"/intents/{intent_id}/reopen", headers=headers)
+
+    assert reopened.status_code == 200
+    assert reopened.json()["status"] == "completed"
+    assert reopened.json()["status_changed"] is False
+    historical = await client.get(
+        "/intents?repo_id=repo-a&status=completed",
+        headers=headers,
+    )
+    stored = next(item for item in historical.json() if item["id"] == intent_id)
+    assert stored["status"] == "completed"
+    outcome = stored["context"]["outcome_history"][-1]
+    assert outcome["outcome"] == "active"
+    assert outcome["provenance"]["source"] == "external"
+    assert outcome["provenance"]["channel"] == "rest"
+    assert outcome["status_changed"] is False
 
 
 @pytest.mark.asyncio

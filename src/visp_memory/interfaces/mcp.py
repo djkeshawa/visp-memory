@@ -762,12 +762,18 @@ def create_mcp_server() -> "Server":
             ),
             Tool(
                 name="memory_done",
-                description="Clear current task (mark as done).",
+                description=(
+                    "Record an assisted task-completion outcome. "
+                    "Intent status remains externally owned and unchanged."
+                ),
                 inputSchema={"type": "object", "properties": {}},
             ),
             Tool(
                 name="memory_update_intent",
-                description="Update an existing goal or intent by ID.",
+                description=(
+                    "Update goal content by ID. Status inputs are recorded as "
+                    "non-authoritative outcome history and do not change status."
+                ),
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -925,14 +931,17 @@ def create_mcp_server() -> "Server":
             ),
             Tool(
                 name="memory_clear_goals",
-                description="Clear all active goals. Destructive: requires confirm=true.",
+                description=(
+                    "Record assisted completion outcomes for active goals without "
+                    "changing their status. Requires confirm=true."
+                ),
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "confirm": {
                             "type": "boolean",
                             "default": False,
-                            "description": "Must be true to clear all active goals",
+                            "description": "Must be true to record outcomes for active goals",
                         },
                     },
                 },
@@ -1828,8 +1837,8 @@ def _handle_intent(name: str, args: dict[str, Any], memory: Memory) -> str:
         return f"Working on: {args['task']}"
 
     elif name == "memory_done":
-        cleared = memory.done()
-        return f"Cleared {cleared} task(s)"
+        recorded = memory.done(actor_id="mcp-client", channel="mcp", source="assisted")
+        return f"Recorded {recorded} task outcome(s); intent status unchanged"
 
     elif name == "memory_update_intent":
         status = args.get("status")
@@ -1845,16 +1854,32 @@ def _handle_intent(name: str, args: dict[str, Any], memory: Memory) -> str:
         }
         if not update_data:
             return "No intent fields provided to update."
-        updated = memory.intent.update(args["intent_id"], **update_data)
+        updated = memory.intent.update(
+            args["intent_id"],
+            **update_data,
+            actor_id="mcp-client",
+            channel="mcp",
+            source="assisted",
+        )
         if not updated:
             return f"Intent not found: {args['intent_id']}"
+        if status is not None:
+            return (
+                f"Intent updated; {status} outcome recorded, status unchanged: "
+                f"{args['intent_id']}"
+            )
         return f"Intent updated: {args['intent_id']}"
 
     elif name == "memory_close_intent":
-        closed = memory.intent.close(args["intent_id"])
+        closed = memory.intent.close(
+            args["intent_id"],
+            actor_id="mcp-client",
+            channel="mcp",
+            source="assisted",
+        )
         if not closed:
             return f"Intent not found: {args['intent_id']}"
-        return f"Intent closed: {args['intent_id']}"
+        return f"Close outcome recorded, status unchanged: {args['intent_id']}"
 
     return f"Unknown intent tool: {name}"
 
@@ -2014,9 +2039,13 @@ def _handle_maintenance(name: str, args: dict[str, Any], memory: Memory) -> str:
 
     elif name == "memory_clear_goals":
         if not args.get("confirm", False):
-            return "Set confirm=true to clear all active goals."
-        cleared = memory.intent.clear_all()
-        return f"Cleared {cleared} goals."
+            return "Set confirm=true to record outcomes for all active goals."
+        recorded = memory.intent.clear_all(
+            actor_id="mcp-client",
+            channel="mcp",
+            source="assisted",
+        )
+        return f"Recorded {recorded} goal outcomes; intent status unchanged."
 
     return f"Unknown maintenance tool: {name}"
 

@@ -601,16 +601,22 @@ class TestIntentMemory:
         assert current is not None
         assert "Token refresh" in current["description"]
 
-    def test_done_clears_task(self, memory):
-        """Done clears current task."""
-        memory.working_on("Some task")
-        assert memory.intent.get_working_on() is not None
+    def test_done_records_outcome_without_clearing_task(self, memory):
+        """Done is a compatibility surface, not a workflow authority."""
+        intent_id = memory.working_on("Some task")
 
-        memory.done()
-        assert memory.intent.get_working_on() is None
+        assert memory.done() == 1
 
-    def test_done_only_clears_configured_repo_task(self, tmp_path):
-        """Done should not complete current tasks from other repositories."""
+        current = memory.intent.get_working_on()
+        assert current["id"] == intent_id
+        outcome = current["context"]["outcome_history"][-1]
+        assert outcome["outcome"] == "completed"
+        assert outcome["provenance"]["channel"] == "library"
+        assert outcome["authoritative"] is False
+        assert outcome["status_changed"] is False
+
+    def test_done_only_records_configured_repo_task_outcome(self, tmp_path):
+        """Done records history only for current tasks in the configured repository."""
         config = MemoryConfig(project_name="done-scope-test", repo_id="repo-a")
         config.storage.data_dir = tmp_path / "data"
         config.embedding.provider = "noop"
@@ -621,10 +627,100 @@ class TestIntentMemory:
 
         assert memory.done() == 1
 
-        assert memory.intent.get_working_on(repo_id="repo-a") is None
+        repo_a_task = memory.intent.get_working_on(repo_id="repo-a")
+        assert repo_a_task is not None
+        assert repo_a_task["status"] == "active"
+        assert len(repo_a_task["context"]["outcome_history"]) == 1
         repo_b_task = memory.intent.get_working_on(repo_id="repo-b")
         assert repo_b_task is not None
         assert repo_b_task["description"] == "WORKING ON: Repo B task"
+        assert "outcome_history" not in repo_b_task["context"]
+
+    def test_intent_status_update_records_history_without_transition(self, memory):
+        intent_id = memory.goal("Ship the release")
+
+        assert memory.intent.update(intent_id, status="completed") is True
+
+        intent = next(item for item in memory.intent.get_active() if item["id"] == intent_id)
+        assert intent["status"] == "active"
+        outcome = intent["context"]["outcome_history"][-1]
+        assert outcome["outcome"] == "completed"
+        assert outcome["status_changed"] is False
+
+    def test_complete_close_and_clear_all_are_history_only(self, memory):
+        first_id = memory.goal("First goal")
+        second_id = memory.goal("Second goal")
+
+        assert memory.intent.complete(first_id) is True
+        assert memory.intent.close(second_id) is True
+        assert memory.intent.clear_all() == 2
+
+        active = {item["id"]: item for item in memory.intent.get_active()}
+        assert {first_id, second_id} <= set(active)
+        assert [entry["outcome"] for entry in active[first_id]["context"]["outcome_history"]] == [
+            "completed",
+            "completed",
+        ]
+        assert [entry["outcome"] for entry in active[second_id]["context"]["outcome_history"]] == [
+            "closed",
+            "completed",
+        ]
+
+    def test_local_storage_rejects_direct_status_mutations(self, memory):
+        intent_id = memory.goal("Preserve backend boundary")
+
+        assert memory._storage.complete_intent(intent_id) is False
+        assert memory._storage.update_intent(intent_id, status="completed") is False
+
+        intent = next(item for item in memory.intent.get_active() if item["id"] == intent_id)
+        assert intent["status"] == "active"
+
+    def test_local_storage_mixed_update_ignores_status(self, memory):
+        intent_id = memory.goal("Update description only")
+
+        assert memory._storage.update_intent(
+            intent_id,
+            description="Updated description",
+            status="completed",
+        ) is True
+
+        intent = next(item for item in memory.intent.get_active() if item["id"] == intent_id)
+        assert intent["description"] == "Updated description"
+        assert intent["status"] == "active"
+
+    def test_external_kit_outcome_appends_provenance_history_only(self, memory):
+        intent_id = memory.goal("Wait for Kit verdict")
+
+        recorded = memory.intent.record_outcome(
+            intent_id,
+            "completed",
+            actor_id="kit-run-42",
+            channel="kit-contract",
+            source="external",
+        )
+
+        assert recorded is True
+        intent = next(item for item in memory.intent.get_active() if item["id"] == intent_id)
+        assert intent["status"] == "active"
+        outcome = intent["context"]["outcome_history"][-1]
+        assert outcome["actor_id"] == "kit-run-42"
+        assert outcome["provenance"] == {
+            "source": "external",
+            "channel": "kit-contract",
+        }
+        assert outcome["authoritative"] is False
+        assert outcome["status_changed"] is False
+
+    def test_historical_completed_intent_is_preserved(self, memory):
+        intent_id = memory.goal("Historical completed intent")
+        with memory._storage._get_db() as conn:
+            conn.execute("UPDATE intents SET status = 'completed' WHERE id = ?", (intent_id,))
+            conn.commit()
+
+        assert memory._storage.complete_intent(intent_id) is False
+        historical = memory._storage.get_active_intents(status="completed")
+        assert historical[0]["id"] == intent_id
+        assert historical[0]["status"] == "completed"
 
 
 class TestSearch:

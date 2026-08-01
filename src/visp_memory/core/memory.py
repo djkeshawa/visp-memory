@@ -446,9 +446,20 @@ class Memory:
         """
         return self.intent.working_on(task, files, repo_id=repo_id or self.config.repo_id)
 
-    def done(self) -> int:
-        """Clear current task (mark as done)."""
-        return self.intent.clear_task(repo_id=self.config.repo_id)
+    def done(
+        self,
+        *,
+        actor_id: str = "library-caller",
+        channel: str = "library",
+        source: str = "external",
+    ) -> int:
+        """Record task completion outcomes without changing intent status."""
+        return self.intent.clear_task(
+            repo_id=self.config.repo_id,
+            actor_id=actor_id,
+            channel=channel,
+            source=source,
+        )
 
     # =========================================================================
     # Search and Recall

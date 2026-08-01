@@ -770,12 +770,12 @@ class ArcadeDbStorage(BaseStorage):
         return intents
 
     def complete_intent(self, intent_id: str) -> bool:
-        return self.update_intent(intent_id, status="completed")
+        return False
 
     def update_intent(self, intent_id: str, **kwargs) -> bool:
         updates = {
             key: kwargs[key]
-            for key in ("description", "priority", "status", "context")
+            for key in ("description", "priority", "context")
             if key in kwargs and kwargs[key] is not None
         }
         if updates:

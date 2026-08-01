@@ -289,19 +289,16 @@ class RemoteStorage(BaseStorage):
             raise self._write_error("list intents", e) from e
 
     def complete_intent(self, intent_id: str) -> bool:
-        """Mark intent as complete."""
-        try:
-            response = self.session.post(f"{self.server_url}/intents/{intent_id}/complete")
-            if response.status_code == 404:
-                return False
-            response.raise_for_status()
-            return True
-        except requests.RequestException as e:
-            raise self._write_error("complete intent", e) from e
+        """Keep the legacy surface without requesting a status transition."""
+        return False
 
     def update_intent(self, intent_id: str, **kwargs) -> bool:
         """Update an intent on the remote server."""
-        payload = {key: value for key, value in kwargs.items() if value is not None}
+        payload = {
+            key: value
+            for key, value in kwargs.items()
+            if key != "status" and value is not None
+        }
         if not payload:
             return False
         try:

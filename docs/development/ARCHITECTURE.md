@@ -173,6 +173,12 @@ Intent memories have highest priority and are always included in context generat
 - `set_focus()` - Set current focus
 - `working_on()` - Mark active task
 - `add_constraint()` - Add limitation
+- `record_outcome()` - Append provenance-bearing external outcome history without
+  changing workflow status
+
+Intent status is externally owned. Completion, close, reopen, and `done`
+compatibility surfaces record non-authoritative history only; they do not create
+an intent-status transition.
 
 **Example:**
 ```python

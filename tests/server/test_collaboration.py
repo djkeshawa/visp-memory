@@ -546,7 +546,10 @@ async def test_non_admin_intent_routes_are_scoped_to_current_team(client):
 
         complete_own = await client.post(f"/intents/{alpha_intent_id}/complete")
         assert complete_own.status_code == 200
-        assert complete_own.json() == {"status": "completed", "id": alpha_intent_id}
+        assert complete_own.json()["status"] == "active"
+        assert complete_own.json()["status_changed"] is False
+        own_active = app.state.storage.get_active_intents(repo_id="repo-alpha")
+        assert any(intent["id"] == alpha_intent_id for intent in own_active)
     finally:
         clear_current_user()
 

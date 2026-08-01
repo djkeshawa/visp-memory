@@ -107,7 +107,13 @@ class LLMConfig(BaseSettings):
     base_url: Optional[str] = Field(default=None, validation_alias="VISP_MEMORY_LLM_BASE_URL")
     timeout_seconds: float = Field(default=30.0, ge=1.0, le=300.0)
     max_output_tokens: int = Field(default=800, ge=64, le=16000)
-    intent_auto_complete: bool = True
+    intent_auto_complete: bool = Field(
+        default=True,
+        deprecated=(
+            "Accepted for one compatibility cycle but ineffective: "
+            "Visp Memory does not change intent status."
+        ),
+    )
     intent_completion_threshold: float = Field(default=0.9, ge=0.5, le=1.0)
     intent_suggestion_threshold: float = Field(default=0.65, ge=0.0, le=1.0)
 
