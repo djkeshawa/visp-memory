@@ -104,6 +104,7 @@ async def test_cross_repo_context(client):
             "content": "Lib API Deprecated",
             "repo_id": "lib-repo",
             "category": "warning",
+            "tags": ["warning"],
         },
         headers=headers,
     )
