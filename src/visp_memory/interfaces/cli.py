@@ -2846,6 +2846,129 @@ def status():
     console.print(layout)
 
 
+# =============================================================================
+# The machine contract (P10-US-07, contract version 1.0)
+# =============================================================================
+#
+# `visp-memory contract …` is the versioned, machine-readable surface the Visp
+# coordinator (visp-hyper-agent >= 0.7.0) speaks. It is deliberately tiny:
+# recall (read) and propose (a quarantined proposal through the reviewed
+# lifecycle — never a direct durable write). The envelope is versioned so a
+# consumer can detect an incompatible Memory instead of misreading it.
+
+MEMORY_CONTRACT_VERSION = "1.0"
+
+contract_app = typer.Typer(help="Versioned machine contract for coordinators.")
+app.add_typer(contract_app, name="contract")
+
+
+def _contract_print(payload: dict) -> None:
+    import json as _json
+
+    print(_json.dumps(payload, ensure_ascii=False))
+
+
+def _contract_failure(reason: str) -> dict:
+    return {
+        "contractVersion": MEMORY_CONTRACT_VERSION,
+        "success": False,
+        "reason": reason,
+    }
+
+
+@contract_app.command("recall")
+def contract_recall(
+    query: str = typer.Argument(..., help="What to look for."),
+    repo: str = typer.Option(None, "--repo", help="Repository scope."),
+    endpoint: str = typer.Option(
+        None, "--endpoint", help="Accepted for forward compatibility; local config wins."
+    ),
+    json_output: bool = typer.Option(True, "--json", help="Machine-readable output (always on)."),
+):
+    """Retrieve relevant memories as a contract-1.0 envelope."""
+    del endpoint, json_output
+    try:
+        memory = get_memory()
+        results = memory.recall(query, repo_id=_repo_scope(memory, repo), limit=10)
+    except Exception as exc:  # noqa: BLE001 - the contract reports, never crashes
+        _contract_print(_contract_failure(f"recall failed: {exc}"))
+        raise typer.Exit(1)
+
+    entries = []
+    for item in results:
+        epistemic = item.get("epistemic_status")
+        caveat = None
+        if epistemic in {"hypothesized", "contradicted", "stale"}:
+            caveat = f"epistemic status: {epistemic}"
+        entries.append(
+            {
+                "kind": str(
+                    item.get("belief_type")
+                    or item.get("category")
+                    or item.get("layer")
+                    or "memory"
+                ),
+                "content": str(item.get("content", "")),
+                **({"caveat": caveat} if caveat else {}),
+            }
+        )
+    _contract_print(
+        {
+            "contractVersion": MEMORY_CONTRACT_VERSION,
+            "success": True,
+            "entries": entries,
+        }
+    )
+
+
+@contract_app.command("propose")
+def contract_propose(
+    content: str = typer.Argument(..., help="What should be remembered."),
+    repo: str = typer.Option(None, "--repo", help="Repository scope."),
+    endpoint: str = typer.Option(
+        None, "--endpoint", help="Accepted for forward compatibility; local config wins."
+    ),
+    json_output: bool = typer.Option(True, "--json", help="Machine-readable output (always on)."),
+):
+    """Record a QUARANTINED proposal — durable only after the reviewed lifecycle accepts it."""
+    del endpoint, json_output
+    try:
+        memory = get_memory()
+        memory_id = memory.record(
+            content,
+            category="note",
+            importance=0.5,
+            repo_id=_repo_scope(memory, repo),
+        )
+        # The proposal enters the reviewed lifecycle, not active service:
+        # recall serves status="active" only, so a quarantined row is invisible
+        # until a human resolution activates it.
+        quarantined = memory._storage.update_memory(
+            memory_id, status="quarantined", epistemic_status="hypothesized"
+        )
+        if not quarantined:
+            _contract_print(
+                _contract_failure(
+                    "the proposal was stored but could not be quarantined; it was removed"
+                )
+            )
+            memory._storage.delete_memory(memory_id)
+            raise typer.Exit(1)
+    except typer.Exit:
+        raise
+    except Exception as exc:  # noqa: BLE001 - the contract reports, never crashes
+        _contract_print(_contract_failure(f"propose failed: {exc}"))
+        raise typer.Exit(1)
+
+    _contract_print(
+        {
+            "contractVersion": MEMORY_CONTRACT_VERSION,
+            "success": True,
+            "proposalId": memory_id,
+        }
+    )
+
+
 def main():
     """Entry point."""
     app()

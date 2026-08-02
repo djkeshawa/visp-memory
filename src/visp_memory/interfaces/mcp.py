@@ -130,7 +130,21 @@ CORE_TOOL_NAMES = frozenset(
     }
 )
 
-VALID_MCP_PROFILES = frozenset({"core", "full"})
+# The read-only subset of the core loop: retrieval and context only. None of
+# these mutate memory state (P10-US-07). Feedback logging is excluded — it
+# writes reinforcement events.
+READONLY_TOOL_NAMES = frozenset(
+    {
+        "memory_prepare_task",
+        "memory_context",
+        "memory_recall",
+        "memory_trace",
+        "memory_file_context",
+        "memory_find_error",
+    }
+)
+
+VALID_MCP_PROFILES = frozenset({"core", "full", "readonly"})
 
 
 def _resolve_tool_profile() -> str:
@@ -139,11 +153,21 @@ def _resolve_tool_profile() -> str:
     return profile if profile in VALID_MCP_PROFILES else "core"
 
 
+def _profile_tool_names(profile: str, all_names: frozenset[str]) -> frozenset[str]:
+    """The tool names a profile permits — used by BOTH advertisement and dispatch."""
+    if profile == "full":
+        return all_names
+    if profile == "readonly":
+        return READONLY_TOOL_NAMES
+    return CORE_TOOL_NAMES
+
+
 def _filter_tools_by_profile(tools: list["Tool"], profile: str) -> list["Tool"]:
     """Restrict advertised tools to the active profile."""
     if profile == "full":
         return tools
-    return [tool for tool in tools if tool.name in CORE_TOOL_NAMES]
+    allowed = _profile_tool_names(profile, frozenset(tool.name for tool in tools))
+    return [tool for tool in tools if tool.name in allowed]
 
 
 def create_mcp_server() -> "Server":
@@ -1038,6 +1062,26 @@ def create_mcp_server() -> "Server":
     @server.call_tool()
     async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         """Handle tool calls."""
+        # P10-US-07: the profile is enforced at DISPATCH, not only in
+        # advertisement. Before this check the filter ran in list_tools while
+        # call_tool dispatched by name with no profile check — a restriction
+        # that only rearranged the menu. A tool outside the active profile is
+        # now a structured refusal, never a silent execution.
+        profile = _resolve_tool_profile()
+        if profile != "full":
+            allowed = _profile_tool_names(profile, frozenset())
+            if name not in allowed:
+                refusal = {
+                    "success": False,
+                    "error": "tool_not_in_profile",
+                    "profile": profile,
+                    "tool": name,
+                    "reason": (
+                        f"The active MCP profile '{profile}' does not permit {name}. "
+                        "Set VISP_MEMORY_MCP_PROFILE=full to expose the full surface."
+                    ),
+                }
+                return [TextContent(type="text", text=json.dumps(refusal))]
         try:
             if name == "memory_model_task":
                 from visp_memory.core.model_router import ModelRouter
