@@ -19,7 +19,17 @@ from visp_memory.core.tokens import estimate_tokens
 from visp_memory.core.trust import TrustFilterResult, filter_unsolicited
 
 SECTION_ORDER = ("warnings", "decisions", "knowledge", "history")
+# Both sets carry the governed belief type first and keep the pre-v4 words after
+# it. A brief is a read over whatever is already stored, so dropping the legacy
+# words would silently unfile every memory written before the migration — the
+# same failure the writers were careful to avoid.
+#
+# `negative` and `preference` are broader than the words they replace, so a
+# belief that would once have been unfiled now lands in a section. That is the
+# intended direction: a warning shown under a general heading is recoverable, a
+# warning shown nowhere is not.
 WARNING_CATEGORIES = {
+    "negative",
     "fragile_area",
     "gotcha",
     "known_issue",
@@ -28,6 +38,7 @@ WARNING_CATEGORIES = {
     "error",
 }
 DECISION_CATEGORIES = {
+    "preference",
     "architecture_decision",
     "decision",
     "convention",
