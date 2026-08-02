@@ -557,7 +557,7 @@ def test_local_storage_auto_links_similar_memories_in_same_repo(tmp_path):
 def test_memory_recall_filters_unrelated_queries_by_default(memory):
     memory.learn(
         "OpenRouter cloud embeddings power project recall",
-        category="embeddings",
+        category="fact",
         importance=0.9,
     )
 

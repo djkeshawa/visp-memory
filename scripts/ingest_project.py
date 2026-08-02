@@ -30,7 +30,7 @@ def ingest_project(root_dir: str):
             # Directory -> Semantic Memory
             mem_id = memory.learn(
                 knowledge=f"Directory structure: {rel_path}",
-                category="code_structure",
+                category="fact",
                 importance=0.3,
             )
             file_ids[str(path)] = mem_id
@@ -51,7 +51,7 @@ def ingest_project(root_dir: str):
                 if defs:
                     summary += f" Defines: {', '.join(defs[:5])}..."
 
-                mem_id = memory.learn(knowledge=summary, category="code_file", importance=0.5)
+                mem_id = memory.learn(knowledge=summary, category="fact", importance=0.5)
                 file_ids[str(path)] = mem_id
                 print(f"File: {rel_path}")
 
