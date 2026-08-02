@@ -142,11 +142,23 @@ def test_merge_unions_tags_persisted_via_local_storage(tmp_path):
 
     storage = LocalStorage(tmp_path)
 
+    # A semantic belief needs at least one evidence record (P11-MEM-07). This test
+    # is about merging tags, so the evidence is setup rather than the subject.
     primary_id = storage.store_memory(
-        "Primary fact", layer="semantic", tags=["auth", "backend"], auto_link=False
+        "Primary fact",
+        layer="semantic",
+        repo_id="repo-a",
+        tags=["auth", "backend"],
+        auto_link=False,
+        evidence_ids=[storage.store_evidence("Primary fact", repo_id="repo-a")],
     )
     dup_id = storage.store_memory(
-        "Duplicate fact", layer="semantic", tags=["backend", "security"], auto_link=False
+        "Duplicate fact",
+        layer="semantic",
+        repo_id="repo-a",
+        tags=["backend", "security"],
+        auto_link=False,
+        evidence_ids=[storage.store_evidence("Duplicate fact", repo_id="repo-a")],
     )
 
     result = Deduplicator(storage).merge_memories([primary_id, dup_id])
