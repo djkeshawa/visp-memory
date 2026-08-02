@@ -30,7 +30,7 @@ def test_conversation_capture_parsing(mock_memory):
         {"what": "Use Redis", "why": "Speed", "alternatives": ["Memcached"]}
       ],
       "learnings": [
-        {"knowledge": "Python 3.12 is faster", "category": "procedure", "importance": 0.8}
+        {"knowledge": "Python 3.12 is faster", "category": "pattern", "importance": 0.8}
       ],
       "bugs": [
         {"description": "Race condition", "cause": "No lock", "fix": "Added mutex"}
