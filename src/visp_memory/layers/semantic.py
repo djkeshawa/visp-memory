@@ -320,26 +320,35 @@ class SemanticMemory(BaseMemoryLayer):
 
     @staticmethod
     def _tagged(results: List[Dict[str, Any]], tag: str) -> List[Dict[str, Any]]:
-        """Keep only the items a writer marked with ``tag``.
-
-        Warnings and known issues are both ``negative`` beliefs, so the belief
-        type alone no longer separates them — filtering on it returns every
-        negative for both. The writers tag them (``warning`` / ``known_issue``),
-        and that tag is what survives the closed vocabulary. ``cross_repo`` already
-        selects this way.
-        """
+        """Keep only the items a writer marked with ``tag``."""
         return [item for item in results if tag in (item.get("tags") or [])]
 
+    @staticmethod
+    def _not_tagged(results: List[Dict[str, Any]], tag: str) -> List[Dict[str, Any]]:
+        """Keep everything a writer did not mark with ``tag``."""
+        return [item for item in results if tag not in (item.get("tags") or [])]
+
     def get_warnings(self, area: str = None, repo_id: str = None) -> List[Dict[str, Any]]:
-        """Get warnings, optionally filtered by area."""
-        results = self._tagged(
+        """Get warnings, optionally filtered by area.
+
+        Warnings and known issues are both ``negative`` beliefs, so the belief type
+        alone no longer separates them — querying it returns every negative for
+        both, and each item lands in both buckets.
+
+        The split is asymmetric on purpose. ``known_issue`` is the specialised kind
+        and is selected by its tag; a warning is any other negative. That keeps a
+        belief written before the tags existed, or through raw storage, visible as
+        a warning rather than silently absent from every view — which is the
+        failure mode worth avoiding here.
+        """
+        results = self._not_tagged(
             self.list_items(
                 layer="semantic",
                 category=KnowledgeCategory.NEGATIVE.value,
                 limit=100,
                 repo_id=repo_id,
             ),
-            "warning",
+            "known_issue",
         )
 
         if area:
