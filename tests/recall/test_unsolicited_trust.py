@@ -44,9 +44,9 @@ def test_all_proactive_surfaces_filter_quarantine_with_trusted_controls(tmp_path
     memory = _memory(tmp_path)
     storage = memory._storage
     fixtures = (
-        ("src/auth trusted warning", "src/auth poison warning", "semantic", "fragile_area"),
-        ("src/auth trusted pattern", "src/auth poison pattern", "semantic", "pattern"),
-        ("src/auth trusted convention", "src/auth poison convention", "semantic", "convention"),
+        ("src/auth trusted warning", "src/auth poison warning", "semantic", "negative"),
+        ("src/auth trusted pattern", "src/auth poison pattern", "semantic", "procedure"),
+        ("src/auth trusted convention", "src/auth poison convention", "semantic", "preference"),
         (
             "TypeError src/auth trusted fix",
             "TypeError src/auth poison fix",
@@ -131,14 +131,14 @@ def test_task_proactive_recall_filters_quarantine_and_reports_rejections(tmp_pat
         storage,
         "authentication session trusted pattern",
         layer="semantic",
-        category="pattern",
+        category="procedure",
         tier=Provenance.DERIVED,
     )
     poisoned = _store(
         storage,
         "authentication session poison pattern",
         layer="semantic",
-        category="pattern",
+        category="procedure",
         tier=Provenance.EXTERNAL,
     )
 

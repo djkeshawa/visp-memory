@@ -71,7 +71,7 @@ class TestAbstention:
         """A hand-written warning is high-precision however small the store is; gating
         these out meant a user who recorded three warnings saw none of them."""
         result = select_for_injection(
-            [_memory("Race condition here", score=0.5, category="fragile_area")],
+            [_memory("Race condition here", score=0.5, category="negative")],
             task="refactor the auth token flow",
             corpus_size=2,
         )

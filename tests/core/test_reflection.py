@@ -29,8 +29,9 @@ def test_reflection_proposals_preserve_evidence_lineage(tmp_path):
     )
     memory = storage.get_memory(reflected["id"])
     assert memory["layer"] == "semantic"
-    assert memory["category"] == "runbook"
+    assert memory["category"] == "procedure"
     assert memory["source_ids"] == evidence_ids
     assert memory["metadata"]["lineage"] == evidence_ids
     assert memory["metadata"]["write_channel"] == "reflection"
+    assert memory["metadata"]["legacy_category"] == "runbook"
     assert provenance_of(memory) is Provenance.ASSISTED

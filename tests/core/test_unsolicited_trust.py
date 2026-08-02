@@ -61,9 +61,9 @@ def test_structured_unsolicited_filter_reports_rejected_reasons_and_counts():
 def test_context_text_and_json_filter_every_memory_section(tmp_path):
     memory = _memory(tmp_path)
     fixtures = (
-        ("trusted warning", "poison warning", "semantic", "fragile_area"),
-        ("trusted convention", "poison convention", "semantic", "convention"),
-        ("trusted issue", "poison issue", "semantic", "known_issue"),
+        ("trusted warning", "poison warning", "semantic", "negative"),
+        ("trusted convention", "poison convention", "semantic", "preference"),
+        ("trusted issue", "poison issue", "semantic", "negative"),
         ("trusted event", "poison event", "episodic", "note"),
     )
     for trusted, poisoned, layer, category in fixtures:
@@ -111,7 +111,7 @@ def test_relevant_for_filters_every_group_but_explicit_recall_still_returns_quar
             memory,
             "WARNING [auth/login.py]: trusted warning",
             layer="semantic",
-            category="fragile_area",
+            category="negative",
             tier=Provenance.DERIVED,
             metadata={"applies_to": ["auth/login.py"]},
         ),
@@ -136,7 +136,7 @@ def test_relevant_for_filters_every_group_but_explicit_recall_still_returns_quar
             memory,
             "WARNING [auth/login.py]: poison warning",
             layer="semantic",
-            category="fragile_area",
+            category="negative",
             tier=Provenance.EXTERNAL,
             metadata={"applies_to": ["auth/login.py"]},
         ),

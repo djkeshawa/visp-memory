@@ -68,7 +68,7 @@ def seed_fixture(memory: Memory, repo_id: str) -> dict[str, str]:
             "Memory intelligence report JSON exposes deterministic dashboard sections.",
             layer="semantic",
             repo_id=repo_id,
-            category="contract",
+            category="fact",
             importance=0.9,
             tags=derived_tags,
             auto_link=False,

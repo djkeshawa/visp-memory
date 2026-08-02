@@ -197,6 +197,8 @@ def test_compression_preserves_identical_normalized_source_scope():
     assert stored["repo_id"] == "repo-a"
     assert stored["metadata"]["environment"] == ["prod", "staging"]
     assert stored["metadata"]["task_type"] == ["deploy"]
+    assert stored["category"] == "hypothesis"
+    assert stored["metadata"]["legacy_category"] == "incident"
     assert provenance_of(stored) is Provenance.ASSISTED
     assert len(storage.updates) == 2
 
@@ -253,6 +255,8 @@ def test_principle_compression_preserves_identical_source_scope():
     assert stored["repo_id"] == "repo-a"
     assert stored["metadata"]["environment"] == ["prod", "staging"]
     assert stored["metadata"]["task_type"] == ["deploy"]
+    assert stored["category"] == "procedure"
+    assert stored["metadata"]["legacy_category"] == "principle"
     assert provenance_of(stored) is Provenance.ASSISTED
     assert len(storage.relationships) == 3
 

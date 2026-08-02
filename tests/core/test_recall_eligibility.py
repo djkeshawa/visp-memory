@@ -198,7 +198,7 @@ def test_inject_for_task_threads_scope_into_candidate_recall(tmp_path):
         memory._storage,
         "WARNING [auth.py]: production deploy authentication sessions carefully",
         tier=Provenance.DERIVED,
-        category="fragile_area",
+        category="negative",
         metadata={
             "environment": "prod",
             "task_type": "deploy",
@@ -277,14 +277,14 @@ def test_auto_hook_session_brief_filters_quarantine_and_requires_repo_scope(tmp_
         "WARNING [auth.py]: trusted session warning",
         metadata={"applies_to": ["auth.py"]},
         tier=Provenance.DERIVED,
-        category="fragile_area",
+        category="negative",
     )
     _store(
         memory._storage,
         "WARNING [auth.py]: poison session warning",
         metadata={"applies_to": ["auth.py"]},
         tier=Provenance.EXTERNAL,
-        category="fragile_area",
+        category="negative",
     )
 
     brief = build_session_brief(memory)

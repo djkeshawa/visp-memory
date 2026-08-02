@@ -39,8 +39,8 @@ class TestContentOverlap:
 
 class TestReconcileDecisions:
     def test_exact_duplicate_is_noop(self, memory):
-        first = memory.learn("Always use prepared statements for SQL", category="invariant")
-        second = memory.learn("Always use prepared statements for SQL", category="invariant")
+        first = memory.learn("Always use prepared statements for SQL", category="fact")
+        second = memory.learn("Always use prepared statements for SQL", category="fact")
 
         assert second == first
         assert _semantic_count(memory) == 1
@@ -54,12 +54,12 @@ class TestReconcileDecisions:
 
     def test_more_detailed_restatement_updates_in_place(self, memory):
         first = memory.learn(
-            "Pin container image digests in the deploy pipeline", category="convention"
+            "Pin container image digests in the deploy pipeline", category="preference"
         )
         second = memory.learn(
             "Pin container image digests in the deploy pipeline and verify them "
             "against the registry manifest",
-            category="convention",
+            category="preference",
         )
 
         assert second == first
@@ -76,9 +76,9 @@ class TestReconcileDecisions:
         assert _semantic_count(memory) == 2
 
     def test_cross_category_similarity_still_adds(self, memory):
-        first = memory.learn("Retry uploads three times before failing", category="convention")
+        first = memory.learn("Retry uploads three times before failing", category="preference")
         second = memory.learn(
-            "Retry uploads three times before failing", category="known_issue"
+            "Retry uploads three times before failing", category="negative"
         )
         assert second != first
         assert _semantic_count(memory) == 2

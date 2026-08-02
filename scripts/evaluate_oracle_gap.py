@@ -90,40 +90,40 @@ SEEDS: tuple[Seed, ...] = (
         "auth_jwt",
         "Authentication uses stateless JWT access tokens with a 15 minute expiry, "
         "refreshed through the /auth/refresh endpoint.",
-        category="convention",
+        category="preference",
     ),
     Seed(
         "auth_race",
         "WARNING [src/auth/session.py]: Session cache writes race under concurrent "
         "refresh; take the session mutex before mutating the cache.",
-        category="fragile_area",
+        category="negative",
         importance=0.9,
     ),
     Seed(
         "auth_revert",
         "Previously reverted: optimistic locking on the session table. It deadlocked "
         "under refresh storms and was backed out.",
-        category="gotcha",
+        category="negative",
         importance=0.85,
     ),
     Seed(
         "billing_rounding",
         "Billing totals round half-even at two decimal places to match the ledger; "
         "never use round() on float amounts.",
-        category="convention",
+        category="preference",
     ),
     Seed(
         "billing_retry",
         "WARNING [src/billing/charge.py]: Charge retries must carry the original "
         "idempotency key or customers are double charged.",
-        category="fragile_area",
+        category="negative",
         importance=0.95,
     ),
     Seed(
         "migrations_offline",
         "Database migrations run offline against a maintenance replica; alembic "
         "upgrade head is never run against production directly.",
-        category="convention",
+        category="preference",
     ),
     Seed(
         "search_index",
@@ -135,19 +135,19 @@ SEEDS: tuple[Seed, ...] = (
         "uploads_streaming",
         "Uploads stream directly to object storage; buffering whole files in memory "
         "caused out-of-memory kills on large imports.",
-        category="gotcha",
+        category="negative",
     ),
     Seed(
         "webhooks_jitter",
         "Outbound webhooks retry with exponential backoff plus jitter, capped at six "
         "attempts over one hour.",
-        category="convention",
+        category="preference",
     ),
     Seed(
         "flags_closed",
         "Feature flags default closed: an unknown flag evaluates to off, so a missing "
         "flag never enables a code path.",
-        category="convention",
+        category="preference",
     ),
 )
 

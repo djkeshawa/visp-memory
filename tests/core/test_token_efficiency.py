@@ -83,7 +83,7 @@ def test_token_efficiency_context_is_more_compact_than_full_store(memory):
             category="investigation",
             importance=0.4,
         )
-    memory.learn("Always pin test container image digests", category="convention")
+    memory.learn("Always pin test container image digests", category="preference")
 
     report = memory.token_efficiency()
 
@@ -113,7 +113,7 @@ def test_token_efficiency_context_is_scoped_to_requested_repo(memory):
 def test_token_efficiency_tolerates_malformed_savings_metadata(memory):
     # A semantic memory whose token_savings is malformed must not crash aggregation.
     good = memory._storage.get_memory(
-        memory.learn("solid established convention", category="convention")
+        memory.learn("solid established convention", category="preference")
     )
     memory._storage.update_memory(
         good["id"], metadata={"token_savings": {"source_tokens": "oops", "result_tokens": None}}

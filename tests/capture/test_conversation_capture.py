@@ -30,7 +30,7 @@ def test_conversation_capture_parsing(mock_memory):
         {"what": "Use Redis", "why": "Speed", "alternatives": ["Memcached"]}
       ],
       "learnings": [
-        {"knowledge": "Python 3.12 is faster", "category": "fact", "importance": 0.8}
+        {"knowledge": "Python 3.12 is faster", "category": "procedure", "importance": 0.8}
       ],
       "bugs": [
         {"description": "Race condition", "cause": "No lock", "fix": "Added mutex"}
@@ -67,9 +67,10 @@ def test_conversation_capture_parsing(mock_memory):
 
         mock_memory.learn.assert_called_with(
             knowledge="Python 3.12 is faster",
-            category="fact",
+            category="procedure",
             importance=0.8,
             repo_id="test-repo",
+            tags=["legacy_category:pattern"],
             _write_channel=WriteChannel.CONVERSATION,
         )
 

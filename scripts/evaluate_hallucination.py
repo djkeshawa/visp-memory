@@ -63,7 +63,7 @@ CASES: tuple[EvalCase, ...] = (
             SeedMemory(
                 "WARNING [MCP schema]: The current running MCP tool namespace did not "
                 "include memory_remember; restart Codex/MCP to refresh the schema.",
-                category="fragile_area",
+                category="negative",
             )
         ],
         expected_terms=["restart", "codex", "mcp", "memory_remember"],

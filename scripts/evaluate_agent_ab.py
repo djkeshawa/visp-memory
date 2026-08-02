@@ -49,7 +49,7 @@ CASES: tuple[AgentEvalCase, ...] = (
             SeedMemory(
                 "WARNING [src/auth/routes.py]: Validate repository scope before changing "
                 "auth routes; never leak memories across repositories.",
-                category="fragile_area",
+                category="negative",
                 importance=0.9,
             ),
         ),
@@ -89,7 +89,7 @@ CASES: tuple[AgentEvalCase, ...] = (
             SeedMemory(
                 "WARNING [MCP schema]: Restart Codex/MCP to refresh the schema when "
                 "memory_remember is missing; keep the existing memory database.",
-                category="fragile_area",
+                category="negative",
                 importance=0.88,
             ),
         ),

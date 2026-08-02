@@ -38,7 +38,7 @@ def evaluate() -> dict:
         warning = _store(storage,
             "WARNING [auth]: browser credentials must stay in HttpOnly cookies",
             layer="semantic",
-            category="fragile_area",
+            category="negative",
             repo_id="evaluation",
             tags=derived_tags,
             metadata={"files": ["src/auth.py"], "confidence": 0.98},

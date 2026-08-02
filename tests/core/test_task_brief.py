@@ -23,7 +23,7 @@ def _store_fixture(storage):
     warning = _store_memory(storage,
         "WARNING [authentication]: never persist credentials in local storage",
         layer="semantic",
-        category="fragile_area",
+        category="negative",
         repo_id="repo-a",
         tags=["warning", provenance_tag(Provenance.DERIVED)],
         metadata={

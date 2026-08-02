@@ -155,7 +155,7 @@ def _build_store(tmp: Path) -> tuple[Memory, set[str], dict[str, str]]:
     for lure in LURES:
         safe_ids[lure.query] = memory.learn(
             knowledge=lure.safe,
-            category="convention",
+            category="preference",
             importance=0.8,
             _write_channel=WriteChannel.CLI,
         )
@@ -179,7 +179,7 @@ def _build_store(tmp: Path) -> tuple[Memory, set[str], dict[str, str]]:
     for content in poisoned[:POISON_COUNT]:
         memory_id = memory.learn(
             knowledge=content,
-            category="convention",
+            category="preference",
             importance=0.95,  # crafted records assert their own authority
             _write_channel=WriteChannel.IMPORT,
         )

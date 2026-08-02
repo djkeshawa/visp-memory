@@ -656,7 +656,7 @@ class TestSemanticMemory:
     def test_establish_knowledge(self, memory):
         """Can establish semantic knowledge."""
         mem_id = memory.learn(
-            "Always use mutex locks in auth module", category="invariant", importance=0.9
+            "Always use mutex locks in auth module", category="fact", importance=0.9
         )
         assert mem_id is not None
 

@@ -644,7 +644,7 @@ async def test_list_memories_filters_by_layer_and_category(client):
         json={
             "content": "Fragile auth warning",
             "layer": "semantic",
-            "category": "fragile_area",
+            "category": "negative",
             "repo_id": "repo-a",
             "evidence_ids": [convention_evidence],
         },
@@ -655,7 +655,7 @@ async def test_list_memories_filters_by_layer_and_category(client):
         json={
             "content": "Team convention",
             "layer": "semantic",
-            "category": "convention",
+            "category": "preference",
             "repo_id": "repo-a",
         },
         headers=headers,
@@ -1061,7 +1061,7 @@ async def test_task_memory_brief_returns_sections_unknowns_and_delta(client):
         json={
             "content": "WARNING [auth]: preserve legacy API compatibility",
             "layer": "semantic",
-            "category": "fragile_area",
+            "category": "negative",
             "repo_id": "brief-repo",
             "files": ["src/auth.py"],
             "confidence": 0.96,
@@ -1074,7 +1074,7 @@ async def test_task_memory_brief_returns_sections_unknowns_and_delta(client):
     trusted_id = _store_semantic(
         "WARNING [auth]: trusted legacy API compatibility",
         "brief-repo",
-        category="fragile_area",
+        category="negative",
         tags=[provenance_tag(Provenance.DERIVED)],
         metadata={
             "files": ["src/auth.py"],
@@ -1709,7 +1709,7 @@ async def test_memory_intelligence_report_endpoint_returns_public_contract(clien
             "content": "API fragile warning",
             "repo_id": "repo-a",
             "layer": "semantic",
-            "category": "fragile_area",
+            "category": "negative",
             "evidence_ids": [evidence_id],
         },
         headers=headers,
