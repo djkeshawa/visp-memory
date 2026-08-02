@@ -1,10 +1,15 @@
+import base64
 import builtins
 import copy
+import json
 import re
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from visp_memory import Memory
 from visp_memory.config import MemoryConfig
@@ -14,7 +19,14 @@ from visp_memory.core.arcadedb_storage import (
     ArcadeDbStorage,
     load_arcadedb_driver,
 )
+from visp_memory.core.authority import (
+    PROHIBITION_AUTHORITY_KEYS_ENV,
+    ProhibitionAuthorityError,
+    build_prohibition_claim,
+    sign_prohibition_attestation,
+)
 from visp_memory.core.storage import (
+    STORAGE_SCHEMA_VERSION,
     EvidenceError,
     EvidenceImmutableError,
     EvidenceReferenceError,
@@ -67,12 +79,14 @@ class FakeArcadeDb:
             "AuditLog": {},
             "RecallFeedback": {},
             "SchemaVersion": {},
+            "AuthorityAttestation": {},
         }
         self.edges = {
             "MemoryRelationship": {},
             "BeliefEvidence": {},
             "RepoDependency": {},
             "TeamMember": {},
+            "BeliefAuthority": {},
         }
         self.memories = self.records["Memory"]
         self.relationships = self.edges["MemoryRelationship"]
@@ -98,6 +112,9 @@ class FakeArcadeDb:
             return None
         if sql.startswith("CREATE EDGE BeliefEvidence"):
             self._create_edge("BeliefEvidence", sql, params)
+            return None
+        if sql.startswith("CREATE EDGE BeliefAuthority"):
+            self._create_edge("BeliefAuthority", sql, params)
             return None
         if sql.startswith("CREATE EDGE RepoDependency"):
             self._create_edge("RepoDependency", sql, params)
@@ -329,7 +346,7 @@ def test_arcadedb_memory_crud_list_search_stats_and_projects(fake_arcadedb, tmp_
         "ArcadeDB supports embedded local graph storage",
         layer="semantic",
         repo_id="repo-a",
-        category="backend",
+        category="fact",
         importance=0.9,
         tags=["graph"],
         metadata={"source": "test"},
@@ -371,7 +388,7 @@ def test_arcadedb_memory_crud_list_search_stats_and_projects(fake_arcadedb, tmp_
 
     assert storage.get_stats() == {
         "memories_by_layer": {"semantic": 1},
-        "memories_by_category": {"backend": 1},
+        "memories_by_category": {"fact": 1},
         "total_memories": 1,
         "active_intents": 0,
         "total_relationships": 0,
@@ -427,6 +444,120 @@ def test_arcadedb_persists_evidence_separately_and_validates_beliefs_atomically(
     )
 
 
+def test_arcadedb_governed_belief_fields_round_trip_and_unknown_refuses_prewrite(
+    fake_arcadedb, tmp_path
+):
+    storage = ArcadeDbStorage(tmp_path)
+    evidence_id = storage.store_evidence("Observed backend behavior", repo_id="repo-a")
+
+    belief_id = storage.store_memory(
+        "ArcadeDB uses governed fields",
+        layer="semantic",
+        category="procedure",
+        repo_id="repo-a",
+        evidence_ids=[evidence_id],
+        auto_link=False,
+    )
+
+    belief = storage.get_memory(belief_id)
+    assert belief["category"] == "procedure"
+    assert belief["belief_type"] == "procedure"
+    assert belief["epistemic_status"] == "inferred"
+    commands_before = list(fake_arcadedb.db.commands)
+    with pytest.raises(ValueError, match="semantic belief type"):
+        storage.store_memory(
+            "Legacy semantic type",
+            layer="semantic",
+            category="invariant",
+            repo_id="repo-a",
+            evidence_ids=[evidence_id],
+            auto_link=False,
+        )
+    assert fake_arcadedb.db.commands == commands_before
+
+
+def test_arcadedb_verified_prohibition_attestation_round_trip_and_replay(
+    fake_arcadedb, tmp_path, monkeypatch
+):
+    now = datetime(2026, 8, 2, 6, tzinfo=timezone.utc)
+    private_key = Ed25519PrivateKey.generate()
+    private_raw = private_key.private_bytes(
+        serialization.Encoding.Raw,
+        serialization.PrivateFormat.Raw,
+        serialization.NoEncryption(),
+    )
+    public_raw = private_key.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    monkeypatch.setenv(
+        PROHIBITION_AUTHORITY_KEYS_ENV,
+        json.dumps({"owner-2026": base64.b64encode(public_raw).decode("ascii")}),
+    )
+    monkeypatch.setattr("visp_memory.core.authority.utc_now", lambda: now)
+    storage = ArcadeDbStorage(tmp_path)
+    content = "Never bypass review"
+    evidence_id = storage.store_evidence(content, repo_id="repo-a")
+    evidence = storage.get_evidence(evidence_id)
+    claim = build_prohibition_claim(
+        content=content,
+        repo_id="repo-a",
+        evidence=[{"id": evidence_id, "content_hash": evidence["content_hash"]}],
+    )
+
+    def signed(issued_at):
+        return sign_prohibition_attestation(
+            claim,
+            key_id="owner-2026",
+            private_key=base64.b64encode(private_raw).decode("ascii"),
+            nonce="nonce-1",
+            issued_at=issued_at,
+        )
+
+    envelope = signed(now)
+    belief_id = storage.store_memory(
+        content,
+        layer="semantic",
+        category="prohibition",
+        repo_id="repo-a",
+        evidence_ids=[evidence_id],
+        authority_attestation=envelope,
+        auto_link=False,
+    )
+    record_counts = (
+        len(fake_arcadedb.db.records["AuthorityAttestation"]),
+        len(fake_arcadedb.db.edges["BeliefAuthority"]),
+    )
+
+    belief = storage.get_memory(belief_id)
+    assert belief["belief_type"] == "prohibition"
+    assert belief["epistemic_status"] == "observed"
+    assert belief["authority_attestation"] == envelope
+    assert storage.store_memory(
+        content,
+        layer="semantic",
+        category="prohibition",
+        repo_id="repo-a",
+        evidence_ids=[evidence_id],
+        authority_attestation=envelope,
+        auto_link=False,
+    ) == belief_id
+    assert record_counts == (
+        len(fake_arcadedb.db.records["AuthorityAttestation"]),
+        len(fake_arcadedb.db.edges["BeliefAuthority"]),
+    )
+    with pytest.raises(ProhibitionAuthorityError, match="nonce"):
+        storage.store_memory(
+            content,
+            layer="semantic",
+            category="prohibition",
+            repo_id="repo-a",
+            evidence_ids=[evidence_id],
+            authority_attestation=signed(now + timedelta(minutes=1)),
+            auto_link=False,
+        )
+
+
 def test_arcadedb_v2_constructor_refuses_without_schema_or_marker_drift(
     fake_arcadedb, tmp_path
 ):
@@ -480,7 +611,7 @@ def _configure_current_arcadedb(fake_arcadedb, tmp_path):
     fake_arcadedb.db.records["SchemaVersion"]["storage"] = {
         "id": "storage",
         "component": "storage",
-        "version": 3,
+        "version": STORAGE_SCHEMA_VERSION,
         "applied_at": "2026-01-01T00:00:00+00:00",
     }
 
@@ -491,6 +622,9 @@ def _add_current_arcadedb_evidence_graph(fake_arcadedb):
         "content": "Evidence-backed belief",
         "layer": "semantic",
         "repo_id": "repo-a",
+        "category": "fact",
+        "belief_type": "fact",
+        "epistemic_status": "inferred",
     }
     fake_arcadedb.db.records["Evidence"]["evidence-1"] = {
         "id": "evidence-1",
@@ -571,6 +705,19 @@ def test_arcadedb_current_marker_valid_evidence_graph_proceeds(
         command.startswith("INSERT INTO SchemaVersion")
         for command in fake_arcadedb.db.commands
     )
+
+
+def test_arcadedb_current_marker_missing_governed_field_refuses_before_mutation(
+    fake_arcadedb, tmp_path
+):
+    _configure_current_arcadedb(fake_arcadedb, tmp_path)
+    _add_current_arcadedb_evidence_graph(fake_arcadedb)
+    fake_arcadedb.db.records["Memory"]["belief-1"].pop("epistemic_status")
+
+    with pytest.raises(StorageMigrationRequired, match="governed"):
+        ArcadeDbStorage(tmp_path)
+
+    assert fake_arcadedb.db.commands == []
 
 
 def test_arcadedb_search_excludes_raw_layer_by_default(fake_arcadedb, tmp_path):
@@ -739,10 +886,16 @@ def test_arcadedb_schema_uses_stable_vertex_and_edge_types(fake_arcadedb, tmp_pa
         "Team",
         "AuditLog",
         "RecallFeedback",
+        "AuthorityAttestation",
     ):
         assert f"CREATE VERTEX TYPE {vertex_type} IF NOT EXISTS" in commands
 
-    for edge_type in ("MemoryRelationship", "RepoDependency", "TeamMember"):
+    for edge_type in (
+        "MemoryRelationship",
+        "RepoDependency",
+        "TeamMember",
+        "BeliefAuthority",
+    ):
         assert f"CREATE EDGE TYPE {edge_type} IF NOT EXISTS" in commands
 
 
@@ -1062,11 +1215,12 @@ def test_arcadedb_memory_intelligence_report_uses_public_storage_contract(
         auto_link=False,
     )
     warning_id = memory._storage.store_memory(
-        "WARNING [arcadedb]: Embedded graph backend needs careful packaging",
-        layer="semantic",
-        category="fragile_area",
-        repo_id="repo-a",
-        importance=0.8,
+            "WARNING [arcadedb]: Embedded graph backend needs careful packaging",
+            layer="semantic",
+            category="negative",
+            repo_id="repo-a",
+            importance=0.8,
+            tags=["warning", "legacy_category:fragile_area"],
         auto_link=False,
         evidence_ids=[
             memory._storage.store_evidence(
