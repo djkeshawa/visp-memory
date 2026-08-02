@@ -249,7 +249,14 @@ def _content_of(memory: dict[str, Any]) -> str:
 
 # The semantic layer's actual warning vocabulary (KnowledgeCategory). There is no
 # category literally named "warning"; assuming there was meant this check never fired.
-WARNING_CATEGORIES = frozenset({"fragile_area", "known_issue", "gotcha", "warning"})
+#
+# `negative` is the governed type every warning now carries, and its absence here
+# reproduced that same bug in a second form: the check compiled, matched nothing
+# written after the migration, and a thin corpus stopped surfacing warnings at all.
+# The pre-v4 words stay for beliefs stored before it.
+WARNING_CATEGORIES = frozenset(
+    {"negative", "fragile_area", "known_issue", "gotcha", "warning"}
+)
 
 
 def _is_warning(memory: dict[str, Any]) -> bool:
