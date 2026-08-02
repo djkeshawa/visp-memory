@@ -12,9 +12,9 @@ Unlike episodic memories (events), semantic memories are:
 - Compressed (distilled from multiple episodes)
 """
 
-from enum import Enum
 from typing import Any, Dict, List
 
+from visp_memory.core.beliefs import BeliefType, normalize_belief_type
 from visp_memory.core.clock import utc_now
 from visp_memory.core.eligibility import require_repo_id
 from visp_memory.core.ranking import rank_memory_results
@@ -27,31 +27,9 @@ from visp_memory.core.trust import (
 )
 from visp_memory.layers.base import BaseMemoryLayer
 
-
-class KnowledgeCategory(str, Enum):
-    """Categories of semantic knowledge."""
-
-    # Facts about the codebase
-    INVARIANT = "invariant"  # Things that must always be true
-    BEHAVIOR = "behavior"  # How things work
-    CONTRACT = "contract"  # API/interface contracts
-
-    # Learned patterns
-    PATTERN = "pattern"  # Design patterns used
-    ANTIPATTERN = "antipattern"  # Things to avoid
-    BEST_PRACTICE = "best_practice"  # Recommended approaches
-
-    # Warnings
-    FRAGILE_AREA = "fragile_area"  # Areas needing care
-    KNOWN_ISSUE = "known_issue"  # Known problems
-    GOTCHA = "gotcha"  # Non-obvious traps
-
-    # Preferences
-    CONVENTION = "convention"  # Team/project conventions
-    PREFERENCE = "preference"  # Stylistic preferences
-
-    # General
-    FACT = "fact"  # General knowledge
+# Compatibility name retained for callers while the accepted values become the
+# governed vocabulary.  It is an alias, so the two enums cannot drift.
+KnowledgeCategory = BeliefType
 
 
 class SemanticMemory(BaseMemoryLayer):
@@ -100,6 +78,7 @@ class SemanticMemory(BaseMemoryLayer):
         evidence_ids: List[str] = None,
         repo_id: str = None,
         tags: List[str] = None,
+        authority_attestation: str = None,
         *,
         _write_channel: WriteChannel | str = WriteChannel.LIBRARY,
     ) -> str:
@@ -121,7 +100,7 @@ class SemanticMemory(BaseMemoryLayer):
         Example:
             semantic.establish(
                 "The auth module requires mutex locks for token refresh",
-                category=KnowledgeCategory.INVARIANT,
+                category=KnowledgeCategory.FACT,
                 applies_to=["auth/token.py", "auth/refresh.py"],
                 importance=0.9,
                 evidence_ids=["ev-auth-refresh-test-output"],
@@ -129,6 +108,7 @@ class SemanticMemory(BaseMemoryLayer):
         """
         write_channel = parse_write_channel(_write_channel)
         policy = channel_policy(write_channel)
+        belief_type = normalize_belief_type(category)
         metadata = {
             "established_at": utc_now().isoformat(),
             "applies_to": applies_to or [],
@@ -138,7 +118,8 @@ class SemanticMemory(BaseMemoryLayer):
         return self.storage.store_memory(
             content=knowledge,
             layer="semantic",
-            category=category.value if isinstance(category, KnowledgeCategory) else category,
+            category=belief_type,
+            authority_attestation=authority_attestation,
             importance=importance,
             repo_id=repo_id,
             tags=with_channel_provenance(tags, write_channel),
@@ -188,7 +169,7 @@ class SemanticMemory(BaseMemoryLayer):
 
         return self.establish(
             knowledge=knowledge,
-            category=KnowledgeCategory.FRAGILE_AREA,
+            category=KnowledgeCategory.NEGATIVE,
             importance=severity,
             applies_to=[area],
             repo_id=repo_id,
@@ -238,7 +219,7 @@ class SemanticMemory(BaseMemoryLayer):
 
         return self.establish(
             knowledge=knowledge,
-            category=KnowledgeCategory.CONVENTION,
+            category=KnowledgeCategory.PREFERENCE,
             importance=importance,
             repo_id=repo_id,
             tags=tags,
@@ -288,7 +269,7 @@ class SemanticMemory(BaseMemoryLayer):
 
         return self.establish(
             knowledge=knowledge,
-            category=KnowledgeCategory.KNOWN_ISSUE,
+            category=KnowledgeCategory.NEGATIVE,
             importance=priority,
             repo_id=repo_id,
             tags=["known_issue"] + (tags or []),
@@ -337,13 +318,28 @@ class SemanticMemory(BaseMemoryLayer):
             as_of=as_of,
         )
 
+    @staticmethod
+    def _tagged(results: List[Dict[str, Any]], tag: str) -> List[Dict[str, Any]]:
+        """Keep only the items a writer marked with ``tag``.
+
+        Warnings and known issues are both ``negative`` beliefs, so the belief
+        type alone no longer separates them — filtering on it returns every
+        negative for both. The writers tag them (``warning`` / ``known_issue``),
+        and that tag is what survives the closed vocabulary. ``cross_repo`` already
+        selects this way.
+        """
+        return [item for item in results if tag in (item.get("tags") or [])]
+
     def get_warnings(self, area: str = None, repo_id: str = None) -> List[Dict[str, Any]]:
         """Get warnings, optionally filtered by area."""
-        results = self.list_items(
-            layer="semantic",
-            category=KnowledgeCategory.FRAGILE_AREA.value,
-            limit=100,
-            repo_id=repo_id,
+        results = self._tagged(
+            self.list_items(
+                layer="semantic",
+                category=KnowledgeCategory.NEGATIVE.value,
+                limit=100,
+                repo_id=repo_id,
+            ),
+            "warning",
         )
 
         if area:
@@ -360,7 +356,7 @@ class SemanticMemory(BaseMemoryLayer):
         """Get all established conventions."""
         return self.list_items(
             layer="semantic",
-            category=KnowledgeCategory.CONVENTION.value,
+            category=KnowledgeCategory.PREFERENCE.value,
             limit=100,
             order_by="importance DESC",
             repo_id=repo_id,
@@ -368,12 +364,15 @@ class SemanticMemory(BaseMemoryLayer):
 
     def get_known_issues(self, repo_id: str = None) -> List[Dict[str, Any]]:
         """Get all known issues."""
-        return self.list_items(
-            layer="semantic",
-            category=KnowledgeCategory.KNOWN_ISSUE.value,
-            limit=100,
-            order_by="importance DESC",
-            repo_id=repo_id,
+        return self._tagged(
+            self.list_items(
+                layer="semantic",
+                category=KnowledgeCategory.NEGATIVE.value,
+                limit=100,
+                order_by="importance DESC",
+                repo_id=repo_id,
+            ),
+            "known_issue",
         )
 
     def relevant_for(

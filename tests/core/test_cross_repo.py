@@ -53,6 +53,7 @@ def test_cross_repo_context_includes_transitive_dependencies_up_to_max_depth():
                     "content": "Core API is changing",
                     "repo_id": "core",
                     "category": "warning",
+                    "tags": ["warning"],
                 }
             ]
         }
@@ -85,6 +86,7 @@ def test_cross_repo_context_deduplicates_dependencies_and_stops_cycles():
                     "content": "Lib warning",
                     "repo_id": "lib",
                     "category": "warning",
+                    "tags": ["warning"],
                 }
             ]
         }

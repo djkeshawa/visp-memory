@@ -13,7 +13,7 @@ def _memory(tmp_path, repo_id="repo-a"):
     return Memory(config=config)
 
 
-def _store(memory, content, *, layer, category, tier, metadata=None):
+def _store(memory, content, *, layer, category, tier, metadata=None, kind=None):
     evidence_ids = None
     if layer == "semantic":
         evidence_ids = [memory._storage.store_evidence(content, repo_id="repo-a")]
@@ -22,7 +22,7 @@ def _store(memory, content, *, layer, category, tier, metadata=None):
         layer=layer,
         category=category,
         repo_id="repo-a",
-        tags=[provenance_tag(tier)],
+        tags=[provenance_tag(tier)] + ([kind] if kind else []),
         metadata=metadata or {},
         auto_link=False,
         evidence_ids=evidence_ids,
@@ -61,14 +61,18 @@ def test_structured_unsolicited_filter_reports_rejected_reasons_and_counts():
 def test_context_text_and_json_filter_every_memory_section(tmp_path):
     memory = _memory(tmp_path)
     fixtures = (
-        ("trusted warning", "poison warning", "semantic", "negative"),
-        ("trusted convention", "poison convention", "semantic", "preference"),
-        ("trusted issue", "poison issue", "semantic", "negative"),
-        ("trusted event", "poison event", "episodic", "note"),
+        ("trusted warning", "poison warning", "semantic", "negative", "warning"),
+        ("trusted convention", "poison convention", "semantic", "preference", None),
+        ("trusted issue", "poison issue", "semantic", "negative", "known_issue"),
+        ("trusted event", "poison event", "episodic", "note", None),
     )
-    for trusted, poisoned, layer, category in fixtures:
-        _store(memory, trusted, layer=layer, category=category, tier=Provenance.DERIVED)
-        _store(memory, poisoned, layer=layer, category=category, tier=Provenance.EXTERNAL)
+    for trusted, poisoned, layer, category, kind in fixtures:
+        _store(
+            memory, trusted, layer=layer, category=category, tier=Provenance.DERIVED, kind=kind
+        )
+        _store(
+            memory, poisoned, layer=layer, category=category, tier=Provenance.EXTERNAL, kind=kind
+        )
 
     structured = memory.context(format="json", include_intent=False)
     rendered = memory.context(format="text", include_intent=False)
