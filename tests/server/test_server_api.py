@@ -657,12 +657,13 @@ async def test_list_memories_filters_by_layer_and_category(client):
             "layer": "semantic",
             "category": "preference",
             "repo_id": "repo-a",
+            "evidence_ids": [convention_evidence],
         },
         headers=headers,
     )
 
     response = await client.get(
-        "/memories?repo_id=repo-a&layer=semantic&category=fragile_area",
+        "/memories?repo_id=repo-a&layer=semantic&category=negative",
         headers=headers,
     )
 
