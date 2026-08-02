@@ -388,11 +388,15 @@ async def test_non_admin_cross_repo_context_does_not_include_other_team_dependen
         "Alpha warning",
         repo_id="context-alpha-lib",
         category="warning",
+        source="authored",
+        tags=["warning"],
     )
     app.state.storage.store_memory(
         "Beta warning",
         repo_id="context-beta-lib",
         category="warning",
+        source="authored",
+        tags=["warning"],
     )
 
     set_current_user(
