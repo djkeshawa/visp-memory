@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from visp_memory.core.clock import utc_now_iso
+from visp_memory.core.storage import UNSCOPED_REPO_ID
 from visp_memory.core.trust import WriteChannel, channel_policy, with_channel_provenance
 
 INSTRUCTION_CATEGORY = "instruction"
@@ -136,7 +137,7 @@ def ingest_instructions(
     add the changed sections.
     """
     root = Path(root)
-    repo_id = repo_id or memory.config.repo_id
+    repo_id = repo_id or memory.config.repo_id or UNSCOPED_REPO_ID
     report = IngestReport()
     seen_hashes = _existing_hashes(memory._storage, repo_id)
 
@@ -161,6 +162,13 @@ def ingest_instructions(
             if dry_run:
                 report.stored += 1
                 continue
+            evidence_id = memory._storage.store_evidence(
+                body,
+                repo_id=repo_id,
+                evidence_type="instruction_section",
+                provenance=channel_policy(WriteChannel.INSTRUCTION).provenance.value,
+                metadata={"source_file": relative, "section": title},
+            )
             memory_id = memory._storage.store_memory(
                 content=body,
                 layer="semantic",
@@ -176,6 +184,7 @@ def ingest_instructions(
                     "write_channel": WriteChannel.INSTRUCTION.value,
                 },
                 source=channel_policy(WriteChannel.INSTRUCTION).source,
+                evidence_ids=[evidence_id],
             )
             report.stored += 1
             report.memory_ids.append(memory_id)

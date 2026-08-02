@@ -9,7 +9,11 @@ import pytest
 
 from visp_memory import Memory, MemoryConfig
 from visp_memory.core.indexing import ReindexScope
-from visp_memory.core.storage import CHROMADB_AVAILABLE, LocalStorage
+from visp_memory.core.storage import (
+    CHROMADB_AVAILABLE,
+    LocalStorage,
+    StorageMigrationRequired,
+)
 from visp_memory.core.trust import Provenance, WriteChannel, assess, provenance_of, provenance_tag
 
 
@@ -54,8 +58,17 @@ def test_direct_facade_writes_default_to_unknown_and_replace_self_claims(memory)
 def test_direct_layer_writes_default_to_unknown_and_replace_self_claims(memory):
     claimed = [provenance_tag(Provenance.AUTHORED)]
     memory_ids = [
-        memory.episodic.record("Direct layer event", tags=claimed),
-        memory.semantic.establish("Direct layer knowledge", tags=claimed),
+        memory.episodic.record("Direct layer event", tags=claimed, repo_id="repo-a"),
+        memory.semantic.establish(
+            "Direct layer knowledge",
+            tags=claimed,
+            repo_id="repo-a",
+            evidence_ids=[
+                memory._storage.store_evidence(
+                    "Direct layer knowledge", repo_id="repo-a"
+                )
+            ],
+        ),
     ]
 
     for memory_id in memory_ids:
@@ -72,11 +85,13 @@ def test_direct_layer_convenience_methods_thread_package_channel(memory):
             "MCP bug",
             tags=[provenance_tag(Provenance.AUTHORED)],
             _write_channel=WriteChannel.MCP,
+            repo_id="repo-a",
         ),
         memory.semantic.known_issue(
             "MCP issue",
             tags=[provenance_tag(Provenance.AUTHORED)],
             _write_channel=WriteChannel.MCP,
+            repo_id="repo-a",
         ),
     ]
 
@@ -123,7 +138,9 @@ def test_local_storage_uses_dimension_specific_vector_collection(tmp_path):
     provider = FakeEmbeddingProvider()
     storage = LocalStorage(tmp_path, embedding_fn=provider.embed)
 
-    storage.store_memory("Docker uses semantic embeddings", layer="episodic")
+    storage.store_memory(
+        "Docker uses semantic embeddings", layer="episodic", repo_id="repo-a"
+    )
 
     assert "episodic" in storage._collections
     collection = storage._collections["episodic"]
@@ -160,7 +177,14 @@ def test_local_storage_rebuild_embedding_index_scopes_by_repo_and_layer(tmp_path
 
     storage.store_memory("Repo A event", layer="episodic", repo_id="repo-a", auto_link=False)
     storage.store_memory("Repo B event", layer="episodic", repo_id="repo-b", auto_link=False)
-    storage.store_memory("Repo A fact", layer="semantic", repo_id="repo-a", auto_link=False)
+    evidence_id = storage.store_evidence("Repo A fact", repo_id="repo-a")
+    storage.store_memory(
+        "Repo A fact",
+        layer="semantic",
+        repo_id="repo-a",
+        evidence_ids=[evidence_id],
+        auto_link=False,
+    )
     collection.upserts.clear()
 
     dry_run = storage.rebuild_embedding_index(
@@ -202,7 +226,7 @@ def test_update_memory_refreshes_vector_embedding(tmp_path, monkeypatch):
     collection = FakeCollection()
     monkeypatch.setattr(storage, "_get_collection", lambda _layer: collection)
 
-    memory_id = storage.store_memory("Old content", auto_link=False)
+    memory_id = storage.store_memory("Old content", repo_id="repo-a", auto_link=False)
     assert storage.update_memory(memory_id, content="New vector content") is True
 
     assert collection.updated["documents"] == ["New vector content"]
@@ -211,8 +235,12 @@ def test_update_memory_refreshes_vector_embedding(tmp_path, monkeypatch):
 
 def test_archived_memories_are_excluded_from_default_list_and_search(tmp_path):
     storage = LocalStorage(tmp_path)
-    active_id = storage.store_memory("Active deploy note", auto_link=False)
-    archived_id = storage.store_memory("Archived deploy note", auto_link=False)
+    active_id = storage.store_memory(
+        "Active deploy note", repo_id="repo-a", auto_link=False
+    )
+    archived_id = storage.store_memory(
+        "Archived deploy note", repo_id="repo-a", auto_link=False
+    )
 
     assert storage.update_memory(archived_id, status="archived") is True
 
@@ -239,7 +267,7 @@ def test_archived_memories_are_excluded_from_default_list_and_search(tmp_path):
     assert archived_id not in search_ids
 
 
-def test_memory_status_migration_defaults_old_rows_to_active(tmp_path):
+def test_unversioned_memory_status_store_refuses_implicit_migration(tmp_path):
     db_dir = tmp_path / "legacy"
     db_dir.mkdir()
     db_path = db_dir / "memories.db"
@@ -271,11 +299,17 @@ def test_memory_status_migration_defaults_old_rows_to_active(tmp_path):
             ("legacy-memory", "Legacy active memory", "episodic"),
         )
 
-    storage = LocalStorage(db_dir)
-    memory = storage.get_memory("legacy-memory")
+    with pytest.raises(StorageMigrationRequired, match="Unversioned"):
+        LocalStorage(db_dir)
 
-    assert memory["status"] == "active"
-    assert memory["quality_flags"] == []
+    with sqlite3.connect(db_path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(memories)")}
+        memory = conn.execute(
+            "SELECT id, content, layer FROM memories"
+        ).fetchone()
+    assert "status" not in columns
+    assert "quality_flags" not in columns
+    assert memory == ("legacy-memory", "Legacy active memory", "episodic")
 
 
 def test_local_storage_rejects_repo_dependencies_with_missing_repositories(tmp_path):
@@ -343,8 +377,12 @@ def test_local_storage_auto_links_source_ids(tmp_path):
 
 def test_local_storage_relationship_evidence_round_trips(tmp_path):
     storage = LocalStorage(tmp_path)
-    source_id = storage.store_memory("Incident was caused by cache expiry", auto_link=False)
-    target_id = storage.store_memory("Fix refreshed the cache before expiry", auto_link=False)
+    source_id = storage.store_memory(
+        "Incident was caused by cache expiry", repo_id="repo-a", auto_link=False
+    )
+    target_id = storage.store_memory(
+        "Fix refreshed the cache before expiry", repo_id="repo-a", auto_link=False
+    )
 
     rel_id = storage.add_relationship(
         source_id,
@@ -382,8 +420,12 @@ def test_local_storage_relationship_evidence_round_trips(tmp_path):
 
 def test_local_storage_relationship_evidence_defaults_and_bounds(tmp_path):
     storage = LocalStorage(tmp_path)
-    source_id = storage.store_memory("A warning surfaced during release", auto_link=False)
-    target_id = storage.store_memory("The release task reused the warning", auto_link=False)
+    source_id = storage.store_memory(
+        "A warning surfaced during release", repo_id="repo-a", auto_link=False
+    )
+    target_id = storage.store_memory(
+        "The release task reused the warning", repo_id="repo-a", auto_link=False
+    )
 
     storage.add_relationship(
         source_id,
@@ -415,7 +457,7 @@ def test_local_storage_relationship_evidence_defaults_and_bounds(tmp_path):
         )
 
 
-def test_local_storage_relationship_evidence_migration_defaults_old_rows(tmp_path):
+def test_unversioned_relationship_store_refuses_implicit_migration(tmp_path):
     db_dir = tmp_path / "legacy-relationships"
     db_dir.mkdir()
     db_path = db_dir / "memories.db"
@@ -478,20 +520,17 @@ def test_local_storage_relationship_evidence_migration_defaults_old_rows(tmp_pat
             ),
         )
 
-    storage = LocalStorage(db_dir)
-    relationship = storage.get_all_relationships(repo_id="repo-a")[0]
+    with pytest.raises(StorageMigrationRequired, match="Unversioned"):
+        LocalStorage(db_dir)
 
-    assert relationship["id"] == "legacy-rel"
-    assert relationship["evidence"] == {
-        "confidence": "ambiguous",
-        "confidence_score": 0.65,
-        "source": "legacy",
-        "source_file": None,
-        "source_location": None,
-        "reason": "Legacy relationship without evidence metadata.",
-        "created_by": None,
-        "created_at": "2026-06-06T00:00:00Z",
-    }
+    with sqlite3.connect(db_path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(relationships)")}
+        relationship = conn.execute(
+            "SELECT id, relationship, strength FROM relationships"
+        ).fetchone()
+    assert "confidence" not in columns
+    assert "reason" not in columns
+    assert relationship == ("legacy-rel", "related", 0.65)
 
 
 def test_local_storage_auto_links_similar_memories_in_same_repo(tmp_path):
@@ -606,6 +645,7 @@ class TestEpisodicMemory:
             cause="Missing mutex",
             fix="Added lock",
             files=["auth/token.py"],
+            repo_id="repo-a",
         )
         assert mem_id is not None
 
@@ -633,7 +673,7 @@ class TestSemanticMemory:
     def test_add_convention(self, memory):
         """Can add conventions."""
         mem_id = memory.semantic.convention(
-            rule="All API endpoints return JSON", rationale="Consistency"
+            rule="All API endpoints return JSON", rationale="Consistency", repo_id="repo-a"
         )
         assert mem_id is not None
 

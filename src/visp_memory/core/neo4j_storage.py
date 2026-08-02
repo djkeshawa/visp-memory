@@ -23,9 +23,11 @@ from visp_memory.core.ranking import (
 from visp_memory.core.storage import (
     STORAGE_SCHEMA_VERSION,
     BaseStorage,
+    EvidenceUnsupportedError,
     LocalStorage,
     MemoryLayer,
     StorageCapabilities,
+    StorageMigrationRequired,
 )
 from visp_memory.quality.secrets import redact_for_storage
 
@@ -116,10 +118,16 @@ class Neo4jStorage(BaseStorage):
         try:
             self.driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password))
             self.verify_connectivity()
+            marker_exists = self._probe_schema_compatibility()
+            if not marker_exists:
+                self._ensure_schema_version()
             self._ensure_indexes()
-            self._ensure_schema_version()
         except Exception as e:
             logger.error(f"Failed to initialize Neo4j driver: {e}")
+            driver = getattr(self, "driver", None)
+            if driver is not None:
+                driver.close()
+                self.driver = None
             raise
 
     def close(self):
@@ -217,7 +225,9 @@ class Neo4jStorage(BaseStorage):
                 version=STORAGE_SCHEMA_VERSION,
             ).single()
             if not record:
-                return
+                raise StorageMigrationRequired(
+                    "Neo4j schema marker could not be confirmed after initialization"
+                )
             stored_version = int(record["version"])
             if stored_version > STORAGE_SCHEMA_VERSION:
                 raise RuntimeError(
@@ -225,11 +235,51 @@ class Neo4jStorage(BaseStorage):
                     f"({stored_version} > {STORAGE_SCHEMA_VERSION})"
                 )
             if stored_version < STORAGE_SCHEMA_VERSION:
+                raise StorageMigrationRequired(
+                    "Neo4j schema migration is not implemented; export the v2 store "
+                    "with its original build before using schema v3"
+                )
+
+    def _probe_schema_compatibility(self) -> bool:
+        """Read marker and graph emptiness before any constraint or marker write."""
+        with self.driver.session() as session:
+            markers = list(
                 session.run(
                     "MATCH (v:SchemaVersion {component: 'storage'}) "
-                    "SET v.version = $version, v.applied_at = datetime()",
-                    version=STORAGE_SCHEMA_VERSION,
+                    "RETURN v.version AS version LIMIT 2"
                 )
+            )
+            if markers:
+                if len(markers) != 1 or markers[0].get("version") is None:
+                    raise StorageMigrationRequired(
+                        "Neo4j storage schema marker is missing or ambiguous"
+                    )
+                stored_version = int(markers[0]["version"])
+                if stored_version > STORAGE_SCHEMA_VERSION:
+                    raise RuntimeError(
+                        "Storage schema is newer than this visp-memory build "
+                        f"({stored_version} > {STORAGE_SCHEMA_VERSION})"
+                    )
+                if stored_version < STORAGE_SCHEMA_VERSION:
+                    raise StorageMigrationRequired(
+                        "Neo4j schema migration is not implemented; export the v2 store "
+                        "with its original build before using schema v3"
+                    )
+                if list(
+                    session.run(
+                        "MATCH (m:Memory) RETURN m.id AS id LIMIT 1"
+                    )
+                ):
+                    raise StorageMigrationRequired(
+                        "Neo4j schema v3 cannot serve existing Memory nodes because "
+                        "the governed Evidence graph is unsupported"
+                    )
+                return True
+            if list(session.run("MATCH (n) RETURN true AS present LIMIT 1")):
+                raise StorageMigrationRequired(
+                    "Unversioned non-empty Neo4j storage requires an explicit migration"
+                )
+        return False
 
     @staticmethod
     def _vector_property_name(dimension: int = None) -> str:
@@ -419,6 +469,7 @@ class Neo4jStorage(BaseStorage):
         tags: List[str] = None,
         metadata: Dict[str, Any] = None,
         source_ids: List[str] = None,
+        evidence_ids: List[str] = None,
         status: str = "active",
         source: str = None,
         quality_flags: List[str] = None,
@@ -434,6 +485,11 @@ class Neo4jStorage(BaseStorage):
         if layer not in _VALID_LAYERS:
             raise ValueError(
                 "Memory layer must be one of: " + ", ".join(sorted(_VALID_LAYERS))
+            )
+        if layer in {"raw", "episodic", "semantic"}:
+            raise EvidenceUnsupportedError(
+                "Neo4j does not yet support the schema-v3 Evidence graph; governed "
+                f"{layer} writes fail closed"
             )
 
         # Generate embedding if not provided and embedding function is available

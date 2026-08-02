@@ -16,6 +16,14 @@ from visp_memory.core.reporting import MemoryIntelligenceReporter
 from visp_memory.core.trust import Provenance, provenance_tag
 from visp_memory.recall.graph import GraphRecall
 
+
+def _store(storage, content, **kwargs):
+    if kwargs.get("layer") == "semantic":
+        kwargs["evidence_ids"] = [
+            storage.store_evidence(content, repo_id=kwargs["repo_id"])
+        ]
+    return storage.store_memory(content, **kwargs)
+
 EVAL_CASES: tuple[dict[str, str], ...] = (
     {
         "query": "memory intelligence report JSON dashboard contract",
@@ -56,7 +64,7 @@ def seed_fixture(memory: Memory, repo_id: str) -> dict[str, str]:
     storage = memory._storage
     derived_tags = [provenance_tag(Provenance.DERIVED)]
     ids = {
-        "report_contract": storage.store_memory(
+        "report_contract": _store(storage,
             "Memory intelligence report JSON exposes deterministic dashboard sections.",
             layer="semantic",
             repo_id=repo_id,
@@ -65,7 +73,7 @@ def seed_fixture(memory: Memory, repo_id: str) -> dict[str, str]:
             tags=derived_tags,
             auto_link=False,
         ),
-        "graph_evidence": storage.store_memory(
+        "graph_evidence": _store(storage,
             "Relationship evidence paths explain why graph findings are relevant.",
             layer="semantic",
             repo_id=repo_id,
@@ -74,7 +82,7 @@ def seed_fixture(memory: Memory, repo_id: str) -> dict[str, str]:
             tags=derived_tags,
             auto_link=False,
         ),
-        "freshness_memory": storage.store_memory(
+        "freshness_memory": _store(storage,
             "Freshness manifest should keep unchanged capture inputs from creating duplicates.",
             layer="episodic",
             repo_id=repo_id,
@@ -83,7 +91,7 @@ def seed_fixture(memory: Memory, repo_id: str) -> dict[str, str]:
             tags=derived_tags,
             auto_link=False,
         ),
-        "conflict_candidate": storage.store_memory(
+        "conflict_candidate": _store(storage,
             "Conflict candidate: ranking can ignore relationship evidence paths.",
             layer="semantic",
             repo_id=repo_id,

@@ -15,6 +15,14 @@ from visp_memory.core.ranking import rank_memory_results
 from visp_memory.core.storage import LocalStorage
 
 
+def _store(storage, content, **kwargs):
+    if kwargs.get("layer") == "semantic":
+        kwargs["evidence_ids"] = [
+            storage.store_evidence(content, repo_id=kwargs["repo_id"])
+        ]
+    return storage.store_memory(content, **kwargs)
+
+
 def _direct(storage, query: str, repo_id: str, limit: int = 10) -> list[dict]:
     candidates = {}
     for layer in ("intent", "semantic", "episodic", "raw"):
@@ -58,38 +66,38 @@ def evaluate() -> dict:
     with tempfile.TemporaryDirectory(prefix="visp-memory-hybrid-eval-") as tmpdir:
         storage = LocalStorage(Path(tmpdir))
         repo_id = "hybrid-eval"
-        oauth = storage.store_memory(
+        oauth = _store(storage,
             "OAuth refresh token rotation policy",
             layer="semantic",
             repo_id=repo_id,
             auto_link=False,
         )
-        lineage = storage.store_memory(
+        lineage = _store(storage,
             "Token families retain parent child lineage",
             layer="semantic",
             repo_id=repo_id,
             auto_link=False,
         )
-        replay = storage.store_memory(
+        replay = _store(storage,
             "Invalidate all descendants after credential replay detection",
             layer="semantic",
             repo_id=repo_id,
             auto_link=False,
         )
-        migration = storage.store_memory(
+        migration = _store(storage,
             "Database migrations use an advisory lock with a thirty second timeout",
             layer="semantic",
             repo_id=repo_id,
             auto_link=False,
         )
-        auth_file = storage.store_memory(
+        auth_file = _store(storage,
             "Configured secrets require constant-time comparison",
             layer="semantic",
             repo_id=repo_id,
             metadata={"files": ["src/auth.py"]},
             auto_link=False,
         )
-        hub = storage.store_memory(
+        hub = _store(storage,
             "General project conventions",
             layer="semantic",
             repo_id=repo_id,
@@ -99,7 +107,7 @@ def evaluate() -> dict:
         storage.add_relationship(lineage, replay, "supports")
         storage.add_relationship(oauth, hub, "related_to", evidence={"confidence": "inferred"})
         for index in range(8):
-            noise = storage.store_memory(
+            noise = _store(storage,
                 f"Routine unrelated note number {index}",
                 layer="episodic",
                 repo_id=repo_id,

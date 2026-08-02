@@ -27,6 +27,8 @@ reason not to.
 | **Storage** | SQLite + ChromaDB | ArcadeDB Embedded graph files | Neo4j Graph DB | HTTP API Client |
 | **Vector Search** | ChromaDB/text fallback | ChromaDB/text fallback for v1 | Neo4j Vector Index | Server-side |
 | **Relationships** | Structured SQLite rows | Stable graph vertices/edges | Native Graphs | Server-side |
+| **Complete Graph Export** | Yes | Yes | No | No |
+| **Atomic Graph Import** | Yes | No | No | No |
 | **Multi-user** | No | No | Yes | Yes |
 | **Requires Server** | No | No | Yes (Neo4j) | Yes (FastAPI) |
 | **Install** | `visp-memory[api,mcp]` | `visp-memory[arcadedb,api,mcp]` | `visp-memory[neo4j,api,mcp]` | `visp-memory[mcp]` |
@@ -53,8 +55,8 @@ does not require Docker or a separate server.
 ### Overview
 
 ArcadeDB Embedded stores structured records as local graph data while preserving
-the same public storage shapes used by SQLite, Neo4j, the API, MCP tools,
-dashboard, reports, import, and export.
+the common record shapes used by the API, MCP tools, dashboard, and reports. It
+supports complete graph export but not atomic graph import.
 
 **Advantages:**
 - Runs in-process with `pip install "visp-memory[arcadedb,api,mcp]"`
@@ -463,31 +465,20 @@ memory = Memory(config)
 
 ## Migration Guide
 
-No automatic backend migration runs in v1. Use the existing export/import flow
-so users explicitly choose the source and target backend.
+No automatic cross-backend migration runs. Format-2.0 graph portability is
+capability-gated: SQLite supports complete export and atomic import; ArcadeDB
+supports complete export only; Remote/HTTP and Neo4j support neither. Unsupported
+operations fail before storage reads or writes.
 
-### SQLite to ArcadeDB
-
-```bash
-VISP_MEMORY_STORAGE_BACKEND=sqlite visp-memory export memory.json
-VISP_MEMORY_STORAGE_BACKEND=arcadedb visp-memory import memory.json
-```
-
-### SQLite or ArcadeDB to Neo4j
-
-Start Neo4j and set `NEO4J_URI`, `NEO4J_USER`, and `NEO4J_PASSWORD`, then:
-
-```bash
-VISP_MEMORY_STORAGE_BACKEND=sqlite visp-memory export memory.json
-VISP_MEMORY_STORAGE_BACKEND=neo4j visp-memory import memory.json
-```
-
-To migrate from ArcadeDB to SQLite, reverse the backend values:
+ArcadeDB data can therefore be exported into SQLite:
 
 ```bash
 VISP_MEMORY_STORAGE_BACKEND=arcadedb visp-memory export memory.json
 VISP_MEMORY_STORAGE_BACKEND=sqlite visp-memory import memory.json
 ```
+
+Importing a format-2.0 graph into ArcadeDB, Remote/HTTP, or Neo4j is intentionally
+refused until those backends provide an atomic Evidence-graph import contract.
 
 ---
 

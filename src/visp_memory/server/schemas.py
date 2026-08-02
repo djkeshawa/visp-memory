@@ -45,6 +45,7 @@ class MemoryCreate(ScopedRequest):
     )
     metadata: Dict[str, Any] = Field(default_factory=dict)
     source_ids: List[str] = Field(default_factory=list)
+    evidence_ids: List[str] = Field(default_factory=list)
     status: MemoryStatus = "active"
     source: Optional[str] = Field(
         default=None,
@@ -83,6 +84,7 @@ class MemoryResponse(BaseModel):
     status: MemoryStatus = "active"
     source: Optional[str] = None
     quality_flags: List[str] = Field(default_factory=list)
+    evidence_ids: List[str] = Field(default_factory=list)
     approved_by: Optional[str] = None
     approved_at: Optional[datetime] = None
     archived_at: Optional[datetime] = None
@@ -108,6 +110,34 @@ class MemoryResponse(BaseModel):
     hold: bool = False
     environment: List[str] = Field(default_factory=list)
     task_type: List[str] = Field(default_factory=list)
+
+
+class EvidenceCreate(BaseModel):
+    content: str = Field(min_length=1)
+    repo_id: str = Field(min_length=1)
+    evidence_type: str = Field(default="observation", min_length=1)
+    provenance: Optional[str] = Field(
+        default=None,
+        deprecated="Accepted for compatibility but ignored; HTTP Evidence is external.",
+    )
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class EvidenceResponse(BaseModel):
+    id: str
+    content: str
+    content_hash: str
+    repo_id: str
+    evidence_type: str
+    provenance: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    record_type: Literal["evidence"] = "evidence"
+
+
+class EvidenceAttachRequest(BaseModel):
+    repo_id: str = Field(min_length=1)
+    evidence_ids: List[str] = Field(min_length=1)
 
 
 class RelatedMemoryResponse(MemoryResponse):

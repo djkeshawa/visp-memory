@@ -14,6 +14,14 @@ from visp_memory.core.tokens import estimate_tokens
 from visp_memory.core.trust import Provenance, provenance_tag
 
 
+def _store(storage, content, **kwargs):
+    if kwargs.get("layer") == "semantic":
+        kwargs["evidence_ids"] = [
+            storage.store_evidence(content, repo_id=kwargs["repo_id"])
+        ]
+    return storage.store_memory(content, **kwargs)
+
+
 def evaluate() -> dict:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
         storage = LocalStorage(Path(directory))
@@ -27,7 +35,7 @@ def evaluate() -> dict:
                 "acceptance_criteria": ["Browser credentials never reach local storage"],
             },
         )
-        warning = storage.store_memory(
+        warning = _store(storage,
             "WARNING [auth]: browser credentials must stay in HttpOnly cookies",
             layer="semantic",
             category="fragile_area",
@@ -36,7 +44,7 @@ def evaluate() -> dict:
             metadata={"files": ["src/auth.py"], "confidence": 0.98},
             auto_link=False,
         )
-        decision = storage.store_memory(
+        decision = _store(storage,
             "Use opaque server-side sessions with CSRF validation",
             layer="episodic",
             category="architecture_decision",
@@ -45,7 +53,7 @@ def evaluate() -> dict:
             metadata={"files": ["src/auth.py"], "confidence": 0.96},
             auto_link=False,
         )
-        knowledge = storage.store_memory(
+        knowledge = _store(storage,
             "Machine clients use repository-scoped llmm personal access tokens",
             layer="semantic",
             category="fact",
@@ -54,7 +62,7 @@ def evaluate() -> dict:
             metadata={"files": ["src/auth.py"], "confidence": 0.94},
             auto_link=False,
         )
-        old = storage.store_memory(
+        old = _store(storage,
             "Dashboard credentials are persisted in local storage",
             layer="semantic",
             category="fact",
@@ -75,7 +83,7 @@ def evaluate() -> dict:
             },
         )
         for index in range(30):
-            storage.store_memory(
+            _store(storage,
                 f"Unrelated build pipeline observation {index}",
                 layer="episodic",
                 repo_id="evaluation",

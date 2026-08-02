@@ -11,6 +11,12 @@ events, and capture manifests. Local mode stores data under the configured
 storage directory. Server mode stores data in the configured backend and exposes
 it through authenticated API routes.
 
+Semantic beliefs are never source records. They reference separately stored,
+immutable, same-repository Evidence as defined in
+[EVIDENCE_BELIEF_CONTRACT.md](EVIDENCE_BELIEF_CONTRACT.md). Missing or
+cross-repository Evidence refuses the entire belief write. Migrated legacy
+beliefs remain unknown and quarantined until reviewed.
+
 ## Workflow Authority And Compatibility
 
 Visp Memory records intent descriptions and cited, non-authoritative outcome

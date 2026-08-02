@@ -32,11 +32,14 @@ def _store(
     tier=Provenance.EXTERNAL,
     category="fact",
 ):
+    effective_repo_id = repo_id or "__visp_unscoped__"
+    evidence_id = storage.store_evidence(content, repo_id=effective_repo_id)
     return storage.store_memory(
         content,
         layer="semantic",
         category=category,
         repo_id=repo_id,
+        evidence_ids=[evidence_id],
         tags=[provenance_tag(tier)],
         metadata=metadata or {},
         auto_link=False,

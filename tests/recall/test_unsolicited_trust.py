@@ -15,6 +15,9 @@ def _memory(tmp_path):
 
 
 def _store(storage, content, *, layer, category, tier, metadata=None):
+    evidence_ids = None
+    if layer == "semantic":
+        evidence_ids = [storage.store_evidence(content, repo_id="repo-a")]
     return storage.store_memory(
         content,
         layer=layer,
@@ -23,6 +26,7 @@ def _store(storage, content, *, layer, category, tier, metadata=None):
         tags=[provenance_tag(tier)],
         metadata=metadata or {},
         auto_link=False,
+        evidence_ids=evidence_ids,
     )
 
 

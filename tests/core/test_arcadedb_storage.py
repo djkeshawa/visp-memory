@@ -1,4 +1,5 @@
 import builtins
+import copy
 import re
 import sys
 from pathlib import Path
@@ -12,6 +13,13 @@ from visp_memory.core.arcadedb_storage import (
     ArcadeDbDependencyError,
     ArcadeDbStorage,
     load_arcadedb_driver,
+)
+from visp_memory.core.storage import (
+    EvidenceError,
+    EvidenceImmutableError,
+    EvidenceReferenceError,
+    LocalStorage,
+    StorageMigrationRequired,
 )
 from visp_memory.core.trust import Provenance, provenance_tag
 
@@ -50,6 +58,7 @@ class FakeArcadeDb:
         self.commands = []
         self.records = {
             "Memory": {},
+            "Evidence": {},
             "Intent": {},
             "Session": {},
             "Repository": {},
@@ -59,10 +68,17 @@ class FakeArcadeDb:
             "RecallFeedback": {},
             "SchemaVersion": {},
         }
-        self.edges = {"MemoryRelationship": {}, "RepoDependency": {}, "TeamMember": {}}
+        self.edges = {
+            "MemoryRelationship": {},
+            "BeliefEvidence": {},
+            "RepoDependency": {},
+            "TeamMember": {},
+        }
         self.memories = self.records["Memory"]
         self.relationships = self.edges["MemoryRelationship"]
         self.sessions = self.records["Session"]
+        self.vertex_types = set()
+        self.edge_types = set()
 
     def __enter__(self):
         return self
@@ -71,7 +87,7 @@ class FakeArcadeDb:
         return False
 
     def transaction(self):
-        return self
+        return FakeArcadeTransaction(self)
 
     def command(self, language, sql, *params):
         assert language == "sql"
@@ -80,11 +96,20 @@ class FakeArcadeDb:
         if sql.startswith("CREATE EDGE MemoryRelationship"):
             self._create_edge("MemoryRelationship", sql, params)
             return None
+        if sql.startswith("CREATE EDGE BeliefEvidence"):
+            self._create_edge("BeliefEvidence", sql, params)
+            return None
         if sql.startswith("CREATE EDGE RepoDependency"):
             self._create_edge("RepoDependency", sql, params)
             return None
         if sql.startswith("CREATE EDGE TeamMember"):
             self._create_edge("TeamMember", sql, params)
+            return None
+        if sql.startswith("CREATE VERTEX TYPE "):
+            self.vertex_types.add(sql.split()[3])
+            return None
+        if sql.startswith("CREATE EDGE TYPE "):
+            self.edge_types.add(sql.split()[3])
             return None
         if sql.startswith("CREATE "):
             return None
@@ -114,6 +139,19 @@ class FakeArcadeDb:
     def query(self, language, sql, *params):
         assert language == "sql"
         sql = " ".join(sql.split())
+        if sql == "SELECT name, type, records FROM schema:types":
+            rows = []
+            for type_name in sorted(self.vertex_types):
+                records = self.records.get(type_name, self.edges.get(type_name, {}))
+                rows.append(
+                    {"name": type_name, "type": "VERTEX", "records": len(records)}
+                )
+            for type_name in sorted(self.edge_types):
+                records = self.edges[type_name]
+                rows.append(
+                    {"name": type_name, "type": "EDGE", "records": len(records)}
+                )
+            return rows
         if sql.startswith("SELECT FROM "):
             type_name = sql.split()[2]
             if type_name in self.edges:
@@ -157,6 +195,32 @@ class FakeArcadeDb:
 
         limit = params[-1] if params else len(rows)
         return rows[:limit]
+
+
+class FakeArcadeTransaction:
+    def __init__(self, db):
+        self.db = db
+
+    def __enter__(self):
+        self.snapshot = (
+            copy.deepcopy(self.db.records),
+            copy.deepcopy(self.db.edges),
+            set(self.db.vertex_types),
+            set(self.db.edge_types),
+        )
+        return self.db
+
+    def __exit__(self, exc_type, exc, traceback):
+        if exc_type is not None:
+            records, edges, vertex_types, edge_types = self.snapshot
+            self.db.records = records
+            self.db.edges = edges
+            self.db.memories = records["Memory"]
+            self.db.relationships = edges["MemoryRelationship"]
+            self.db.sessions = records["Session"]
+            self.db.vertex_types = vertex_types
+            self.db.edge_types = edge_types
+        return False
 
 
 def _insert_fields(sql):
@@ -259,6 +323,7 @@ def test_arcadedb_storage_opens_existing_database_after_initial_create(fake_arca
 
 def test_arcadedb_memory_crud_list_search_stats_and_projects(fake_arcadedb, tmp_path):
     storage = ArcadeDbStorage(tmp_path)
+    semantic_evidence = storage.store_evidence("ArcadeDB backend fixture", repo_id="repo-a")
 
     repo_a = storage.store_memory(
         "ArcadeDB supports embedded local graph storage",
@@ -268,6 +333,7 @@ def test_arcadedb_memory_crud_list_search_stats_and_projects(fake_arcadedb, tmp_
         importance=0.9,
         tags=["graph"],
         metadata={"source": "test"},
+        evidence_ids=[semantic_evidence],
     )
     repo_b = storage.store_memory(
         "SQLite remains the default backend",
@@ -315,6 +381,196 @@ def test_arcadedb_memory_crud_list_search_stats_and_projects(fake_arcadedb, tmp_
     assert storage.delete_memory(repo_b) is True
     assert storage.delete_memory(repo_b) is False
     assert fake_arcadedb.paths[-1] == tmp_path / "arcadedb"
+
+
+def test_arcadedb_persists_evidence_separately_and_validates_beliefs_atomically(
+    fake_arcadedb, tmp_path
+):
+    storage = ArcadeDbStorage(tmp_path)
+    evidence_id = storage.store_evidence(
+        "ArcadeDB exact tool output",
+        repo_id="repo-a",
+        evidence_type="tool_output",
+        provenance="derived",
+    )
+
+    belief_id = storage.store_memory(
+        "ArcadeDB evidence-backed belief",
+        layer="semantic",
+        repo_id="repo-a",
+        evidence_ids=[evidence_id],
+    )
+
+    assert storage.get_evidence(evidence_id)["record_type"] == "evidence"
+    assert storage.get_memory(belief_id)["evidence_ids"] == [evidence_id]
+    assert evidence_id not in {item["id"] for item in storage.list_memories(repo_id="repo-a")}
+    with pytest.raises(EvidenceImmutableError):
+        storage.update_evidence(evidence_id, content="changed")
+
+    other = storage.store_evidence("Other repository evidence", repo_id="repo-b")
+    with pytest.raises(EvidenceReferenceError):
+        storage.store_memory(
+            "Must not persist",
+            layer="semantic",
+            repo_id="repo-a",
+            evidence_ids=[other],
+        )
+    assert all(
+        item["content"] != "Must not persist"
+        for item in storage.list_memories(repo_id="repo-a")
+    )
+
+    additional = storage.store_evidence("Reconciliation observation", repo_id="repo-a")
+    storage.attach_evidence(belief_id, [additional], repo_id="repo-a")
+    assert storage.get_memory(belief_id)["evidence_ids"] == sorted(
+        [evidence_id, additional]
+    )
+
+
+def test_arcadedb_v2_constructor_refuses_without_schema_or_marker_drift(
+    fake_arcadedb, tmp_path
+):
+    database_path = tmp_path / "arcadedb"
+    fake_arcadedb.existing_paths.add(database_path)
+    fake_arcadedb.db.records["SchemaVersion"]["storage"] = {
+        "id": "storage",
+        "component": "storage",
+        "version": 2,
+        "applied_at": "2026-01-01T00:00:00+00:00",
+    }
+    fake_arcadedb.db.vertex_types = {"Memory", "SchemaVersion"}
+    fake_arcadedb.db.edge_types = {"MemoryRelationship"}
+
+    with pytest.raises(StorageMigrationRequired):
+        ArcadeDbStorage(tmp_path)
+
+    assert fake_arcadedb.db.records["SchemaVersion"]["storage"]["version"] == 2
+    assert fake_arcadedb.db.vertex_types == {"Memory", "SchemaVersion"}
+    assert fake_arcadedb.db.edge_types == {"MemoryRelationship"}
+    assert fake_arcadedb.db.commands == []
+
+
+def test_arcadedb_markerless_nonempty_constructor_refuses_before_type_mutation(
+    fake_arcadedb, tmp_path
+):
+    database_path = tmp_path / "arcadedb"
+    fake_arcadedb.existing_paths.add(database_path)
+    fake_arcadedb.db.vertex_types = {"Memory"}
+    fake_arcadedb.db.records["Memory"]["legacy"] = {
+        "id": "legacy",
+        "content": "Markerless legacy record",
+        "layer": "episodic",
+    }
+    records_before = copy.deepcopy(fake_arcadedb.db.records)
+
+    with pytest.raises(StorageMigrationRequired, match="[Uu]nversioned"):
+        ArcadeDbStorage(tmp_path)
+
+    assert fake_arcadedb.db.records == records_before
+    assert fake_arcadedb.db.vertex_types == {"Memory"}
+    assert fake_arcadedb.db.edge_types == set()
+    assert fake_arcadedb.db.commands == []
+
+
+def _configure_current_arcadedb(fake_arcadedb, tmp_path):
+    database_path = tmp_path / "arcadedb"
+    fake_arcadedb.existing_paths.add(database_path)
+    fake_arcadedb.db.vertex_types = set(ArcadeDbStorage.VERTEX_TYPES)
+    fake_arcadedb.db.edge_types = set(ArcadeDbStorage.EDGE_TYPES)
+    fake_arcadedb.db.records["SchemaVersion"]["storage"] = {
+        "id": "storage",
+        "component": "storage",
+        "version": 3,
+        "applied_at": "2026-01-01T00:00:00+00:00",
+    }
+
+
+def _add_current_arcadedb_evidence_graph(fake_arcadedb):
+    fake_arcadedb.db.records["Memory"]["belief-1"] = {
+        "id": "belief-1",
+        "content": "Evidence-backed belief",
+        "layer": "semantic",
+        "repo_id": "repo-a",
+    }
+    fake_arcadedb.db.records["Evidence"]["evidence-1"] = {
+        "id": "evidence-1",
+        "content": "Exact observation",
+        "content_hash": LocalStorage._evidence_hash("Exact observation"),
+        "repo_id": "repo-a",
+        "evidence_type": "observation",
+        "provenance": "unknown",
+        "metadata": {},
+        "created_at": "2026-01-01T00:00:00+00:00",
+    }
+    fake_arcadedb.db.edges["BeliefEvidence"]["link-1"] = {
+        "id": "link-1",
+        "belief_id": "belief-1",
+        "evidence_id": "evidence-1",
+        "created_at": "2026-01-01T00:00:00+00:00",
+    }
+
+
+def test_arcadedb_current_marker_missing_required_type_refuses_without_mutation(
+    fake_arcadedb, tmp_path
+):
+    _configure_current_arcadedb(fake_arcadedb, tmp_path)
+    fake_arcadedb.db.vertex_types.remove("Evidence")
+    types_before = (
+        set(fake_arcadedb.db.vertex_types),
+        set(fake_arcadedb.db.edge_types),
+    )
+
+    with pytest.raises(StorageMigrationRequired, match="required types"):
+        ArcadeDbStorage(tmp_path)
+
+    assert types_before == (
+        fake_arcadedb.db.vertex_types,
+        fake_arcadedb.db.edge_types,
+    )
+    assert fake_arcadedb.db.commands == []
+
+
+@pytest.mark.parametrize(
+    "defect",
+    ["dangling_belief", "missing_evidence", "cross_repo", "no_edge"],
+)
+def test_arcadedb_current_marker_invalid_evidence_graph_refuses_without_mutation(
+    fake_arcadedb, tmp_path, defect
+):
+    _configure_current_arcadedb(fake_arcadedb, tmp_path)
+    _add_current_arcadedb_evidence_graph(fake_arcadedb)
+    if defect == "dangling_belief":
+        fake_arcadedb.db.edges["BeliefEvidence"]["link-1"]["belief_id"] = "missing"
+    elif defect == "missing_evidence":
+        fake_arcadedb.db.records["Evidence"].clear()
+    elif defect == "cross_repo":
+        fake_arcadedb.db.records["Evidence"]["evidence-1"]["repo_id"] = "repo-b"
+    else:
+        fake_arcadedb.db.edges["BeliefEvidence"].clear()
+    records_before = copy.deepcopy(fake_arcadedb.db.records)
+    edges_before = copy.deepcopy(fake_arcadedb.db.edges)
+
+    with pytest.raises(StorageMigrationRequired, match="Evidence graph"):
+        ArcadeDbStorage(tmp_path)
+
+    assert fake_arcadedb.db.records == records_before
+    assert fake_arcadedb.db.edges == edges_before
+    assert fake_arcadedb.db.commands == []
+
+
+def test_arcadedb_current_marker_valid_evidence_graph_proceeds(
+    fake_arcadedb, tmp_path
+):
+    _configure_current_arcadedb(fake_arcadedb, tmp_path)
+    _add_current_arcadedb_evidence_graph(fake_arcadedb)
+
+    storage = ArcadeDbStorage(tmp_path)
+
+    assert storage.get_memory("belief-1")["evidence_ids"] == ["evidence-1"]
+    assert not any(
+        command.startswith("INSERT INTO SchemaVersion")
+        for command in fake_arcadedb.db.commands
+    )
 
 
 def test_arcadedb_search_excludes_raw_layer_by_default(fake_arcadedb, tmp_path):
@@ -367,6 +623,106 @@ def test_arcadedb_get_collection_is_none_for_conservative_vector_v1(fake_arcaded
     storage = ArcadeDbStorage(tmp_path)
 
     assert storage.get_collection("semantic") is None
+
+
+def test_arcadedb_evidence_idempotency_compares_only_explicit_created_at(
+    fake_arcadedb, tmp_path
+):
+    storage = ArcadeDbStorage(tmp_path / "arcade")
+    first_created_at = "2026-01-01T00:00:00+00:00"
+    storage.store_evidence(
+        "Timestamped evidence",
+        repo_id="repo-a",
+        evidence_id="evidence-timestamped",
+        created_at=first_created_at,
+    )
+
+    assert storage.store_evidence(
+        "Timestamped evidence",
+        repo_id="repo-a",
+        evidence_id="evidence-timestamped",
+    ) == "evidence-timestamped"
+    with pytest.raises(EvidenceImmutableError, match="collision"):
+        storage.store_evidence(
+            "Timestamped evidence",
+            repo_id="repo-a",
+            evidence_id="evidence-timestamped",
+            created_at="2026-01-02T00:00:00+00:00",
+        )
+
+    assert storage.get_evidence("evidence-timestamped")["created_at"] == first_created_at
+
+
+def test_arcadedb_evidence_redacts_secret_before_hash_and_persistence(
+    fake_arcadedb, tmp_path
+):
+    storage = ArcadeDbStorage(tmp_path)
+    secret = "sk-proj-abcdefghijklmnopqrstuvwxyz123456"
+
+    evidence_id = storage.store_evidence(
+        f"Observed credential {secret}", repo_id="repo-a"
+    )
+
+    evidence = storage.get_evidence(evidence_id)
+    assert secret not in evidence["content"]
+    assert "[REDACTED:openai-key]" in evidence["content"]
+    assert evidence["content_hash"] == LocalStorage._evidence_hash(evidence["content"])
+
+
+@pytest.mark.parametrize("defect", ["invalid_hash", "missing_field"])
+def test_arcadedb_current_marker_corrupt_evidence_refuses_without_command(
+    fake_arcadedb, tmp_path, defect
+):
+    _configure_current_arcadedb(fake_arcadedb, tmp_path)
+    _add_current_arcadedb_evidence_graph(fake_arcadedb)
+    if defect == "invalid_hash":
+        fake_arcadedb.db.records["Evidence"]["evidence-1"]["content_hash"] = "bad"
+    else:
+        fake_arcadedb.db.records["Evidence"]["evidence-1"].pop("evidence_type")
+
+    with pytest.raises(StorageMigrationRequired, match="Evidence graph"):
+        ArcadeDbStorage(tmp_path)
+
+    assert fake_arcadedb.db.commands == []
+
+
+def test_arcadedb_corrupt_secret_evidence_read_refuses(fake_arcadedb, tmp_path):
+    storage = ArcadeDbStorage(tmp_path)
+    evidence_id = storage.store_evidence("Initially safe", repo_id="repo-a")
+    secret = "sk-proj-abcdefghijklmnopqrstuvwxyz123456"
+    record = fake_arcadedb.db.records["Evidence"][evidence_id]
+    record["content"] = f"Corrupted credential {secret}"
+    record["content_hash"] = LocalStorage._evidence_hash(record["content"])
+
+    with pytest.raises(EvidenceError, match="secret-bearing Evidence"):
+        storage.get_evidence(evidence_id)
+
+
+@pytest.mark.parametrize("defect", ["invalid_hash", "secret"])
+def test_arcadedb_post_open_corrupt_evidence_list_and_export_refuse(
+    fake_arcadedb, tmp_path, defect
+):
+    config = MemoryConfig(project_name="arcadedb-corrupt-export", repo_id="repo-a")
+    config.storage.backend = "arcadedb"
+    config.storage.data_dir = tmp_path / "data"
+    config.embedding.provider = "noop"
+    memory = Memory(config=config)
+    evidence_id = memory._storage.store_evidence("Initially safe", repo_id="repo-a")
+    record = fake_arcadedb.db.records["Evidence"][evidence_id]
+    if defect == "invalid_hash":
+        record["content_hash"] = "invalid"
+    else:
+        secret = "sk-proj-abcdefghijklmnopqrstuvwxyz123456"
+        record["content"] = f"Corrupted credential {secret}"
+        record["content_hash"] = LocalStorage._evidence_hash(record["content"])
+    export_path = tmp_path / f"must-not-export-{defect}.json"
+
+    with pytest.raises(EvidenceError, match="Evidence"):
+        memory._storage.list_evidence("repo-a")
+    with pytest.raises(EvidenceError, match="Evidence"):
+        memory.export(export_path)
+
+    assert not export_path.exists()
 
 
 def test_arcadedb_schema_uses_stable_vertex_and_edge_types(fake_arcadedb, tmp_path):
@@ -591,7 +947,7 @@ def test_arcadedb_reinforces_on_use_in_parity_with_local(fake_arcadedb, tmp_path
     # Backend parity: a used memory must strengthen (access_count++) just like SQLite,
     # while a merely-surfaced one must not.
     storage = ArcadeDbStorage(tmp_path)
-    memory_id = storage.store_memory("ArcadeDB reinforce signal")
+    memory_id = storage.store_memory("ArcadeDB reinforce signal", repo_id="repo-a")
 
     def access_count() -> int:
         record = storage._memory_record_to_dict(storage._query_memory(memory_id))
@@ -712,6 +1068,11 @@ def test_arcadedb_memory_intelligence_report_uses_public_storage_contract(
         repo_id="repo-a",
         importance=0.8,
         auto_link=False,
+        evidence_ids=[
+            memory._storage.store_evidence(
+                "Embedded graph backend needs careful packaging", repo_id="repo-a"
+            )
+        ],
     )
     memory._storage.add_relationship(
         high_id,

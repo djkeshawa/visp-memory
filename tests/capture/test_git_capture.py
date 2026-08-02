@@ -61,7 +61,7 @@ def test_test_capture_skips_unchanged_report(tmp_path):
 
     assert len(first) == 1
     captured = memory._storage.get_memory(first[0])
-    assert provenance_of(captured) is Provenance.DERIVED
+    assert provenance_of(captured) is Provenance.UNKNOWN
     assert captured["metadata"]["write_channel"] == "test_capture"
     assert second == []
     assert capture.last_manifest_report == {"changed": 0, "unchanged": 1, "stale": 0}

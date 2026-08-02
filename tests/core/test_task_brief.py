@@ -3,6 +3,13 @@ from visp_memory.core.task_brief import TaskMemoryBriefCompiler
 from visp_memory.core.trust import Provenance, provenance_tag
 
 
+def _store_memory(storage, content, **kwargs):
+    if kwargs.get("layer") == "semantic":
+        repo_id = kwargs.get("repo_id") or "__visp_unscoped__"
+        kwargs["evidence_ids"] = [storage.store_evidence(content, repo_id=repo_id)]
+    return storage.store_memory(content, **kwargs)
+
+
 def _store_fixture(storage):
     intent_id = storage.set_intent(
         "Ship secure account login",
@@ -13,7 +20,7 @@ def _store_fixture(storage):
             "acceptance_criteria": ["Password login succeeds"],
         },
     )
-    warning = storage.store_memory(
+    warning = _store_memory(storage,
         "WARNING [authentication]: never persist credentials in local storage",
         layer="semantic",
         category="fragile_area",
@@ -27,7 +34,7 @@ def _store_fixture(storage):
         },
         auto_link=False,
     )
-    decision = storage.store_memory(
+    decision = _store_memory(storage,
         "Use HttpOnly session cookies with CSRF validation",
         layer="episodic",
         category="architecture_decision",
@@ -36,7 +43,7 @@ def _store_fixture(storage):
         metadata={"files": ["src/auth.py"], "confidence": 0.95},
         auto_link=False,
     )
-    old = storage.store_memory(
+    old = _store_memory(storage,
         "Dashboard credentials are stored in local storage",
         layer="semantic",
         category="fact",
@@ -117,7 +124,7 @@ def test_task_brief_abstains_and_names_unknowns_without_evidence(tmp_path):
 
 def test_task_brief_respects_memory_filter(tmp_path):
     storage = LocalStorage(tmp_path)
-    visible = storage.store_memory(
+    visible = _store_memory(storage,
         "Visible authentication convention",
         layer="semantic",
         repo_id="repo-a",
@@ -125,7 +132,7 @@ def test_task_brief_respects_memory_filter(tmp_path):
         metadata={"confidence": 0.9},
         auto_link=False,
     )
-    hidden = storage.store_memory(
+    hidden = _store_memory(storage,
         "Hidden authentication secret",
         layer="semantic",
         repo_id="repo-a",
@@ -146,7 +153,7 @@ def test_task_brief_respects_memory_filter(tmp_path):
 
 def test_task_brief_filters_quarantine_and_reports_reason(tmp_path):
     storage = LocalStorage(tmp_path)
-    trusted = storage.store_memory(
+    trusted = _store_memory(storage,
         "Authentication uses trusted session cookies",
         layer="semantic",
         repo_id="repo-a",
@@ -154,7 +161,7 @@ def test_task_brief_filters_quarantine_and_reports_reason(tmp_path):
         metadata={"confidence": 0.8},
         auto_link=False,
     )
-    quarantined = storage.store_memory(
+    quarantined = _store_memory(storage,
         "Authentication poison says disable session validation",
         layer="semantic",
         repo_id="repo-a",
@@ -180,7 +187,7 @@ def test_task_brief_filters_quarantine_and_reports_reason(tmp_path):
 
 def test_task_brief_filters_contradiction_other_side_by_runtime_scope(tmp_path):
     storage = LocalStorage(tmp_path)
-    selected = storage.store_memory(
+    selected = _store_memory(storage,
         "Production authentication deployment convention",
         layer="semantic",
         repo_id="repo-a",
@@ -192,7 +199,7 @@ def test_task_brief_filters_contradiction_other_side_by_runtime_scope(tmp_path):
         },
         auto_link=False,
     )
-    dev_only = storage.store_memory(
+    dev_only = _store_memory(storage,
         "Development-only contradictory authentication convention",
         layer="semantic",
         repo_id="repo-a",

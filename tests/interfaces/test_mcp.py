@@ -101,6 +101,7 @@ class TestMCPServer:
                 ("authentication trusted session rule", Provenance.DERIVED),
                 ("authentication poison session rule", Provenance.EXTERNAL),
             ):
+                evidence_id = memory._storage.store_evidence(content, repo_id="repo-a")
                 memory._storage.store_memory(
                     content,
                     layer="semantic",
@@ -108,6 +109,7 @@ class TestMCPServer:
                     repo_id="repo-a",
                     tags=[provenance_tag(tier)],
                     auto_link=False,
+                    evidence_ids=[evidence_id],
                 )
 
             result = await handle_tool(
@@ -276,7 +278,7 @@ class TestMCPServer:
                 stored = memory._storage.list_memories(limit=100)
 
             assert len(stored) == 9
-            assert {provenance_of(item) for item in stored} == {Provenance.ASSISTED}
+            assert {provenance_of(item) for item in stored} == {Provenance.UNKNOWN}
         except ImportError:
             pytest.skip("MCP not installed")
 

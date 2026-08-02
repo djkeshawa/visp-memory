@@ -7,6 +7,7 @@ import requests
 from visp_memory import Memory, MemoryConfig
 from visp_memory.core.hybrid_retrieval import HybridRetriever
 from visp_memory.core.remote_storage import RemoteStorage, RemoteStorageError
+from visp_memory.core.storage import EvidenceImmutableError
 from visp_memory.layers.episodic import EpisodicMemory
 from visp_memory.layers.semantic import SemanticMemory
 from visp_memory.recall.graph import GraphRecall
@@ -99,6 +100,82 @@ def test_remote_storage_write_requires_returned_id():
 
     with pytest.raises(RemoteStorageError, match="without returning an id"):
         storage.store_memory("remember this")
+
+
+def test_remote_storage_evidence_contract_and_immutability():
+    storage = remote_storage_with(FakeResponse(200, {"id": "evidence-1"}))
+
+    assert storage.store_evidence(
+        "Exact tool output",
+        repo_id="repo-a",
+        evidence_type="tool_output",
+        provenance="derived",
+        metadata={"tool": "pytest"},
+    ) == "evidence-1"
+    assert storage.session.last_post_url == "http://memory.example/evidence"
+    assert storage.session.last_post_json == {
+        "content": "Exact tool output",
+        "repo_id": "repo-a",
+        "evidence_type": "tool_output",
+        "provenance": "derived",
+        "metadata": {"tool": "pytest"},
+    }
+
+    with pytest.raises(EvidenceImmutableError):
+        storage.update_evidence("evidence-1", content="changed")
+    assert storage.session.last_patch_url is None
+
+
+def test_remote_storage_reads_evidence_and_server_schema_status():
+    evidence = {
+        "id": "evidence-1",
+        "content": "Exact output",
+        "content_hash": "abc",
+        "repo_id": "repo-a",
+        "evidence_type": "tool_output",
+        "provenance": "derived",
+        "metadata": {},
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "record_type": "evidence",
+    }
+    storage = remote_storage_with(FakeResponse(200, evidence))
+    assert storage.get_evidence("evidence-1") == evidence
+    assert storage.session.last_get_url == "http://memory.example/evidence/evidence-1"
+
+    storage = remote_storage_with(FakeResponse(200, [evidence]))
+    assert storage.list_evidence(repo_id="repo-a") == [evidence]
+    assert storage.session.last_get_params == {"repo_id": "repo-a", "limit": 10000}
+
+    schema = {"current_version": 3, "stored_version": 3, "status": "ready"}
+    storage = remote_storage_with(FakeResponse(200, {"schema_status": schema}))
+    assert storage.get_schema_status() == schema
+    assert storage.session.last_get_url == "http://memory.example/diagnostics/storage"
+
+
+def test_remote_storage_forwards_belief_evidence_ids():
+    storage = remote_storage_with(FakeResponse(200, {"id": "belief-1"}))
+
+    assert storage.store_memory(
+        "Authentication requires secure cookies",
+        layer="semantic",
+        repo_id="repo-a",
+        evidence_ids=["evidence-1"],
+    ) == "belief-1"
+    assert storage.session.last_post_json["evidence_ids"] == ["evidence-1"]
+
+
+def test_remote_storage_attaches_evidence_through_authorized_http_endpoint():
+    storage = remote_storage_with(FakeResponse(200, {"id": "belief-1"}))
+
+    storage.attach_evidence("belief-1", ["evidence-2"], repo_id="repo-a")
+
+    assert storage.session.last_post_url == (
+        "http://memory.example/memories/belief-1/evidence"
+    )
+    assert storage.session.last_post_json == {
+        "repo_id": "repo-a",
+        "evidence_ids": ["evidence-2"],
+    }
 
 
 def test_remote_storage_get_stats_accepts_repo_id():

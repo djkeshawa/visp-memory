@@ -16,9 +16,10 @@ from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Iterable, List, Literal, Optional
 
 from visp_memory.core.clock import utc_now
+from visp_memory.core.eligibility import UNSCOPED_REPO_ID
 from visp_memory.core.indexing import EmbeddingIndexReport, ReindexResult, ReindexScope
 from visp_memory.core.ranking import (
     clamp_score,
@@ -60,7 +61,56 @@ RECALL_EVENT_WEIGHTS: dict[str, float] = {
 # deliberately do not reinforce, to avoid popularity bias from mere exposure.
 REINFORCING_RECALL_EVENTS = frozenset({"used", "task_linked", "outcome_linked"})
 SENSITIVE_RECALL_METADATA_KEYS = {"prompt", "response", "query", "content", "messages"}
-STORAGE_SCHEMA_VERSION = 2
+STORAGE_SCHEMA_VERSION = 3
+_STORAGE_TABLE_NAMES = frozenset(
+    {
+        "audit_logs",
+        "belief_evidence",
+        "evidence",
+        "intents",
+        "memories",
+        "recall_events",
+        "relationships",
+        "repositories",
+        "repository_dependencies",
+        "sessions",
+        "team_members",
+        "teams",
+        "users",
+    }
+)
+
+
+class EvidenceError(ValueError):
+    """Base error for evidence contract violations."""
+
+
+class EvidenceReferenceError(EvidenceError):
+    """Raised when a belief cites invalid or out-of-scope evidence."""
+
+
+class EvidenceImmutableError(EvidenceError):
+    """Raised when immutable evidence would be changed."""
+
+
+class EvidenceUnsupportedError(EvidenceError):
+    """Raised when a backend cannot represent Evidence separately."""
+
+
+class StorageMigrationRequired(RuntimeError):  # noqa: N818 - public compatibility name
+    """Raised when an existing store needs an explicit, backed-up migration."""
+
+
+class GraphImportRollbackIncompleteError(RuntimeError):
+    """Raised when a failed graph import may have left residual vector records."""
+
+    def __init__(self, residual_ids: Iterable[str]):
+        self.residual_ids = tuple(dict.fromkeys(residual_ids))
+        joined = ", ".join(self.residual_ids)
+        super().__init__(
+            "Graph import rolled back relational data, but vector compensation failed "
+            f"for {joined}; manual vector cleanup is required before retrying"
+        )
 
 
 @dataclass(frozen=True)
@@ -74,6 +124,8 @@ class StorageCapabilities:
     sessions: bool = True
     audit_log: bool = False
     reindex: bool = False
+    complete_graph_export: bool = False
+    atomic_graph_import: bool = False
 
     def to_dict(self) -> Dict[str, bool]:
         return asdict(self)
@@ -101,6 +153,31 @@ class BaseStorage(ABC):
             "stored_version": STORAGE_SCHEMA_VERSION,
             "status": "ready",
         }
+
+    def store_evidence(self, content: str, repo_id: str, **kwargs) -> str:
+        raise EvidenceUnsupportedError(
+            f"{self.__class__.__name__} does not support separate Evidence records"
+        )
+
+    def get_evidence(self, evidence_id: str) -> Optional[Dict[str, Any]]:
+        raise EvidenceUnsupportedError(
+            f"{self.__class__.__name__} does not support separate Evidence records"
+        )
+
+    def list_evidence(self, repo_id: str, **kwargs) -> List[Dict[str, Any]]:
+        raise EvidenceUnsupportedError(
+            f"{self.__class__.__name__} does not support separate Evidence records"
+        )
+
+    def update_evidence(self, evidence_id: str, **kwargs) -> bool:
+        raise EvidenceImmutableError(f"Evidence {evidence_id!r} is immutable")
+
+    def attach_evidence(
+        self, belief_id: str, evidence_ids: List[str], *, repo_id: str
+    ) -> None:
+        raise EvidenceUnsupportedError(
+            f"{self.__class__.__name__} does not support belief Evidence references"
+        )
 
     def __enter__(self):
         return self
@@ -328,10 +405,43 @@ class LocalStorage(BaseStorage):
     def _init_sqlite(self):
         """Initialize SQLite schema."""
         with self._get_db() as conn:
-            # Enable WAL once: it persists in the database file header, so every
-            # later connection inherits it (readers do not block writers).
-            conn.execute("PRAGMA journal_mode=WAL")
+            existing_tables = {
+                row["name"]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+                ).fetchall()
+            }
+            stored_version = 0
+            if "schema_migrations" in existing_tables:
+                row = conn.execute(
+                    "SELECT MAX(version) AS version FROM schema_migrations"
+                ).fetchone()
+                stored_version = int(row["version"] or 0)
 
+            if stored_version == 0 and existing_tables & _STORAGE_TABLE_NAMES:
+                raise StorageMigrationRequired(
+                    "Unversioned legacy storage requires an explicit migration; "
+                    "back up the database before converting it to schema "
+                    f"{STORAGE_SCHEMA_VERSION}"
+                )
+            if stored_version > STORAGE_SCHEMA_VERSION:
+                raise RuntimeError(
+                    "Storage schema is newer than this visp-memory build "
+                    f"({stored_version} > {STORAGE_SCHEMA_VERSION})"
+                )
+            if stored_version and stored_version < STORAGE_SCHEMA_VERSION:
+                raise StorageMigrationRequired(
+                    f"Storage schema {stored_version} requires explicit migration to "
+                    f"{STORAGE_SCHEMA_VERSION}; create a backup and run "
+                    "LocalStorage.migrate_schema(...)"
+                )
+            if stored_version == STORAGE_SCHEMA_VERSION:
+                self._validate_v3_evidence_schema(conn)
+
+            # Enable WAL only after compatibility checks: it persists in the
+            # database header and legacy stores must remain byte-for-byte unchanged.
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -340,13 +450,6 @@ class LocalStorage(BaseStorage):
                 )
                 """
             )
-            row = conn.execute("SELECT MAX(version) AS version FROM schema_migrations").fetchone()
-            stored_version = int(row["version"] or 0)
-            if stored_version > STORAGE_SCHEMA_VERSION:
-                raise RuntimeError(
-                    "Storage schema is newer than this visp-memory build "
-                    f"({stored_version} > {STORAGE_SCHEMA_VERSION})"
-                )
 
             # Main memories table
             conn.execute("""
@@ -373,6 +476,33 @@ class LocalStorage(BaseStorage):
                     compressed_at TIMESTAMP DEFAULT NULL
                 )
             """)
+
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS evidence (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    repo_id TEXT DEFAULT NULL,
+                    evidence_type TEXT NOT NULL DEFAULT 'observation',
+                    provenance TEXT NOT NULL DEFAULT 'unknown',
+                    metadata TEXT NOT NULL DEFAULT '{}',
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS belief_evidence (
+                    belief_id TEXT NOT NULL,
+                    evidence_id TEXT NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (belief_id, evidence_id),
+                    FOREIGN KEY (belief_id) REFERENCES memories(id) ON DELETE CASCADE,
+                    FOREIGN KEY (evidence_id) REFERENCES evidence(id) ON DELETE RESTRICT
+                )
+                """
+            )
 
             # Migration: Check if repo_id column exists in memories
             try:
@@ -592,6 +722,11 @@ class LocalStorage(BaseStorage):
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_repo ON memories(repo_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_evidence_repo ON evidence(repo_id)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_belief_evidence_evidence "
+                "ON belief_evidence(evidence_id)"
+            )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_memories_repo_status_created "
                 "ON memories(repo_id, status, created_at)"
@@ -641,6 +776,696 @@ class LocalStorage(BaseStorage):
 
             conn.commit()
 
+    @classmethod
+    def _validate_v3_evidence_schema(cls, conn: sqlite3.Connection) -> None:
+        """Refuse a malformed declared-v3 Evidence graph without repairing it."""
+        required_columns = {
+            "evidence": {
+                "id",
+                "content",
+                "content_hash",
+                "repo_id",
+                "evidence_type",
+                "provenance",
+                "metadata",
+                "created_at",
+            },
+            "belief_evidence": {"belief_id", "evidence_id", "created_at"},
+        }
+        try:
+            tables = {
+                row["name"]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            for table, expected in required_columns.items():
+                if table not in tables:
+                    raise ValueError(f"missing {table} table")
+                columns = {
+                    row["name"]: row for row in conn.execute(f"PRAGMA table_info({table})")
+                }
+                missing = expected - columns.keys()
+                if missing:
+                    raise ValueError(
+                        f"{table} is missing columns {', '.join(sorted(missing))}"
+                    )
+
+            link_columns = {
+                row["name"]: row
+                for row in conn.execute("PRAGMA table_info(belief_evidence)")
+            }
+            if (
+                link_columns["belief_id"]["pk"] != 1
+                or link_columns["evidence_id"]["pk"] != 2
+            ):
+                raise ValueError("belief_evidence has an invalid primary key")
+
+            foreign_keys = {
+                (
+                    row["from"],
+                    row["table"],
+                    row["to"],
+                    str(row["on_delete"]).upper(),
+                )
+                for row in conn.execute("PRAGMA foreign_key_list(belief_evidence)")
+            }
+            expected_foreign_keys = {
+                ("belief_id", "memories", "id", "CASCADE"),
+                ("evidence_id", "evidence", "id", "RESTRICT"),
+            }
+            if not expected_foreign_keys.issubset(foreign_keys):
+                raise ValueError("belief_evidence has invalid foreign keys")
+
+            for row in conn.execute("SELECT id, content, content_hash FROM evidence"):
+                if cls._evidence_hash(row["content"]) != row["content_hash"]:
+                    raise ValueError(f"Evidence {row['id']!r} has an invalid content hash")
+                try:
+                    cls._require_secret_free_evidence(
+                        row["content"], context="opening secret-bearing Evidence"
+                    )
+                except EvidenceError as exc:
+                    raise ValueError(
+                        f"Evidence {row['id']!r} contains secret-bearing Evidence content"
+                    ) from exc
+
+            invalid_links = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM belief_evidence be
+                LEFT JOIN memories m ON m.id = be.belief_id
+                LEFT JOIN evidence e ON e.id = be.evidence_id
+                WHERE m.id IS NULL OR e.id IS NULL OR m.repo_id != e.repo_id
+                """
+            ).fetchone()["count"]
+            if invalid_links:
+                raise ValueError("belief_evidence contains dangling or cross-repository links")
+
+            missing_semantic_links = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM memories m
+                WHERE m.layer = 'semantic'
+                AND NOT EXISTS (
+                    SELECT 1 FROM belief_evidence be WHERE be.belief_id = m.id
+                )
+                """
+            ).fetchone()["count"]
+            if missing_semantic_links:
+                raise ValueError("semantic memories are missing Evidence links")
+        except (sqlite3.DatabaseError, KeyError, TypeError, ValueError) as exc:
+            raise StorageMigrationRequired(
+                f"Storage schema 3 is malformed: {exc}; restore a valid backup or "
+                "run a supported migration"
+            ) from exc
+
+    def import_graph(
+        self, data: Dict[str, Any], *, default_repo_id: str
+    ) -> Dict[str, Any]:
+        """Prevalidate and import one schema-v3 graph in a single SQLite transaction."""
+        from visp_memory.core.trust import (
+            Provenance,
+            WriteChannel,
+            with_channel_provenance,
+            with_provenance,
+        )
+
+        evidence_items = list(data.get("evidence") or [])
+        memories_by_layer = data.get("memories") or {}
+        memory_items = [
+            {**item, "layer": item.get("layer") or layer}
+            for layer, items in memories_by_layer.items()
+            for item in (items or [])
+        ]
+        intent_items = list(data.get("intents") or [])
+        relationship_items = list(data.get("relationships") or [])
+
+        def indexed(items: List[Dict[str, Any]], kind: str) -> Dict[str, Dict[str, Any]]:
+            result: Dict[str, Dict[str, Any]] = {}
+            for item in items:
+                item_id = item.get("id")
+                if not isinstance(item_id, str) or not item_id:
+                    raise ValueError(f"Every imported {kind} requires a stable id")
+                if item_id in result:
+                    raise ValueError(f"Duplicate imported {kind} id {item_id!r}")
+                result[item_id] = item
+            return result
+
+        evidence_by_id = indexed(evidence_items, "Evidence")
+        memories_by_id = indexed(memory_items, "memory")
+        intents_by_id = indexed(intent_items, "intent")
+        relationships_by_id = indexed(relationship_items, "relationship")
+
+        portable_evidence_ids = {
+            evidence_id
+            for item in memory_items
+            if not item.get("repo_id")
+            for evidence_id in (item.get("evidence_ids") or [])
+        }
+        for evidence_id in portable_evidence_ids:
+            if evidence_id in evidence_by_id:
+                evidence_by_id[evidence_id]["repo_id"] = default_repo_id
+
+        for evidence_id, item in evidence_by_id.items():
+            content = item.get("content")
+            repo_id = item.get("repo_id") or default_repo_id
+            if not isinstance(content, str) or not content or not repo_id:
+                raise ValueError(f"Imported Evidence {evidence_id!r} is malformed")
+            self._require_secret_free_evidence(
+                content, context="stable imported Evidence"
+            )
+            supplied_hash = item.get("content_hash")
+            if supplied_hash and supplied_hash != self._evidence_hash(content):
+                raise ValueError(f"Imported Evidence {evidence_id!r} has an invalid hash")
+            item["repo_id"] = repo_id
+
+        for memory_id, item in memories_by_id.items():
+            content = item.get("content")
+            layer = item.get("layer")
+            repo_id = item.get("repo_id") or default_repo_id
+            if not isinstance(content, str) or layer not in {
+                "raw",
+                "episodic",
+                "semantic",
+                "intent",
+            }:
+                raise ValueError(f"Imported memory {memory_id!r} is malformed")
+            item["repo_id"] = repo_id
+            for evidence_id in item.get("evidence_ids") or []:
+                evidence = evidence_by_id.get(evidence_id)
+                if evidence is None:
+                    raise ValueError(
+                        f"Imported memory {memory_id!r} references missing Evidence "
+                        f"{evidence_id!r}"
+                    )
+                if evidence["repo_id"] != repo_id:
+                    raise ValueError("Imported Evidence references cannot cross repositories")
+
+        resolved_cache: Dict[str, List[str]] = {}
+
+        def resolve_evidence(memory_id: str, stack: set[str] | None = None) -> List[str]:
+            if memory_id in resolved_cache:
+                return resolved_cache[memory_id]
+            stack = set(stack or ())
+            if memory_id in stack:
+                raise ValueError("Imported memory lineage contains a cycle")
+            stack.add(memory_id)
+            item = memories_by_id[memory_id]
+            resolved = list(dict.fromkeys(item.get("evidence_ids") or []))
+            for source_id in dict.fromkeys(item.get("source_ids") or []):
+                source = memories_by_id.get(source_id)
+                if source is None:
+                    raise ValueError(
+                        f"Imported memory {memory_id!r} references missing lineage "
+                        f"source {source_id!r}"
+                    )
+                if source["repo_id"] != item["repo_id"]:
+                    raise ValueError("Imported lineage cannot cross repositories")
+                if source.get("status") == "deleted":
+                    raise ValueError("Imported lineage cannot reference a deleted memory")
+                resolved.extend(resolve_evidence(source_id, stack))
+            resolved = list(dict.fromkeys(resolved))
+            if item["layer"] == "semantic" and not resolved:
+                raise ValueError(
+                    f"Imported semantic memory {memory_id!r} has no retrievable Evidence"
+                )
+            resolved_cache[memory_id] = resolved
+            return resolved
+
+        for memory_id in memories_by_id:
+            resolve_evidence(memory_id)
+
+        for relationship_id, item in relationships_by_id.items():
+            source = memories_by_id.get(item.get("source_id"))
+            target = memories_by_id.get(item.get("target_id"))
+            if source is None or target is None:
+                raise ValueError(
+                    f"Imported relationship {relationship_id!r} has a dangling endpoint"
+                )
+            if source["repo_id"] != target["repo_id"]:
+                raise ValueError("Imported relationships cannot cross repositories")
+
+        vector_payloads: Dict[str, Dict[str, Any]] = {}
+        vector_collections: Dict[str, Any] = {}
+        if self._embedding_fn is not None and not self._uses_noop_embeddings:
+            for item in memory_items:
+                try:
+                    embedding = self._embedding_fn(item["content"])
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Could not compute vector for imported memory {item['id']!r}"
+                    ) from exc
+                layer = item["layer"]
+                collection = vector_collections.get(layer)
+                if collection is None:
+                    collection = self._get_collection(layer)
+                    if collection is None:
+                        raise RuntimeError(
+                            f"Vector collection for imported {layer} memories is unavailable"
+                        )
+                    vector_collections[layer] = collection
+                payload = vector_payloads.setdefault(
+                    layer,
+                    {"ids": [], "documents": [], "metadatas": [], "embeddings": []},
+                )
+                payload["ids"].append(item["id"])
+                payload["documents"].append(item["content"])
+                payload["metadatas"].append(
+                    {
+                        "category": item.get("category") or "general",
+                        "importance": item.get("importance", 0.5),
+                        "tags": self._json_serialize(
+                            with_channel_provenance(
+                                item.get("tags"), WriteChannel.IMPORT
+                            )
+                        ),
+                        "repo_id": item["repo_id"],
+                        "status": item.get("status") or "active",
+                    }
+                )
+                payload["embeddings"].append(embedding)
+
+        vector_write_payloads: Dict[str, Dict[str, Any]] = {}
+        with self._get_db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                for layer, payload in vector_payloads.items():
+                    placeholders = ", ".join("?" for _ in payload["ids"])
+                    relational_ids = {
+                        row["id"]
+                        for row in conn.execute(
+                            f"SELECT id FROM memories WHERE id IN ({placeholders})",
+                            payload["ids"],
+                        )
+                    }
+                    collection = vector_collections[layer]
+                    vector_result = collection.get(ids=payload["ids"], include=[])
+                    vector_ids = set((vector_result or {}).get("ids") or [])
+                    orphan_collisions = vector_ids - relational_ids
+                    if orphan_collisions:
+                        collision = sorted(orphan_collisions)[0]
+                        raise ValueError(
+                            f"Imported memory {collision!r} collides with a pre-existing vector"
+                        )
+                    write_indexes = [
+                        index
+                        for index, memory_id in enumerate(payload["ids"])
+                        if memory_id not in vector_ids
+                    ]
+                    if write_indexes:
+                        vector_write_payloads[layer] = {
+                            key: [values[index] for index in write_indexes]
+                            for key, values in payload.items()
+                        }
+
+                for evidence_id, item in evidence_by_id.items():
+                    quarantined = item["repo_id"] == UNSCOPED_REPO_ID
+                    self._insert_evidence(
+                        conn,
+                        content=item["content"],
+                        repo_id=item["repo_id"],
+                        evidence_type=item.get("evidence_type") or "observation",
+                        provenance="unknown" if quarantined else "external",
+                        metadata={
+                            **(item.get("metadata") or {}),
+                            "write_channel": WriteChannel.IMPORT.value,
+                        },
+                        evidence_id=evidence_id,
+                        created_at=item.get("created_at") or utc_now().isoformat(),
+                        compare_created_at=item.get("created_at") is not None,
+                    )
+
+                for memory_id, item in memories_by_id.items():
+                    quarantined = item["repo_id"] == UNSCOPED_REPO_ID
+                    tags = (
+                        with_provenance(item.get("tags"), Provenance.UNKNOWN)
+                        if quarantined
+                        else with_channel_provenance(
+                            item.get("tags"), WriteChannel.IMPORT
+                        )
+                    )
+                    metadata = {
+                        **(item.get("metadata") or {}),
+                        "write_channel": WriteChannel.IMPORT.value,
+                    }
+                    existing = conn.execute(
+                        "SELECT * FROM memories WHERE id = ?", (memory_id,)
+                    ).fetchone()
+                    created_at = (
+                        item.get("created_at")
+                        or (existing["created_at"] if existing is not None else None)
+                        or utc_now().isoformat()
+                    )
+                    values = {
+                        "id": memory_id,
+                        "content": item["content"],
+                        "layer": item["layer"],
+                        "repo_id": item["repo_id"],
+                        "category": item.get("category") or "general",
+                        "importance": item.get("importance", 0.5),
+                        "tags": self._json_serialize(tags),
+                        "metadata": self._json_serialize(metadata),
+                        "source_ids": self._json_serialize(item.get("source_ids") or []),
+                        "status": item.get("status") or "active",
+                        "source": "unknown" if quarantined else "external",
+                        "quality_flags": self._json_serialize(
+                            item.get("quality_flags") or []
+                        ),
+                        "created_at": created_at,
+                        "accessed_at": item.get("accessed_at")
+                        or item.get("created_at")
+                        or (existing["accessed_at"] if existing is not None else None)
+                        or utc_now().isoformat(),
+                        "access_count": int(item.get("access_count") or 0),
+                        "approved_by": item.get("approved_by"),
+                        "approved_at": item.get("approved_at"),
+                        "archived_at": item.get("archived_at"),
+                        "compressed_at": item.get("compressed_at"),
+                        "last_quality_checked_at": item.get(
+                            "last_quality_checked_at"
+                        ),
+                    }
+                    if existing is not None:
+                        identity_and_lifecycle = {
+                            key: value
+                            for key, value in values.items()
+                            if key not in {"accessed_at", "access_count"}
+                        }
+                        if any(
+                            existing[key] != value
+                            for key, value in identity_and_lifecycle.items()
+                        ):
+                            raise ValueError(
+                                f"Imported memory ID collision for {memory_id!r}"
+                            )
+                    else:
+                        columns = list(values)
+                        conn.execute(
+                            f"INSERT INTO memories ({', '.join(columns)}) VALUES "
+                            f"({', '.join('?' for _ in columns)})",
+                            [values[column] for column in columns],
+                        )
+                    link_created_at = item.get("created_at") or utc_now().isoformat()
+                    for evidence_id in resolve_evidence(memory_id):
+                        conn.execute(
+                            "INSERT OR IGNORE INTO belief_evidence "
+                            "(belief_id, evidence_id, created_at) VALUES (?, ?, ?)",
+                            (memory_id, evidence_id, link_created_at),
+                        )
+
+                for intent_id, item in intents_by_id.items():
+                    repo_id = item.get("repo_id") or default_repo_id
+                    values = (
+                        intent_id,
+                        item["description"],
+                        int(item.get("priority") or 0),
+                        item.get("status") or "active",
+                        self._json_serialize(item.get("context") or {}),
+                        item.get("created_at") or utc_now().isoformat(),
+                        item.get("updated_at") or item.get("created_at") or utc_now().isoformat(),
+                        repo_id,
+                    )
+                    existing = conn.execute(
+                        "SELECT id, description, priority, status, context, created_at, "
+                        "updated_at, repo_id FROM intents WHERE id = ?", (intent_id,)
+                    ).fetchone()
+                    if existing is not None and tuple(existing) != values:
+                        raise ValueError(f"Imported intent ID collision for {intent_id!r}")
+                    if existing is None:
+                        conn.execute(
+                            "INSERT INTO intents (id, description, priority, status, context, "
+                            "created_at, updated_at, repo_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                            values,
+                        )
+
+                for relationship_id, item in relationships_by_id.items():
+                    evidence = self._normalize_relationship_evidence(
+                        item.get("evidence"),
+                        strength=item.get("strength"),
+                        created_at=item.get("created_at"),
+                        legacy=False,
+                    )
+                    values = (
+                        relationship_id,
+                        item["source_id"],
+                        item["target_id"],
+                        item["relationship"],
+                        float(item.get("strength", 1.0)),
+                        evidence["confidence"],
+                        evidence["confidence_score"],
+                        evidence["source"],
+                        evidence["source_file"],
+                        evidence["source_location"],
+                        evidence["reason"],
+                        evidence["created_by"],
+                        evidence["created_at"] or utc_now().isoformat(),
+                    )
+                    existing = conn.execute(
+                        "SELECT id, source_id, target_id, relationship, strength, confidence, "
+                        "confidence_score, source, source_file, source_location, reason, "
+                        "created_by, created_at FROM relationships WHERE id = ?",
+                        (relationship_id,),
+                    ).fetchone()
+                    if existing is not None and tuple(existing) != values:
+                        raise ValueError(
+                            f"Imported relationship ID collision for {relationship_id!r}"
+                        )
+                    if existing is None:
+                        conn.execute(
+                            "INSERT INTO relationships (id, source_id, target_id, relationship, "
+                            "strength, confidence, confidence_score, source, source_file, "
+                            "source_location, reason, created_by, created_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            values,
+                        )
+                for layer, payload in vector_write_payloads.items():
+                    vector_collections[layer].upsert(**payload)
+                conn.commit()
+            except Exception as exc:
+                conn.rollback()
+                residual_ids: List[str] = []
+                for layer, payload in vector_write_payloads.items():
+                    try:
+                        vector_collections[layer].delete(ids=payload["ids"])
+                    except Exception:
+                        logger.error(
+                            "Vector compensation failed for imported %s memory IDs",
+                            len(payload["ids"]),
+                        )
+                        residual_ids.extend(payload["ids"])
+                if residual_ids:
+                    raise GraphImportRollbackIncompleteError(residual_ids) from exc
+                raise
+        return {
+            "status": "completed",
+            "memories": len(memories_by_id),
+            "evidence": len(evidence_by_id),
+            "vectors": "disabled" if not vector_payloads else "reconciled",
+        }
+
+    @classmethod
+    def migrate_schema(cls, data_dir: Path, *, backup_path: Path) -> Dict[str, Any]:
+        """Explicitly migrate a backed-up SQLite v2 store to schema v3."""
+        data_dir = Path(data_dir)
+        db_path = data_dir / "memories.db"
+        backup_path = Path(backup_path)
+        if not db_path.is_file():
+            raise FileNotFoundError(f"Storage database does not exist: {db_path}")
+        if backup_path.resolve() == db_path.resolve():
+            raise ValueError("backup_path must differ from the live storage database")
+
+        with sqlite3.connect(db_path) as probe:
+            row = probe.execute("SELECT MAX(version) FROM schema_migrations").fetchone()
+            stored_version = int((row or [0])[0] or 0)
+        if stored_version > STORAGE_SCHEMA_VERSION:
+            raise RuntimeError(
+                "Storage schema is newer than this visp-memory build "
+                f"({stored_version} > {STORAGE_SCHEMA_VERSION})"
+            )
+        if stored_version == STORAGE_SCHEMA_VERSION:
+            return {
+                "from_version": stored_version,
+                "to_version": STORAGE_SCHEMA_VERSION,
+                "status": "already_current",
+            }
+        if stored_version != 2:
+            raise StorageMigrationRequired(
+                f"Only schema version 2 can be migrated to {STORAGE_SCHEMA_VERSION}; "
+                f"found {stored_version}"
+            )
+
+        with sqlite3.connect(db_path) as validation_conn:
+            validation_conn.row_factory = sqlite3.Row
+            cls._prevalidate_legacy_evidence_content(validation_conn)
+
+        if backup_path.exists():
+            raise FileExistsError(f"Migration backup already exists: {backup_path}")
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(db_path) as source_conn, sqlite3.connect(
+            backup_path
+        ) as backup_conn:
+            source_conn.backup(backup_conn)
+        conn = sqlite3.connect(db_path, timeout=30.0, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("BEGIN IMMEDIATE")
+            cls._migrate_v2_to_v3(conn)
+            missing = conn.execute(
+                """
+                SELECT COUNT(*) FROM memories m
+                WHERE m.layer = 'semantic'
+                AND NOT EXISTS (
+                    SELECT 1 FROM belief_evidence be WHERE be.belief_id = m.id
+                )
+                """
+            ).fetchone()[0]
+            if missing:
+                raise RuntimeError(
+                    f"Evidence migration integrity check found {missing} unlinked beliefs"
+                )
+            invalid_hashes = sum(
+                hashlib.sha256(row["content"].encode("utf-8")).hexdigest()
+                != row["content_hash"]
+                for row in conn.execute("SELECT content, content_hash FROM evidence")
+            )
+            if invalid_hashes:
+                raise RuntimeError(
+                    f"Evidence migration integrity check found {invalid_hashes} invalid hashes"
+                )
+            conn.execute(
+                "INSERT INTO schema_migrations(version) VALUES (?)",
+                (STORAGE_SCHEMA_VERSION,),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        return {
+            "from_version": stored_version,
+            "to_version": STORAGE_SCHEMA_VERSION,
+            "status": "migrated",
+        }
+
+    @staticmethod
+    def _prevalidate_legacy_evidence_content(conn: sqlite3.Connection) -> None:
+        for row in conn.execute("SELECT id, content FROM memories ORDER BY id"):
+            content = str(row["content"])
+            if LocalStorage._redact_evidence_content(content) != content:
+                raise EvidenceError(
+                    "Refusing schema-v3 migration: secret-bearing legacy content "
+                    f"in memory {row['id']!r} cannot become stable Evidence"
+                )
+
+    @staticmethod
+    def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
+        LocalStorage._prevalidate_legacy_evidence_content(conn)
+        conn.execute(
+            "UPDATE memories SET repo_id = ? "
+            "WHERE repo_id IS NULL OR TRIM(repo_id) = ''",
+            (UNSCOPED_REPO_ID,),
+        )
+        intent_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'intents'"
+        ).fetchone()
+        if intent_table is not None:
+            intent_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(intents)")
+            }
+            if "repo_id" in intent_columns:
+                conn.execute(
+                    "UPDATE intents SET repo_id = ? "
+                    "WHERE repo_id IS NULL OR TRIM(repo_id) = ''",
+                    (UNSCOPED_REPO_ID,),
+                )
+        conn.execute(
+            """
+            CREATE TABLE evidence (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                repo_id TEXT DEFAULT NULL,
+                evidence_type TEXT NOT NULL,
+                provenance TEXT NOT NULL,
+                metadata TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE belief_evidence (
+                belief_id TEXT NOT NULL,
+                evidence_id TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (belief_id, evidence_id),
+                FOREIGN KEY (belief_id) REFERENCES memories(id) ON DELETE CASCADE,
+                FOREIGN KEY (evidence_id) REFERENCES evidence(id) ON DELETE RESTRICT
+            )
+            """
+        )
+        rows = conn.execute("SELECT * FROM memories ORDER BY id").fetchall()
+        for row in rows:
+            content = str(row["content"])
+            evidence_id = "ev-legacy-" + hashlib.sha256(
+                str(row["id"]).encode("utf-8")
+            ).hexdigest()[:24]
+            created_at = row["created_at"] or utc_now().isoformat()
+            conn.execute(
+                """
+                INSERT INTO evidence (
+                    id, content, content_hash, repo_id, evidence_type,
+                    provenance, metadata, created_at
+                ) VALUES (?, ?, ?, ?, 'legacy_import', 'unknown', ?, ?)
+                """,
+                (
+                    evidence_id,
+                    content,
+                    hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                    row["repo_id"],
+                    json.dumps({"legacy_memory_id": row["id"], "schema_version": 2}),
+                    created_at,
+                ),
+            )
+            conn.execute(
+                "INSERT INTO belief_evidence (belief_id, evidence_id, created_at) "
+                "VALUES (?, ?, ?)",
+                (row["id"], evidence_id, created_at),
+            )
+            tags = LocalStorage._json_deserialize(row["tags"] or "[]") or []
+            tags = [tag for tag in tags if not str(tag).startswith("provenance:")]
+            tags.append("provenance:unknown")
+            quality_flags = LocalStorage._json_deserialize(
+                row["quality_flags"] or "[]"
+            ) or []
+            if "legacy_unreviewed" not in quality_flags:
+                quality_flags.append("legacy_unreviewed")
+            metadata = LocalStorage._json_deserialize(row["metadata"] or "{}") or {}
+            metadata = {
+                **metadata,
+                "legacy_evidence_migration": True,
+                "legacy_evidence_id": evidence_id,
+            }
+            conn.execute(
+                """
+                UPDATE memories
+                SET tags = ?, metadata = ?, source = 'unknown', quality_flags = ?
+                WHERE id = ?
+                """,
+                (
+                    json.dumps(tags),
+                    json.dumps(metadata),
+                    json.dumps(quality_flags),
+                    row["id"],
+                ),
+            )
+        conn.execute("CREATE INDEX idx_evidence_repo ON evidence(repo_id)")
+        conn.execute(
+            "CREATE INDEX idx_belief_evidence_evidence ON belief_evidence(evidence_id)"
+        )
+
     def get_capabilities(self) -> StorageCapabilities:
         return StorageCapabilities(
             vector_search=bool(
@@ -650,6 +1475,8 @@ class LocalStorage(BaseStorage):
             ),
             audit_log=True,
             reindex=True,
+            complete_graph_export=True,
+            atomic_graph_import=True,
         )
 
     def get_schema_status(self) -> Dict[str, Any]:
@@ -1061,6 +1888,226 @@ class LocalStorage(BaseStorage):
         except (json.JSONDecodeError, TypeError):
             return data
 
+    @staticmethod
+    def _evidence_hash(content: str) -> str:
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _redact_evidence_content(content: str) -> str:
+        redacted, _quality_flags = redact_for_storage(content, None)
+        return redacted
+
+    @classmethod
+    def _require_secret_free_evidence(cls, content: str, *, context: str) -> None:
+        if cls._redact_evidence_content(content) != content:
+            raise EvidenceError(
+                f"Refusing {context}: secret-bearing Evidence content cannot be "
+                "persisted or exported"
+            )
+
+    @classmethod
+    def _insert_evidence(
+        cls,
+        conn: sqlite3.Connection,
+        *,
+        content: str,
+        repo_id: str,
+        evidence_type: str,
+        provenance: str,
+        metadata: Dict[str, Any],
+        evidence_id: str,
+        created_at: str,
+        compare_created_at: bool = False,
+    ) -> str:
+        content_hash = cls._evidence_hash(content)
+        existing = conn.execute("SELECT * FROM evidence WHERE id = ?", (evidence_id,)).fetchone()
+        if existing is not None:
+            comparable = {
+                "content": content,
+                "content_hash": content_hash,
+                "repo_id": repo_id,
+                "evidence_type": evidence_type,
+                "provenance": provenance,
+                "metadata": cls._json_serialize(metadata),
+            }
+            if compare_created_at:
+                comparable["created_at"] = created_at
+            if any(existing[key] != value for key, value in comparable.items()):
+                raise EvidenceImmutableError(
+                    f"Evidence ID collision would mutate immutable record {evidence_id!r}"
+                )
+            return evidence_id
+        conn.execute(
+            """
+            INSERT INTO evidence (
+                id, content, content_hash, repo_id, evidence_type,
+                provenance, metadata, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                evidence_id,
+                content,
+                content_hash,
+                repo_id,
+                evidence_type,
+                provenance,
+                cls._json_serialize(metadata),
+                created_at,
+            ),
+        )
+        return evidence_id
+
+    def store_evidence(
+        self,
+        content: str,
+        repo_id: str,
+        evidence_type: str = "observation",
+        provenance: str = "unknown",
+        metadata: Dict[str, Any] = None,
+        evidence_id: str = None,
+        created_at: str = None,
+    ) -> str:
+        """Store one immutable Evidence record, idempotently by explicit ID."""
+        if not isinstance(content, str) or not content:
+            raise ValueError("Evidence content must be a non-empty string")
+        if not isinstance(repo_id, str) or not repo_id.strip():
+            raise EvidenceReferenceError("Evidence requires a non-empty repository ID")
+        content = self._redact_evidence_content(content)
+        if repo_id == UNSCOPED_REPO_ID:
+            provenance = "unknown"
+        evidence_id = evidence_id or f"ev-{uuid.uuid4().hex}"
+        compare_created_at = created_at is not None
+        created_at = created_at or utc_now().isoformat()
+        with self._get_db() as conn:
+            self._insert_evidence(
+                conn,
+                content=content,
+                repo_id=repo_id,
+                evidence_type=evidence_type,
+                provenance=provenance,
+                metadata=metadata or {},
+                evidence_id=evidence_id,
+                created_at=created_at,
+                compare_created_at=compare_created_at,
+            )
+            conn.commit()
+        return evidence_id
+
+    @staticmethod
+    def _evidence_row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
+        evidence = dict(row)
+        LocalStorage._require_secret_free_evidence(
+            evidence["content"], context="reading secret-bearing Evidence"
+        )
+        if LocalStorage._evidence_hash(evidence["content"]) != evidence["content_hash"]:
+            raise EvidenceError("Refusing to read Evidence with an invalid content hash")
+        evidence["metadata"] = LocalStorage._json_deserialize(evidence.get("metadata")) or {}
+        evidence["record_type"] = "evidence"
+        return evidence
+
+    def get_evidence(self, evidence_id: str) -> Optional[Dict[str, Any]]:
+        with self._get_db() as conn:
+            row = conn.execute("SELECT * FROM evidence WHERE id = ?", (evidence_id,)).fetchone()
+        return self._evidence_row_to_dict(row) if row is not None else None
+
+    def list_evidence(
+        self, repo_id: str, *, limit: int = 10000
+    ) -> List[Dict[str, Any]]:
+        with self._get_db() as conn:
+            rows = conn.execute(
+                "SELECT * FROM evidence WHERE repo_id = ? ORDER BY created_at, id LIMIT ?",
+                (repo_id, limit),
+            ).fetchall()
+        return [self._evidence_row_to_dict(row) for row in rows]
+
+    def update_evidence(self, evidence_id: str, **kwargs) -> bool:
+        raise EvidenceImmutableError(f"Evidence {evidence_id!r} is immutable")
+
+    def attach_evidence(
+        self, belief_id: str, evidence_ids: List[str], *, repo_id: str
+    ) -> None:
+        with self._get_db() as conn:
+            belief = conn.execute(
+                "SELECT id, layer, repo_id FROM memories WHERE id = ?", (belief_id,)
+            ).fetchone()
+            if belief is None or belief["layer"] != "semantic":
+                raise EvidenceReferenceError(
+                    f"Evidence can attach only to an existing semantic belief: {belief_id!r}"
+                )
+            if belief["repo_id"] != repo_id:
+                raise EvidenceReferenceError("Belief and Evidence must share a repository")
+            resolved = self._validate_belief_references(
+                conn,
+                memory_id=belief_id,
+                layer="semantic",
+                repo_id=repo_id,
+                source_ids=[],
+                evidence_ids=evidence_ids,
+            )
+            created_at = utc_now().isoformat()
+            for evidence_id in resolved:
+                conn.execute(
+                    "INSERT OR IGNORE INTO belief_evidence "
+                    "(belief_id, evidence_id, created_at) VALUES (?, ?, ?)",
+                    (belief_id, evidence_id, created_at),
+                )
+            conn.commit()
+
+    @staticmethod
+    def _belief_evidence_ids(conn: sqlite3.Connection, belief_id: str) -> List[str]:
+        return [
+            row["evidence_id"]
+            for row in conn.execute(
+                "SELECT evidence_id FROM belief_evidence "
+                "WHERE belief_id = ? ORDER BY created_at, evidence_id",
+                (belief_id,),
+            ).fetchall()
+        ]
+
+    @classmethod
+    def _validate_belief_references(
+        cls,
+        conn: sqlite3.Connection,
+        *,
+        memory_id: str,
+        layer: str,
+        repo_id: str,
+        source_ids: List[str],
+        evidence_ids: List[str],
+    ) -> List[str]:
+        if memory_id in evidence_ids:
+            raise EvidenceReferenceError("A belief cannot cite itself as Evidence")
+
+        resolved = list(dict.fromkeys(evidence_ids))
+        for source_id in dict.fromkeys(source_ids):
+            source = conn.execute(
+                "SELECT id, repo_id, status FROM memories WHERE id = ?", (source_id,)
+            ).fetchone()
+            if source is None or source["status"] == "deleted":
+                raise EvidenceReferenceError(
+                    f"Lineage source {source_id!r} is missing or deleted"
+                )
+            if source["repo_id"] != repo_id:
+                raise EvidenceReferenceError("Lineage sources must belong to the same repository")
+            resolved.extend(cls._belief_evidence_ids(conn, source_id))
+
+        resolved = list(dict.fromkeys(resolved))
+        if layer == "semantic" and not resolved:
+            raise EvidenceReferenceError(
+                "A semantic belief requires at least one evidence record"
+            )
+        for evidence_id in resolved:
+            evidence = conn.execute(
+                "SELECT repo_id FROM evidence WHERE id = ?", (evidence_id,)
+            ).fetchone()
+            if evidence is None:
+                raise EvidenceReferenceError(
+                    f"Evidence {evidence_id!r} is missing or is not an Evidence record"
+                )
+            if evidence["repo_id"] != repo_id:
+                raise EvidenceReferenceError("Evidence must belong to the same repository")
+        return resolved
+
     def store_memory(
         self,
         content: str,
@@ -1071,6 +2118,7 @@ class LocalStorage(BaseStorage):
         tags: List[str] = None,
         metadata: Dict[str, Any] = None,
         source_ids: List[str] = None,
+        evidence_ids: List[str] = None,
         status: MemoryStatus = "active",
         source: str = None,
         quality_flags: List[str] = None,
@@ -1078,6 +2126,8 @@ class LocalStorage(BaseStorage):
         auto_link: bool = True,
         auto_link_limit: int = DEFAULT_AUTO_LINK_LIMIT,
         auto_link_min_score: float = DEFAULT_AUTO_LINK_MIN_SCORE,
+        memory_id: str = None,
+        created_at: str = None,
     ) -> str:
         """
         Store a memory in both SQLite and vector DB.
@@ -1102,11 +2152,18 @@ class LocalStorage(BaseStorage):
         # Enforce the secrets policy at the single choke point every write path funnels
         # through, so a new caller cannot opt out. See visp_memory.quality.secrets.
         content, quality_flags = redact_for_storage(content, quality_flags)
-        memory_id = self._generate_id(content)
+        memory_id = memory_id or self._generate_id(content)
+        repo_id = repo_id or UNSCOPED_REPO_ID
         tags = tags or []
         metadata = metadata or {}
         source_ids = source_ids or []
+        evidence_ids = evidence_ids or []
         quality_flags = quality_flags or []
+        if repo_id == UNSCOPED_REPO_ID:
+            from visp_memory.core.trust import Provenance, with_provenance
+
+            tags = with_provenance(tags, Provenance.UNKNOWN)
+            source = Provenance.UNKNOWN.value
 
         if embedding is None and self._embedding_fn is not None:
             try:
@@ -1116,8 +2173,29 @@ class LocalStorage(BaseStorage):
                 embedding = None
 
         # Store in SQLite
-        created_at = utc_now().isoformat()
+        created_at = created_at or utc_now().isoformat()
         with self._get_db() as conn:
+            if layer in ("episodic", "raw") and not evidence_ids:
+                captured_evidence_id = f"ev-{uuid.uuid4().hex}"
+                self._insert_evidence(
+                    conn,
+                    content=content,
+                    repo_id=repo_id,
+                    evidence_type="observation" if layer == "episodic" else "raw",
+                    provenance=source or "unknown",
+                    metadata={"captured_memory_id": memory_id, "exact_input": True},
+                    evidence_id=captured_evidence_id,
+                    created_at=created_at,
+                )
+                evidence_ids = [captured_evidence_id]
+            resolved_evidence_ids = self._validate_belief_references(
+                conn,
+                memory_id=memory_id,
+                layer=layer,
+                repo_id=repo_id,
+                source_ids=source_ids,
+                evidence_ids=evidence_ids,
+            )
             conn.execute(
                 """
                 INSERT INTO memories (
@@ -1143,6 +2221,12 @@ class LocalStorage(BaseStorage):
                     created_at,
                 ),
             )
+            for evidence_id in resolved_evidence_ids:
+                conn.execute(
+                    "INSERT INTO belief_evidence (belief_id, evidence_id, created_at) "
+                    "VALUES (?, ?, ?)",
+                    (memory_id, evidence_id, created_at),
+                )
             conn.commit()
 
         # Store in vector DB
@@ -1276,7 +2360,9 @@ class LocalStorage(BaseStorage):
                 )
                 conn.commit()
 
-            return self._row_to_dict(row)
+            memory = self._row_to_dict(row)
+            memory["evidence_ids"] = self._belief_evidence_ids(conn, memory_id)
+            return memory
 
     def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
         """Get a memory by ID and record an explicit access."""
@@ -1433,7 +2519,11 @@ class LocalStorage(BaseStorage):
 
         with self._get_db() as conn:
             cursor = conn.execute(sql, params)
-            rows = [self._row_to_dict(row) for row in cursor.fetchall()]
+            rows = []
+            for row in cursor.fetchall():
+                memory = self._row_to_dict(row)
+                memory["evidence_ids"] = self._belief_evidence_ids(conn, memory["id"])
+                rows.append(memory)
 
         results = []
         for row in rows:
@@ -1499,7 +2589,12 @@ class LocalStorage(BaseStorage):
 
         with self._get_db() as conn:
             cursor = conn.execute(query, params)
-            return [self._row_to_dict(row) for row in cursor.fetchall()]
+            memories = []
+            for row in cursor.fetchall():
+                memory = self._row_to_dict(row)
+                memory["evidence_ids"] = self._belief_evidence_ids(conn, memory["id"])
+                memories.append(memory)
+            return memories
 
     def update_memory(
         self,

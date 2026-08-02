@@ -489,6 +489,111 @@ async def test_non_admin_memory_routes_are_scoped_to_current_team(client):
 
 
 @pytest.mark.asyncio
+async def test_evidence_routes_enforce_server_owned_team_scope(client):
+    shared_repo_id = "same-unregistered-repo"
+    alice = UserContext(
+        user_id="alice",
+        username="alice",
+        team_id="team-alpha",
+        is_admin=False,
+    )
+    bob = UserContext(
+        user_id="bob",
+        username="bob",
+        team_id="team-beta",
+        is_admin=False,
+    )
+
+    set_current_user(alice)
+    try:
+        alpha_response = await client.post(
+            "/evidence",
+            json={
+                "content": "Alpha private observation",
+                "repo_id": shared_repo_id,
+                "metadata": {"author_id": "mallory", "team_id": "team-beta"},
+            },
+        )
+        assert alpha_response.status_code == 200
+        alpha_evidence = alpha_response.json()
+        assert alpha_evidence["metadata"]["author_id"] == "alice"
+        assert alpha_evidence["metadata"]["team_id"] == "team-alpha"
+    finally:
+        clear_current_user()
+
+    set_current_user(bob)
+    try:
+        beta_response = await client.post(
+            "/evidence",
+            json={
+                "content": "Beta private observation",
+                "repo_id": shared_repo_id,
+            },
+        )
+        assert beta_response.status_code == 200
+        beta_evidence = beta_response.json()
+    finally:
+        clear_current_user()
+
+    set_current_user(alice)
+    try:
+        cross_team_belief = await client.post(
+            "/memories",
+            json={
+                "content": "Known beta Evidence must not be citable by alpha",
+                "layer": "semantic",
+                "repo_id": shared_repo_id,
+                "evidence_ids": [beta_evidence["id"]],
+            },
+        )
+        assert cross_team_belief.status_code == 404
+        visible = await client.get("/evidence", params={"repo_id": shared_repo_id})
+        assert [item["id"] for item in visible.json()] == [alpha_evidence["id"]]
+        assert (await client.get(f"/evidence/{beta_evidence['id']}")).status_code == 404
+        assert (
+            await client.patch(
+                f"/evidence/{beta_evidence['id']}",
+                json={"content": "Cross-team mutation"},
+            )
+        ).status_code == 404
+        assert (await client.get(f"/evidence/{alpha_evidence['id']}")).status_code == 200
+
+        app.state.storage.store_repository(
+            {"id": "registered-alpha", "name": "Alpha", "team_id": "team-alpha"}
+        )
+        app.state.storage.store_repository(
+            {"id": "registered-beta", "name": "Beta", "team_id": "team-beta"}
+        )
+        assert (
+            await client.post(
+                "/evidence",
+                json={"content": "Registered own-team", "repo_id": "registered-alpha"},
+            )
+        ).status_code == 200
+        assert (
+            await client.post(
+                "/evidence",
+                json={"content": "Registered cross-team", "repo_id": "registered-beta"},
+            )
+        ).status_code == 404
+    finally:
+        clear_current_user()
+
+    set_current_user(
+        UserContext(user_id="admin", username="admin", is_admin=True)
+    )
+    try:
+        visible = await client.get("/evidence", params={"repo_id": shared_repo_id})
+        assert {item["id"] for item in visible.json()} == {
+            alpha_evidence["id"],
+            beta_evidence["id"],
+        }
+        assert (await client.get(f"/evidence/{beta_evidence['id']}")).status_code == 200
+    finally:
+        clear_current_user()
+
+
+@pytest.mark.asyncio
 async def test_non_admin_intent_routes_are_scoped_to_current_team(client):
     app.state.storage.store_repository(
         {

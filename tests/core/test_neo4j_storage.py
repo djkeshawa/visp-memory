@@ -1,6 +1,9 @@
+from types import SimpleNamespace
+
 import pytest
 
 from visp_memory.core.neo4j_storage import Neo4jStorage
+from visp_memory.core.storage import EvidenceUnsupportedError, StorageMigrationRequired
 
 
 class FakeResult:
@@ -50,6 +53,9 @@ class FakeDriver:
 
     def session(self):
         return self.session_obj
+
+    def verify_connectivity(self):
+        return None
 
     def close(self):
         self.close_calls += 1
@@ -323,7 +329,9 @@ def test_neo4j_uses_dimension_specific_vector_property_for_memories():
     storage._vector_property = Neo4jStorage._vector_property_name(3)
     storage._vector_index = Neo4jStorage._vector_index_name(3)
 
-    storage.store_memory("vector dimension test", repo_id="repo", auto_link=False)
+    storage.store_memory(
+        "vector dimension test", layer="intent", repo_id="repo", auto_link=False
+    )
 
     query, params = storage.driver.session_obj.calls[0]
     assert "setNodeVectorProperty(m, $vector_property, $embedding)" in query
@@ -377,18 +385,112 @@ def test_neo4j_store_memory_rejects_invalid_layer():
     assert storage.driver.session_obj.calls == []
 
 
-def test_neo4j_store_memory_accepts_valid_layers():
-    for layer in ("raw", "episodic", "semantic", "intent"):
+def test_neo4j_governed_memory_layers_fail_closed_until_evidence_is_supported():
+    for layer in ("raw", "episodic", "semantic"):
         storage = neo4j_storage_with_delete_count(1)
-        memory_id = storage.store_memory(
-            "valid layer", layer=layer, repo_id="repo-a", auto_link=False
+        with pytest.raises(EvidenceUnsupportedError, match="Evidence graph"):
+            storage.store_memory(
+                "governed layer", layer=layer, repo_id="repo-a", auto_link=False
+            )
+        assert storage.driver.session_obj.calls == []
+
+
+def test_neo4j_governed_write_accepts_evidence_keyword_before_explicit_refusal():
+    storage = neo4j_storage_with_delete_count(1)
+
+    with pytest.raises(EvidenceUnsupportedError, match="Evidence graph"):
+        storage.store_memory(
+            "Evidence-backed Neo belief",
+            layer="semantic",
+            repo_id="repo-a",
+            evidence_ids=["ev-1"],
+            auto_link=False,
         )
-        assert memory_id
-        # The MERGE ran and the layer label was applied.
-        label = layer.capitalize()
-        assert any(
-            f"SET m:{label}" in query for query, _ in storage.driver.session_obj.calls
-        )
+
+    assert storage.driver.session_obj.calls == []
+
+
+def test_neo4j_markerless_nonempty_constructor_refuses_before_index_or_marker_mutation(
+    monkeypatch
+):
+    driver = FakeDriver(0)
+    driver.session_obj.query_results["MATCH (v:SchemaVersion"] = lambda _params: (
+        FakeResult(records=[])
+    )
+    driver.session_obj.query_results["MATCH (n)"] = lambda _params: FakeResult(
+        records=[{"present": True}]
+    )
+    monkeypatch.setattr(
+        "visp_memory.core.neo4j_storage.GraphDatabase",
+        SimpleNamespace(driver=lambda *_args, **_kwargs: driver),
+    )
+
+    with pytest.raises(StorageMigrationRequired, match="[Uu]nversioned"):
+        Neo4jStorage(uri="bolt://example", user="neo4j", password="secret")
+
+    mutating = [
+        query
+        for query, _params in driver.session_obj.calls
+        if query.lstrip().startswith(("CREATE", "MERGE", "SET"))
+    ]
+    assert mutating == []
+
+
+def test_neo4j_current_marker_memory_node_refuses_before_indexes_and_closes_driver(
+    monkeypatch,
+):
+    driver = FakeDriver(0)
+    driver.session_obj.query_results["MATCH (v:SchemaVersion"] = lambda _params: (
+        FakeResult(records=[{"version": 3}])
+    )
+    driver.session_obj.query_results["MATCH (m:Memory)"] = lambda _params: FakeResult(
+        records=[{"id": "legacy-memory"}]
+    )
+    monkeypatch.setattr(
+        "visp_memory.core.neo4j_storage.GraphDatabase",
+        SimpleNamespace(driver=lambda *_args, **_kwargs: driver),
+    )
+
+    with pytest.raises(StorageMigrationRequired, match="Memory nodes"):
+        Neo4jStorage(uri="bolt://example", user="neo4j", password="secret")
+
+    mutating = [
+        query
+        for query, _params in driver.session_obj.calls
+        if query.lstrip().startswith(("CREATE", "MERGE", "SET"))
+    ]
+    assert mutating == []
+    assert driver.close_calls == 1
+
+
+def test_neo4j_current_marker_empty_memory_graph_proceeds_to_indexes(monkeypatch):
+    driver = FakeDriver(0)
+    driver.session_obj.query_results["MATCH (v:SchemaVersion"] = lambda _params: (
+        FakeResult(records=[{"version": 3}])
+    )
+    driver.session_obj.query_results["MATCH (m:Memory)"] = lambda _params: FakeResult(
+        records=[]
+    )
+    monkeypatch.setattr(
+        "visp_memory.core.neo4j_storage.GraphDatabase",
+        SimpleNamespace(driver=lambda *_args, **_kwargs: driver),
+    )
+
+    storage = Neo4jStorage(uri="bolt://example", user="neo4j", password="secret")
+
+    assert any(query.lstrip().startswith("CREATE") for query, _ in driver.session_obj.calls)
+    assert driver.close_calls == 0
+    storage.close()
+    assert driver.close_calls == 1
+
+
+def test_neo4j_store_memory_accepts_intent_layer():
+    storage = neo4j_storage_with_delete_count(1)
+    memory_id = storage.store_memory(
+        "valid intent", layer="intent", repo_id="repo-a", auto_link=False
+    )
+    assert memory_id
+    assert any("SET m:Intent" in query for query, _ in storage.driver.session_obj.calls)
 
 
 def test_neo4j_add_relationship_rejects_missing_memory():

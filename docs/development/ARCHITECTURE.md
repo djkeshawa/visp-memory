@@ -35,6 +35,10 @@ The unified interface that coordinates all memory layers. This is the main entry
 
 ### Storage Abstraction
 
+Schema version 3 separates immutable Evidence from semantic beliefs. The
+normative representation, migration, backend, and export/import rules are in
+[EVIDENCE_BELIEF_CONTRACT.md](EVIDENCE_BELIEF_CONTRACT.md).
+
 Three storage implementations all inherit from `BaseStorage`:
 
 #### LocalStorage (`storage.py`)

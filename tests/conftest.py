@@ -1,9 +1,16 @@
+# ruff: noqa: E402
+
+import os
 import tempfile
 import unittest.mock as mock
 from pathlib import Path
 
 import httpx
 import pytest_asyncio
+
+_APP_IMPORT_STORAGE = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+_ORIGINAL_APP_IMPORT_STORAGE = os.environ.get("VISP_MEMORY_STORAGE_DATA_DIR")
+os.environ["VISP_MEMORY_STORAGE_DATA_DIR"] = _APP_IMPORT_STORAGE.name
 
 from visp_memory.config import MemoryConfig, ServerConfig
 from visp_memory.core.intent_evaluator import IntentEvaluator
@@ -12,6 +19,11 @@ from visp_memory.core.model_router import ModelRouter
 from visp_memory.core.storage import LocalStorage
 from visp_memory.server.app import app
 from visp_memory.server.auth_store import AuthStore
+
+if _ORIGINAL_APP_IMPORT_STORAGE is None:
+    os.environ.pop("VISP_MEMORY_STORAGE_DATA_DIR", None)
+else:
+    os.environ["VISP_MEMORY_STORAGE_DATA_DIR"] = _ORIGINAL_APP_IMPORT_STORAGE
 
 
 @pytest_asyncio.fixture

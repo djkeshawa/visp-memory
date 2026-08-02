@@ -86,6 +86,12 @@ async def test_http_memory_schema_normalizes_scope_and_recall_enforces_it(client
 @pytest.mark.asyncio
 async def test_http_context_compile_enforces_environment_and_task_scope(client):
     storage = app.state.storage
+    matched_evidence = storage.store_evidence(
+        "context scoped production deployment", repo_id="repo-a"
+    )
+    development_evidence = storage.store_evidence(
+        "context scoped development deployment", repo_id="repo-a"
+    )
     matched = storage.store_memory(
         "context scoped production deployment",
         layer="semantic",
@@ -93,6 +99,7 @@ async def test_http_context_compile_enforces_environment_and_task_scope(client):
         tags=[provenance_tag(Provenance.DERIVED)],
         metadata={"environment": "prod", "task_type": "deploy"},
         auto_link=False,
+        evidence_ids=[matched_evidence],
     )
     storage.store_memory(
         "context scoped development deployment",
@@ -101,6 +108,7 @@ async def test_http_context_compile_enforces_environment_and_task_scope(client):
         tags=[provenance_tag(Provenance.DERIVED)],
         metadata={"environment": "dev", "task_type": "deploy"},
         auto_link=False,
+        evidence_ids=[development_evidence],
     )
 
     response = await client.post(

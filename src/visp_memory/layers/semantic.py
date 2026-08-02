@@ -16,8 +16,9 @@ from enum import Enum
 from typing import Any, Dict, List
 
 from visp_memory.core.clock import utc_now
+from visp_memory.core.eligibility import require_repo_id
 from visp_memory.core.ranking import rank_memory_results
-from visp_memory.core.storage import BaseStorage
+from visp_memory.core.storage import UNSCOPED_REPO_ID, BaseStorage
 from visp_memory.core.trust import (
     WriteChannel,
     channel_policy,
@@ -65,6 +66,30 @@ class SemanticMemory(BaseMemoryLayer):
     def __init__(self, storage: BaseStorage):
         super().__init__(storage)
 
+    def _direct_input_evidence(
+        self,
+        content: str,
+        *,
+        repo_id: str,
+        write_channel: WriteChannel | str,
+        evidence_ids: List[str] = None,
+    ) -> List[str]:
+        if evidence_ids:
+            return list(evidence_ids)
+        policy = channel_policy(write_channel)
+        evidence_repo_id = repo_id or UNSCOPED_REPO_ID
+        if evidence_repo_id != UNSCOPED_REPO_ID:
+            evidence_repo_id = require_repo_id(evidence_repo_id)
+        return [
+            self.storage.store_evidence(
+                content,
+                repo_id=evidence_repo_id,
+                evidence_type="caller_input",
+                provenance=policy.provenance.value,
+                metadata={"write_channel": parse_write_channel(write_channel).value},
+            )
+        ]
+
     def establish(
         self,
         knowledge: str,
@@ -72,6 +97,7 @@ class SemanticMemory(BaseMemoryLayer):
         importance: float = 0.6,
         applies_to: List[str] = None,
         source_episodes: List[str] = None,
+        evidence_ids: List[str] = None,
         repo_id: str = None,
         tags: List[str] = None,
         *,
@@ -86,6 +112,7 @@ class SemanticMemory(BaseMemoryLayer):
             importance: How important (0.0 to 1.0)
             applies_to: What this applies to (files, modules, etc.)
             source_episodes: IDs of episodes this was derived from
+            evidence_ids: IDs of repository-scoped Evidence supporting the belief
             tags: Tags for organization
 
         Returns:
@@ -96,7 +123,8 @@ class SemanticMemory(BaseMemoryLayer):
                 "The auth module requires mutex locks for token refresh",
                 category=KnowledgeCategory.INVARIANT,
                 applies_to=["auth/token.py", "auth/refresh.py"],
-                importance=0.9
+                importance=0.9,
+                evidence_ids=["ev-auth-refresh-test-output"],
             )
         """
         write_channel = parse_write_channel(_write_channel)
@@ -116,6 +144,7 @@ class SemanticMemory(BaseMemoryLayer):
             tags=with_channel_provenance(tags, write_channel),
             metadata=metadata,
             source_ids=source_episodes or [],
+            evidence_ids=evidence_ids or [],
             source=policy.source,
         )
 
@@ -126,6 +155,7 @@ class SemanticMemory(BaseMemoryLayer):
         severity: float = 0.7,
         repo_id: str = None,
         tags: List[str] = None,
+        evidence_ids: List[str] = None,
         *,
         _write_channel: WriteChannel | str = WriteChannel.LIBRARY,
     ) -> str:
@@ -149,6 +179,12 @@ class SemanticMemory(BaseMemoryLayer):
             )
         """
         knowledge = f"WARNING [{area}]: {warning}"
+        evidence_ids = self._direct_input_evidence(
+            knowledge,
+            repo_id=repo_id,
+            write_channel=_write_channel,
+            evidence_ids=evidence_ids,
+        )
 
         return self.establish(
             knowledge=knowledge,
@@ -157,6 +193,7 @@ class SemanticMemory(BaseMemoryLayer):
             applies_to=[area],
             repo_id=repo_id,
             tags=["warning"] + (tags or []),
+            evidence_ids=evidence_ids,
             _write_channel=_write_channel,
         )
 
@@ -167,6 +204,7 @@ class SemanticMemory(BaseMemoryLayer):
         importance: float = 0.5,
         repo_id: str = None,
         tags: List[str] = None,
+        evidence_ids: List[str] = None,
         *,
         _write_channel: WriteChannel | str = WriteChannel.LIBRARY,
     ) -> str:
@@ -191,6 +229,12 @@ class SemanticMemory(BaseMemoryLayer):
         knowledge = rule
         if rationale:
             knowledge += f" (Rationale: {rationale})"
+        evidence_ids = self._direct_input_evidence(
+            knowledge,
+            repo_id=repo_id,
+            write_channel=_write_channel,
+            evidence_ids=evidence_ids,
+        )
 
         return self.establish(
             knowledge=knowledge,
@@ -198,6 +242,7 @@ class SemanticMemory(BaseMemoryLayer):
             importance=importance,
             repo_id=repo_id,
             tags=tags,
+            evidence_ids=evidence_ids,
             _write_channel=_write_channel,
         )
 
@@ -208,6 +253,7 @@ class SemanticMemory(BaseMemoryLayer):
         priority: float = 0.5,
         repo_id: str = None,
         tags: List[str] = None,
+        evidence_ids: List[str] = None,
         *,
         _write_channel: WriteChannel | str = WriteChannel.LIBRARY,
     ) -> str:
@@ -233,6 +279,12 @@ class SemanticMemory(BaseMemoryLayer):
         knowledge = f"Known Issue: {issue}"
         if workaround:
             knowledge += f"\nWorkaround: {workaround}"
+        evidence_ids = self._direct_input_evidence(
+            knowledge,
+            repo_id=repo_id,
+            write_channel=_write_channel,
+            evidence_ids=evidence_ids,
+        )
 
         return self.establish(
             knowledge=knowledge,
@@ -240,6 +292,7 @@ class SemanticMemory(BaseMemoryLayer):
             importance=priority,
             repo_id=repo_id,
             tags=["known_issue"] + (tags or []),
+            evidence_ids=evidence_ids,
             _write_channel=_write_channel,
         )
 

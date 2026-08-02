@@ -2,9 +2,16 @@ from visp_memory.core.context_compiler import ContextCompiler
 from visp_memory.core.storage import LocalStorage
 
 
+def _semantic(storage, content, **kwargs):
+    repo_id = kwargs.get("repo_id", "repo-a")
+    evidence_id = storage.store_evidence(content, repo_id=repo_id)
+    return storage.store_memory(content, evidence_ids=[evidence_id], **kwargs)
+
+
 def test_context_compiler_filters_temporal_facts_and_returns_deltas(tmp_path):
     storage = LocalStorage(tmp_path)
-    current = storage.store_memory(
+    current = _semantic(
+        storage,
         "Authentication uses secure session cookies",
         layer="semantic",
         repo_id="repo-a",
@@ -16,7 +23,8 @@ def test_context_compiler_filters_temporal_facts_and_returns_deltas(tmp_path):
         },
         auto_link=False,
     )
-    expired = storage.store_memory(
+    expired = _semantic(
+        storage,
         "Authentication uses local storage tokens",
         layer="semantic",
         repo_id="repo-a",

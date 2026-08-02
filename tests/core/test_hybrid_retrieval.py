@@ -2,6 +2,12 @@ from visp_memory.core.hybrid_retrieval import HybridRetriever, personalized_page
 from visp_memory.core.storage import LocalStorage
 
 
+def _semantic(storage, content, **kwargs):
+    repo_id = kwargs.get("repo_id", "project-a")
+    evidence_id = storage.store_evidence(content, repo_id=repo_id)
+    return storage.store_memory(content, evidence_ids=[evidence_id], **kwargs)
+
+
 def _edge(source, target, strength=0.9):
     return {
         "source_id": source,
@@ -32,35 +38,35 @@ def test_personalized_pagerank_is_degree_normalized_and_deterministic():
 
 def test_hybrid_retrieval_recovers_multi_hop_evidence_without_hub_override(tmp_path):
     storage = LocalStorage(tmp_path)
-    seed = storage.store_memory(
+    seed = _semantic(storage,
         "OAuth refresh token rotation",
         layer="semantic",
         repo_id="project-a",
         metadata={"confidence": 0.95},
         auto_link=False,
     )
-    middle = storage.store_memory(
+    middle = _semantic(storage,
         "Session invalidation depends on token family lineage",
         layer="semantic",
         repo_id="project-a",
         metadata={"confidence": 0.9},
         auto_link=False,
     )
-    evidence = storage.store_memory(
+    evidence = _semantic(storage,
         "Revoke every child session when reuse is detected",
         layer="semantic",
         repo_id="project-a",
         metadata={"confidence": 0.92},
         auto_link=False,
     )
-    hub = storage.store_memory(
+    hub = _semantic(storage,
         "General engineering conventions",
         layer="semantic",
         repo_id="project-a",
         auto_link=False,
     )
     noise_ids = [
-        storage.store_memory(
+        _semantic(storage,
             f"Unrelated convention {index}",
             layer="semantic",
             repo_id="project-a",
@@ -89,14 +95,14 @@ def test_hybrid_retrieval_recovers_multi_hop_evidence_without_hub_override(tmp_p
 
 def test_hybrid_retrieval_uses_exact_code_entities_and_candidate_filter(tmp_path):
     storage = LocalStorage(tmp_path)
-    file_decision = storage.store_memory(
+    file_decision = _semantic(storage,
         "Use constant-time comparison for configured secrets",
         layer="semantic",
         repo_id="project-a",
         metadata={"files": ["src/auth.py"], "confidence": 0.95},
         auto_link=False,
     )
-    hidden = storage.store_memory(
+    hidden = _semantic(storage,
         "Legacy tenant-only authentication behavior",
         layer="semantic",
         repo_id="project-a",

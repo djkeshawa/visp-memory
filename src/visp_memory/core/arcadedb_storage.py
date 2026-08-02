@@ -1,19 +1,25 @@
 """ArcadeDB storage backend."""
 
 import logging
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from visp_memory.core.clock import utc_now
+from visp_memory.core.eligibility import UNSCOPED_REPO_ID
 from visp_memory.core.ranking import rank_memory_results, text_similarity, utility_rank_adjustment
 from visp_memory.core.storage import (
     REINFORCING_RECALL_EVENTS,
     STORAGE_SCHEMA_VERSION,
     BaseStorage,
+    EvidenceError,
+    EvidenceImmutableError,
+    EvidenceReferenceError,
     LocalStorage,
     MemoryLayer,
     MemoryStatus,
     StorageCapabilities,
+    StorageMigrationRequired,
 )
 from visp_memory.quality.secrets import redact_for_storage
 
@@ -45,6 +51,7 @@ class ArcadeDbStorage(BaseStorage):
     SESSION_TYPE = "Session"
     VERTEX_TYPES = [
         "Memory",
+        "Evidence",
         "Intent",
         "Session",
         "Repository",
@@ -54,10 +61,11 @@ class ArcadeDbStorage(BaseStorage):
         "RecallFeedback",
         "SchemaVersion",
     ]
-    EDGE_TYPES = ["MemoryRelationship", "RepoDependency", "TeamMember"]
+    EDGE_TYPES = ["MemoryRelationship", "BeliefEvidence", "RepoDependency", "TeamMember"]
     MEMORY_RELATIONSHIP_EDGE = "MemoryRelationship"
     REPO_DEPENDENCY_EDGE = "RepoDependency"
     TEAM_MEMBER_EDGE = "TeamMember"
+    BELIEF_EVIDENCE_EDGE = "BeliefEvidence"
     MEMORY_JSON_FIELDS = {"tags", "metadata", "source_ids", "quality_flags"}
     MEMORY_FIELDS = [
         "id",
@@ -79,6 +87,18 @@ class ArcadeDbStorage(BaseStorage):
         "approved_at",
         "archived_at",
     ]
+    EVIDENCE_FIELDS = [
+        "id",
+        "content",
+        "content_hash",
+        "repo_id",
+        "evidence_type",
+        "provenance",
+        "metadata",
+        "created_at",
+    ]
+    EVIDENCE_JSON_FIELDS = {"metadata"}
+    BELIEF_EVIDENCE_FIELDS = ["id", "belief_id", "evidence_id", "created_at"]
     RELATIONSHIP_FIELDS = [
         "id",
         "source_id",
@@ -197,32 +217,17 @@ class ArcadeDbStorage(BaseStorage):
         return self._arcadedb.create_database(database_path)
 
     def _init_schema(self) -> None:
+        database_existed = self._arcadedb.database_exists(str(self.data_dir))
         with self._database() as db:
+            marker_exists = False
+            if database_existed:
+                marker_exists = self._probe_schema_compatibility(db)
             with db.transaction():
                 for vertex_type in self.VERTEX_TYPES:
                     db.command("sql", f"CREATE VERTEX TYPE {vertex_type} IF NOT EXISTS")
                 for edge_type in self.EDGE_TYPES:
                     db.command("sql", f"CREATE EDGE TYPE {edge_type} IF NOT EXISTS")
-                versions = self._rows(
-                    db.query("sql", "SELECT FROM SchemaVersion WHERE id = ?", "storage")
-                )
-                if versions:
-                    stored_version = int(self._record_get(versions[0], "version", 0) or 0)
-                    if stored_version > STORAGE_SCHEMA_VERSION:
-                        raise RuntimeError(
-                            "Storage schema is newer than this visp-memory build "
-                            f"({stored_version} > {STORAGE_SCHEMA_VERSION})"
-                        )
-                    if stored_version < STORAGE_SCHEMA_VERSION:
-                        db.command(
-                            "sql",
-                            "UPDATE SchemaVersion SET version = ?, applied_at = ? "
-                            "WHERE id = ?",
-                            STORAGE_SCHEMA_VERSION,
-                            utc_now().isoformat(),
-                            "storage",
-                        )
-                else:
+                if not marker_exists:
                     db.command(
                         "sql",
                         "INSERT INTO SchemaVersion SET id = ?, component = ?, version = ?, "
@@ -233,8 +238,231 @@ class ArcadeDbStorage(BaseStorage):
                         utc_now().isoformat(),
                     )
 
+    def _probe_schema_compatibility(self, db) -> bool:
+        """Read existing schema state before any type or marker mutation."""
+        try:
+            schema_types = self._rows(
+                db.query("sql", "SELECT name, type, records FROM schema:types")
+            )
+        except Exception as exc:
+            raise StorageMigrationRequired(
+                "ArcadeDB schema compatibility could not be proven without mutation"
+            ) from exc
+
+        type_counts: Dict[str, int] = {}
+        type_kinds: Dict[str, str] = {}
+        for item in schema_types:
+            name = self._record_get(item, "name")
+            kind = self._record_get(item, "type")
+            records = self._record_get(item, "records")
+            if (
+                not isinstance(name, str)
+                or not name
+                or not isinstance(kind, str)
+                or kind.upper() not in {"VERTEX", "EDGE"}
+                or not isinstance(records, int)
+                or records < 0
+                or name in type_counts
+            ):
+                raise StorageMigrationRequired(
+                    "ArcadeDB schema metadata is malformed; compatibility is unknown"
+                )
+            type_counts[name] = records
+            type_kinds[name] = kind.upper()
+
+        versions: List[Any] = []
+        if "SchemaVersion" in type_counts:
+            try:
+                versions = self._rows(
+                    db.query(
+                        "sql", "SELECT FROM SchemaVersion WHERE id = ?", "storage"
+                    )
+                )
+            except Exception as exc:
+                raise StorageMigrationRequired(
+                    "ArcadeDB schema marker could not be read safely"
+                ) from exc
+        if versions:
+            if len(versions) != 1:
+                raise StorageMigrationRequired("ArcadeDB storage schema marker is ambiguous")
+            try:
+                stored_version = int(
+                    self._record_get(versions[0], "version", 0) or 0
+                )
+            except (TypeError, ValueError) as exc:
+                raise StorageMigrationRequired(
+                    "ArcadeDB storage schema marker is malformed"
+                ) from exc
+            if stored_version > STORAGE_SCHEMA_VERSION:
+                raise RuntimeError(
+                    "Storage schema is newer than this visp-memory build "
+                    f"({stored_version} > {STORAGE_SCHEMA_VERSION})"
+                )
+            if stored_version < STORAGE_SCHEMA_VERSION:
+                raise StorageMigrationRequired(
+                    "ArcadeDB schema migration is not implemented; export the v2 "
+                    "store with its original build before using schema v3"
+                )
+            self._validate_current_v3_graph(db, type_kinds, type_counts)
+            return True
+        if any(type_counts.values()):
+            raise StorageMigrationRequired(
+                "Unversioned non-empty ArcadeDB storage requires an explicit migration"
+            )
+        return False
+
+    def _validate_current_v3_graph(
+        self,
+        db,
+        type_kinds: Dict[str, str],
+        type_counts: Dict[str, int],
+    ) -> None:
+        """Prove the current ArcadeDB schema and Evidence graph without repair."""
+        required_kinds = {
+            **{name: "VERTEX" for name in self.VERTEX_TYPES},
+            **{name: "EDGE" for name in self.EDGE_TYPES},
+        }
+        missing = sorted(required_kinds.keys() - type_kinds.keys())
+        wrong_kind = sorted(
+            name
+            for name, expected in required_kinds.items()
+            if type_kinds.get(name) not in {None, expected}
+        )
+        if missing or wrong_kind:
+            details = []
+            if missing:
+                details.append("missing " + ", ".join(missing))
+            if wrong_kind:
+                details.append("wrong kind " + ", ".join(wrong_kind))
+            raise StorageMigrationRequired(
+                "ArcadeDB schema v3 required types are invalid: " + "; ".join(details)
+            )
+
+        try:
+            memories = self._rows(db.query("sql", "SELECT FROM Memory"))
+            evidence = self._rows(db.query("sql", "SELECT FROM Evidence"))
+            links = self._rows(db.query("sql", "SELECT FROM BeliefEvidence"))
+        except Exception as exc:
+            raise StorageMigrationRequired(
+                "ArcadeDB schema-v3 Evidence graph could not be read safely"
+            ) from exc
+
+        rows_by_kind = {
+            "Memory": memories,
+            "Evidence": evidence,
+            "BeliefEvidence": links,
+        }
+        for kind, rows in rows_by_kind.items():
+            if len(rows) != type_counts[kind]:
+                raise StorageMigrationRequired(
+                    f"ArcadeDB schema-v3 Evidence graph has an ambiguous {kind} count"
+                )
+
+        def indexed(rows: List[Any], kind: str) -> Dict[str, Any]:
+            result: Dict[str, Any] = {}
+            for row in rows:
+                row_id = self._record_get(row, "id")
+                if not isinstance(row_id, str) or not row_id.strip() or row_id in result:
+                    raise StorageMigrationRequired(
+                        f"ArcadeDB schema-v3 Evidence graph has ambiguous {kind} IDs"
+                    )
+                result[row_id] = row
+            return result
+
+        memories_by_id = indexed(memories, "Memory")
+        evidence_by_id = indexed(evidence, "Evidence")
+        links_by_id = indexed(links, "BeliefEvidence")
+        if memories_by_id.keys() & evidence_by_id.keys():
+            raise StorageMigrationRequired(
+                "ArcadeDB schema-v3 Evidence graph has cross-type ID collisions"
+            )
+
+        for kind, records in (
+            ("Memory", memories_by_id),
+            ("Evidence", evidence_by_id),
+        ):
+            for record_id, record in records.items():
+                repo_id = self._record_get(record, "repo_id")
+                if not isinstance(repo_id, str) or not repo_id.strip():
+                    raise StorageMigrationRequired(
+                        "ArcadeDB schema-v3 Evidence graph has an unscoped "
+                        f"{kind} record {record_id!r}"
+                    )
+
+        for evidence_id, record in evidence_by_id.items():
+            missing_fields = [
+                field
+                for field in self.EVIDENCE_FIELDS
+                if self._record_get(record, field) is None
+            ]
+            if missing_fields:
+                raise StorageMigrationRequired(
+                    "ArcadeDB schema-v3 Evidence graph record "
+                    f"{evidence_id!r} is missing fields: "
+                    + ", ".join(sorted(missing_fields))
+                )
+            content = self._record_get(record, "content")
+            content_hash = self._record_get(record, "content_hash")
+            if (
+                not isinstance(content, str)
+                or not content
+                or not isinstance(content_hash, str)
+                or LocalStorage._evidence_hash(content) != content_hash
+            ):
+                raise StorageMigrationRequired(
+                    "ArcadeDB schema-v3 Evidence graph record "
+                    f"{evidence_id!r} has an invalid content hash"
+                )
+            if LocalStorage._redact_evidence_content(content) != content:
+                raise StorageMigrationRequired(
+                    "ArcadeDB schema-v3 Evidence graph contains secret-bearing "
+                    f"Evidence {evidence_id!r}"
+                )
+
+        links_by_belief: Dict[str, int] = {}
+        for link_id, link in links_by_id.items():
+            belief_id = self._record_get(link, "belief_id")
+            evidence_id = self._record_get(link, "evidence_id")
+            if (
+                not isinstance(belief_id, str)
+                or not belief_id
+                or not isinstance(evidence_id, str)
+                or not evidence_id
+            ):
+                raise StorageMigrationRequired(
+                    f"ArcadeDB schema-v3 Evidence graph link {link_id!r} is malformed"
+                )
+            belief = memories_by_id.get(belief_id)
+            source = evidence_by_id.get(evidence_id)
+            if belief is None or source is None:
+                raise StorageMigrationRequired(
+                    f"ArcadeDB schema-v3 Evidence graph link {link_id!r} is dangling"
+                )
+            if self._record_get(belief, "repo_id") != self._record_get(
+                source, "repo_id"
+            ):
+                raise StorageMigrationRequired(
+                    f"ArcadeDB schema-v3 Evidence graph link {link_id!r} crosses repositories"
+                )
+            links_by_belief[belief_id] = links_by_belief.get(belief_id, 0) + 1
+
+        for memory_id, memory in memories_by_id.items():
+            if (
+                self._record_get(memory, "layer") == "semantic"
+                and links_by_belief.get(memory_id, 0) < 1
+            ):
+                raise StorageMigrationRequired(
+                    "ArcadeDB schema-v3 Evidence graph contains a semantic Memory "
+                    f"without Evidence: {memory_id!r}"
+                )
+
     def get_capabilities(self) -> StorageCapabilities:
-        return StorageCapabilities(vector_search=False, audit_log=True, reindex=False)
+        return StorageCapabilities(
+            vector_search=False,
+            audit_log=True,
+            reindex=False,
+            complete_graph_export=True,
+        )
 
     def get_schema_status(self) -> Dict[str, Any]:
         with self._database() as db:
@@ -299,6 +527,80 @@ class ArcadeDbStorage(BaseStorage):
         return memory
 
     @classmethod
+    def _evidence_record_to_dict(cls, record) -> Dict[str, Any]:
+        evidence = cls._record_to_dict(
+            record, cls.EVIDENCE_FIELDS, cls.EVIDENCE_JSON_FIELDS
+        )
+        content = evidence.get("content")
+        content_hash = evidence.get("content_hash")
+        if not isinstance(content, str) or not content:
+            raise EvidenceError("Refusing to read malformed Evidence content")
+        LocalStorage._require_secret_free_evidence(
+            content, context="reading secret-bearing Evidence"
+        )
+        if LocalStorage._evidence_hash(content) != content_hash:
+            raise EvidenceError("Refusing to read Evidence with an invalid content hash")
+        evidence.setdefault("metadata", {})
+        evidence["record_type"] = "evidence"
+        return evidence
+
+    def _belief_evidence_ids(self, db, belief_id: str) -> List[str]:
+        rows = self._rows(db.query("sql", f"SELECT FROM {self.BELIEF_EVIDENCE_EDGE}"))
+        return sorted(
+            {
+                self._record_get(row, "evidence_id")
+                for row in rows
+                if self._record_get(row, "belief_id") == belief_id
+                and self._record_get(row, "evidence_id")
+            }
+        )
+
+    def _validate_belief_references(
+        self,
+        db,
+        *,
+        memory_id: str,
+        layer: str,
+        repo_id: str,
+        source_ids: List[str],
+        evidence_ids: List[str],
+    ) -> List[str]:
+        if memory_id in evidence_ids:
+            raise EvidenceReferenceError("A belief cannot cite itself as Evidence")
+
+        resolved = list(dict.fromkeys(evidence_ids))
+        for source_id in dict.fromkeys(source_ids):
+            source_rows = self._rows(
+                db.query("sql", f"SELECT FROM {self.MEMORY_TYPE} WHERE id = ?", source_id)
+            )
+            if not source_rows or self._record_get(source_rows[0], "status") == "deleted":
+                raise EvidenceReferenceError(
+                    f"Lineage source {source_id!r} is missing or deleted"
+                )
+            if self._record_get(source_rows[0], "repo_id") != repo_id:
+                raise EvidenceReferenceError(
+                    "Lineage sources must belong to the same repository"
+                )
+            resolved.extend(self._belief_evidence_ids(db, source_id))
+
+        resolved = list(dict.fromkeys(resolved))
+        if layer == "semantic" and not resolved:
+            raise EvidenceReferenceError(
+                "A semantic belief requires at least one evidence record"
+            )
+        for evidence_id in resolved:
+            rows = self._rows(
+                db.query("sql", "SELECT FROM Evidence WHERE id = ?", evidence_id)
+            )
+            if not rows:
+                raise EvidenceReferenceError(
+                    f"Evidence {evidence_id!r} is missing or is not an Evidence record"
+                )
+            if self._record_get(rows[0], "repo_id") != repo_id:
+                raise EvidenceReferenceError("Evidence must belong to the same repository")
+        return resolved
+
+    @classmethod
     def _record_to_dict(
         cls, record, fields: List[str], json_fields: set[str] = None
     ) -> Dict[str, Any]:
@@ -346,7 +648,11 @@ class ArcadeDbStorage(BaseStorage):
             rows = self._rows(
                 db.query("sql", f"SELECT FROM {self.MEMORY_TYPE} WHERE id = ?", memory_id)
             )
-            return self._memory_record_to_dict(rows[0]) if rows else None
+            if not rows:
+                return None
+            memory = self._memory_record_to_dict(rows[0])
+            memory["evidence_ids"] = self._belief_evidence_ids(db, memory_id)
+            return memory
 
     def _query_memories(
         self,
@@ -399,7 +705,139 @@ class ArcadeDbStorage(BaseStorage):
 
         with self._database() as db:
             rows = self._rows(db.query("sql", query, *params))
-            return [self._memory_record_to_dict(row) for row in rows]
+            memories = [self._memory_record_to_dict(row) for row in rows]
+            for memory in memories:
+                memory["evidence_ids"] = self._belief_evidence_ids(db, memory["id"])
+            return memories
+
+    def store_evidence(
+        self,
+        content: str,
+        repo_id: str,
+        evidence_type: str = "observation",
+        provenance: str = "unknown",
+        metadata: Dict[str, Any] = None,
+        evidence_id: str = None,
+        created_at: str = None,
+    ) -> str:
+        if not isinstance(content, str) or not content:
+            raise ValueError("Evidence content must be a non-empty string")
+        if not isinstance(repo_id, str) or not repo_id.strip():
+            raise EvidenceReferenceError("Evidence requires a non-empty repository ID")
+        content = LocalStorage._redact_evidence_content(content)
+        if repo_id == UNSCOPED_REPO_ID:
+            provenance = "unknown"
+        evidence_id = evidence_id or f"ev-{uuid.uuid4().hex}"
+        compare_created_at = created_at is not None
+        created_at = created_at or utc_now().isoformat()
+        record = {
+            "id": evidence_id,
+            "content": content,
+            "content_hash": LocalStorage._evidence_hash(content),
+            "repo_id": repo_id,
+            "evidence_type": evidence_type,
+            "provenance": provenance,
+            "metadata": metadata or {},
+            "created_at": created_at,
+        }
+        with self._database() as db:
+            with db.transaction():
+                rows = self._rows(
+                    db.query("sql", "SELECT FROM Evidence WHERE id = ?", evidence_id)
+                )
+                if rows:
+                    existing = self._evidence_record_to_dict(rows[0])
+                    comparable_fields = set(record) - {"created_at"}
+                    if compare_created_at:
+                        comparable_fields.add("created_at")
+                    if any(
+                        existing.get(field) != record[field]
+                        for field in comparable_fields
+                    ):
+                        raise EvidenceImmutableError(
+                            f"Evidence ID collision would mutate immutable record {evidence_id!r}"
+                        )
+                    return evidence_id
+                fields = [field for field in self.EVIDENCE_FIELDS if field in record]
+                assignments = ", ".join(f"{field} = ?" for field in fields)
+                values = [
+                    self._json_serialize(record[field])
+                    if field in self.EVIDENCE_JSON_FIELDS
+                    else record[field]
+                    for field in fields
+                ]
+                db.command("sql", f"INSERT INTO Evidence SET {assignments}", *values)
+        return evidence_id
+
+    def get_evidence(self, evidence_id: str) -> Optional[Dict[str, Any]]:
+        with self._database() as db:
+            rows = self._rows(db.query("sql", "SELECT FROM Evidence WHERE id = ?", evidence_id))
+        return self._evidence_record_to_dict(rows[0]) if rows else None
+
+    def list_evidence(self, repo_id: str, *, limit: int = 10000) -> List[Dict[str, Any]]:
+        with self._database() as db:
+            records = self._rows(
+                db.query(
+                    "sql",
+                    "SELECT FROM Evidence WHERE repo_id = ? "
+                    "ORDER BY created_at ASC LIMIT ?",
+                    repo_id,
+                    limit,
+                )
+            )
+        return [self._evidence_record_to_dict(record) for record in records]
+
+    def update_evidence(self, evidence_id: str, **kwargs) -> bool:
+        raise EvidenceImmutableError(f"Evidence {evidence_id!r} is immutable")
+
+    def attach_evidence(
+        self, belief_id: str, evidence_ids: List[str], *, repo_id: str
+    ) -> None:
+        with self._database() as db:
+            with db.transaction():
+                rows = self._rows(
+                    db.query(
+                        "sql", f"SELECT FROM {self.MEMORY_TYPE} WHERE id = ?", belief_id
+                    )
+                )
+                if not rows or self._record_get(rows[0], "layer") != "semantic":
+                    raise EvidenceReferenceError(
+                        "Evidence can attach only to an existing semantic belief: "
+                        f"{belief_id!r}"
+                    )
+                if self._record_get(rows[0], "repo_id") != repo_id:
+                    raise EvidenceReferenceError(
+                        "Belief and Evidence must share a repository"
+                    )
+                resolved = self._validate_belief_references(
+                    db,
+                    memory_id=belief_id,
+                    layer="semantic",
+                    repo_id=repo_id,
+                    source_ids=[],
+                    evidence_ids=evidence_ids,
+                )
+                existing_ids = set(self._belief_evidence_ids(db, belief_id))
+                now = utc_now().isoformat()
+                for evidence_id in resolved:
+                    if evidence_id in existing_ids:
+                        continue
+                    edge_id = f"be-{belief_id}-{evidence_id}"
+                    db.command(
+                        "sql",
+                        f"""
+                        CREATE EDGE {self.BELIEF_EVIDENCE_EDGE}
+                        FROM (SELECT FROM {self.MEMORY_TYPE} WHERE id = ?)
+                        TO (SELECT FROM Evidence WHERE id = ?)
+                        SET id = ?, belief_id = ?, evidence_id = ?, created_at = ?
+                        """,
+                        belief_id,
+                        evidence_id,
+                        edge_id,
+                        belief_id,
+                        evidence_id,
+                        now,
+                    )
 
     def _insert_record(
         self,
@@ -534,6 +972,7 @@ class ArcadeDbStorage(BaseStorage):
         tags: List[str] = None,
         metadata: Dict[str, Any] = None,
         source_ids: List[str] = None,
+        evidence_ids: List[str] = None,
         status: MemoryStatus = "active",
         source: str = None,
         quality_flags: List[str] = None,
@@ -546,14 +985,52 @@ class ArcadeDbStorage(BaseStorage):
         # through, so a new caller cannot opt out. See visp_memory.quality.secrets.
         content, quality_flags = redact_for_storage(content, quality_flags)
         memory_id = self._generate_id(content)
+        repo_id = repo_id or UNSCOPED_REPO_ID
         tags = tags or []
         metadata = metadata or {}
         source_ids = source_ids or []
+        evidence_ids = evidence_ids or []
         quality_flags = quality_flags or []
+        if repo_id == UNSCOPED_REPO_ID:
+            from visp_memory.core.trust import Provenance, with_provenance
+
+            tags = with_provenance(tags, Provenance.UNKNOWN)
+            source = Provenance.UNKNOWN.value
         now = utc_now().isoformat()
 
         with self._database() as db:
             with db.transaction():
+                if layer in ("episodic", "raw") and not evidence_ids:
+                    evidence_id = f"ev-{uuid.uuid4().hex}"
+                    evidence_record = {
+                        "id": evidence_id,
+                        "content": content,
+                        "content_hash": LocalStorage._evidence_hash(content),
+                        "repo_id": repo_id,
+                        "evidence_type": "observation" if layer == "episodic" else "raw",
+                        "provenance": source or "unknown",
+                        "metadata": {"captured_memory_id": memory_id, "exact_input": True},
+                        "created_at": now,
+                    }
+                    fields = list(self.EVIDENCE_FIELDS)
+                    assignments = ", ".join(f"{field} = ?" for field in fields)
+                    values = [
+                        self._json_serialize(evidence_record[field])
+                        if field in self.EVIDENCE_JSON_FIELDS
+                        else evidence_record[field]
+                        for field in fields
+                    ]
+                    db.command("sql", f"INSERT INTO Evidence SET {assignments}", *values)
+                    evidence_ids = [evidence_id]
+
+                resolved_evidence_ids = self._validate_belief_references(
+                    db,
+                    memory_id=memory_id,
+                    layer=layer,
+                    repo_id=repo_id,
+                    source_ids=source_ids,
+                    evidence_ids=evidence_ids,
+                )
                 db.command(
                     "sql",
                     f"""
@@ -579,6 +1056,23 @@ class ArcadeDbStorage(BaseStorage):
                     now,
                     0,
                 )
+                for evidence_id in resolved_evidence_ids:
+                    edge_id = f"be-{memory_id}-{evidence_id}"
+                    db.command(
+                        "sql",
+                        f"""
+                        CREATE EDGE {self.BELIEF_EVIDENCE_EDGE}
+                        FROM (SELECT FROM {self.MEMORY_TYPE} WHERE id = ?)
+                        TO (SELECT FROM Evidence WHERE id = ?)
+                        SET id = ?, belief_id = ?, evidence_id = ?, created_at = ?
+                        """,
+                        memory_id,
+                        evidence_id,
+                        edge_id,
+                        memory_id,
+                        evidence_id,
+                        now,
+                    )
 
         return memory_id
 

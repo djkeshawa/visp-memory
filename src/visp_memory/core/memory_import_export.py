@@ -8,6 +8,8 @@ from typing import Any, Dict
 
 from visp_memory.capture.git import CaptureManifest
 from visp_memory.core.clock import utc_now
+from visp_memory.core.eligibility import UNSCOPED_REPO_ID
+from visp_memory.core.storage import EvidenceUnsupportedError
 from visp_memory.core.trust import WriteChannel, channel_policy, with_channel_provenance
 
 REDACTED_SECRET = "***REDACTED***"
@@ -18,6 +20,15 @@ _SENSITIVE_CONFIG_KEYS = {
     "jwt_secret",
     "neo4j_password",
 }
+_MAX_GRAPH_EXPORT_ITEMS = 10000
+
+
+def _complete_export_page(items: list[Dict[str, Any]], kind: str) -> list[Dict[str, Any]]:
+    if len(items) > _MAX_GRAPH_EXPORT_ITEMS:
+        raise ValueError(
+            f"Refusing to truncate {kind} export above {_MAX_GRAPH_EXPORT_ITEMS} records"
+        )
+    return items
 
 
 def _scrub_memory_vectors(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -44,28 +55,47 @@ def _redact_config_secrets(value: Any, key: str | None = None) -> Any:
 
 def export_memory(memory: Any, path: Path = None) -> Dict[str, Any]:
     """Export memories, intents, config, and stats for the configured repository."""
-    repo_id = memory.config.repo_id
+    if not memory._storage.get_capabilities().complete_graph_export:
+        raise EvidenceUnsupportedError(
+            f"{memory._storage.__class__.__name__} does not support complete graph export"
+        )
+    repo_id = memory.config.repo_id or UNSCOPED_REPO_ID
 
     export_data = {
-        "version": "1.0",
+        "version": "2.0",
         "exported_at": utc_now().isoformat(),
         "config": _redact_config_secrets(memory.config.model_dump()),
+        "evidence": _complete_export_page(
+            memory._storage.list_evidence(
+                repo_id=repo_id, limit=_MAX_GRAPH_EXPORT_ITEMS + 1
+            ),
+            "Evidence",
+        ),
         "memories": {
-            "episodic": [
-                _scrub_memory_vectors(item)
-                for item in memory._storage.list_memories(
-                    layer="episodic", limit=10000, repo_id=repo_id
-                )
-            ],
-            "semantic": [
-                _scrub_memory_vectors(item)
-                for item in memory._storage.list_memories(
-                    layer="semantic", limit=10000, repo_id=repo_id
-                )
-            ],
+            layer: _complete_export_page(
+                [
+                    _scrub_memory_vectors(item)
+                    for item in memory._storage.list_memories(
+                        layer=layer,
+                        limit=_MAX_GRAPH_EXPORT_ITEMS + 1,
+                        repo_id=repo_id,
+                        status="all",
+                        order_by="created_at ASC",
+                    )
+                ],
+                f"{layer} memory",
+            )
+            for layer in ("raw", "episodic", "semantic", "intent")
         },
-        "intents": memory._storage.get_active_intents(repo_id=repo_id),
-        "stats": memory.stats(),
+        "intents": _complete_export_page(
+            memory._storage.get_active_intents(repo_id=repo_id, status="all"),
+            "intent",
+        ),
+        "relationships": _complete_export_page(
+            memory._storage.get_all_relationships(repo_id=repo_id),
+            "relationship",
+        ),
+        "stats": memory._storage.get_stats(repo_id=repo_id),
         "capture_manifest": CaptureManifest(memory).to_export(),
     }
 
@@ -146,6 +176,24 @@ def _validate_import_data(data: Any) -> Dict[str, Any]:
 def import_memories(memory: Any, path: Path) -> None:
     """Import memories from a JSON export into a Memory instance."""
     data = _validate_import_data(json.loads(Path(path).read_text(encoding="utf-8")))
+    version = data.get("version")
+    if version not in (None, "1.0", "2.0"):
+        raise ValueError(f"Unsupported memory export version: {version!r}")
+
+    if version == "2.0":
+        if not memory._storage.get_capabilities().atomic_graph_import:
+            raise EvidenceUnsupportedError(
+                f"{memory._storage.__class__.__name__} does not support atomic graph import"
+            )
+        import_graph = getattr(memory._storage, "import_graph", None)
+        if import_graph is None:
+            raise ValueError(
+                f"{memory._storage.__class__.__name__} cannot atomically import schema-v3 graphs"
+            )
+        result = import_graph(data, default_repo_id=memory.config.repo_id)
+        if data.get("capture_manifest"):
+            CaptureManifest(memory).replace(data["capture_manifest"])
+        return result
 
     import_policy = channel_policy(WriteChannel.IMPORT)
     for mem in data.get("memories", {}).get("episodic", []):
@@ -164,6 +212,14 @@ def import_memories(memory: Any, path: Path) -> None:
         )
 
     for mem in data.get("memories", {}).get("semantic", []):
+        repo_id = mem.get("repo_id") or memory.config.repo_id
+        evidence_id = memory._storage.store_evidence(
+            mem["content"],
+            repo_id=repo_id,
+            evidence_type="legacy_import",
+            provenance=import_policy.provenance.value,
+            metadata={"write_channel": WriteChannel.IMPORT.value},
+        )
         memory._storage.store_memory(
             content=mem["content"],
             layer="semantic",
@@ -174,8 +230,9 @@ def import_memories(memory: Any, path: Path) -> None:
                 **(mem.get("metadata") or {}),
                 "write_channel": WriteChannel.IMPORT.value,
             },
-            repo_id=mem.get("repo_id") or memory.config.repo_id,
+            repo_id=repo_id,
             source=import_policy.source,
+            evidence_ids=[evidence_id],
         )
 
     for intent in data.get("intents", []):

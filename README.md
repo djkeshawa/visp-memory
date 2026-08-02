@@ -381,14 +381,13 @@ visp-memory tokens --format json
 
 ### Migrate Between Backends
 
-No automatic backend migration runs in v1. Use the existing export/import flow:
+Cross-backend graph portability is capability-gated. SQLite supports complete
+export and atomic import; ArcadeDB supports complete export only. Remote/HTTP and
+Neo4j currently support neither operation. Unsupported operations fail closed.
 
 ```bash
-VISP_MEMORY_STORAGE_BACKEND=sqlite visp-memory export memory.json
-VISP_MEMORY_STORAGE_BACKEND=arcadedb visp-memory import memory.json
-
-# Or migrate into Neo4j after starting/configuring Neo4j
-VISP_MEMORY_STORAGE_BACKEND=neo4j visp-memory import memory.json
+VISP_MEMORY_STORAGE_BACKEND=arcadedb visp-memory export memory.json
+VISP_MEMORY_STORAGE_BACKEND=sqlite visp-memory import memory.json
 ```
 
 ---

@@ -70,8 +70,24 @@ def _backdate_and_set_access(storage: LocalStorage, memory_id: str, days: int, a
 
 def test_decay_spares_frequently_used_memories(tmp_path):
     storage = LocalStorage(tmp_path)
-    unused = storage.store_memory("rarely needed note", layer="semantic", auto_link=False)
-    used = storage.store_memory("the deploy incantation", layer="semantic", auto_link=False)
+    unused_evidence = storage.store_evidence(
+        "rarely needed note", repo_id="__visp_unscoped__"
+    )
+    used_evidence = storage.store_evidence(
+        "the deploy incantation", repo_id="__visp_unscoped__"
+    )
+    unused = storage.store_memory(
+        "rarely needed note",
+        layer="semantic",
+        evidence_ids=[unused_evidence],
+        auto_link=False,
+    )
+    used = storage.store_memory(
+        "the deploy incantation",
+        layer="semantic",
+        evidence_ids=[used_evidence],
+        auto_link=False,
+    )
 
     # Same age and starting importance, but the used memory has many recalls.
     storage.update_memory(unused, importance=0.8)
@@ -89,7 +105,15 @@ def test_decay_spares_frequently_used_memories(tmp_path):
 
 def test_decay_tolerates_null_accessed_at(tmp_path):
     storage = LocalStorage(tmp_path)
-    memory_id = storage.store_memory("null access time note", layer="semantic", auto_link=False)
+    evidence_id = storage.store_evidence(
+        "null access time note", repo_id="__visp_unscoped__"
+    )
+    memory_id = storage.store_memory(
+        "null access time note",
+        layer="semantic",
+        evidence_ids=[evidence_id],
+        auto_link=False,
+    )
     old = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
     with storage._get_db() as conn:
         # accessed_at explicitly NULL must fall back to created_at, not crash.

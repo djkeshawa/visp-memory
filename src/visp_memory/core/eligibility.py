@@ -7,12 +7,17 @@ from typing import Any, Iterable
 
 from visp_memory.core.clock import parse_utc, utc_now
 
+UNSCOPED_REPO_ID = "__visp_unscoped__"
+
 
 def require_repo_id(repo_id: Any) -> str:
     """Return a normalized repository scope or refuse an implicit global read."""
     if not isinstance(repo_id, str) or not repo_id.strip():
         raise ValueError("repo_id is required")
-    return repo_id.strip()
+    normalized = repo_id.strip()
+    if normalized == UNSCOPED_REPO_ID:
+        raise ValueError("reserved repository scope cannot be used for recall")
+    return normalized
 
 
 def normalize_scope_values(value: Any, *, field: str) -> tuple[str, ...]:

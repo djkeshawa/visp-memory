@@ -283,7 +283,9 @@ class MemoryConfig(BaseSettings):
                         config.storage.data_dir = parent / config.storage.data_dir
                     return config
 
-        return cls()
+        config = cls()
+        config.apply_env_overrides()
+        return config
 
     def apply_env_overrides(self):
         """Apply deployment environment overrides after file-based config loading."""

@@ -54,7 +54,9 @@ def _authorize_pat_request(request: Request, user: UserContext) -> UserContext:
         required_scope = "project:read" if request.method == "GET" else "project:write"
     elif path.startswith("/context"):
         required_scope = "memory:read"
-    elif path.startswith(("/memories", "/recall", "/graph", "/quality", "/ai")):
+    elif path.startswith(
+        ("/memories", "/evidence", "/recall", "/graph", "/quality", "/ai")
+    ):
         required_scope = "memory:read" if request.method == "GET" else "memory:write"
     else:
         required_scope = "project:read"

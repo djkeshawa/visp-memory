@@ -15,7 +15,12 @@ try:
 except ImportError:
     REQUESTS_AVAILABLE = False
 
-from visp_memory.core.storage import BaseStorage, MemoryLayer, StorageCapabilities
+from visp_memory.core.storage import (
+    BaseStorage,
+    EvidenceImmutableError,
+    MemoryLayer,
+    StorageCapabilities,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +105,82 @@ class RemoteStorage(BaseStorage):
 
     def get_capabilities(self) -> StorageCapabilities:
         return StorageCapabilities(audit_log=False, reindex=False, vector_search=False)
+
+    def get_schema_status(self) -> Dict[str, Any]:
+        try:
+            response = self.session.get(f"{self.server_url}/diagnostics/storage")
+            response.raise_for_status()
+            payload = self._response_json(response, "get schema status", dict)
+            status = payload.get("schema_status")
+            if not isinstance(status, dict):
+                raise RemoteStorageError(
+                    "Remote server returned an invalid schema status response"
+                )
+            return status
+        except requests.RequestException as e:
+            raise self._write_error("get schema status", e) from e
+
+    def store_evidence(
+        self,
+        content: str,
+        repo_id: str,
+        evidence_type: str = "observation",
+        provenance: str = "unknown",
+        metadata: Dict[str, Any] = None,
+        **kwargs,
+    ) -> str:
+        try:
+            payload = {
+                "content": content,
+                "repo_id": repo_id,
+                "evidence_type": evidence_type,
+                "provenance": provenance,
+                "metadata": metadata or {},
+                **kwargs,
+            }
+            response = self.session.post(f"{self.server_url}/evidence", json=payload)
+            response.raise_for_status()
+            return self._response_id(response, "store evidence")
+        except requests.RequestException as e:
+            raise self._write_error("store evidence", e) from e
+
+    def get_evidence(self, evidence_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            response = self.session.get(f"{self.server_url}/evidence/{evidence_id}")
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            return self._response_json(response, "get evidence", dict)
+        except requests.RequestException as e:
+            raise self._write_error("get evidence", e) from e
+
+    def list_evidence(
+        self, repo_id: str, *, limit: int = 10000
+    ) -> List[Dict[str, Any]]:
+        try:
+            response = self.session.get(
+                f"{self.server_url}/evidence",
+                params={"repo_id": repo_id, "limit": limit},
+            )
+            response.raise_for_status()
+            return self._response_json(response, "list evidence", list)
+        except requests.RequestException as e:
+            raise self._write_error("list evidence", e) from e
+
+    def update_evidence(self, evidence_id: str, **kwargs) -> bool:
+        raise EvidenceImmutableError(f"Evidence {evidence_id!r} is immutable")
+
+    def attach_evidence(
+        self, belief_id: str, evidence_ids: List[str], *, repo_id: str
+    ) -> None:
+        try:
+            response = self.session.post(
+                f"{self.server_url}/memories/{belief_id}/evidence",
+                json={"repo_id": repo_id, "evidence_ids": evidence_ids},
+            )
+            response.raise_for_status()
+        except requests.RequestException as e:
+            raise self._write_error("attach evidence", e) from e
 
     def _install_request_guard(self) -> None:
         """Inject a default timeout and centralized failure logging into the session."""

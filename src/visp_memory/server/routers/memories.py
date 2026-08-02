@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
@@ -11,6 +11,11 @@ from visp_memory.core.eligibility import (
 )
 from visp_memory.core.lifecycle import LifecycleError
 from visp_memory.core.ranking import rank_memory_results
+from visp_memory.core.storage import (
+    EvidenceImmutableError,
+    EvidenceReferenceError,
+    EvidenceUnsupportedError,
+)
 from visp_memory.core.trust import (
     WriteChannel,
     channel_policy,
@@ -27,6 +32,9 @@ from visp_memory.server.authorization import (
 )
 from visp_memory.server.routers.platform import append_audit_event
 from visp_memory.server.schemas import (
+    EvidenceAttachRequest,
+    EvidenceCreate,
+    EvidenceResponse,
     MemoryCreate,
     MemoryMergePreviewRequest,
     MemoryMergeRequest,
@@ -98,6 +106,7 @@ def _memory_response_payload(memory: dict):
         "status": memory.get("status", "active"),
         "source": memory.get("source"),
         "quality_flags": memory.get("quality_flags", []),
+        "evidence_ids": memory.get("evidence_ids", []),
         "approved_by": memory.get("approved_by"),
         "approved_at": _as_optional_datetime(memory.get("approved_at")),
         "archived_at": _as_optional_datetime(memory.get("archived_at")),
@@ -220,6 +229,19 @@ async def create_memory(
     config = load_config()
     memory_repo_id = memory.repo_id or config.repo_id
     require_repo_writable(storage, memory_repo_id, user)
+    if memory.layer == "semantic" and not memory.evidence_ids:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Semantic beliefs require at least one existing Evidence ID",
+        )
+    for evidence_id in memory.evidence_ids:
+        require_scoped_record_access(
+            storage,
+            storage.get_evidence(evidence_id),
+            user,
+            scope_field="metadata",
+            not_found_detail="Evidence not found",
+        )
 
     # Add author attribution to metadata
     metadata = dict(memory.metadata or {})
@@ -235,19 +257,27 @@ async def create_memory(
             metadata[field] = value
 
     http_policy = channel_policy(WriteChannel.HTTP)
-    mem_id = storage.store_memory(
-        content=memory.content,
-        layer=memory.layer,
-        category=memory.category,
-        importance=memory.importance,
-        repo_id=memory_repo_id,
-        tags=with_channel_provenance(memory.tags, WriteChannel.HTTP),
-        metadata=metadata,
-        source_ids=memory.source_ids,
-        status=memory.status,
-        source=http_policy.source,
-        quality_flags=memory.quality_flags,
-    )
+    try:
+        mem_id = storage.store_memory(
+            content=memory.content,
+            layer=memory.layer,
+            category=memory.category,
+            importance=memory.importance,
+            repo_id=memory_repo_id,
+            tags=with_channel_provenance(memory.tags, WriteChannel.HTTP),
+            metadata=metadata,
+            source_ids=memory.source_ids,
+            evidence_ids=memory.evidence_ids,
+            status=memory.status,
+            source=http_policy.source,
+            quality_flags=memory.quality_flags,
+        )
+    except EvidenceReferenceError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except EvidenceUnsupportedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)
+        ) from exc
     append_audit_event(
         storage,
         event_type="memory.created",
@@ -258,6 +288,146 @@ async def create_memory(
         metadata={"layer": memory.layer, "category": memory.category},
     )
     return _memory_response_payload(storage.get_memory(mem_id))
+
+
+@router.post("/evidence", response_model=EvidenceResponse)
+async def create_evidence(
+    request: Request,
+    evidence: EvidenceCreate,
+    user: UserContext = Depends(get_current_user),
+):
+    storage = request.app.state.storage
+    require_repo_writable(storage, evidence.repo_id, user)
+    metadata = {
+        key: value
+        for key, value in evidence.metadata.items()
+        if key not in {"author_id", "team_id", "write_channel"}
+    }
+    metadata.update({"author_id": user.user_id, "write_channel": "http"})
+    if user.team_id:
+        metadata["team_id"] = user.team_id
+    try:
+        evidence_id = storage.store_evidence(
+            evidence.content,
+            repo_id=evidence.repo_id,
+            evidence_type=evidence.evidence_type,
+            provenance="external",
+            metadata=metadata,
+        )
+    except EvidenceUnsupportedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)
+        ) from exc
+    append_audit_event(
+        storage,
+        event_type="evidence.created",
+        actor_id=user.user_id,
+        repo_id=evidence.repo_id,
+        target_type="evidence",
+        target_id=evidence_id,
+        metadata={"evidence_type": evidence.evidence_type},
+    )
+    return storage.get_evidence(evidence_id)
+
+
+@router.get("/evidence", response_model=List[EvidenceResponse])
+async def list_evidence(
+    request: Request,
+    repo_id: str,
+    limit: int = 10000,
+    user: UserContext = Depends(get_current_user),
+):
+    storage = request.app.state.storage
+    require_repo_scope_access(storage, repo_id, user)
+    requested_limit = max(1, min(limit, 10000))
+    evidence = storage.list_evidence(repo_id=repo_id, limit=10000)
+    return [
+        item
+        for item in evidence
+        if can_access_scoped_record(storage, item, user, scope_field="metadata")
+    ][:requested_limit]
+
+
+@router.get("/evidence/{evidence_id}", response_model=EvidenceResponse)
+async def get_evidence(
+    request: Request,
+    evidence_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    storage = request.app.state.storage
+    evidence = require_scoped_record_access(
+        storage,
+        storage.get_evidence(evidence_id),
+        user,
+        scope_field="metadata",
+        not_found_detail="Evidence not found",
+    )
+    return evidence
+
+
+@router.patch("/evidence/{evidence_id}")
+async def update_evidence(
+    request: Request,
+    evidence_id: str,
+    payload: Dict[str, Any],
+    user: UserContext = Depends(get_current_user),
+):
+    storage = request.app.state.storage
+    evidence = require_scoped_record_access(
+        storage,
+        storage.get_evidence(evidence_id),
+        user,
+        scope_field="metadata",
+        not_found_detail="Evidence not found",
+    )
+    require_repo_writable(storage, evidence["repo_id"], user)
+    try:
+        storage.update_evidence(evidence_id, **payload)
+    except EvidenceImmutableError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Evidence is immutable")
+
+
+@router.post("/memories/{belief_id}/evidence", response_model=MemoryResponse)
+async def attach_evidence(
+    request: Request,
+    belief_id: str,
+    payload: EvidenceAttachRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    storage = request.app.state.storage
+    belief = require_scoped_record_access(
+        storage,
+        storage.get_memory(belief_id),
+        user,
+        scope_field="metadata",
+        not_found_detail="Memory not found",
+    )
+    if belief.get("repo_id") != payload.repo_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Belief and Evidence must share a repository",
+        )
+    require_repo_writable(storage, payload.repo_id, user)
+    for evidence_id in payload.evidence_ids:
+        require_scoped_record_access(
+            storage,
+            storage.get_evidence(evidence_id),
+            user,
+            scope_field="metadata",
+            not_found_detail="Evidence not found",
+        )
+    try:
+        storage.attach_evidence(
+            belief_id, payload.evidence_ids, repo_id=payload.repo_id
+        )
+    except EvidenceReferenceError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except EvidenceUnsupportedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)
+        ) from exc
+    return _memory_response_payload(storage.get_memory(belief_id))
 
 
 @router.get("/memories/{memory_id}", response_model=MemoryResponse)

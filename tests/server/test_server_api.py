@@ -2,9 +2,31 @@ import sqlite3
 
 import pytest
 
+from visp_memory.core.neo4j_storage import Neo4jStorage
 from visp_memory.core.trust import Provenance, assess, provenance_of, provenance_tag
 from visp_memory.server import app as server_app
 from visp_memory.server.app import app
+
+
+async def _http_evidence(client, headers, repo_id, content):
+    response = await client.post(
+        "/evidence",
+        json={"content": content, "repo_id": repo_id, "evidence_type": "test"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    return response.json()["id"]
+
+
+def _store_semantic(content, repo_id, **kwargs):
+    evidence_id = app.state.storage.store_evidence(content, repo_id=repo_id)
+    return app.state.storage.store_memory(
+        content,
+        layer="semantic",
+        repo_id=repo_id,
+        evidence_ids=[evidence_id],
+        **kwargs,
+    )
 
 
 @pytest.mark.asyncio
@@ -335,6 +357,171 @@ async def test_create_memory_with_attribution(client):
 
 
 @pytest.mark.asyncio
+async def test_http_semantic_belief_requires_existing_same_repo_evidence(client):
+    headers = {"X-API-KEY": "test_key"}
+
+    missing = await client.post(
+        "/memories",
+        json={
+            "content": "Authentication requires secure cookies",
+            "layer": "semantic",
+            "repo_id": "repo-a",
+        },
+        headers=headers,
+    )
+    assert missing.status_code == 422
+
+    evidence_response = await client.post(
+        "/evidence",
+        json={
+            "content": "Observed Set-Cookie with Secure and HttpOnly",
+            "repo_id": "repo-a",
+            "evidence_type": "tool_output",
+        },
+        headers=headers,
+    )
+    assert evidence_response.status_code == 200
+    evidence = evidence_response.json()
+    assert evidence["content_hash"]
+    assert evidence["provenance"] == "external"
+
+    created = await client.post(
+        "/memories",
+        json={
+            "content": "Authentication requires secure cookies",
+            "layer": "semantic",
+            "repo_id": "repo-a",
+            "evidence_ids": [evidence["id"]],
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200
+    assert created.json()["evidence_ids"] == [evidence["id"]]
+
+    fetched = await client.get(f"/evidence/{evidence['id']}", headers=headers)
+    assert fetched.status_code == 200
+    assert fetched.json() == evidence
+
+    immutable = await client.patch(
+        f"/evidence/{evidence['id']}",
+        json={"content": "Changed"},
+        headers=headers,
+    )
+    assert immutable.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_http_evidence_redacts_secret_before_response_and_storage(client):
+    secret = "sk-proj-abcdefghijklmnopqrstuvwxyz123456"
+    response = await client.post(
+        "/evidence",
+        json={"content": f"Observed credential {secret}", "repo_id": "repo-a"},
+        headers={"X-API-KEY": "test_key"},
+    )
+
+    assert response.status_code == 200
+    evidence = response.json()
+    assert secret not in evidence["content"]
+    assert "[REDACTED:openai-key]" in evidence["content"]
+    assert secret not in app.state.storage.get_evidence(evidence["id"])["content"]
+
+
+@pytest.mark.asyncio
+async def test_http_belief_rejects_cross_repo_evidence_without_partial_write(client):
+    headers = {"X-API-KEY": "test_key"}
+    evidence = (
+        await client.post(
+            "/evidence",
+            json={"content": "Repository B output", "repo_id": "repo-b"},
+            headers=headers,
+        )
+    ).json()
+
+    response = await client.post(
+        "/memories",
+        json={
+            "content": "Repository A belief must fail",
+            "layer": "semantic",
+            "repo_id": "repo-a",
+            "evidence_ids": [evidence["id"]],
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 409
+    repo_a = await client.get(
+        "/memories",
+        params={"repo_id": "repo-a", "layer": "semantic"},
+        headers=headers,
+    )
+    assert all(item["content"] != "Repository A belief must fail" for item in repo_a.json())
+
+
+@pytest.mark.asyncio
+async def test_http_attach_evidence_is_atomic_and_same_repo(client):
+    headers = {"X-API-KEY": "test_key"}
+    first = await _http_evidence(client, headers, "repo-a", "First observation")
+    second = await _http_evidence(client, headers, "repo-a", "Second observation")
+    other_repo = await _http_evidence(client, headers, "repo-b", "Other observation")
+    belief = await client.post(
+        "/memories",
+        json={
+            "content": "Evidence-backed reconciliation target",
+            "layer": "semantic",
+            "repo_id": "repo-a",
+            "evidence_ids": [first],
+        },
+        headers=headers,
+    )
+    belief_id = belief.json()["id"]
+
+    attached = await client.post(
+        f"/memories/{belief_id}/evidence",
+        json={"repo_id": "repo-a", "evidence_ids": [second]},
+        headers=headers,
+    )
+    assert attached.status_code == 200
+    assert attached.json()["evidence_ids"] == [first, second]
+
+    duplicate = await client.post(
+        f"/memories/{belief_id}/evidence",
+        json={"repo_id": "repo-a", "evidence_ids": [second]},
+        headers=headers,
+    )
+    assert duplicate.status_code == 200
+    assert duplicate.json()["evidence_ids"] == [first, second]
+
+    rejected = await client.post(
+        f"/memories/{belief_id}/evidence",
+        json={"repo_id": "repo-a", "evidence_ids": [second, other_repo]},
+        headers=headers,
+    )
+    assert rejected.status_code == 409
+    assert app.state.storage.get_memory(belief_id)["evidence_ids"] == [first, second]
+
+
+@pytest.mark.asyncio
+async def test_http_neo_governed_write_returns_explicit_unsupported(client):
+    storage = Neo4jStorage.__new__(Neo4jStorage)
+    storage.get_repository = lambda _repo_id: None
+    storage._embedding_fn = None
+    storage._uses_noop_embeddings = False
+    original_storage = app.state.storage
+    app.state.storage = storage
+    try:
+        response = await client.post(
+            "/memories",
+            json={"content": "Neo governed write", "repo_id": "repo-a"},
+            headers={"X-API-KEY": "test_key"},
+        )
+    finally:
+        app.state.storage = original_storage
+
+    assert response.status_code == 501
+    assert "Evidence graph" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("claimed_tag", ["provenance:authored", "provenance:not-a-tier"])
 async def test_http_memory_write_replaces_self_claimed_provenance_with_external(
     client, claimed_tag
@@ -435,6 +622,12 @@ async def test_memory_responses_use_persisted_accessed_at(client):
 @pytest.mark.asyncio
 async def test_list_memories_filters_by_layer_and_category(client):
     headers = {"X-API-KEY": "test_key"}
+    fragile_evidence = await _http_evidence(
+        client, headers, "repo-a", "Fragile auth warning"
+    )
+    convention_evidence = await _http_evidence(
+        client, headers, "repo-a", "Team convention"
+    )
     await client.post(
         "/memories",
         json={
@@ -442,6 +635,7 @@ async def test_list_memories_filters_by_layer_and_category(client):
             "layer": "episodic",
             "category": "note",
             "repo_id": "repo-a",
+            "evidence_ids": [fragile_evidence],
         },
         headers=headers,
     )
@@ -452,6 +646,7 @@ async def test_list_memories_filters_by_layer_and_category(client):
             "layer": "semantic",
             "category": "fragile_area",
             "repo_id": "repo-a",
+            "evidence_ids": [convention_evidence],
         },
         headers=headers,
     )
@@ -807,6 +1002,9 @@ async def test_captured_completion_language_only_produces_advisory_evaluation(cl
 @pytest.mark.asyncio
 async def test_context_compile_returns_citations_and_unchanged_delta(client):
     headers = {"X-API-KEY": "test_key"}
+    evidence_id = await _http_evidence(
+        client, headers, "context-repo", "Session cookies protect dashboard authentication"
+    )
     await client.post(
         "/memories",
         json={
@@ -817,6 +1015,7 @@ async def test_context_compile_returns_citations_and_unchanged_delta(client):
             "symbols": ["login"],
             "confidence": 0.95,
             "source_revision": "abc123",
+            "evidence_ids": [evidence_id],
         },
         headers=headers,
     )
@@ -851,6 +1050,12 @@ async def test_context_compile_returns_citations_and_unchanged_delta(client):
 @pytest.mark.asyncio
 async def test_task_memory_brief_returns_sections_unknowns_and_delta(client):
     headers = {"X-API-KEY": "test_key"}
+    evidence_id = await _http_evidence(
+        client,
+        headers,
+        "brief-repo",
+        "WARNING [auth]: preserve legacy API compatibility",
+    )
     memory = await client.post(
         "/memories",
         json={
@@ -861,15 +1066,15 @@ async def test_task_memory_brief_returns_sections_unknowns_and_delta(client):
             "files": ["src/auth.py"],
             "confidence": 0.96,
             "source_revision": "brief123",
+            "evidence_ids": [evidence_id],
         },
         headers=headers,
     )
     assert memory.status_code == 200
-    trusted_id = app.state.storage.store_memory(
+    trusted_id = _store_semantic(
         "WARNING [auth]: trusted legacy API compatibility",
-        layer="semantic",
+        "brief-repo",
         category="fragile_area",
-        repo_id="brief-repo",
         tags=[provenance_tag(Provenance.DERIVED)],
         metadata={
             "files": ["src/auth.py"],
@@ -1103,17 +1308,15 @@ async def test_recall_endpoint_filters_low_relevance_results_by_default(client):
 @pytest.mark.asyncio
 async def test_ask_memory_returns_scoped_citations(client):
     headers = {"X-API-KEY": "test_key"}
-    app.state.storage.store_memory(
+    _store_semantic(
         "Use OpenRouter embeddings for cloud recall",
-        layer="semantic",
-        repo_id="repo-a",
+        "repo-a",
         tags=[provenance_tag(Provenance.DERIVED)],
         auto_link=False,
     )
-    app.state.storage.store_memory(
+    _store_semantic(
         "Repo B uses a different provider",
-        layer="semantic",
-        repo_id="repo-b",
+        "repo-b",
         tags=[provenance_tag(Provenance.DERIVED)],
         auto_link=False,
     )
@@ -1139,10 +1342,9 @@ async def test_ask_memory_filters_trust_temporal_and_runtime_scope(client):
     headers = {"X-API-KEY": "test_key"}
 
     def store(content, metadata, tier=Provenance.DERIVED):
-        return app.state.storage.store_memory(
+        return _store_semantic(
             content,
-            layer="semantic",
-            repo_id="repo-a",
+            "repo-a",
             tags=[provenance_tag(tier)],
             metadata=metadata,
             auto_link=False,
@@ -1190,9 +1392,17 @@ async def test_ask_memory_filters_trust_temporal_and_runtime_scope(client):
 @pytest.mark.asyncio
 async def test_ask_memory_excludes_archived_memories(client):
     headers = {"X-API-KEY": "test_key"}
+    evidence_id = await _http_evidence(
+        client, headers, "repo-a", "Archived answer source"
+    )
     create_response = await client.post(
         "/memories",
-        json={"content": "Archived answer source", "layer": "semantic", "repo_id": "repo-a"},
+        json={
+            "content": "Archived answer source",
+            "layer": "semantic",
+            "repo_id": "repo-a",
+            "evidence_ids": [evidence_id],
+        },
         headers=headers,
     )
     mem_id = create_response.json()["id"]
@@ -1481,6 +1691,9 @@ async def test_graph_recall_trace_endpoint_returns_evidence(client):
 @pytest.mark.asyncio
 async def test_memory_intelligence_report_endpoint_returns_public_contract(client):
     headers = {"X-API-KEY": "test_key"}
+    evidence_id = await _http_evidence(
+        client, headers, "repo-a", "API fragile warning"
+    )
     await client.post(
         "/memories",
         json={
@@ -1497,6 +1710,7 @@ async def test_memory_intelligence_report_endpoint_returns_public_contract(clien
             "repo_id": "repo-a",
             "layer": "semantic",
             "category": "fragile_area",
+            "evidence_ids": [evidence_id],
         },
         headers=headers,
     )

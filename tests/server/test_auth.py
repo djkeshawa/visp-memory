@@ -185,6 +185,18 @@ async def test_personal_access_token_is_scoped_and_revocable(client):
 
     pat_headers = {"Authorization": f"Bearer {token}"}
     assert (await client.get("/auth/me", headers=pat_headers)).status_code == 200
+    assert (
+        await client.get(
+            "/evidence", params={"repo_id": "allowed-repo"}, headers=pat_headers
+        )
+    ).status_code == 200
+    assert (
+        await client.post(
+            "/evidence",
+            headers=pat_headers,
+            json={"content": "Read-only token must fail", "repo_id": "allowed-repo"},
+        )
+    ).status_code == 403
     assert (await client.post("/memories", headers=pat_headers, json={})).status_code == 403
     assert (await client.get("/repos", headers=pat_headers)).status_code == 403
 

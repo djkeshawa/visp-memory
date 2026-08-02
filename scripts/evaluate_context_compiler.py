@@ -12,18 +12,26 @@ from visp_memory.core.storage import LocalStorage
 from visp_memory.core.tokens import estimate_tokens
 
 
+def _store(storage, content, **kwargs):
+    if kwargs.get("layer") == "semantic":
+        kwargs["evidence_ids"] = [
+            storage.store_evidence(content, repo_id=kwargs["repo_id"])
+        ]
+    return storage.store_memory(content, **kwargs)
+
+
 def evaluate() -> dict:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
         storage = LocalStorage(Path(directory))
         relevant_ids = {
-            storage.store_memory(
+            _store(storage,
                 "Dashboard login uses HttpOnly session cookies and CSRF validation",
                 layer="semantic",
                 repo_id="evaluation",
                 metadata={"files": ["src/auth.py"], "confidence": 0.95},
                 auto_link=False,
             ),
-            storage.store_memory(
+            _store(storage,
                 "API clients authenticate with scoped llmm personal access tokens",
                 layer="semantic",
                 repo_id="evaluation",
@@ -31,7 +39,7 @@ def evaluate() -> dict:
                 auto_link=False,
             ),
         }
-        storage.store_memory(
+        _store(storage,
             "The dashboard previously stored JWT tokens in browser session storage",
             layer="semantic",
             repo_id="evaluation",
@@ -43,7 +51,7 @@ def evaluate() -> dict:
             auto_link=False,
         )
         for index in range(20):
-            storage.store_memory(
+            _store(storage,
                 f"Unrelated build observation {index}",
                 repo_id="evaluation",
                 metadata={"files": ["src/build.py"], "confidence": 0.7},

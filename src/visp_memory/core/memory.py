@@ -27,9 +27,14 @@ from visp_memory.core.neo4j_storage import Neo4jStorage
 from visp_memory.core.ranking import DEFAULT_RECALL_MIN_SCORE, rank_memory_results, text_similarity
 from visp_memory.core.remote_storage import RemoteStorage
 from visp_memory.core.repository import RepositoryManager
-from visp_memory.core.storage import LocalStorage
+from visp_memory.core.storage import UNSCOPED_REPO_ID, LocalStorage
 from visp_memory.core.team import TeamManager
-from visp_memory.core.trust import TrustFilterResult, WriteChannel, filter_unsolicited
+from visp_memory.core.trust import (
+    TrustFilterResult,
+    WriteChannel,
+    channel_policy,
+    filter_unsolicited,
+)
 from visp_memory.layers.episodic import EpisodeCategory, EpisodicMemory
 from visp_memory.layers.intent import IntentMemory, IntentPriority
 from visp_memory.layers.semantic import KnowledgeCategory, SemanticMemory
@@ -284,8 +289,24 @@ class Memory:
         if reconcile is None:
             reconcile = self.config.quality.write_reconciliation
 
-        effective_repo_id = repo_id or self.config.repo_id
+        effective_repo_id = repo_id or self.config.repo_id or UNSCOPED_REPO_ID
         category_value = cat.value if hasattr(cat, "value") else str(cat)
+        evidence_ids = list(kwargs.pop("evidence_ids", []) or [])
+        source_episodes = list(kwargs.get("source_episodes", []) or [])
+        if not evidence_ids and not source_episodes:
+            policy = channel_policy(_write_channel)
+            evidence_repo_id = effective_repo_id
+            if evidence_repo_id != UNSCOPED_REPO_ID:
+                evidence_repo_id = require_repo_id(evidence_repo_id)
+            evidence_ids = [
+                self._storage.store_evidence(
+                    knowledge,
+                    repo_id=evidence_repo_id,
+                    evidence_type="caller_input",
+                    provenance=policy.provenance.value,
+                    metadata={"write_channel": _write_channel.value},
+                )
+            ]
 
         # Write-time reconciliation: fold near-duplicate knowledge into the
         # existing memory instead of inserting a copy. Keeps the store small,
@@ -295,7 +316,13 @@ class Memory:
                 knowledge, layer="semantic", repo_id=effective_repo_id, category=category_value
             )
             if decision.action in ("noop", "update") and decision.target_id:
-                return self._apply_reconcile_decision(decision, knowledge, importance)
+                return self._apply_reconcile_decision(
+                    decision,
+                    knowledge,
+                    importance,
+                    evidence_ids=evidence_ids,
+                    repo_id=effective_repo_id,
+                )
 
         conflict = None
         if detect or self.config.quality.conflict_detection:
@@ -306,6 +333,7 @@ class Memory:
             category=cat,
             importance=importance,
             repo_id=effective_repo_id,
+            evidence_ids=evidence_ids,
             _write_channel=_write_channel,
             **kwargs,
         )
@@ -336,7 +364,15 @@ class Memory:
 
         return memory_id
 
-    def _apply_reconcile_decision(self, decision, knowledge: str, importance: float) -> str:
+    def _apply_reconcile_decision(
+        self,
+        decision,
+        knowledge: str,
+        importance: float,
+        *,
+        evidence_ids: List[str],
+        repo_id: str,
+    ) -> str:
         """Reinforce or refresh an existing memory instead of inserting a duplicate."""
         from visp_memory.core.clock import utc_now_iso
 
@@ -352,6 +388,15 @@ class Memory:
                 "reconciled_at": utc_now_iso(),
                 "reconcile_action": "update",
             }
+        if evidence_ids:
+            evidence_repo_id = repo_id
+            if evidence_repo_id != UNSCOPED_REPO_ID:
+                evidence_repo_id = require_repo_id(evidence_repo_id)
+            self._storage.attach_evidence(
+                decision.target_id,
+                evidence_ids,
+                repo_id=evidence_repo_id,
+            )
         self._storage.update_memory(decision.target_id, **updates)
         logger.info(
             "Reconciled knowledge into %s (%s, overlap=%.2f): %s",
