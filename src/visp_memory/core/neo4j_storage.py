@@ -477,6 +477,13 @@ class Neo4jStorage(BaseStorage):
         auto_link: bool = True,
         auto_link_limit: int = DEFAULT_AUTO_LINK_LIMIT,
         auto_link_min_score: float = DEFAULT_AUTO_LINK_MIN_SCORE,
+        # Accepted and unused. The governed belief fields exist on the local
+        # backend; this one fails closed for every layer that carries them, a few
+        # lines below. Omitting them from the signature did not prevent the write —
+        # it turned an intended, explicit refusal into a TypeError raised before the
+        # check could run, which the server surfaced as a 500 rather than a 501.
+        epistemic_status: str = None,
+        authority_attestation: str = None,
     ) -> str:
         """Store a memory node."""
         # Enforce the secrets policy at the single choke point every write path funnels
