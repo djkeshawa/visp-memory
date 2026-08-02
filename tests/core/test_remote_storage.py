@@ -153,7 +153,17 @@ def test_remote_storage_reads_evidence_and_server_schema_status():
 
 
 def test_remote_storage_forwards_belief_evidence_ids():
-    storage = remote_storage_with(FakeResponse(200, {"id": "belief-1"}))
+    storage = remote_storage_with(
+        FakeResponse(
+            200,
+            {
+                "id": "belief-1",
+                "category": "fact",
+                "belief_type": "fact",
+                "epistemic_status": "inferred",
+            },
+        )
+    )
 
     assert storage.store_memory(
         "Authentication requires secure cookies",
@@ -162,6 +172,62 @@ def test_remote_storage_forwards_belief_evidence_ids():
         evidence_ids=["evidence-1"],
     ) == "belief-1"
     assert storage.session.last_post_json["evidence_ids"] == ["evidence-1"]
+
+
+def test_remote_semantic_write_closes_input_and_forwards_authority_candidate():
+    storage = remote_storage_with(
+        FakeResponse(
+            200,
+            {
+                "id": "belief-1",
+                "category": "prohibition",
+                "belief_type": "prohibition",
+                "epistemic_status": "observed",
+            },
+        )
+    )
+
+    assert storage.store_memory(
+        "Never bypass review",
+        layer="semantic",
+        category="prohibition",
+        authority_attestation="opaque-envelope",
+    ) == "belief-1"
+    assert storage.session.last_post_json["authority_attestation"] == "opaque-envelope"
+
+    for invalid in (
+        {"category": "fact"},
+        {"category": "fact", "epistemic_status": "observed"},
+    ):
+        with pytest.raises(RemoteStorageError):
+            storage.store_memory("Rejected", layer="semantic", **invalid)
+
+
+@pytest.mark.parametrize(
+    "response_payload",
+    [
+        {"id": "belief-1"},
+        {
+            "id": "belief-1",
+            "category": "procedure",
+            "belief_type": "procedure",
+            "epistemic_status": "inferred",
+        },
+        {
+            "id": "belief-1",
+            "category": "fact",
+            "belief_type": "fact",
+            "epistemic_status": "observed",
+        },
+    ],
+)
+def test_remote_semantic_write_refuses_old_or_mismatching_server_response(
+    response_payload,
+):
+    storage = remote_storage_with(FakeResponse(200, response_payload))
+
+    with pytest.raises(RemoteStorageError, match="semantic belief contract"):
+        storage.store_memory("Governed fact", layer="semantic", category="fact")
 
 
 def test_remote_storage_attaches_evidence_through_authorized_http_endpoint():
@@ -384,11 +450,11 @@ def test_remote_storage_get_relationships_preserves_evidence_payload():
 def test_remote_storage_list_sends_supported_filters_without_none_values():
     storage = remote_storage_with(FakeResponse(200, []))
 
-    assert storage.list_memories(layer="semantic", category="fragile_area", repo_id=None) == []
+    assert storage.list_memories(layer="semantic", category="negative", repo_id=None) == []
     assert storage.session.last_get_url == "http://memory.example/memories"
     assert storage.session.last_get_params == {
         "layer": "semantic",
-        "category": "fragile_area",
+        "category": "negative",
     }
 
 

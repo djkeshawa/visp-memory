@@ -7,6 +7,7 @@ import pytest
 
 from visp_memory import Memory, MemoryConfig
 from visp_memory.capture.instructions import (
+    INSTRUCTION_BELIEF_TYPE,
     INSTRUCTION_CATEGORY,
     discover_instruction_files,
     ingest_instructions,
@@ -80,13 +81,17 @@ def test_ingest_stores_sections_with_provenance(memory, project):
 
     assert report.stored > 0
     rows = memory._storage.list_memories(
-        layer="semantic", category=INSTRUCTION_CATEGORY, limit=100
+        layer="semantic", category=INSTRUCTION_BELIEF_TYPE, limit=100
     )
     assert len(rows) == report.stored
     sample = rows[0]
     assert sample["metadata"]["source_file"]
     assert sample["metadata"]["content_hash"]
     assert sample["metadata"]["write_channel"] == "instruction"
+    assert sample["metadata"]["legacy_category"] == INSTRUCTION_CATEGORY
+    assert sample["belief_type"] == "hypothesis"
+    assert sample["epistemic_status"] == "hypothesized"
+    assert sample["metadata"]["valid_to"] is not None
     assert "imported_instruction" in sample["tags"]
     assert provenance_of(sample) is Provenance.EXTERNAL
     assert assess(sample).injectable is False
@@ -99,7 +104,7 @@ def test_reingest_is_idempotent(memory, project):
     assert second.stored == 0
     assert second.skipped_unchanged >= first.stored
     rows = memory._storage.list_memories(
-        layer="semantic", category=INSTRUCTION_CATEGORY, limit=100
+        layer="semantic", category=INSTRUCTION_BELIEF_TYPE, limit=100
     )
     assert len(rows) == first.stored
 
@@ -126,7 +131,7 @@ def test_dry_run_stores_nothing(memory, project):
     report = ingest_instructions(memory, root=project, dry_run=True)
     assert report.stored > 0
     rows = memory._storage.list_memories(
-        layer="semantic", category=INSTRUCTION_CATEGORY, limit=100
+        layer="semantic", category=INSTRUCTION_BELIEF_TYPE, limit=100
     )
     assert rows == []
 

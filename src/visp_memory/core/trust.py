@@ -299,6 +299,17 @@ def assess(
 ) -> TrustAssessment:
     """Score how far a memory can be trusted for unsolicited injection."""
     tier = provenance_of(memory)
+    if memory.get("layer") == "semantic" and (
+        memory.get("belief_type") == "hypothesis"
+        or memory.get("category") == "hypothesis"
+        or memory.get("epistemic_status") == "hypothesized"
+    ):
+        return TrustAssessment(
+            tier=tier,
+            trust=0.0,
+            quarantined=True,
+            reason="provisional semantic belief is explicit-inspection-only",
+        )
     policy = TIER_POLICIES.get(tier, TIER_POLICIES[Provenance.UNKNOWN])
 
     if not policy.injectable:

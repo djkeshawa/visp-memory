@@ -168,7 +168,7 @@ class MemoryIntelligenceReporter:
         return sorted(items, key=lambda item: (-item["facts"]["importance"], item["id"]))[:limit]
 
     def _fragile_areas(self, memories: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
-        fragile_categories = {"fragile_area", "known_issue", "warning"}
+        fragile_categories = {"negative", "fragile_area", "known_issue", "warning"}
         items = [
             _item(
                 "memory",
@@ -258,7 +258,8 @@ class MemoryIntelligenceReporter:
                 {"category": memory.get("category")},
             )
             for memory in memories
-            if memory.get("category") in {"fragile_area", "known_issue", "warning"}
+            if memory.get("category")
+            in {"negative", "fragile_area", "known_issue", "warning"}
             and memory.get("id") not in connected
         ]
         return sorted(items, key=lambda item: item["id"])[:limit]

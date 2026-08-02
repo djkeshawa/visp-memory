@@ -11,7 +11,7 @@ The unified interface for LLM memory, bringing together:
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from visp_memory.config import MemoryConfig
 from visp_memory.core.arcadedb_storage import ArcadeDbStorage
@@ -38,9 +38,20 @@ from visp_memory.core.trust import (
 from visp_memory.layers.episodic import EpisodeCategory, EpisodicMemory
 from visp_memory.layers.intent import IntentMemory, IntentPriority
 from visp_memory.layers.semantic import KnowledgeCategory, SemanticMemory
+from visp_memory.quality.conflict import ConflictVerdict
 from visp_memory.quality.dedup import Deduplicator
 
 logger = logging.getLogger(__name__)
+
+
+class ContradictionNotRecordedError(RuntimeError):
+    """A contradiction was detected but its edge could not be written.
+
+    Raised rather than logged because the edge is the only thing that makes the
+    disagreement discoverable. Without it the two beliefs co-exist and whichever
+    the search surfaces first is treated as fact — so a silent failure here is
+    indistinguishable from never having detected the conflict at all.
+    """
 
 
 class Memory:
@@ -277,20 +288,23 @@ class Memory:
         Returns:
             Memory ID
         """
-        try:
-            cat = KnowledgeCategory(category)
-        except ValueError:
-            cat = category
+        cat = KnowledgeCategory(category)
 
         # `detect_conflicts`/`reconcile` are control flags for this method only;
         # they must not be forwarded to establish() (which does not accept them).
         detect = kwargs.pop("detect_conflicts", False)
         reconcile = kwargs.pop("reconcile", None)
+        if "epistemic_status" in kwargs:
+            raise ValueError(
+                "initial epistemic status is assigned by the memory service"
+            )
         if reconcile is None:
             reconcile = self.config.quality.write_reconciliation
 
         effective_repo_id = repo_id or self.config.repo_id or UNSCOPED_REPO_ID
         category_value = cat.value if hasattr(cat, "value") else str(cat)
+        if category_value == KnowledgeCategory.PROHIBITION.value:
+            reconcile = False
         evidence_ids = list(kwargs.pop("evidence_ids", []) or [])
         source_episodes = list(kwargs.get("source_episodes", []) or [])
         if not evidence_ids and not source_episodes:
@@ -311,7 +325,31 @@ class Memory:
         # Write-time reconciliation: fold near-duplicate knowledge into the
         # existing memory instead of inserting a copy. Keeps the store small,
         # cheap to retrieve, and self-correcting (Mem0's ADD/UPDATE/NOOP model).
-        if reconcile:
+        # Conflict detection runs BEFORE reconciliation. Reconciling folds new
+        # knowledge into an existing memory, and folding away a contradiction
+        # hides it: the reconcile branch used to return before this check ever
+        # ran, so a near-duplicate that disagreed was merged silently, with no
+        # `contradicts` edge and nothing recorded (MG-025).
+        verdict = ConflictVerdict.clear()
+        if detect or self.config.quality.conflict_detection:
+            verdict = self.check_conflict(
+                knowledge, layer="semantic", repo_id=effective_repo_id
+            )
+
+        # An undetermined verdict is not a clear one. The content is still stored
+        # — refusing would break every deployment without a detector configured,
+        # which is most of them — but it is marked so nothing downstream can
+        # mistake "not checked" for "checked and clean" (MG-026).
+        if not verdict.determined:
+            kwargs["quality_flags"] = list(
+                dict.fromkeys(
+                    [*(kwargs.get("quality_flags") or []), "conflict_unverified"]
+                )
+            )
+
+        # Only reconcile once we know there is nothing to contradict. A confirmed
+        # conflict must be recorded as its own memory and edge, never merged.
+        if reconcile and not verdict.has_conflict:
             decision = self.reconciler.decide(
                 knowledge, layer="semantic", repo_id=effective_repo_id, category=category_value
             )
@@ -324,9 +362,7 @@ class Memory:
                     repo_id=effective_repo_id,
                 )
 
-        conflict = None
-        if detect or self.config.quality.conflict_detection:
-            conflict = self.check_conflict(knowledge, layer="semantic")
+        conflict = verdict.conflict
 
         memory_id = self.semantic.establish(
             knowledge=knowledge,
@@ -353,16 +389,95 @@ class Memory:
                         evidence={"reason": reason, "source": "conflict_detection"},
                     )
                 except Exception as exc:
-                    logger.warning(
+                    # A contradiction that could not be recorded must not leave an
+                    # active memory behind claiming success. The edge is the only
+                    # thing making the conflict discoverable; without it the two
+                    # beliefs simply co-exist and whichever search surfaces first
+                    # becomes the answer. Logging and continuing was MG-029.
+                    logger.error(
                         "Failed to link contradiction %s -> %s: %s",
                         memory_id,
                         conflicting_id,
                         exc,
                     )
-                if self.config.quality.auto_supersede:
+                    self._quarantine_unlinked_contradiction(
+                        memory_id, conflicting_id, reason, exc
+                    )
+                    raise ContradictionNotRecordedError(
+                        f"contradiction between {memory_id} and {conflicting_id} "
+                        f"could not be recorded: {exc}"
+                    ) from exc
+
+                if self.config.quality.auto_supersede and self._may_supersede(
+                    superseding_id=memory_id, superseded_id=conflicting_id
+                ):
                     self._supersede_memory(conflicting_id, superseded_by=memory_id, reason=reason)
 
         return memory_id
+
+    def _may_supersede(self, *, superseding_id: str, superseded_id: str) -> bool:
+        """Whether the new belief carries enough authority to retire the old one.
+
+        Recency alone used to decide this: whatever arrived last won. So an
+        externally-sourced note could retire an authored prohibition simply by
+        being newer, which is the wrong way round for exactly the beliefs that
+        matter most (MG-028).
+
+        Authority is the provenance tier's base trust. Equal authority still
+        supersedes — that is ordinary belief revision by the same author. Lower
+        authority does not; the contradiction is still recorded as an edge, so
+        the disagreement stays visible rather than being silently applied.
+        """
+        from visp_memory.core.trust import TIER_POLICIES, Provenance
+
+        def authority(memory_id: str) -> float:
+            record = self._storage.peek_memory(memory_id) or {}
+            tier = Provenance.parse(record.get("source"))
+            policy = TIER_POLICIES.get(tier)
+            return float(getattr(policy, "base_trust", 0.0) or 0.0)
+
+        new_authority = authority(superseding_id)
+        old_authority = authority(superseded_id)
+        if new_authority >= old_authority:
+            return True
+
+        logger.info(
+            "Not superseding %s with %s: authority %.2f does not reach %.2f",
+            superseded_id,
+            superseding_id,
+            new_authority,
+            old_authority,
+        )
+        return False
+
+    def _quarantine_unlinked_contradiction(
+        self, memory_id: str, conflicting_id: str, reason: str, exc: Exception
+    ) -> None:
+        """Mark a memory whose contradiction edge could not be written.
+
+        Best effort by design: this runs while already handling a storage
+        failure, so it must not raise a second one over the top of the first and
+        lose the original cause.
+        """
+        try:
+            existing = self._storage.peek_memory(memory_id) or {}
+            self._storage.update_memory(
+                memory_id,
+                status="quarantined",
+                metadata={
+                    **(existing.get("metadata") or {}),
+                    "contradiction_unrecorded": {
+                        "conflicting_id": conflicting_id,
+                        "reason": reason,
+                        "error": str(exc),
+                    },
+                },
+            )
+        except Exception:  # pragma: no cover - already in a failure path
+            logger.exception(
+                "Could not quarantine %s after its contradiction edge failed",
+                memory_id,
+            )
 
     def _apply_reconcile_decision(
         self,
@@ -434,23 +549,34 @@ class Memory:
         except Exception as exc:  # supersession must never block the new write
             logger.warning("Failed to supersede memory %s: %s", memory_id, exc)
 
-    def check_conflict(self, content: str, layer: str = "semantic") -> Optional[Dict[str, Any]]:
+    def check_conflict(
+        self,
+        content: str,
+        layer: str = "semantic",
+        repo_id: str = None,
+    ) -> "ConflictVerdict":
         """
         Check if content conflicts with existing memories.
 
         Args:
             content: New content to check
             layer: Layer to check against
+            repo_id: Repository to search. Defaults to the configured repository,
+                which is only correct when the caller has not scoped the write
+                elsewhere — pass the effective repository explicitly.
 
         Returns:
-            Conflict details or None
+            A ConflictVerdict. An undetermined verdict is not a clear one.
         """
-        # 1. Find relevant memories
+        # Search the repository the write is actually going to. Using the
+        # configured one meant a write scoped to repo B was checked against
+        # repo A, so a contradiction inside repo B was never seen (MG-027).
+        search_repo_id = repo_id if repo_id is not None else self.config.repo_id
+
         relevant = self._storage.search_memories(
-            query=content, layer=layer, limit=5, repo_id=self.config.repo_id
+            query=content, layer=layer, limit=5, repo_id=search_repo_id
         )
 
-        # 2. Check for conflicts
         return self.conflict_detector.detect_conflicts(content, relevant)
 
     def warn(

@@ -1,4 +1,6 @@
 import json
+import os
+from datetime import timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -250,20 +252,45 @@ async def preview_repository_purge(
     return _repository_purge_preview(request.app.state.storage, repo_id)
 
 
+# A purge is irreversible, so the pre-purge backup is a deliberate safety net.
+# But it is a complete plaintext copy of everything just purged, and it used to be
+# written world-readable with no expiry — so "purge this repository" left the
+# purged content sitting on disk indefinitely (MG-036).
+BACKUP_RETENTION_DAYS = 30
+
+
 def _export_repository_backup(storage, repo_id: str, backup_dir) -> str:
     backup_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = utc_now().strftime("%Y%m%dT%H%M%SZ")
+    # Owner-only, and set before anything is written into it.
+    os.chmod(backup_dir, 0o700)
+
+    created_at = utc_now()
+    timestamp = created_at.strftime("%Y%m%dT%H%M%SZ")
     backup_path = backup_dir / f"project-{repo_id}-{timestamp}.json"
     payload = {
         "format": "visp-memory-project-backup-v1",
-        "created_at": utc_now().isoformat(),
+        "created_at": created_at.isoformat(),
+        # Retention is recorded in the artifact itself so a sweeper — or an
+        # operator — can tell when it stopped being justified without needing the
+        # server that wrote it.
+        "retention": {
+            "expires_at": (created_at + timedelta(days=BACKUP_RETENTION_DAYS)).isoformat(),
+            "reason": "pre-purge safety copy",
+            "contains_purged_plaintext": True,
+        },
         "repository": storage.get_repository(repo_id),
         "memories": storage.list_memories(repo_id=repo_id, status="all", limit=100000),
         "intents": storage.get_active_intents(repo_id=repo_id, status="all"),
         "relationships": storage.get_all_relationships(repo_id=repo_id),
     }
     serialized = json.dumps(payload, indent=2, default=str)
-    backup_path.write_text(serialized, encoding="utf-8")
+
+    # Create owner-only from the start rather than writing then chmod-ing, so the
+    # content is never briefly readable by anyone else.
+    fd = os.open(backup_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(serialized)
+
     json.loads(backup_path.read_text(encoding="utf-8"))
     return backup_path.name
 

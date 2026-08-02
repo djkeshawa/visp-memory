@@ -15,10 +15,18 @@ import uuid
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Literal, Optional
 
-from visp_memory.core.clock import utc_now
+from visp_memory.core.beliefs import (
+    HYPOTHESIS_TTL_DAYS,
+    EpistemicStatus,
+    migrate_legacy_belief_fields,
+    normalize_belief_type,
+    normalize_epistemic_status,
+)
+from visp_memory.core.clock import parse_utc, utc_now
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID
 from visp_memory.core.indexing import EmbeddingIndexReport, ReindexResult, ReindexScope
 from visp_memory.core.ranking import (
@@ -45,6 +53,15 @@ logger = logging.getLogger(__name__)
 
 MemoryLayer = Literal["raw", "episodic", "semantic", "intent"]
 MemoryStatus = Literal["active", "pending", "archived", "superseded", "merged", "deleted"]
+
+# Statuses that take a memory out of every serving path. A memory here has been
+# deleted, folded into another, or replaced by a newer belief — returning it from
+# any read is how content someone deleted keeps reappearing.
+#
+# `archived` and `pending` are deliberately absent: those are still real,
+# retrievable memories, just not prominent ones.
+NON_SERVABLE_STATUSES: frozenset[str] = frozenset({"deleted", "merged", "superseded"})
+
 RecallEventType = Literal["surfaced", "used", "dismissed", "task_linked", "outcome_linked"]
 
 RECALL_EVENT_WEIGHTS: dict[str, float] = {
@@ -61,10 +78,11 @@ RECALL_EVENT_WEIGHTS: dict[str, float] = {
 # deliberately do not reinforce, to avoid popularity bias from mere exposure.
 REINFORCING_RECALL_EVENTS = frozenset({"used", "task_linked", "outcome_linked"})
 SENSITIVE_RECALL_METADATA_KEYS = {"prompt", "response", "query", "content", "messages"}
-STORAGE_SCHEMA_VERSION = 3
+STORAGE_SCHEMA_VERSION = 4
 _STORAGE_TABLE_NAMES = frozenset(
     {
         "audit_logs",
+        "authority_attestations",
         "belief_evidence",
         "evidence",
         "intents",
@@ -79,6 +97,56 @@ _STORAGE_TABLE_NAMES = frozenset(
         "users",
     }
 )
+_V4_REQUIRED_COLUMNS = {
+    "schema_migrations": {"version", "applied_at"},
+    "memories": {
+        "id", "content", "layer", "category", "belief_type",
+        "epistemic_status", "importance", "repo_id", "access_count", "tags",
+        "metadata", "source_ids", "status", "approved_by", "approved_at",
+        "archived_at", "source", "quality_flags", "last_quality_checked_at",
+        "created_at", "accessed_at", "compressed_at",
+    },
+    "evidence": {
+        "id", "content", "content_hash", "repo_id", "evidence_type",
+        "provenance", "metadata", "created_at",
+    },
+    "belief_evidence": {"belief_id", "evidence_id", "created_at"},
+    "authority_attestations": {
+        "digest", "belief_id", "key_id", "nonce", "envelope", "created_at",
+    },
+    "intents": {
+        "id", "description", "priority", "status", "context", "created_at",
+        "updated_at", "repo_id",
+    },
+    "relationships": {
+        "id", "source_id", "target_id", "relationship", "strength",
+        "confidence", "confidence_score", "source", "source_file",
+        "source_location", "reason", "created_by", "created_at",
+    },
+    "sessions": {"id", "summary", "memory_ids", "started_at", "ended_at"},
+    "repositories": {
+        "id", "name", "url", "description", "tech_stack", "team_id",
+        "metadata", "status", "archived_at", "created_at",
+    },
+    "users": {
+        "id", "username", "email", "display_name", "metadata", "created_at",
+        "last_active",
+    },
+    "teams": {"id", "name", "description", "metadata", "created_at"},
+    "team_members": {"team_id", "user_id", "role", "joined_at"},
+    "repository_dependencies": {
+        "id", "source_repo_id", "target_repo_id", "dependency_type", "version",
+        "notes", "created_at",
+    },
+    "audit_logs": {
+        "id", "event_type", "actor_id", "repo_id", "target_type", "target_id",
+        "metadata", "created_at",
+    },
+    "recall_events": {
+        "id", "memory_id", "event_type", "repo_id", "query_hash", "task_id",
+        "outcome", "metadata", "created_at",
+    },
+}
 
 
 class EvidenceError(ValueError):
@@ -437,7 +505,7 @@ class LocalStorage(BaseStorage):
                     "LocalStorage.migrate_schema(...)"
                 )
             if stored_version == STORAGE_SCHEMA_VERSION:
-                self._validate_v3_evidence_schema(conn)
+                self._validate_v4_schema(conn)
 
             # Enable WAL only after compatibility checks: it persists in the
             # database header and legacy stores must remain byte-for-byte unchanged.
@@ -458,6 +526,8 @@ class LocalStorage(BaseStorage):
                     content TEXT NOT NULL,
                     layer TEXT NOT NULL DEFAULT 'episodic',
                     category TEXT DEFAULT 'general',
+                    belief_type TEXT DEFAULT NULL,
+                    epistemic_status TEXT DEFAULT NULL,
                     importance REAL DEFAULT 0.5,
                     repo_id TEXT DEFAULT NULL,
                     access_count INTEGER DEFAULT 0,
@@ -500,6 +570,20 @@ class LocalStorage(BaseStorage):
                     PRIMARY KEY (belief_id, evidence_id),
                     FOREIGN KEY (belief_id) REFERENCES memories(id) ON DELETE CASCADE,
                     FOREIGN KEY (evidence_id) REFERENCES evidence(id) ON DELETE RESTRICT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS authority_attestations (
+                    digest TEXT PRIMARY KEY,
+                    belief_id TEXT NOT NULL UNIQUE,
+                    key_id TEXT NOT NULL,
+                    nonce TEXT NOT NULL,
+                    envelope TEXT NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (key_id, nonce),
+                    FOREIGN KEY (belief_id) REFERENCES memories(id) ON DELETE CASCADE
                 )
                 """
             )
@@ -777,21 +861,8 @@ class LocalStorage(BaseStorage):
             conn.commit()
 
     @classmethod
-    def _validate_v3_evidence_schema(cls, conn: sqlite3.Connection) -> None:
-        """Refuse a malformed declared-v3 Evidence graph without repairing it."""
-        required_columns = {
-            "evidence": {
-                "id",
-                "content",
-                "content_hash",
-                "repo_id",
-                "evidence_type",
-                "provenance",
-                "metadata",
-                "created_at",
-            },
-            "belief_evidence": {"belief_id", "evidence_id", "created_at"},
-        }
+    def _validate_v4_schema(cls, conn: sqlite3.Connection) -> None:
+        """Refuse a malformed declared-v4 governed graph without repairing it."""
         try:
             tables = {
                 row["name"]
@@ -799,7 +870,7 @@ class LocalStorage(BaseStorage):
                     "SELECT name FROM sqlite_master WHERE type = 'table'"
                 ).fetchall()
             }
-            for table, expected in required_columns.items():
+            for table, expected in _V4_REQUIRED_COLUMNS.items():
                 if table not in tables:
                     raise ValueError(f"missing {table} table")
                 columns = {
@@ -809,6 +880,21 @@ class LocalStorage(BaseStorage):
                 if missing:
                     raise ValueError(
                         f"{table} is missing columns {', '.join(sorted(missing))}"
+                    )
+
+            for row in conn.execute(
+                "SELECT id, layer, category, belief_type, epistemic_status FROM memories"
+            ):
+                if row["layer"] == "semantic":
+                    belief_type = normalize_belief_type(row["belief_type"])
+                    normalize_epistemic_status(row["epistemic_status"])
+                    if row["category"] != belief_type:
+                        raise ValueError(
+                            f"semantic memory {row['id']!r} has divergent category and type"
+                        )
+                elif row["belief_type"] is not None or row["epistemic_status"] is not None:
+                    raise ValueError(
+                        f"non-semantic memory {row['id']!r} carries semantic belief fields"
                     )
 
             link_columns = {
@@ -875,21 +961,18 @@ class LocalStorage(BaseStorage):
                 raise ValueError("semantic memories are missing Evidence links")
         except (sqlite3.DatabaseError, KeyError, TypeError, ValueError) as exc:
             raise StorageMigrationRequired(
-                f"Storage schema 3 is malformed: {exc}; restore a valid backup or "
+                f"Storage schema 4 is malformed: {exc}; restore a valid backup or "
                 "run a supported migration"
             ) from exc
 
     def import_graph(
         self, data: Dict[str, Any], *, default_repo_id: str
     ) -> Dict[str, Any]:
-        """Prevalidate and import one schema-v3 graph in a single SQLite transaction."""
-        from visp_memory.core.trust import (
-            Provenance,
-            WriteChannel,
-            with_channel_provenance,
-            with_provenance,
+        """Prevalidate and import one format-3 graph in a single SQLite transaction."""
+        from visp_memory.core.authority import (
+            ProhibitionAuthorityError,
+            verify_prohibition_attestation,
         )
-
         evidence_items = list(data.get("evidence") or [])
         memories_by_layer = data.get("memories") or {}
         memory_items = [
@@ -899,6 +982,9 @@ class LocalStorage(BaseStorage):
         ]
         intent_items = list(data.get("intents") or [])
         relationship_items = list(data.get("relationships") or [])
+        authority_items = list(data.get("authority_attestations") or [])
+        authority_link_items = list(data.get("belief_authority") or [])
+        legacy_format2 = bool(data.get("_legacy_format2"))
 
         def indexed(items: List[Dict[str, Any]], kind: str) -> Dict[str, Dict[str, Any]]:
             result: Dict[str, Dict[str, Any]] = {}
@@ -915,6 +1001,8 @@ class LocalStorage(BaseStorage):
         memories_by_id = indexed(memory_items, "memory")
         intents_by_id = indexed(intent_items, "intent")
         relationships_by_id = indexed(relationship_items, "relationship")
+        authority_by_id = indexed(authority_items, "AuthorityAttestation")
+        authority_links_by_id = indexed(authority_link_items, "BeliefAuthority")
 
         portable_evidence_ids = {
             evidence_id
@@ -935,9 +1023,14 @@ class LocalStorage(BaseStorage):
                 content, context="stable imported Evidence"
             )
             supplied_hash = item.get("content_hash")
+            if not legacy_format2 and not supplied_hash:
+                raise ValueError(
+                    f"Imported Evidence {evidence_id!r} requires an exact content hash"
+                )
             if supplied_hash and supplied_hash != self._evidence_hash(content):
                 raise ValueError(f"Imported Evidence {evidence_id!r} has an invalid hash")
             item["repo_id"] = repo_id
+            item["content_hash"] = supplied_hash or self._evidence_hash(content)
 
         for memory_id, item in memories_by_id.items():
             content = item.get("content")
@@ -951,6 +1044,43 @@ class LocalStorage(BaseStorage):
             }:
                 raise ValueError(f"Imported memory {memory_id!r} is malformed")
             item["repo_id"] = repo_id
+            belief_type = item.get("belief_type")
+            epistemic_status = item.get("epistemic_status")
+            if layer == "semantic":
+                try:
+                    belief_type = normalize_belief_type(belief_type)
+                    epistemic_status = normalize_epistemic_status(epistemic_status)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Imported semantic memory {memory_id!r} has invalid governed fields"
+                    ) from exc
+                if item.get("category") != belief_type:
+                    raise ValueError(
+                        f"Imported semantic memory {memory_id!r} category/type mismatch"
+                    )
+                if belief_type == "hypothesis":
+                    if epistemic_status != "hypothesized":
+                        raise ValueError("Imported hypothesis must be hypothesized")
+                    created_at = parse_utc(item.get("created_at"))
+                    valid_to = parse_utc((item.get("metadata") or {}).get("valid_to"))
+                    if (
+                        created_at is None
+                        or valid_to is None
+                        or valid_to <= created_at
+                        or valid_to
+                        > created_at + timedelta(days=HYPOTHESIS_TTL_DAYS)
+                    ):
+                        raise ValueError(
+                            f"Imported hypothesis {memory_id!r} has invalid TTL"
+                        )
+                if belief_type == "prohibition" and epistemic_status != "observed":
+                    raise ValueError("Imported prohibition must be observed")
+                item["belief_type"] = belief_type
+                item["epistemic_status"] = epistemic_status
+            elif belief_type is not None or epistemic_status is not None:
+                raise ValueError(
+                    f"Imported non-semantic memory {memory_id!r} has governed fields"
+                )
             for evidence_id in item.get("evidence_ids") or []:
                 evidence = evidence_by_id.get(evidence_id)
                 if evidence is None:
@@ -995,6 +1125,80 @@ class LocalStorage(BaseStorage):
         for memory_id in memories_by_id:
             resolve_evidence(memory_id)
 
+        authority_link_by_belief: Dict[str, Dict[str, Any]] = {}
+        linked_attestations: set[str] = set()
+        for link_id, link in authority_links_by_id.items():
+            belief_id = link.get("belief_id")
+            attestation_id = link.get("attestation_id")
+            if (
+                belief_id not in memories_by_id
+                or attestation_id not in authority_by_id
+                or belief_id in authority_link_by_belief
+                or attestation_id in linked_attestations
+            ):
+                raise ValueError(
+                    f"Imported BeliefAuthority {link_id!r} is dangling or duplicated"
+                )
+            authority_link_by_belief[belief_id] = link
+            linked_attestations.add(attestation_id)
+
+        seen_nonces: Dict[tuple[str, str], str] = {}
+        for attestation_id, attestation in authority_by_id.items():
+            belief_id = attestation.get("belief_id")
+            belief = memories_by_id.get(belief_id)
+            if (
+                belief is None
+                or belief.get("belief_type") != "prohibition"
+                or attestation_id not in linked_attestations
+            ):
+                raise ValueError(
+                    f"Imported AuthorityAttestation {attestation_id!r} is unlinked"
+                )
+            evidence_claim = [
+                {
+                    "id": evidence_id,
+                    "content_hash": evidence_by_id[evidence_id]["content_hash"],
+                }
+                for evidence_id in sorted(resolve_evidence(belief_id))
+            ]
+            verified = verify_prohibition_attestation(
+                attestation.get("envelope"),
+                content=belief["content"],
+                repo_id=belief["repo_id"],
+                metadata=belief.get("metadata") or {},
+                evidence=evidence_claim,
+            )
+            if (
+                attestation_id != f"att-{verified.digest}"
+                or attestation.get("digest") != verified.digest
+                or attestation.get("key_id") != verified.key_id
+                or attestation.get("nonce") != verified.nonce
+            ):
+                raise ProhibitionAuthorityError(
+                    f"Imported AuthorityAttestation {attestation_id!r} fields mismatch"
+                )
+            link = authority_link_by_belief[belief_id]
+            if (
+                link.get("id") != f"ba-{belief_id}-{attestation_id}"
+                or link.get("created_at") != attestation.get("created_at")
+            ):
+                raise ValueError(
+                    f"Imported BeliefAuthority for {belief_id!r} has mismatched history"
+                )
+            nonce_key = (verified.key_id, verified.nonce)
+            if nonce_key in seen_nonces:
+                raise ProhibitionAuthorityError(
+                    "Imported prohibition authority nonce is duplicated"
+                )
+            seen_nonces[nonce_key] = verified.digest
+
+        for memory_id, item in memories_by_id.items():
+            has_authority = memory_id in authority_link_by_belief
+            if (item.get("belief_type") == "prohibition") != has_authority:
+                raise ProhibitionAuthorityError(
+                    f"Imported prohibition authority graph is incomplete for {memory_id!r}"
+                )
+
         for relationship_id, item in relationships_by_id.items():
             source = memories_by_id.get(item.get("source_id"))
             target = memories_by_id.get(item.get("target_id"))
@@ -1035,9 +1239,7 @@ class LocalStorage(BaseStorage):
                         "category": item.get("category") or "general",
                         "importance": item.get("importance", 0.5),
                         "tags": self._json_serialize(
-                            with_channel_provenance(
-                                item.get("tags"), WriteChannel.IMPORT
-                            )
+                            item.get("tags") or []
                         ),
                         "repo_id": item["repo_id"],
                         "status": item.get("status") or "active",
@@ -1079,35 +1281,21 @@ class LocalStorage(BaseStorage):
                         }
 
                 for evidence_id, item in evidence_by_id.items():
-                    quarantined = item["repo_id"] == UNSCOPED_REPO_ID
                     self._insert_evidence(
                         conn,
                         content=item["content"],
                         repo_id=item["repo_id"],
                         evidence_type=item.get("evidence_type") or "observation",
-                        provenance="unknown" if quarantined else "external",
-                        metadata={
-                            **(item.get("metadata") or {}),
-                            "write_channel": WriteChannel.IMPORT.value,
-                        },
+                        provenance=item.get("provenance") or "unknown",
+                        metadata=item.get("metadata") or {},
                         evidence_id=evidence_id,
                         created_at=item.get("created_at") or utc_now().isoformat(),
                         compare_created_at=item.get("created_at") is not None,
                     )
 
                 for memory_id, item in memories_by_id.items():
-                    quarantined = item["repo_id"] == UNSCOPED_REPO_ID
-                    tags = (
-                        with_provenance(item.get("tags"), Provenance.UNKNOWN)
-                        if quarantined
-                        else with_channel_provenance(
-                            item.get("tags"), WriteChannel.IMPORT
-                        )
-                    )
-                    metadata = {
-                        **(item.get("metadata") or {}),
-                        "write_channel": WriteChannel.IMPORT.value,
-                    }
+                    tags = item.get("tags") or []
+                    metadata = item.get("metadata") or {}
                     existing = conn.execute(
                         "SELECT * FROM memories WHERE id = ?", (memory_id,)
                     ).fetchone()
@@ -1122,12 +1310,21 @@ class LocalStorage(BaseStorage):
                         "layer": item["layer"],
                         "repo_id": item["repo_id"],
                         "category": item.get("category") or "general",
+                        "belief_type": item.get("belief_type"),
+                        "epistemic_status": item.get("epistemic_status"),
                         "importance": item.get("importance", 0.5),
                         "tags": self._json_serialize(tags),
                         "metadata": self._json_serialize(metadata),
                         "source_ids": self._json_serialize(item.get("source_ids") or []),
                         "status": item.get("status") or "active",
-                        "source": "unknown" if quarantined else "external",
+                        # Preserve an explicit null rather than coercing it, and
+                        # default only when the field is genuinely absent. `or`
+                        # could not tell those apart, so importing a record whose
+                        # source was null rewrote it to "unknown" and no export /
+                        # import / re-export cycle could compare equal. Both
+                        # values assess to the same provenance tier, so this
+                        # changes fidelity without changing trust.
+                        "source": item["source"] if "source" in item else "unknown",
                         "quality_flags": self._json_serialize(
                             item.get("quality_flags") or []
                         ),
@@ -1171,6 +1368,38 @@ class LocalStorage(BaseStorage):
                             "INSERT OR IGNORE INTO belief_evidence "
                             "(belief_id, evidence_id, created_at) VALUES (?, ?, ?)",
                             (memory_id, evidence_id, link_created_at),
+                        )
+
+                for attestation_id, item in authority_by_id.items():
+                    values = (
+                        item["digest"],
+                        item["belief_id"],
+                        item["key_id"],
+                        item["nonce"],
+                        item["envelope"],
+                        item["created_at"],
+                    )
+                    existing = conn.execute(
+                        "SELECT digest, belief_id, key_id, nonce, envelope, created_at "
+                        "FROM authority_attestations WHERE digest = ? OR belief_id = ? "
+                        "OR (key_id = ? AND nonce = ?)",
+                        (
+                            item["digest"],
+                            item["belief_id"],
+                            item["key_id"],
+                            item["nonce"],
+                        ),
+                    ).fetchone()
+                    if existing is not None and tuple(existing) != values:
+                        raise ProhibitionAuthorityError(
+                            f"Imported AuthorityAttestation collision for {attestation_id!r}"
+                        )
+                    if existing is None:
+                        conn.execute(
+                            "INSERT INTO authority_attestations "
+                            "(digest, belief_id, key_id, nonce, envelope, created_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?)",
+                            values,
                         )
 
                 for intent_id, item in intents_by_id.items():
@@ -1265,7 +1494,7 @@ class LocalStorage(BaseStorage):
 
     @classmethod
     def migrate_schema(cls, data_dir: Path, *, backup_path: Path) -> Dict[str, Any]:
-        """Explicitly migrate a backed-up SQLite v2 store to schema v3."""
+        """Explicitly migrate a backed-up SQLite v2/v3 store to schema v4."""
         data_dir = Path(data_dir)
         db_path = data_dir / "memories.db"
         backup_path = Path(backup_path)
@@ -1288,15 +1517,19 @@ class LocalStorage(BaseStorage):
                 "to_version": STORAGE_SCHEMA_VERSION,
                 "status": "already_current",
             }
-        if stored_version != 2:
+        if stored_version not in {2, 3}:
             raise StorageMigrationRequired(
-                f"Only schema version 2 can be migrated to {STORAGE_SCHEMA_VERSION}; "
+                f"Only schema versions 2 and 3 can be migrated to "
+                f"{STORAGE_SCHEMA_VERSION}; "
                 f"found {stored_version}"
             )
 
         with sqlite3.connect(db_path) as validation_conn:
             validation_conn.row_factory = sqlite3.Row
-            cls._prevalidate_legacy_evidence_content(validation_conn)
+            if stored_version == 2:
+                cls._prevalidate_legacy_evidence_content(validation_conn)
+            else:
+                cls._prevalidate_v3_graph(validation_conn)
 
         if backup_path.exists():
             raise FileExistsError(f"Migration backup already exists: {backup_path}")
@@ -1310,7 +1543,9 @@ class LocalStorage(BaseStorage):
         try:
             conn.execute("PRAGMA foreign_keys=ON")
             conn.execute("BEGIN IMMEDIATE")
-            cls._migrate_v2_to_v3(conn)
+            if stored_version == 2:
+                cls._migrate_v2_to_v3(conn)
+                conn.execute("INSERT INTO schema_migrations(version) VALUES (3)")
             missing = conn.execute(
                 """
                 SELECT COUNT(*) FROM memories m
@@ -1333,10 +1568,8 @@ class LocalStorage(BaseStorage):
                 raise RuntimeError(
                     f"Evidence migration integrity check found {invalid_hashes} invalid hashes"
                 )
-            conn.execute(
-                "INSERT INTO schema_migrations(version) VALUES (?)",
-                (STORAGE_SCHEMA_VERSION,),
-            )
+            cls._migrate_v3_to_v4(conn)
+            conn.execute("INSERT INTO schema_migrations(version) VALUES (4)")
             conn.commit()
         except Exception:
             conn.rollback()
@@ -1358,6 +1591,52 @@ class LocalStorage(BaseStorage):
                     "Refusing schema-v3 migration: secret-bearing legacy content "
                     f"in memory {row['id']!r} cannot become stable Evidence"
                 )
+
+    @staticmethod
+    def _prevalidate_v3_graph(conn: sqlite3.Connection) -> None:
+        """Validate the P11-07 graph before the migration backup is written."""
+        required = {
+            "evidence": {
+                "id",
+                "content",
+                "content_hash",
+                "repo_id",
+                "evidence_type",
+                "provenance",
+                "metadata",
+                "created_at",
+            },
+            "belief_evidence": {"belief_id", "evidence_id", "created_at"},
+        }
+        tables = {
+            row["name"]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        for table, columns in required.items():
+            if table not in tables:
+                raise StorageMigrationRequired(
+                    f"Storage schema 3 is malformed: missing {table} table"
+                )
+            actual = {
+                row["name"] for row in conn.execute(f"PRAGMA table_info({table})")
+            }
+            missing = columns - actual
+            if missing:
+                raise StorageMigrationRequired(
+                    "Storage schema 3 is malformed: "
+                    f"{table} is missing columns {', '.join(sorted(missing))}"
+                )
+        for row in conn.execute("SELECT id, content, content_hash FROM evidence"):
+            if LocalStorage._evidence_hash(row["content"]) != row["content_hash"]:
+                raise StorageMigrationRequired(
+                    f"Storage schema 3 is malformed: Evidence {row['id']!r} "
+                    "has an invalid content hash"
+                )
+            LocalStorage._require_secret_free_evidence(
+                row["content"], context="migrating schema-v3 Evidence"
+            )
 
     @staticmethod
     def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
@@ -1465,6 +1744,186 @@ class LocalStorage(BaseStorage):
         conn.execute(
             "CREATE INDEX idx_belief_evidence_evidence ON belief_evidence(evidence_id)"
         )
+
+    @staticmethod
+    def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
+        """Add governed semantic fields and conservatively classify legacy rows."""
+        conn.execute("ALTER TABLE memories ADD COLUMN belief_type TEXT DEFAULT NULL")
+        conn.execute(
+            "ALTER TABLE memories ADD COLUMN epistemic_status TEXT DEFAULT NULL"
+        )
+        conn.execute(
+            """
+            CREATE TABLE authority_attestations (
+                digest TEXT PRIMARY KEY,
+                belief_id TEXT NOT NULL UNIQUE,
+                key_id TEXT NOT NULL,
+                nonce TEXT NOT NULL,
+                envelope TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (key_id, nonce),
+                FOREIGN KEY (belief_id) REFERENCES memories(id) ON DELETE CASCADE
+            )
+            """
+        )
+        LocalStorage._ensure_supporting_v4_schema(conn)
+        rows = conn.execute(
+            "SELECT id, category, status, tags, metadata, quality_flags "
+            "FROM memories WHERE layer = 'semantic' ORDER BY id"
+        ).fetchall()
+        from visp_memory.core.trust import Provenance, with_provenance
+
+        for row in rows:
+            belief_type, epistemic_status = migrate_legacy_belief_fields(
+                row["category"], row["status"]
+            )
+            metadata = LocalStorage._json_deserialize(row["metadata"] or "{}") or {}
+            metadata = {**metadata, "legacy_category": row["category"]}
+            tags = with_provenance(
+                LocalStorage._json_deserialize(row["tags"] or "[]") or [],
+                Provenance.UNKNOWN,
+            )
+            quality_flags = LocalStorage._json_deserialize(
+                row["quality_flags"] or "[]"
+            ) or []
+            if "legacy_unreviewed" not in quality_flags:
+                quality_flags.append("legacy_unreviewed")
+            conn.execute(
+                """
+                UPDATE memories
+                SET category = ?, belief_type = ?, epistemic_status = ?,
+                    metadata = ?, tags = ?, source = 'unknown', quality_flags = ?
+                WHERE id = ?
+                """,
+                (
+                    belief_type,
+                    belief_type,
+                    epistemic_status,
+                    json.dumps(metadata),
+                    json.dumps(tags),
+                    json.dumps(quality_flags),
+                    row["id"],
+                ),
+            )
+
+    @staticmethod
+    def _ensure_supporting_v4_schema(conn: sqlite3.Connection) -> None:
+        """Make an older complete store structurally current inside migration."""
+        statements = (
+            """
+            CREATE TABLE IF NOT EXISTS intents (
+                id TEXT PRIMARY KEY, description TEXT NOT NULL, priority INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'active', context TEXT DEFAULT '{}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, repo_id TEXT DEFAULT NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS relationships (
+                id TEXT PRIMARY KEY, source_id TEXT NOT NULL, target_id TEXT NOT NULL,
+                relationship TEXT NOT NULL, strength REAL DEFAULT 1.0,
+                confidence TEXT DEFAULT 'ambiguous', confidence_score REAL DEFAULT NULL,
+                source TEXT DEFAULT 'legacy', source_file TEXT DEFAULT NULL,
+                source_location TEXT DEFAULT NULL,
+                reason TEXT DEFAULT 'Legacy relationship without evidence metadata.',
+                created_by TEXT DEFAULT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (source_id) REFERENCES memories(id),
+                FOREIGN KEY (target_id) REFERENCES memories(id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY, summary TEXT, memory_ids TEXT DEFAULT '[]',
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                ended_at TIMESTAMP DEFAULT NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS repositories (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, url TEXT, description TEXT,
+                tech_stack TEXT DEFAULT '[]', team_id TEXT, metadata TEXT DEFAULT '{}',
+                status TEXT DEFAULT 'active', archived_at TIMESTAMP DEFAULT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, email TEXT,
+                display_name TEXT, metadata TEXT DEFAULT '{}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS teams (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT,
+                metadata TEXT DEFAULT '{}', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS team_members (
+                team_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT DEFAULT 'member',
+                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (team_id, user_id),
+                FOREIGN KEY (team_id) REFERENCES teams(id),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS repository_dependencies (
+                id TEXT PRIMARY KEY, source_repo_id TEXT NOT NULL,
+                target_repo_id TEXT NOT NULL, dependency_type TEXT NOT NULL,
+                version TEXT, notes TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (source_repo_id) REFERENCES repositories(id),
+                FOREIGN KEY (target_repo_id) REFERENCES repositories(id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id TEXT PRIMARY KEY, event_type TEXT NOT NULL, actor_id TEXT, repo_id TEXT,
+                target_type TEXT, target_id TEXT, metadata TEXT DEFAULT '{}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS recall_events (
+                id TEXT PRIMARY KEY, memory_id TEXT NOT NULL, event_type TEXT NOT NULL,
+                repo_id TEXT DEFAULT NULL, query_hash TEXT DEFAULT NULL,
+                task_id TEXT DEFAULT NULL, outcome TEXT DEFAULT NULL,
+                metadata TEXT DEFAULT '{}', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (memory_id) REFERENCES memories(id)
+            )
+            """,
+        )
+        for statement in statements:
+            conn.execute(statement)
+
+        additive_columns = {
+            "intents": {"repo_id": "TEXT DEFAULT NULL"},
+            "relationships": {
+                "confidence": "TEXT DEFAULT 'ambiguous'",
+                "confidence_score": "REAL DEFAULT NULL",
+                "source": "TEXT DEFAULT 'legacy'",
+                "source_file": "TEXT DEFAULT NULL",
+                "source_location": "TEXT DEFAULT NULL",
+                "reason": "TEXT DEFAULT 'Legacy relationship without evidence metadata.'",
+                "created_by": "TEXT DEFAULT NULL",
+            },
+            "repositories": {
+                "status": "TEXT DEFAULT 'active'",
+                "archived_at": "TIMESTAMP DEFAULT NULL",
+            },
+        }
+        for table, columns in additive_columns.items():
+            existing = {
+                row["name"] for row in conn.execute(f"PRAGMA table_info({table})")
+            }
+            for column, declaration in columns.items():
+                if column not in existing:
+                    conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {column} {declaration}"
+                    )
 
     def get_capabilities(self) -> StorageCapabilities:
         return StorageCapabilities(
@@ -2020,6 +2479,16 @@ class LocalStorage(BaseStorage):
             ).fetchall()
         return [self._evidence_row_to_dict(row) for row in rows]
 
+    def get_authority_attestation(self, belief_id: str) -> Optional[Dict[str, Any]]:
+        """Return the persisted public attestation for one prohibition belief."""
+        with self._get_db() as conn:
+            row = conn.execute(
+                "SELECT digest, belief_id, key_id, nonce, envelope, created_at "
+                "FROM authority_attestations WHERE belief_id = ?",
+                (belief_id,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
     def update_evidence(self, evidence_id: str, **kwargs) -> bool:
         raise EvidenceImmutableError(f"Evidence {evidence_id!r} is immutable")
 
@@ -2113,13 +2582,15 @@ class LocalStorage(BaseStorage):
         content: str,
         layer: MemoryLayer = "episodic",
         repo_id: str = None,
-        category: str = "general",
+        category: str = None,
         importance: float = 0.5,
         tags: List[str] = None,
         metadata: Dict[str, Any] = None,
         source_ids: List[str] = None,
         evidence_ids: List[str] = None,
         status: MemoryStatus = "active",
+        epistemic_status: str = None,
+        authority_attestation: str = None,
         source: str = None,
         quality_flags: List[str] = None,
         embedding: List[float] = None,
@@ -2159,6 +2630,54 @@ class LocalStorage(BaseStorage):
         source_ids = source_ids or []
         evidence_ids = evidence_ids or []
         quality_flags = quality_flags or []
+        created_at = created_at or utc_now().isoformat()
+        belief_type = None
+        if layer == "semantic":
+            category = category or "fact"
+            belief_type = normalize_belief_type(category)
+            category = belief_type
+            if belief_type == "hypothesis":
+                if epistemic_status not in (None, EpistemicStatus.HYPOTHESIZED.value):
+                    raise ValueError(
+                        "a hypothesis must begin with hypothesized epistemic status"
+                    )
+                epistemic_status = EpistemicStatus.HYPOTHESIZED.value
+                created_time = parse_utc(created_at)
+                if created_time is None:
+                    raise ValueError("created_at must be a valid timestamp")
+                maximum_valid_to = created_time + timedelta(days=7)
+                supplied_valid_to = metadata.get("valid_to")
+                if supplied_valid_to is None:
+                    metadata = {**metadata, "valid_to": maximum_valid_to.isoformat()}
+                else:
+                    valid_to = parse_utc(supplied_valid_to)
+                    if valid_to is None:
+                        raise ValueError("hypothesis valid_to must be a valid timestamp")
+                    if valid_to > maximum_valid_to:
+                        raise ValueError(
+                            "hypothesis valid_to exceeds the seven-day maximum TTL"
+                        )
+                    metadata = {**metadata, "valid_to": valid_to.isoformat()}
+            elif belief_type == "prohibition":
+                if epistemic_status not in (None, EpistemicStatus.OBSERVED.value):
+                    raise ValueError(
+                        "a verified prohibition must begin with observed epistemic status"
+                    )
+                epistemic_status = EpistemicStatus.OBSERVED.value
+            else:
+                epistemic_status = normalize_epistemic_status(
+                    epistemic_status or EpistemicStatus.INFERRED.value
+                )
+            if belief_type != "prohibition" and authority_attestation is not None:
+                raise ValueError(
+                    "authority attestation applies only to a prohibition belief"
+                )
+        elif epistemic_status is not None:
+            raise ValueError(
+                "epistemic status applies only to a semantic belief"
+            )
+        else:
+            category = category or "general"
         if repo_id == UNSCOPED_REPO_ID:
             from visp_memory.core.trust import Provenance, with_provenance
 
@@ -2173,7 +2692,6 @@ class LocalStorage(BaseStorage):
                 embedding = None
 
         # Store in SQLite
-        created_at = created_at or utc_now().isoformat()
         with self._get_db() as conn:
             if layer in ("episodic", "raw") and not evidence_ids:
                 captured_evidence_id = f"ev-{uuid.uuid4().hex}"
@@ -2196,13 +2714,76 @@ class LocalStorage(BaseStorage):
                 source_ids=source_ids,
                 evidence_ids=evidence_ids,
             )
+            verified_attestation = None
+            if belief_type == "prohibition":
+                from visp_memory.core.authority import (
+                    ProhibitionAuthorityError,
+                    verify_prohibition_attestation,
+                )
+
+                if authority_attestation is None:
+                    raise ProhibitionAuthorityError(
+                        "prohibition belief requires an authority attestation"
+                    )
+                evidence_claim = [
+                    dict(row)
+                    for row in conn.execute(
+                        "SELECT id, content_hash FROM evidence "
+                        f"WHERE id IN ({', '.join('?' for _ in resolved_evidence_ids)}) "
+                        "ORDER BY id",
+                        resolved_evidence_ids,
+                    ).fetchall()
+                ]
+                verified_attestation = verify_prohibition_attestation(
+                    authority_attestation,
+                    content=content,
+                    repo_id=repo_id,
+                    metadata=metadata,
+                    evidence=evidence_claim,
+                )
+                nonce_row = conn.execute(
+                    "SELECT digest, belief_id FROM authority_attestations "
+                    "WHERE key_id = ? AND nonce = ?",
+                    (verified_attestation.key_id, verified_attestation.nonce),
+                ).fetchone()
+                if nonce_row is not None:
+                    if nonce_row["digest"] != verified_attestation.digest:
+                        raise ProhibitionAuthorityError(
+                            "prohibition authority nonce was reused with different bytes"
+                        )
+                    if nonce_row["belief_id"] != memory_id:
+                        raise ProhibitionAuthorityError(
+                            "prohibition attestation replay targets a different belief"
+                        )
+                    existing = conn.execute(
+                        "SELECT content, layer, repo_id, belief_type, epistemic_status, "
+                        "metadata, status FROM memories WHERE id = ?",
+                        (memory_id,),
+                    ).fetchone()
+                    existing_evidence = self._belief_evidence_ids(conn, memory_id)
+                    if (
+                        existing is not None
+                        and existing["content"] == content
+                        and existing["layer"] == layer
+                        and existing["repo_id"] == repo_id
+                        and existing["belief_type"] == belief_type
+                        and existing["epistemic_status"] == epistemic_status
+                        and existing["metadata"] == self._json_serialize(metadata)
+                        and existing["status"] == status
+                        and existing_evidence == resolved_evidence_ids
+                    ):
+                        return memory_id
+                    raise ProhibitionAuthorityError(
+                        "prohibition attestation replay does not match the stored belief"
+                    )
             conn.execute(
                 """
                 INSERT INTO memories (
-                    id, content, layer, repo_id, category, importance, tags, metadata,
-                    source_ids, status, source, quality_flags, created_at, accessed_at
+                    id, content, layer, repo_id, category, belief_type,
+                    epistemic_status, importance, tags, metadata, source_ids,
+                    status, source, quality_flags, created_at, accessed_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     memory_id,
@@ -2210,6 +2791,8 @@ class LocalStorage(BaseStorage):
                     layer,
                     repo_id,
                     category,
+                    belief_type,
+                    epistemic_status,
                     importance,
                     self._json_serialize(tags),
                     self._json_serialize(metadata),
@@ -2226,6 +2809,20 @@ class LocalStorage(BaseStorage):
                     "INSERT INTO belief_evidence (belief_id, evidence_id, created_at) "
                     "VALUES (?, ?, ?)",
                     (memory_id, evidence_id, created_at),
+                )
+            if verified_attestation is not None:
+                conn.execute(
+                    "INSERT INTO authority_attestations "
+                    "(digest, belief_id, key_id, nonce, envelope, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        verified_attestation.digest,
+                        memory_id,
+                        verified_attestation.key_id,
+                        verified_attestation.nonce,
+                        verified_attestation.envelope,
+                        created_at,
+                    ),
                 )
             conn.commit()
 
@@ -2367,6 +2964,18 @@ class LocalStorage(BaseStorage):
     def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
         """Get a memory by ID and record an explicit access."""
         return self._get_memory_row(memory_id, track_access=True)
+
+    def peek_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
+        """Read a memory without counting it as an access.
+
+        For machinery that reads a row to serialise or inspect it rather than
+        because someone recalled it — export being the case that exposed this.
+        Exporting through ``get_memory`` incremented ``access_count`` and rewrote
+        ``accessed_at`` on every belief it touched, so the act of exporting
+        changed what a second export would produce and no round trip could ever
+        compare equal.
+        """
+        return self._get_memory_row(memory_id, track_access=False)
 
     def search_memories(
         self,
@@ -2609,6 +3218,7 @@ class LocalStorage(BaseStorage):
         archived_at: str = None,
         source: str = None,
         quality_flags: List[str] = None,
+        epistemic_status: str = None,
     ) -> bool:
         """Update an existing memory."""
         updates = []
@@ -2637,6 +3247,13 @@ class LocalStorage(BaseStorage):
                 updates.append("archived_at = COALESCE(archived_at, CURRENT_TIMESTAMP)")
             elif status == "active":
                 updates.append("archived_at = NULL")
+
+        if epistemic_status is not None:
+            # Normalised on the way in, exactly as a write is: a lifecycle
+            # transition must not be able to introduce a state the governed
+            # vocabulary does not define.
+            updates.append("epistemic_status = ?")
+            params.append(normalize_epistemic_status(epistemic_status))
 
         if approved_by is not None:
             updates.append("approved_by = ?")
@@ -2709,6 +3326,38 @@ class LocalStorage(BaseStorage):
 
         return updated
 
+    def _drop_deleted_source_reference(self, conn, memory_id: str) -> None:
+        """Remove a hard-deleted memory from every survivor's ``source_ids``.
+
+        ``source_ids`` is JSON, so nothing in the schema enforces it the way a
+        foreign key enforces ``relationships``. Deleting a memory therefore left
+        derived beliefs citing an id that no longer resolved (MG-033) — a
+        provenance trail pointing at nothing, which reads as "this was derived
+        from something" while being unable to say what.
+
+        Runs inside the caller's transaction so a survivor is never left citing a
+        row that has already gone.
+        """
+        # LIKE narrows the scan; the JSON parse below is what actually decides,
+        # since a substring match can hit an unrelated id that contains this one.
+        candidates = conn.execute(
+            "SELECT id, source_ids FROM memories WHERE id != ? AND source_ids LIKE ?",
+            (memory_id, f"%{memory_id}%"),
+        ).fetchall()
+
+        for row in candidates:
+            try:
+                current = json.loads(row["source_ids"] or "[]")
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(current, list) or memory_id not in current:
+                continue
+            remaining = [source for source in current if source != memory_id]
+            conn.execute(
+                "UPDATE memories SET source_ids = ? WHERE id = ?",
+                (self._json_serialize(remaining), row["id"]),
+            )
+
     def delete_memory(self, memory_id: str) -> bool:
         """Delete a memory from both stores."""
         # Get layer first for vector DB cleanup
@@ -2725,6 +3374,7 @@ class LocalStorage(BaseStorage):
                 "DELETE FROM relationships WHERE source_id = ? OR target_id = ?",
                 (memory_id, memory_id),
             )
+            self._drop_deleted_source_reference(conn, memory_id)
             conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
             conn.commit()
 
@@ -2734,12 +3384,18 @@ class LocalStorage(BaseStorage):
             try:
                 collection.delete(ids=[memory_id])
             except Exception as exc:
-                logger.warning(
-                    "Vector delete failed for memory %s; an orphaned vector may remain "
-                    "(run rebuild_embedding_index to reconcile): %s",
+                # The row is gone but its embedding is not, so semantic search can
+                # still surface content the caller believes it deleted. Reporting
+                # success here (MG-034) meant a purge could complete "cleanly" and
+                # leave the deleted text retrievable.
+                logger.error(
+                    "Vector delete failed for memory %s; the row is deleted but an "
+                    "orphaned vector remains and may still be retrievable. Run "
+                    "rebuild_embedding_index to reconcile: %s",
                     memory_id,
                     exc,
                 )
+                return False
 
         return True
 
@@ -2925,6 +3581,17 @@ class LocalStorage(BaseStorage):
             AND m.id != ?
         """
         params = [memory_id, memory_id, memory_id]
+
+        # A relationship outlives the memory at its other end, so without this the
+        # traversal happily returned deleted, merged and superseded targets: the
+        # edge still pointed at them and nothing here asked whether they were
+        # still servable (MG-030). Sorted for a stable query string.
+        non_servable = sorted(NON_SERVABLE_STATUSES)
+        query += (
+            " AND (m.status IS NULL OR m.status NOT IN "
+            f"({', '.join('?' for _ in non_servable)}))"
+        )
+        params.extend(non_servable)
 
         if relationship:
             query += " AND r.relationship = ?"

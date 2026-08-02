@@ -678,17 +678,20 @@ def create_mcp_server() -> "Server":
                             "type": "string",
                             "enum": [
                                 "fact",
-                                "invariant",
-                                "behavior",
-                                "pattern",
-                                "convention",
-                                "best_practice",
-                                "contract",
-                                "antipattern",
-                                "gotcha",
+                                "preference",
+                                "procedure",
+                                "prohibition",
+                                "hypothesis",
+                                "negative",
                             ],
                             "default": "fact",
                             "description": "Type of knowledge",
+                        },
+                        "authority_attestation": {
+                            "type": "string",
+                            "description": (
+                                "Opaque signed prohibition envelope for central verification"
+                            ),
                         },
                         "importance": {
                             "type": "number",
@@ -1877,12 +1880,17 @@ def _handle_recording(name: str, args: dict[str, Any], memory: Memory) -> str:
 def _handle_knowledge(name: str, args: dict[str, Any], memory: Memory) -> str:
     """Handle knowledge tools."""
     if name == "memory_learn":
+        if "epistemic_status" in args:
+            raise ValueError(
+                "initial epistemic status is assigned by the memory service"
+            )
         mem_id = memory.learn(
             knowledge=args["knowledge"],
             category=args.get("category", "fact"),
             importance=args.get("importance", 0.6),
             repo_id=args.get("repo_id"),
             detect_conflicts=args.get("detect_conflicts", False),
+            authority_attestation=args.get("authority_attestation"),
             _write_channel=WriteChannel.MCP,
         )
         return f"Knowledge established (ID: {mem_id}): {args['knowledge']}"

@@ -19,11 +19,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
+from visp_memory.core.beliefs import BeliefType
 from visp_memory.core.clock import utc_now_iso
 from visp_memory.core.storage import UNSCOPED_REPO_ID
 from visp_memory.core.trust import WriteChannel, channel_policy, with_channel_provenance
 
 INSTRUCTION_CATEGORY = "instruction"
+INSTRUCTION_BELIEF_TYPE = BeliefType.HYPOTHESIS.value
 INSTRUCTION_TAG = "imported_instruction"
 # Regions visp-memory itself injects into instruction files must not be
 # re-ingested, or memory would echo back into itself on every run.
@@ -107,7 +109,7 @@ def _existing_hashes(storage, repo_id: str | None) -> set[str]:
     try:
         rows: Iterable[dict[str, Any]] = storage.list_memories(
             layer="semantic",
-            category=INSTRUCTION_CATEGORY,
+            category=INSTRUCTION_BELIEF_TYPE,
             repo_id=repo_id,
             status="all",
             limit=10000,
@@ -116,6 +118,8 @@ def _existing_hashes(storage, repo_id: str | None) -> set[str]:
         return set()
     hashes = set()
     for row in rows:
+        if (row.get("metadata") or {}).get("legacy_category") != INSTRUCTION_CATEGORY:
+            continue
         stored_hash = (row.get("metadata") or {}).get("content_hash")
         if stored_hash:
             hashes.add(stored_hash)
@@ -131,7 +135,7 @@ def ingest_instructions(
 ) -> IngestReport:
     """Import instruction-file sections as semantic memories.
 
-    Each markdown section becomes one memory (category="instruction") carrying
+    Each markdown section becomes a provisional hypothesis carrying
     provenance (source file, section title, content hash). Sections whose hash
     already exists are skipped, so repeated runs are idempotent and edits only
     add the changed sections.
@@ -172,7 +176,7 @@ def ingest_instructions(
             memory_id = memory._storage.store_memory(
                 content=body,
                 layer="semantic",
-                category=INSTRUCTION_CATEGORY,
+                category=INSTRUCTION_BELIEF_TYPE,
                 importance=importance,
                 repo_id=repo_id,
                 tags=with_channel_provenance([INSTRUCTION_TAG], WriteChannel.INSTRUCTION),
@@ -180,6 +184,7 @@ def ingest_instructions(
                     "source_file": relative,
                     "section": title,
                     "content_hash": section_hash,
+                    "legacy_category": INSTRUCTION_CATEGORY,
                     "ingested_at": utc_now_iso(),
                     "write_channel": WriteChannel.INSTRUCTION.value,
                 },

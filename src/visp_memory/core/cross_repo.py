@@ -13,19 +13,9 @@ from visp_memory.core.repository import RepositoryManager
 from visp_memory.core.storage import BaseStorage
 from visp_memory.layers.semantic import KnowledgeCategory
 
-# Categories that represent warnings/cautions worth surfacing across repos.
-# Memories created via ``semantic.warn`` use FRAGILE_AREA (and are tagged "warning");
-# KNOWN_ISSUE/GOTCHA are the other caution categories. The plain "warning"/"error"
-# strings are free-form categories callers may assign directly.
-_WARNING_CATEGORIES = frozenset(
-    {
-        KnowledgeCategory.FRAGILE_AREA.value,
-        KnowledgeCategory.KNOWN_ISSUE.value,
-        KnowledgeCategory.GOTCHA.value,
-        "warning",
-        "error",
-    }
-)
+# Governed negative beliefs carry warning/known-issue detail in tags or metadata;
+# the semantic category itself remains closed.
+_WARNING_CATEGORIES = frozenset({KnowledgeCategory.NEGATIVE.value})
 # Free-form category strings used to flag breaking / cross-repo-impacting changes.
 # These are not part of the KnowledgeCategory enum; they mirror the convention used
 # by ``core.reporting``.

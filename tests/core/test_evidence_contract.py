@@ -266,6 +266,43 @@ def _create_malformed_v3_fixture(path, defect):
             )
 
 
+def _create_governed_migration_v3_fixture(path):
+    data_dir = path.parent
+    storage = LocalStorage(data_dir)
+    rows = [
+        ("legacy-known", "Legacy known", "contract", "active"),
+        ("legacy-unknown", "Legacy unknown", "instruction", "pending"),
+        ("legacy-archived", "Legacy archived", "fact", "archived"),
+        ("legacy-prohibition", "Legacy rule", "prohibition", "active"),
+    ]
+    for memory_id, content, _category, lifecycle_status in rows:
+        evidence_id = storage.store_evidence(content, repo_id="repo-a")
+        storage.store_memory(
+            content,
+            layer="semantic",
+            repo_id="repo-a",
+            category="fact",
+            status=lifecycle_status,
+            source="unknown",
+            quality_flags=["legacy_unreviewed"],
+            evidence_ids=[evidence_id],
+            memory_id=memory_id,
+            auto_link=False,
+        )
+    storage.close()
+    with sqlite3.connect(path) as conn:
+        for memory_id, _content, category, _status in rows:
+            conn.execute(
+                "UPDATE memories SET category = ? WHERE id = ?",
+                (category, memory_id),
+            )
+        conn.execute("ALTER TABLE memories DROP COLUMN belief_type")
+        conn.execute("ALTER TABLE memories DROP COLUMN epistemic_status")
+        conn.execute("DROP TABLE authority_attestations")
+        conn.execute("DELETE FROM schema_migrations WHERE version = 4")
+        conn.execute("INSERT INTO schema_migrations(version) VALUES (3)")
+
+
 def _sqlite_snapshot(path):
     with sqlite3.connect(path) as conn:
         schema = conn.execute(
@@ -274,6 +311,25 @@ def _sqlite_snapshot(path):
         ).fetchall()
         memories = conn.execute("SELECT * FROM memories ORDER BY id").fetchall()
     return schema, memories
+
+
+def _create_malformed_v4_fixture(path, defect):
+    storage = LocalStorage(path.parent)
+    storage.store_memory(
+        "Preserve declared-v4 row",
+        layer="episodic",
+        repo_id="repo-a",
+        auto_link=False,
+    )
+    storage.close()
+    with sqlite3.connect(path) as conn:
+        conn.execute("PRAGMA journal_mode=DELETE")
+        if defect == "missing_required_table":
+            conn.execute("DROP TABLE relationships")
+        elif defect == "missing_legacy_memory_column":
+            conn.execute("ALTER TABLE memories DROP COLUMN quality_flags")
+        else:  # pragma: no cover - fixture misuse
+            raise AssertionError(defect)
 
 
 def test_sqlite_stores_immutable_evidence_separately_and_links_belief(tmp_path):
@@ -524,6 +580,103 @@ def test_v2_migration_is_explicit_idempotent_and_preserves_quarantined_legacy_st
         "status": "already_current",
     }
     assert LocalStorage(data_dir).list_evidence(repo_id="repo-a") == before
+
+
+def test_v3_to_v4_migration_maps_governed_fields_and_preserves_legacy_state(tmp_path):
+    data_dir = tmp_path / "legacy-v3"
+    db_path = data_dir / "memories.db"
+    _create_governed_migration_v3_fixture(db_path)
+    backup = tmp_path / "rollback-v3.db"
+
+    with pytest.raises(StorageMigrationRequired, match="schema 3"):
+        LocalStorage(data_dir)
+
+    report = LocalStorage.migrate_schema(data_dir, backup_path=backup)
+    assert report == {"from_version": 3, "to_version": 4, "status": "migrated"}
+    with sqlite3.connect(backup) as conn:
+        assert conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (3,)
+        assert {
+            row[1] for row in conn.execute("PRAGMA table_info(memories)")
+        }.isdisjoint({"belief_type", "epistemic_status"})
+
+    storage = LocalStorage(data_dir)
+    expected = {
+        "legacy-known": ("fact", "inferred", "contract"),
+        "legacy-unknown": ("hypothesis", "hypothesized", "instruction"),
+        "legacy-archived": ("fact", "stale", "fact"),
+        "legacy-prohibition": ("hypothesis", "hypothesized", "prohibition"),
+    }
+    for memory_id, (belief_type, epistemic_status, legacy_category) in expected.items():
+        belief = storage.get_memory(memory_id)
+        assert belief["belief_type"] == belief["category"] == belief_type
+        assert belief["epistemic_status"] == epistemic_status
+        assert belief["metadata"]["legacy_category"] == legacy_category
+        assert belief["source"] == "unknown"
+        assert "legacy_unreviewed" in belief["quality_flags"]
+
+
+def test_v2_to_v4_runs_evidence_then_governed_transform_in_one_migration(tmp_path):
+    data_dir = tmp_path / "legacy-v2-v4"
+    db_path = data_dir / "memories.db"
+    _create_v2_fixture(db_path)
+
+    report = LocalStorage.migrate_schema(
+        data_dir, backup_path=tmp_path / "rollback-v2-v4.db"
+    )
+
+    assert report == {"from_version": 2, "to_version": 4, "status": "migrated"}
+    belief = LocalStorage(data_dir).get_memory("legacy-belief")
+    assert belief["belief_type"] == belief["category"] == "fact"
+    assert belief["epistemic_status"] == "contradicted"
+    assert belief["metadata"]["legacy_category"] == "fact"
+
+
+def test_v3_to_v4_rolls_back_transform_and_version_on_interruption(
+    tmp_path, monkeypatch
+):
+    data_dir = tmp_path / "interrupted-v4"
+    db_path = data_dir / "memories.db"
+    _create_governed_migration_v3_fixture(db_path)
+
+    def interrupted(conn):
+        conn.execute("ALTER TABLE memories ADD COLUMN belief_type TEXT")
+        raise RuntimeError("simulated v4 interruption")
+
+    monkeypatch.setattr(
+        LocalStorage, "_migrate_v3_to_v4", staticmethod(interrupted)
+    )
+
+    with pytest.raises(RuntimeError, match="simulated v4 interruption"):
+        LocalStorage.migrate_schema(
+            data_dir, backup_path=tmp_path / "interrupted-v4-backup.db"
+        )
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (3,)
+        assert "belief_type" not in {
+            row[1] for row in conn.execute("PRAGMA table_info(memories)")
+        }
+
+
+@pytest.mark.parametrize(
+    "defect", ["missing_required_table", "missing_legacy_memory_column"]
+)
+def test_declared_schema_v4_is_fully_validated_before_wal_or_ddl_mutation(
+    tmp_path, defect
+):
+    data_dir = tmp_path / f"malformed-v4-{defect}"
+    db_path = data_dir / "memories.db"
+    _create_malformed_v4_fixture(db_path, defect)
+    bytes_before = db_path.read_bytes()
+    snapshot_before = _sqlite_snapshot(db_path)
+
+    with pytest.raises(StorageMigrationRequired, match="schema 4"):
+        LocalStorage(data_dir)
+
+    assert db_path.read_bytes() == bytes_before
+    assert _sqlite_snapshot(db_path) == snapshot_before
+    assert not (data_dir / "memories.db-wal").exists()
+    assert not (data_dir / "memories.db-shm").exists()
 
 
 def test_v2_migration_refuses_secret_before_backup_or_schema_write(tmp_path):

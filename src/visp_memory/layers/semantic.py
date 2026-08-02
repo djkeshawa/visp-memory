@@ -79,6 +79,7 @@ class SemanticMemory(BaseMemoryLayer):
         repo_id: str = None,
         tags: List[str] = None,
         authority_attestation: str = None,
+        quality_flags: List[str] = None,
         *,
         _write_channel: WriteChannel | str = WriteChannel.LIBRARY,
     ) -> str:
@@ -126,6 +127,7 @@ class SemanticMemory(BaseMemoryLayer):
             metadata=metadata,
             source_ids=source_episodes or [],
             evidence_ids=evidence_ids or [],
+            quality_flags=quality_flags or [],
             source=policy.source,
         )
 

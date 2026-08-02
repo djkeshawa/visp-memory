@@ -325,20 +325,39 @@ class MemoryLifecycleManager:
                 blocked.append({"id": memory["id"], "reason": "Active memories cannot be purged"})
             elif metadata.get("pinned") or metadata.get("hold"):
                 blocked.append({"id": memory["id"], "reason": "Memory is pinned or held"})
-            elif any(memory["id"] in (candidate.get("source_ids") or []) for candidate in active):
-                blocked.append(
-                    {"id": memory["id"], "reason": "Memory is sole or retained provenance"}
-                )
+
         purgeable = [
             memory["id"]
             for memory in present
             if memory["id"] not in {item["id"] for item in blocked}
         ]
+
+        # Being cited as provenance used to block the purge outright, which made
+        # a legitimate deletion request simply fail while the content stayed
+        # (MG-032). A derivative is not a reason to keep the source — it is a
+        # consequence of removing it. So the purge proceeds and the derived
+        # beliefs are revoked with it: their basis is gone, so they can no longer
+        # be asserted, but they stay visible and auditable rather than being
+        # silently destroyed alongside content nobody asked to delete.
+        purging = set(purgeable)
+        cascade = [
+            {
+                "id": candidate["id"],
+                "derived_from": sorted(
+                    purging.intersection(candidate.get("source_ids") or [])
+                ),
+                "action": "revoke",
+            }
+            for candidate in active
+            if purging.intersection(candidate.get("source_ids") or [])
+        ]
+
         return {
             "requested_ids": requested,
             "purgeable_ids": purgeable,
             "missing_ids": missing,
             "blocked": blocked,
+            "cascade": cascade,
             "estimated_content_bytes": sum(
                 len(memory.get("content", "").encode("utf-8"))
                 for memory in present
@@ -350,12 +369,50 @@ class MemoryLifecycleManager:
         preview = self.purge_preview(memory_ids)
         if preview["blocked"]:
             raise LifecycleError("One or more memories are not safe to purge")
-        purged = [
-            memory_id
-            for memory_id in preview["purgeable_ids"]
-            if self.storage.delete_memory(memory_id)
+
+        # Revoke derivatives before removing what they were derived from, so no
+        # window exists where a belief is still asserted while its basis is gone.
+        revoked = [
+            entry["id"]
+            for entry in preview.get("cascade", [])
+            if self._revoke_derived(entry["id"], entry["derived_from"])
         ]
-        return {**preview, "purged_ids": purged}
+
+        # Prefer a backend's explicit purge. On remote storage `delete_memory`
+        # is a soft delete, so purging through it left the content on the server
+        # while reporting success (MG-035). Local backends have no separate
+        # purge because their delete already removes the row.
+        purge_one = getattr(self.storage, "purge_memory", None) or self.storage.delete_memory
+
+        purged = [
+            memory_id for memory_id in preview["purgeable_ids"] if purge_one(memory_id)
+        ]
+        return {**preview, "purged_ids": purged, "revoked_ids": revoked}
+
+    def _revoke_derived(self, memory_id: str, derived_from: list[str]) -> bool:
+        """Mark a belief unsupported because the memory it came from was purged.
+
+        Revoked rather than deleted: the caller asked to remove the source, not
+        everything downstream of it. Destroying derivatives would delete content
+        nobody named, and keeping them asserted would leave a claim standing on a
+        basis that no longer exists.
+        """
+        from visp_memory.core.beliefs import EpistemicStatus
+
+        memory = self.storage.get_memory(memory_id)
+        if not memory:
+            return False
+
+        metadata = dict(memory.get("metadata") or {})
+        metadata["revocation"] = {
+            "reason": "source memory was purged",
+            "purged_sources": list(derived_from),
+        }
+        return self.storage.update_memory(
+            memory_id,
+            epistemic_status=EpistemicStatus.REVOKED.value,
+            metadata=metadata,
+        )
 
     def retention_preview(self, repo_id: str, *, retention_days: int = 30) -> dict[str, Any]:
         cutoff = utc_now() - timedelta(days=max(30, retention_days))

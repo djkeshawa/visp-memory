@@ -38,6 +38,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
+from visp_memory.core.beliefs import BeliefType, EpistemicStatus
 from visp_memory.core.clock import parse_utc
 from visp_memory.core.eligibility import filter_recall_eligible, require_repo_id
 
@@ -172,6 +173,10 @@ class InjectionResult:
     """What was injected, what was withheld, and why."""
 
     memories: list[dict[str, Any]] = field(default_factory=list)
+    # Hypotheses are held here rather than in ``memories`` so that a caller
+    # reading the canonical set never receives a guess presented as established
+    # knowledge (MG-048). Opting in is explicit; the default path is the safe one.
+    hypotheses: list[dict[str, Any]] = field(default_factory=list)
     reason: str = "ok"
     considered: int = 0
     dropped_below_floor: int = 0
@@ -257,6 +262,24 @@ def _content_of(memory: dict[str, Any]) -> str:
 WARNING_CATEGORIES = frozenset(
     {"negative", "fragile_area", "known_issue", "gotcha", "warning"}
 )
+
+
+def _is_hypothesis(memory: dict[str, Any]) -> bool:
+    """Whether this belief is a guess rather than something held to be true.
+
+    Checks the governed belief type and the epistemic state, because the two say
+    different things: ``hypothesis`` is what kind of claim it is, ``hypothesized``
+    is how it came to be believed. Either is enough to keep it out of a canonical
+    answer.
+    """
+    if str(memory.get("belief_type") or "").casefold() == BeliefType.HYPOTHESIS.value:
+        return True
+    if str(memory.get("category") or "").casefold() == BeliefType.HYPOTHESIS.value:
+        return True
+    return (
+        str(memory.get("epistemic_status") or "").casefold()
+        == EpistemicStatus.HYPOTHESIZED.value
+    )
 
 
 def _is_warning(memory: dict[str, Any]) -> bool:
@@ -474,6 +497,14 @@ def select_for_injection(
             # A single oversized memory should not consume the whole budget, but a
             # smaller later candidate still might fit.
             result.dropped_over_budget += 1
+            continue
+
+        if _is_hypothesis(candidate):
+            # Relevance is not standing. A hypothesis can score at the top and
+            # still be a guess, so it is separated rather than dropped: useful to
+            # a caller that asks for it, never mixed into the canonical answer.
+            result.hypotheses.append(candidate)
+            used_chars += len(content)
             continue
 
         selected.append(candidate)

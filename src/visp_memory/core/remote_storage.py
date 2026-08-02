@@ -15,6 +15,7 @@ try:
 except ImportError:
     REQUESTS_AVAILABLE = False
 
+from visp_memory.core.beliefs import normalize_belief_type
 from visp_memory.core.storage import (
     BaseStorage,
     EvidenceImmutableError,
@@ -209,13 +210,48 @@ class RemoteStorage(BaseStorage):
         self, content: str, layer: MemoryLayer = "episodic", repo_id: str = None, **kwargs
     ) -> str:
         """Store a memory remotely."""
+        if "epistemic_status" in kwargs:
+            raise RemoteStorageError(
+                "initial epistemic status is assigned by the memory service"
+            )
+        expected_belief_type = None
+        if layer == "semantic":
+            try:
+                expected_belief_type = normalize_belief_type(
+                    kwargs.get("category") or "fact"
+                )
+            except ValueError as exc:
+                raise RemoteStorageError(str(exc)) from exc
+            kwargs["category"] = expected_belief_type
         try:
             payload = {"content": content, "layer": layer, "repo_id": repo_id, **kwargs}
-            # Map kwargs to API schema if needed
-            # For now, simplistic mapping
             response = self.session.post(f"{self.server_url}/memories", json=payload)
             response.raise_for_status()
-            return self._response_id(response, "store memory")
+            response_payload = self._response_json(
+                response, "store memory", dict
+            )
+            memory_id = self._response_id(response, "store memory")
+            if expected_belief_type is not None:
+                expected_status = {
+                    "hypothesis": "hypothesized",
+                    "prohibition": "observed",
+                }.get(expected_belief_type, "inferred")
+                returned_contract = (
+                    response_payload.get("category"),
+                    response_payload.get("belief_type"),
+                    response_payload.get("epistemic_status"),
+                )
+                expected_contract = (
+                    expected_belief_type,
+                    expected_belief_type,
+                    expected_status,
+                )
+                if returned_contract != expected_contract:
+                    raise RemoteStorageError(
+                        "Remote server violated the semantic belief contract: "
+                        f"expected {expected_contract!r}, received {returned_contract!r}"
+                    )
+            return memory_id
         except requests.RequestException as e:
             raise self._write_error("store memory", e) from e
 
@@ -296,6 +332,37 @@ class RemoteStorage(BaseStorage):
             return True
         except requests.RequestException as e:
             raise self._write_error("delete memory", e) from e
+
+    def purge_memory(self, memory_id: str) -> bool:
+        """Physically purge a memory on the server.
+
+        ``delete_memory`` maps to ``DELETE /memories/{id}``, which is a *soft*
+        delete — the row is marked, not removed. A purge routed through it
+        therefore reported success while the content was still on the server
+        (MG-035). The server has a separate purge route; this uses it, so a purge
+        against remote storage means the same thing it means locally.
+
+        The endpoint requires the memory id repeated as confirmation, which is
+        also the server's guard against a purge issued by mistake.
+        """
+        try:
+            response = self.session.delete(
+                f"{self.server_url}/memories/{memory_id}/purge",
+                params={"confirmation": memory_id},
+            )
+            if response.status_code == 404:
+                return False
+            response.raise_for_status()
+        except requests.RequestException as e:
+            raise self._write_error("purge memory", e) from e
+
+        # A purge that the server did not confirm is not a purge. Reporting
+        # success on an unreadable body would put us back where we started.
+        try:
+            body = response.json()
+        except ValueError:
+            return False
+        return memory_id in (body.get("purged_ids") or [])
 
     def get_collection(self, layer: str):
         return None  # Remote storage doesn't expose vector collections directly

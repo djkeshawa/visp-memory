@@ -8,6 +8,7 @@ import threading
 
 from visp_memory import Memory, MemoryConfig
 from visp_memory.core.storage import LocalStorage
+from visp_memory.quality.conflict import ConflictVerdict
 
 
 def test_get_db_applies_concurrency_and_integrity_pragmas(tmp_path):
@@ -79,11 +80,11 @@ def test_learn_conflict_creates_contradicts_relationship(tmp_path):
     existing_id = memory.learn("Auth tokens expire after 24 hours", category="fact")
 
     # Force a detected conflict against the existing memory.
-    memory.conflict_detector.detect_conflicts = lambda content, relevant: {
+    memory.conflict_detector.detect_conflicts = lambda content, relevant: ConflictVerdict.found({
         "conflict": True,
         "reason": "contradicts the documented expiry",
         "conflicting_ids": [existing_id],
-    }
+    })
 
     new_id = memory.learn("Auth tokens never expire", category="fact")
     assert new_id  # must not raise even though a conflict was detected

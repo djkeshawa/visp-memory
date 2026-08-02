@@ -1,11 +1,23 @@
 """ArcadeDB storage backend."""
 
+import hashlib
 import logging
 import uuid
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from visp_memory.core.clock import utc_now
+from visp_memory.core.authority import (
+    ProhibitionAuthorityError,
+    verify_prohibition_attestation,
+)
+from visp_memory.core.beliefs import (
+    HYPOTHESIS_TTL_DAYS,
+    EpistemicStatus,
+    normalize_belief_type,
+    normalize_epistemic_status,
+)
+from visp_memory.core.clock import parse_utc, utc_now
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID
 from visp_memory.core.ranking import rank_memory_results, text_similarity, utility_rank_adjustment
 from visp_memory.core.storage import (
@@ -60,12 +72,20 @@ class ArcadeDbStorage(BaseStorage):
         "AuditLog",
         "RecallFeedback",
         "SchemaVersion",
+        "AuthorityAttestation",
     ]
-    EDGE_TYPES = ["MemoryRelationship", "BeliefEvidence", "RepoDependency", "TeamMember"]
+    EDGE_TYPES = [
+        "MemoryRelationship",
+        "BeliefEvidence",
+        "BeliefAuthority",
+        "RepoDependency",
+        "TeamMember",
+    ]
     MEMORY_RELATIONSHIP_EDGE = "MemoryRelationship"
     REPO_DEPENDENCY_EDGE = "RepoDependency"
     TEAM_MEMBER_EDGE = "TeamMember"
     BELIEF_EVIDENCE_EDGE = "BeliefEvidence"
+    BELIEF_AUTHORITY_EDGE = "BeliefAuthority"
     MEMORY_JSON_FIELDS = {"tags", "metadata", "source_ids", "quality_flags"}
     MEMORY_FIELDS = [
         "id",
@@ -73,6 +93,8 @@ class ArcadeDbStorage(BaseStorage):
         "layer",
         "repo_id",
         "category",
+        "belief_type",
+        "epistemic_status",
         "importance",
         "tags",
         "metadata",
@@ -99,6 +121,21 @@ class ArcadeDbStorage(BaseStorage):
     ]
     EVIDENCE_JSON_FIELDS = {"metadata"}
     BELIEF_EVIDENCE_FIELDS = ["id", "belief_id", "evidence_id", "created_at"]
+    AUTHORITY_ATTESTATION_FIELDS = [
+        "id",
+        "belief_id",
+        "key_id",
+        "nonce",
+        "digest",
+        "envelope",
+        "created_at",
+    ]
+    BELIEF_AUTHORITY_FIELDS = [
+        "id",
+        "belief_id",
+        "attestation_id",
+        "created_at",
+    ]
     RELATIONSHIP_FIELDS = [
         "id",
         "source_id",
@@ -185,6 +222,7 @@ class ArcadeDbStorage(BaseStorage):
         "AuditLog": AUDIT_FIELDS,
         "RecallFeedback": RECALL_EVENT_FIELDS,
         "SchemaVersion": SCHEMA_VERSION_FIELDS,
+        "AuthorityAttestation": AUTHORITY_ATTESTATION_FIELDS,
     }
 
     def __init__(
@@ -300,10 +338,10 @@ class ArcadeDbStorage(BaseStorage):
                 )
             if stored_version < STORAGE_SCHEMA_VERSION:
                 raise StorageMigrationRequired(
-                    "ArcadeDB schema migration is not implemented; export the v2 "
-                    "store with its original build before using schema v3"
+                    "ArcadeDB schema migration is not implemented; export the older "
+                    "store with its original build before using schema v4"
                 )
-            self._validate_current_v3_graph(db, type_kinds, type_counts)
+            self._validate_current_v4_graph(db, type_kinds, type_counts)
             return True
         if any(type_counts.values()):
             raise StorageMigrationRequired(
@@ -311,13 +349,13 @@ class ArcadeDbStorage(BaseStorage):
             )
         return False
 
-    def _validate_current_v3_graph(
+    def _validate_current_v4_graph(
         self,
         db,
         type_kinds: Dict[str, str],
         type_counts: Dict[str, int],
     ) -> None:
-        """Prove the current ArcadeDB schema and Evidence graph without repair."""
+        """Prove the current governed graph without mutating or repairing it."""
         required_kinds = {
             **{name: "VERTEX" for name in self.VERTEX_TYPES},
             **{name: "EDGE" for name in self.EDGE_TYPES},
@@ -335,27 +373,33 @@ class ArcadeDbStorage(BaseStorage):
             if wrong_kind:
                 details.append("wrong kind " + ", ".join(wrong_kind))
             raise StorageMigrationRequired(
-                "ArcadeDB schema v3 required types are invalid: " + "; ".join(details)
+                "ArcadeDB schema v4 required types are invalid: " + "; ".join(details)
             )
 
         try:
             memories = self._rows(db.query("sql", "SELECT FROM Memory"))
             evidence = self._rows(db.query("sql", "SELECT FROM Evidence"))
             links = self._rows(db.query("sql", "SELECT FROM BeliefEvidence"))
+            attestations = self._rows(
+                db.query("sql", "SELECT FROM AuthorityAttestation")
+            )
+            authority_links = self._rows(db.query("sql", "SELECT FROM BeliefAuthority"))
         except Exception as exc:
             raise StorageMigrationRequired(
-                "ArcadeDB schema-v3 Evidence graph could not be read safely"
+                "ArcadeDB schema-v4 governed graph could not be read safely"
             ) from exc
 
         rows_by_kind = {
             "Memory": memories,
             "Evidence": evidence,
             "BeliefEvidence": links,
+            "AuthorityAttestation": attestations,
+            "BeliefAuthority": authority_links,
         }
         for kind, rows in rows_by_kind.items():
             if len(rows) != type_counts[kind]:
                 raise StorageMigrationRequired(
-                    f"ArcadeDB schema-v3 Evidence graph has an ambiguous {kind} count"
+                    f"ArcadeDB schema-v4 governed graph has an ambiguous {kind} count"
                 )
 
         def indexed(rows: List[Any], kind: str) -> Dict[str, Any]:
@@ -364,7 +408,7 @@ class ArcadeDbStorage(BaseStorage):
                 row_id = self._record_get(row, "id")
                 if not isinstance(row_id, str) or not row_id.strip() or row_id in result:
                     raise StorageMigrationRequired(
-                        f"ArcadeDB schema-v3 Evidence graph has ambiguous {kind} IDs"
+                        f"ArcadeDB schema-v4 governed graph has ambiguous {kind} IDs"
                     )
                 result[row_id] = row
             return result
@@ -372,6 +416,8 @@ class ArcadeDbStorage(BaseStorage):
         memories_by_id = indexed(memories, "Memory")
         evidence_by_id = indexed(evidence, "Evidence")
         links_by_id = indexed(links, "BeliefEvidence")
+        attestations_by_id = indexed(attestations, "AuthorityAttestation")
+        authority_links_by_id = indexed(authority_links, "BeliefAuthority")
         if memories_by_id.keys() & evidence_by_id.keys():
             raise StorageMigrationRequired(
                 "ArcadeDB schema-v3 Evidence graph has cross-type ID collisions"
@@ -452,8 +498,97 @@ class ArcadeDbStorage(BaseStorage):
                 and links_by_belief.get(memory_id, 0) < 1
             ):
                 raise StorageMigrationRequired(
-                    "ArcadeDB schema-v3 Evidence graph contains a semantic Memory "
+                    "ArcadeDB schema-v4 Evidence graph contains a semantic Memory "
                     f"without Evidence: {memory_id!r}"
+                )
+
+        for memory_id, memory in memories_by_id.items():
+            layer = self._record_get(memory, "layer")
+            category = self._record_get(memory, "category")
+            belief_type = self._record_get(memory, "belief_type")
+            epistemic_status = self._record_get(memory, "epistemic_status")
+            if layer == "semantic":
+                try:
+                    normalized_type = normalize_belief_type(belief_type)
+                    normalized_status = normalize_epistemic_status(epistemic_status)
+                except ValueError as exc:
+                    raise StorageMigrationRequired(
+                        "ArcadeDB schema-v4 governed Memory fields are invalid: "
+                        f"{memory_id!r}"
+                    ) from exc
+                if category != normalized_type:
+                    raise StorageMigrationRequired(
+                        "ArcadeDB schema-v4 governed Memory category/type mismatch: "
+                        f"{memory_id!r}"
+                    )
+                if normalized_type == "hypothesis" and normalized_status != "hypothesized":
+                    raise StorageMigrationRequired(
+                        "ArcadeDB schema-v4 governed hypothesis status is invalid"
+                    )
+                if normalized_type == "prohibition" and normalized_status != "observed":
+                    raise StorageMigrationRequired(
+                        "ArcadeDB schema-v4 governed prohibition status is invalid"
+                    )
+            elif belief_type is not None or epistemic_status is not None:
+                raise StorageMigrationRequired(
+                    "ArcadeDB schema-v4 governed fields appear on a non-semantic Memory"
+                )
+
+        authority_by_belief: Dict[str, int] = {}
+        nonce_digests: Dict[tuple[str, str], str] = {}
+        for _attestation_id, attestation in attestations_by_id.items():
+            missing_fields = [
+                field
+                for field in self.AUTHORITY_ATTESTATION_FIELDS
+                if self._record_get(attestation, field) is None
+            ]
+            if missing_fields:
+                raise StorageMigrationRequired(
+                    "ArcadeDB schema-v4 AuthorityAttestation is missing fields"
+                )
+            belief_id = self._record_get(attestation, "belief_id")
+            key_id = self._record_get(attestation, "key_id")
+            nonce = self._record_get(attestation, "nonce")
+            digest = self._record_get(attestation, "digest")
+            envelope = self._record_get(attestation, "envelope")
+            if (
+                belief_id not in memories_by_id
+                or not isinstance(key_id, str)
+                or not key_id
+                or not isinstance(nonce, str)
+                or not nonce
+                or not isinstance(envelope, str)
+                or hashlib.sha256(envelope.encode("utf-8")).hexdigest() != digest
+            ):
+                raise StorageMigrationRequired(
+                    "ArcadeDB schema-v4 AuthorityAttestation is malformed"
+                )
+            nonce_key = (key_id, nonce)
+            if nonce_key in nonce_digests:
+                raise StorageMigrationRequired(
+                    "ArcadeDB schema-v4 AuthorityAttestation nonce is duplicated"
+                )
+            nonce_digests[nonce_key] = digest
+
+        for link_id, link in authority_links_by_id.items():
+            belief_id = self._record_get(link, "belief_id")
+            attestation_id = self._record_get(link, "attestation_id")
+            attestation = attestations_by_id.get(attestation_id)
+            if (
+                belief_id not in memories_by_id
+                or attestation is None
+                or self._record_get(attestation, "belief_id") != belief_id
+            ):
+                raise StorageMigrationRequired(
+                    f"ArcadeDB schema-v4 BeliefAuthority link {link_id!r} is malformed"
+                )
+            authority_by_belief[belief_id] = authority_by_belief.get(belief_id, 0) + 1
+
+        for memory_id, memory in memories_by_id.items():
+            expected = 1 if self._record_get(memory, "belief_type") == "prohibition" else 0
+            if authority_by_belief.get(memory_id, 0) != expected:
+                raise StorageMigrationRequired(
+                    "ArcadeDB schema-v4 prohibition authority graph is incomplete"
                 )
 
     def get_capabilities(self) -> StorageCapabilities:
@@ -555,6 +690,19 @@ class ArcadeDbStorage(BaseStorage):
             }
         )
 
+    def _authority_attestation_for_belief(self, db, belief_id: str) -> Optional[str]:
+        rows = self._rows(db.query("sql", "SELECT FROM AuthorityAttestation"))
+        matches = [
+            row for row in rows if self._record_get(row, "belief_id") == belief_id
+        ]
+        if not matches:
+            return None
+        if len(matches) != 1:
+            raise ProhibitionAuthorityError(
+                "stored prohibition has ambiguous authority attestations"
+            )
+        return self._record_get(matches[0], "envelope")
+
     def _validate_belief_references(
         self,
         db,
@@ -652,6 +800,9 @@ class ArcadeDbStorage(BaseStorage):
                 return None
             memory = self._memory_record_to_dict(rows[0])
             memory["evidence_ids"] = self._belief_evidence_ids(db, memory_id)
+            authority_attestation = self._authority_attestation_for_belief(db, memory_id)
+            if authority_attestation is not None:
+                memory["authority_attestation"] = authority_attestation
             return memory
 
     def _query_memories(
@@ -708,6 +859,11 @@ class ArcadeDbStorage(BaseStorage):
             memories = [self._memory_record_to_dict(row) for row in rows]
             for memory in memories:
                 memory["evidence_ids"] = self._belief_evidence_ids(db, memory["id"])
+                authority_attestation = self._authority_attestation_for_belief(
+                    db, memory["id"]
+                )
+                if authority_attestation is not None:
+                    memory["authority_attestation"] = authority_attestation
             return memories
 
     def store_evidence(
@@ -967,36 +1123,84 @@ class ArcadeDbStorage(BaseStorage):
         content: str,
         layer: MemoryLayer = "episodic",
         repo_id: str = None,
-        category: str = "general",
+        category: str = None,
         importance: float = 0.5,
         tags: List[str] = None,
         metadata: Dict[str, Any] = None,
         source_ids: List[str] = None,
         evidence_ids: List[str] = None,
         status: MemoryStatus = "active",
+        epistemic_status: str = None,
+        authority_attestation: str = None,
         source: str = None,
         quality_flags: List[str] = None,
         embedding: List[float] = None,
         auto_link: bool = True,
         auto_link_limit: int = 3,
         auto_link_min_score: float = 0.53,
+        memory_id: str = None,
+        created_at: str = None,
     ) -> str:
         # Enforce the secrets policy at the single choke point every write path funnels
         # through, so a new caller cannot opt out. See visp_memory.quality.secrets.
         content, quality_flags = redact_for_storage(content, quality_flags)
-        memory_id = self._generate_id(content)
+        requested_memory_id = memory_id
+        memory_id = memory_id or self._generate_id(content)
         repo_id = repo_id or UNSCOPED_REPO_ID
         tags = tags or []
         metadata = metadata or {}
         source_ids = source_ids or []
         evidence_ids = evidence_ids or []
         quality_flags = quality_flags or []
+        created_at = created_at or utc_now().isoformat()
+        belief_type = None
+        if layer == "semantic":
+            belief_type = normalize_belief_type(category or "fact")
+            category = belief_type
+            if belief_type == "hypothesis":
+                if epistemic_status not in (None, EpistemicStatus.HYPOTHESIZED.value):
+                    raise ValueError(
+                        "a hypothesis must begin with hypothesized epistemic status"
+                    )
+                epistemic_status = EpistemicStatus.HYPOTHESIZED.value
+                created_time = parse_utc(created_at)
+                if created_time is None:
+                    raise ValueError("created_at must be a valid timestamp")
+                maximum_valid_to = created_time + timedelta(days=HYPOTHESIS_TTL_DAYS)
+                supplied_valid_to = metadata.get("valid_to")
+                if supplied_valid_to is None:
+                    metadata = {**metadata, "valid_to": maximum_valid_to.isoformat()}
+                else:
+                    valid_to = parse_utc(supplied_valid_to)
+                    if valid_to is None or valid_to > maximum_valid_to:
+                        raise ValueError(
+                            "hypothesis valid_to exceeds the seven-day maximum TTL"
+                        )
+                    metadata = {**metadata, "valid_to": valid_to.isoformat()}
+            elif belief_type == "prohibition":
+                if epistemic_status not in (None, EpistemicStatus.OBSERVED.value):
+                    raise ValueError(
+                        "a verified prohibition must begin with observed epistemic status"
+                    )
+                epistemic_status = EpistemicStatus.OBSERVED.value
+            else:
+                epistemic_status = normalize_epistemic_status(
+                    epistemic_status or EpistemicStatus.INFERRED.value
+                )
+            if belief_type != "prohibition" and authority_attestation is not None:
+                raise ValueError(
+                    "authority attestation applies only to a prohibition belief"
+                )
+        elif epistemic_status is not None:
+            raise ValueError("epistemic status applies only to a semantic belief")
+        else:
+            category = category or "general"
         if repo_id == UNSCOPED_REPO_ID:
             from visp_memory.core.trust import Provenance, with_provenance
 
             tags = with_provenance(tags, Provenance.UNKNOWN)
             source = Provenance.UNKNOWN.value
-        now = utc_now().isoformat()
+        now = created_at
 
         with self._database() as db:
             with db.transaction():
@@ -1031,11 +1235,84 @@ class ArcadeDbStorage(BaseStorage):
                     source_ids=source_ids,
                     evidence_ids=evidence_ids,
                 )
+                verified_attestation = None
+                if belief_type == "prohibition":
+                    if authority_attestation is None:
+                        raise ProhibitionAuthorityError(
+                            "prohibition belief requires an authority attestation"
+                        )
+                    evidence_claim = []
+                    for evidence_id in sorted(resolved_evidence_ids):
+                        rows = self._rows(
+                            db.query("sql", "SELECT FROM Evidence WHERE id = ?", evidence_id)
+                        )
+                        evidence_claim.append(
+                            {
+                                "id": evidence_id,
+                                "content_hash": self._record_get(rows[0], "content_hash"),
+                            }
+                        )
+                    verified_attestation = verify_prohibition_attestation(
+                        authority_attestation,
+                        content=content,
+                        repo_id=repo_id,
+                        metadata=metadata,
+                        evidence=evidence_claim,
+                    )
+                    for stored in self._rows(
+                        db.query("sql", "SELECT FROM AuthorityAttestation")
+                    ):
+                        if (
+                            self._record_get(stored, "key_id")
+                            != verified_attestation.key_id
+                            or self._record_get(stored, "nonce")
+                            != verified_attestation.nonce
+                        ):
+                            continue
+                        if self._record_get(stored, "digest") != verified_attestation.digest:
+                            raise ProhibitionAuthorityError(
+                                "prohibition authority nonce was reused with different bytes"
+                            )
+                        stored_belief_id = self._record_get(stored, "belief_id")
+                        if (
+                            requested_memory_id is not None
+                            and stored_belief_id != memory_id
+                        ):
+                            raise ProhibitionAuthorityError(
+                                "prohibition attestation replay targets a different belief"
+                            )
+                        existing_rows = self._rows(
+                            db.query(
+                                "sql",
+                                f"SELECT FROM {self.MEMORY_TYPE} WHERE id = ?",
+                                stored_belief_id,
+                            )
+                        )
+                        existing_evidence = self._belief_evidence_ids(
+                            db, stored_belief_id
+                        )
+                        if existing_rows:
+                            existing = self._memory_record_to_dict(existing_rows[0])
+                            if (
+                                existing.get("content") == content
+                                and existing.get("layer") == layer
+                                and existing.get("repo_id") == repo_id
+                                and existing.get("belief_type") == belief_type
+                                and existing.get("epistemic_status") == epistemic_status
+                                and existing.get("metadata") == metadata
+                                and existing.get("status") == status
+                                and existing_evidence == sorted(resolved_evidence_ids)
+                            ):
+                                return stored_belief_id
+                        raise ProhibitionAuthorityError(
+                            "prohibition attestation replay does not match the stored belief"
+                        )
                 db.command(
                     "sql",
                     f"""
                     INSERT INTO {self.MEMORY_TYPE} SET
                     id = ?, content = ?, layer = ?, repo_id = ?, category = ?,
+                    belief_type = ?, epistemic_status = ?,
                     importance = ?, tags = ?, metadata = ?, source_ids = ?,
                     status = ?, source = ?, quality_flags = ?, created_at = ?,
                     accessed_at = ?, access_count = ?
@@ -1045,6 +1322,8 @@ class ArcadeDbStorage(BaseStorage):
                     layer,
                     repo_id,
                     category,
+                    belief_type,
+                    epistemic_status,
                     importance,
                     self._json_serialize(tags),
                     self._json_serialize(metadata),
@@ -1071,6 +1350,37 @@ class ArcadeDbStorage(BaseStorage):
                         edge_id,
                         memory_id,
                         evidence_id,
+                        now,
+                    )
+                if verified_attestation is not None:
+                    attestation_id = f"att-{verified_attestation.digest}"
+                    fields = self.AUTHORITY_ATTESTATION_FIELDS
+                    db.command(
+                        "sql",
+                        "INSERT INTO AuthorityAttestation SET "
+                        + ", ".join(f"{field} = ?" for field in fields),
+                        attestation_id,
+                        memory_id,
+                        verified_attestation.key_id,
+                        verified_attestation.nonce,
+                        verified_attestation.digest,
+                        verified_attestation.envelope,
+                        now,
+                    )
+                    edge_id = f"ba-{memory_id}-{attestation_id}"
+                    db.command(
+                        "sql",
+                        f"""
+                        CREATE EDGE {self.BELIEF_AUTHORITY_EDGE}
+                        FROM (SELECT FROM {self.MEMORY_TYPE} WHERE id = ?)
+                        TO (SELECT FROM AuthorityAttestation WHERE id = ?)
+                        SET id = ?, belief_id = ?, attestation_id = ?, created_at = ?
+                        """,
+                        memory_id,
+                        attestation_id,
+                        edge_id,
+                        memory_id,
+                        attestation_id,
                         now,
                     )
 

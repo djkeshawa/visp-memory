@@ -31,6 +31,11 @@ from rich.table import Table
 
 from visp_memory import Memory, MemoryConfig, __version__
 from visp_memory.config import load_config
+from visp_memory.core.authority import (
+    build_prohibition_claim,
+    sign_prohibition_attestation,
+)
+from visp_memory.core.beliefs import BeliefType
 from visp_memory.core.clock import parse_utc, utc_now
 from visp_memory.core.ranking import projected_importance
 from visp_memory.core.reporting import MemoryIntelligenceReporter
@@ -670,9 +675,19 @@ def bug(
 @app.command()
 def learn(
     knowledge: str = typer.Argument(..., help="The knowledge/fact/pattern"),
-    category: str = typer.Option("fact", "--category", "-c", help="Knowledge category"),
+    category: BeliefType = typer.Option(
+        BeliefType.FACT, "--category", "-c", help="Governed semantic belief type"
+    ),
     importance: float = typer.Option(0.6, "--importance", "-i", help="Importance (0.0-1.0)"),
     repo: str = typer.Option(None, "--repo", "-r", help="Repository context"),
+    authority_attestation_file: Optional[Path] = typer.Option(
+        None,
+        "--authority-attestation-file",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="Opaque signed prohibition envelope to send to the central verifier",
+    ),
 ):
     """Establish semantic knowledge (something learned)."""
     memory = get_memory()
@@ -681,9 +696,80 @@ def learn(
         category=category,
         importance=importance,
         repo_id=repo,
+        authority_attestation=(
+            authority_attestation_file.read_text(encoding="utf-8").strip()
+            if authority_attestation_file is not None
+            else None
+        ),
         _write_channel=WriteChannel.CLI,
     )
     console.print(f"[green]Established:[/green] {knowledge[:60]}...")
+
+
+def _claim_evidence(values: List[str]) -> List[dict[str, str]]:
+    evidence = []
+    for value in values:
+        evidence_id, separator, content_hash = value.partition("=")
+        if not separator or not evidence_id or not content_hash:
+            raise typer.BadParameter(
+                "each evidence value must be EVIDENCE_ID=CONTENT_HASH",
+                param_hint="--evidence",
+            )
+        evidence.append({"id": evidence_id, "content_hash": content_hash})
+    return evidence
+
+
+@app.command("prohibition-sign")
+def prohibition_sign(
+    content: str = typer.Argument(..., help="Exact prohibition content to sign"),
+    repo: str = typer.Option(..., "--repo", help="Exact repository ID"),
+    evidence: List[str] = typer.Option(
+        ..., "--evidence", help="Repeat EVIDENCE_ID=CONTENT_HASH for every evidence item"
+    ),
+    key_id: str = typer.Option(..., "--key-id", help="Public authority key identifier"),
+    private_key_file: Path = typer.Option(
+        ...,
+        "--private-key-file",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="File containing exactly one base64 raw 32-byte Ed25519 private key",
+    ),
+    nonce: str = typer.Option(..., "--nonce", help="Unique authority nonce"),
+    issued_at: str = typer.Option(..., "--issued-at", help="Signing timestamp"),
+    environment: List[str] = typer.Option(
+        None, "--environment", help="Repeat for every exact environment scope value"
+    ),
+    task_type: List[str] = typer.Option(
+        None, "--task-type", help="Repeat for every exact task scope value"
+    ),
+    valid_from: Optional[str] = typer.Option(None, "--valid-from"),
+    valid_to: Optional[str] = typer.Option(None, "--valid-to"),
+    not_before: Optional[str] = typer.Option(None, "--not-before"),
+    replaces_belief_id: Optional[str] = typer.Option(
+        None, "--replaces-belief-id"
+    ),
+):
+    """Create an offline Ed25519 prohibition envelope without opening storage."""
+    claim = build_prohibition_claim(
+        content=content,
+        repo_id=repo,
+        evidence=_claim_evidence(evidence),
+        environment=environment,
+        task_type=task_type,
+        valid_from=valid_from,
+        valid_to=valid_to,
+        replaces_belief_id=replaces_belief_id,
+    )
+    envelope = sign_prohibition_attestation(
+        claim,
+        key_id=key_id,
+        private_key=private_key_file.read_text(encoding="utf-8").strip(),
+        nonce=nonce,
+        issued_at=issued_at,
+        not_before=not_before,
+    )
+    typer.echo(envelope)
 
 
 @app.command()

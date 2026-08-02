@@ -5,12 +5,16 @@ These tests verify that CLI commands work end-to-end and catch regressions
 that unit tests might miss (e.g., parameter mismatches between layers).
 """
 
+import base64
+import hashlib
 import json
 import re
 import tempfile
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from typer.testing import CliRunner
 
 from visp_memory.interfaces.cli import app
@@ -117,10 +121,103 @@ class TestCLIBasicCommands:
         runner.invoke(app, ["init", "--type", "code"])
 
         result = runner.invoke(
-            app, ["learn", "Always use prepared statements", "--category", "invariant"]
+            app, ["learn", "Always use prepared statements", "--category", "procedure"]
         )
         assert result.exit_code == 0
         assert "Established" in result.output
+
+    def test_learn_accepts_only_governed_types_and_forwards_attestation_file(
+        self, cli_env, monkeypatch
+    ):
+        import visp_memory.interfaces.cli as cli_module
+
+        captured = {}
+
+        class FakeMemory:
+            def learn(self, knowledge, **kwargs):
+                captured.update({"knowledge": knowledge, **kwargs})
+                return "belief-1"
+
+        monkeypatch.setattr(cli_module, "get_memory", lambda: FakeMemory())
+        attestation_path = cli_env / "attestation.json"
+        attestation_path.write_text("opaque-attestation", encoding="utf-8")
+
+        accepted = runner.invoke(
+            app,
+            [
+                "learn",
+                "Never bypass review",
+                "--category",
+                "prohibition",
+                "--authority-attestation-file",
+                str(attestation_path),
+            ],
+        )
+        rejected = runner.invoke(
+            app, ["learn", "Legacy category", "--category", "invariant"]
+        )
+
+        assert accepted.exit_code == 0
+        assert captured["category"].value == "prohibition"
+        assert captured["authority_attestation"] == "opaque-attestation"
+        assert rejected.exit_code != 0
+
+    def test_offline_prohibition_signer_outputs_only_envelope_without_storage(
+        self, cli_env, monkeypatch
+    ):
+        import visp_memory.interfaces.cli as cli_module
+
+        monkeypatch.setattr(
+            cli_module,
+            "get_memory",
+            lambda: pytest.fail("offline signer must not initialize memory"),
+        )
+        private_key = Ed25519PrivateKey.generate().private_bytes(
+            serialization.Encoding.Raw,
+            serialization.PrivateFormat.Raw,
+            serialization.NoEncryption(),
+        )
+        private_key_path = cli_env / "authority.key"
+        private_key_path.write_text(
+            base64.b64encode(private_key).decode("ascii"), encoding="utf-8"
+        )
+        evidence_hash = hashlib.sha256(b"Observed rule").hexdigest()
+
+        result = runner.invoke(
+            app,
+            [
+                "prohibition-sign",
+                "Never bypass review",
+                "--repo",
+                "repo-a",
+                "--evidence",
+                f"evidence-1={evidence_hash}",
+                "--environment",
+                "prod",
+                "--task-type",
+                "deploy",
+                "--key-id",
+                "owner-2026",
+                "--private-key-file",
+                str(private_key_path),
+                "--nonce",
+                "nonce-1",
+                "--issued-at",
+                "2026-08-02T06:00:00+00:00",
+            ],
+        )
+
+        assert result.exit_code == 0
+        envelope = json.loads(result.output)
+        assert result.output.strip() == json.dumps(
+            envelope, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        )
+        assert envelope["claim"]["evidence"] == [
+            {"id": "evidence-1", "content_hash": evidence_hash}
+        ]
+        assert envelope["claim"]["environment"] == ["prod"]
+        assert envelope["claim"]["task_type"] == ["deploy"]
+        assert not (cli_env / "visp-memory.yaml").exists()
 
     def test_human_write_commands_assign_authored_provenance(self, cli_env):
         runner.invoke(app, ["init", "--type", "code"])

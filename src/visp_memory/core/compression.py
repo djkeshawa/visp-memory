@@ -14,6 +14,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
+from visp_memory.core.beliefs import map_producer_belief_type
 from visp_memory.core.clock import utc_now
 from visp_memory.core.eligibility import normalize_optional_scope_values, require_repo_id
 from visp_memory.core.ranking import projected_importance
@@ -152,6 +153,8 @@ class MemoryCompressor:
         if not category:
             categories = [ep.get("category") for ep in episodes if ep.get("category")]
             category = max(set(categories), key=categories.count) if categories else "pattern"
+        legacy_category = str(category)
+        category = map_producer_belief_type(legacy_category)
 
         # Collect tags
         all_tags = set()
@@ -180,6 +183,7 @@ class MemoryCompressor:
                 "compressed_at": utc_now().isoformat(),
                 "token_savings": savings.as_dict(),
                 "write_channel": write_channel.value,
+                "legacy_category": legacy_category,
                 **inherited_scope,
             },
             source_ids=source_ids,
@@ -381,7 +385,7 @@ class MemoryCompressor:
             content=compressed,
             layer="semantic",
             repo_id=repo_id,
-            category="principle",
+            category="procedure",
             importance=importance,
             tags=with_channel_provenance(
                 ["compressed", "principle"], write_channel
@@ -392,6 +396,7 @@ class MemoryCompressor:
                 "compressed_at": utc_now().isoformat(),
                 "token_savings": savings.as_dict(),
                 "write_channel": write_channel.value,
+                "legacy_category": "principle",
                 **inherited_scope,
             },
             source_ids=source_ids,

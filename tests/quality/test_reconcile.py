@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from visp_memory import Memory, MemoryConfig
+from visp_memory.quality.conflict import ConflictVerdict
 from visp_memory.quality.reconcile import Reconciler, content_overlap
 
 
@@ -101,12 +102,14 @@ class TestSupersession:
     def test_confirmed_conflict_supersedes_old_memory(self, memory, monkeypatch):
         old_id = memory.learn("The API rate limit is 100 requests per minute")
 
-        def fake_conflict(content, layer="semantic"):
-            return {
-                "conflict": True,
-                "reason": "Rate limit changed",
-                "conflicting_ids": [old_id],
-            }
+        def fake_conflict(content, layer="semantic", repo_id=None):
+            return ConflictVerdict.found(
+                {
+                    "conflict": True,
+                    "reason": "Rate limit changed",
+                    "conflicting_ids": [old_id],
+                }
+            )
 
         monkeypatch.setattr(memory, "check_conflict", fake_conflict)
         new_id = memory.learn("The API rate limit is 500 requests per minute")
@@ -135,11 +138,13 @@ class TestSupersession:
         monkeypatch.setattr(
             memory,
             "check_conflict",
-            lambda content, layer="semantic": {
-                "conflict": True,
-                "reason": "changed",
-                "conflicting_ids": [old_id],
-            },
+            lambda content, layer="semantic", repo_id=None: ConflictVerdict.found(
+                {
+                    "conflict": True,
+                    "reason": "changed",
+                    "conflicting_ids": [old_id],
+                }
+            ),
         )
         memory.learn("Sessions expire after 8 hours")
 

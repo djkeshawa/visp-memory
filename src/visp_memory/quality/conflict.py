@@ -5,12 +5,49 @@ Identifies and resolves conflicting information in memories.
 """
 
 import logging
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from visp_memory.core.llm import LLMClient, create_llm_client
 from visp_memory.core.storage import BaseStorage
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ConflictVerdict:
+    """What detection concluded, kept distinct from why it concluded nothing.
+
+    ``None`` used to mean three different things — no detector configured, the
+    detector raised, and the detector ran and found nothing. A caller could not
+    tell "all clear" from "I could not check", so an unavailable detector read as
+    a clean bill of health and the write proceeded. That is MG-026.
+
+    ``determined`` says whether detection actually completed. ``conflict`` is the
+    finding when it did. A caller that needs to fail closed checks ``determined``.
+    """
+
+    determined: bool
+    conflict: Optional[Dict[str, Any]] = None
+    reason: Optional[str] = None
+
+    @property
+    def has_conflict(self) -> bool:
+        return self.determined and self.conflict is not None
+
+    @classmethod
+    def clear(cls) -> "ConflictVerdict":
+        """Detection ran and found no contradiction."""
+        return cls(determined=True)
+
+    @classmethod
+    def found(cls, conflict: Dict[str, Any]) -> "ConflictVerdict":
+        return cls(determined=True, conflict=conflict)
+
+    @classmethod
+    def undetermined(cls, reason: str) -> "ConflictVerdict":
+        """Detection could not run or could not complete. Never a clear result."""
+        return cls(determined=False, reason=reason)
 
 
 class ConflictDetector:
@@ -34,7 +71,7 @@ class ConflictDetector:
 
     def detect_conflicts(
         self, new_content: str, relevant_memories: List[Dict[str, Any]]
-    ) -> Optional[Dict[str, Any]]:
+    ) -> ConflictVerdict:
         """
         Check if new content conflicts with existing memories.
 
@@ -43,10 +80,14 @@ class ConflictDetector:
             relevant_memories: List of potentially conflicting existing memories
 
         Returns:
-            Dict describing the conflict if found, else None
+            A ConflictVerdict. Check ``determined`` before trusting the absence
+            of a conflict — an undetermined verdict is not a clear one.
         """
-        if not self.client or not relevant_memories:
-            return None
+        # Nothing to contradict is a real answer; no detector is not.
+        if not relevant_memories:
+            return ConflictVerdict.clear()
+        if not self.client:
+            return ConflictVerdict.undetermined("no conflict detector is configured")
 
         mem_text = "\n".join([f"- [{m['id']}] {m['content']}" for m in relevant_memories])
 
@@ -77,14 +118,16 @@ If no, return JSON: {{"conflict": false}}
             result = json.loads(clean)
 
             if result.get("conflict"):
-                return result
-            return None
+                return ConflictVerdict.found(result)
+            return ConflictVerdict.clear()
 
         except Exception as e:
-            # Don't let LLM/parse failures pass silently; keep returning None
-            # (behavior unchanged) but make the failure observable.
+            # A detector that raised did not clear the content. Reporting this as
+            # "no conflict" is how contradictory knowledge used to get written
+            # whenever the model was slow, rate-limited, or returned malformed
+            # JSON — the failure was logged, and the write proceeded anyway.
             logger.warning("Conflict detection failed: %s", e)
-            return None
+            return ConflictVerdict.undetermined(f"conflict detection failed: {e}")
 
     def scan_all(self, layer: str = "semantic", sample_size: int = 50) -> List[Dict[str, Any]]:
         """

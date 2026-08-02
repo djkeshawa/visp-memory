@@ -1,10 +1,20 @@
+import base64
 import json
+from datetime import datetime, timezone
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from visp_memory import Memory
 from visp_memory.config import MemoryConfig
 from visp_memory.core.arcadedb_storage import ArcadeDbStorage
+from visp_memory.core.authority import (
+    PROHIBITION_AUTHORITY_KEYS_ENV,
+    ProhibitionAuthorityError,
+    build_prohibition_claim,
+    sign_prohibition_attestation,
+)
 from visp_memory.core.remote_storage import RemoteStorage
 from visp_memory.core.storage import (
     UNSCOPED_REPO_ID,
@@ -54,10 +64,12 @@ def test_export_import_round_trips_evidence_lineage_lifecycle_and_graph(tmp_path
     export_file = tmp_path / "memory-graph.json"
     exported = source.export(export_file)
 
-    assert exported["version"] == "2.0"
+    assert exported["version"] == "3.0"
     assert exported["evidence"]
     assert relationship_id in {item["id"] for item in exported["relationships"]}
     assert exported["memories"]["semantic"][0]["evidence_ids"]
+    assert exported["memories"]["semantic"][0]["belief_type"] == "fact"
+    assert exported["memories"]["semantic"][0]["epistemic_status"] == "inferred"
 
     target = _memory(tmp_path, "target")
     target.import_memories(export_file)
@@ -86,6 +98,117 @@ def test_export_import_round_trips_evidence_lineage_lifecycle_and_graph(tmp_path
         item["id"] for item in exported["evidence"]
     }
     assert len(target._storage.get_active_intents("repo-a", status="all")) == 1
+
+
+def test_format3_round_trips_complete_prohibition_authority_graph(
+    tmp_path, monkeypatch
+):
+    now = datetime(2026, 8, 2, 6, tzinfo=timezone.utc)
+    private_key = Ed25519PrivateKey.generate()
+    private_raw = private_key.private_bytes(
+        serialization.Encoding.Raw,
+        serialization.PrivateFormat.Raw,
+        serialization.NoEncryption(),
+    )
+    public_raw = private_key.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    monkeypatch.setenv(
+        PROHIBITION_AUTHORITY_KEYS_ENV,
+        json.dumps({"owner-2026": base64.b64encode(public_raw).decode("ascii")}),
+    )
+    monkeypatch.setattr("visp_memory.core.authority.utc_now", lambda: now)
+    source = _memory(tmp_path, "authority-source")
+    content = "Never bypass review"
+    evidence_id = source._storage.store_evidence(content, repo_id="repo-a")
+    evidence = source._storage.get_evidence(evidence_id)
+    claim = build_prohibition_claim(
+        content=content,
+        repo_id="repo-a",
+        evidence=[{"id": evidence_id, "content_hash": evidence["content_hash"]}],
+    )
+    envelope = sign_prohibition_attestation(
+        claim,
+        key_id="owner-2026",
+        private_key=base64.b64encode(private_raw).decode("ascii"),
+        nonce="portable-nonce",
+        issued_at=now,
+    )
+    belief_id = source._storage.store_memory(
+        content,
+        layer="semantic",
+        category="prohibition",
+        repo_id="repo-a",
+        evidence_ids=[evidence_id],
+        authority_attestation=envelope,
+        memory_id="portable-prohibition",
+        auto_link=False,
+    )
+    export_path = tmp_path / "authority-v3.json"
+    exported = source.export(export_path)
+
+    assert exported["authority_attestations"][0]["envelope"] == envelope
+    assert exported["belief_authority"][0]["belief_id"] == belief_id
+    target = _memory(tmp_path, "authority-target")
+    target.import_memories(export_path)
+    # peek, not get: this asserts on the row rather than recalling it, and a
+    # recall would bump access_count and rewrite accessed_at — which the
+    # re-export below then compares against the original.
+    imported = target._storage.peek_memory(belief_id)
+    assert imported["belief_type"] == "prohibition"
+    assert imported["epistemic_status"] == "observed"
+    assert target._storage.get_authority_attestation(belief_id)["envelope"] == envelope
+    reexported = target.export()
+    for field in (
+        "evidence",
+        "memories",
+        "intents",
+        "relationships",
+        "authority_attestations",
+        "belief_authority",
+    ):
+        assert reexported[field] == exported[field]
+
+    monkeypatch.delenv(PROHIBITION_AUTHORITY_KEYS_ENV)
+    refused = _memory(tmp_path, "authority-no-key")
+    with pytest.raises(ProhibitionAuthorityError, match="public key"):
+        refused.import_memories(export_path)
+    assert refused._storage.list_memories(repo_id="repo-a", status="all") == []
+
+
+def test_format2_semantic_import_is_conservatively_quarantined(tmp_path):
+    target = _memory(tmp_path, "legacy-v2-target")
+    payload = {
+        "version": "2.0",
+        "evidence": [
+            {"id": "legacy-ev", "content": "Legacy instruction", "repo_id": "repo-a"}
+        ],
+        "memories": {
+            "semantic": [
+                {
+                    "id": "legacy-belief",
+                    "content": "Legacy instruction",
+                    "layer": "semantic",
+                    "category": "instruction",
+                    "repo_id": "repo-a",
+                    "evidence_ids": ["legacy-ev"],
+                }
+            ]
+        },
+        "intents": [],
+        "relationships": [],
+    }
+    path = tmp_path / "legacy-v2.json"
+    path.write_text(json.dumps(payload))
+
+    target.import_memories(path)
+
+    belief = target._storage.get_memory("legacy-belief")
+    assert belief["belief_type"] == "hypothesis"
+    assert belief["epistemic_status"] == "hypothesized"
+    assert belief["metadata"]["legacy_category"] == "instruction"
+    assert "legacy_unreviewed" in belief["quality_flags"]
 
 
 def test_default_scope_export_round_trips_a_self_contained_quarantined_graph(tmp_path):
@@ -571,7 +694,7 @@ def test_unknown_explicit_export_version_refuses_before_local_write(tmp_path):
     import_path.write_text(
         json.dumps(
             {
-                "version": "3.0",
+                "version": "4.0",
                 "memories": {
                     "episodic": [{"content": "Must not be written"}],
                     "semantic": [],

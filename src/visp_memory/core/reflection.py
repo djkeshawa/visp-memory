@@ -120,11 +120,12 @@ class ReflectionEngine:
             "derived_at": utc_now_iso(),
             "derived_by": actor_id,
             "write_channel": write_channel.value,
+            "legacy_category": "runbook",
         }
         memory_id = self.storage.store_memory(
             content,
             layer="semantic",
-            category="runbook",
+            category="procedure",
             repo_id=repo_id,
             source_ids=[memory["id"] for memory in evidence],
             metadata=metadata,

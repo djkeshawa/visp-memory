@@ -441,7 +441,7 @@ def test_neo4j_current_marker_memory_node_refuses_before_indexes_and_closes_driv
 ):
     driver = FakeDriver(0)
     driver.session_obj.query_results["MATCH (v:SchemaVersion"] = lambda _params: (
-        FakeResult(records=[{"version": 3}])
+        FakeResult(records=[{"version": 4}])
     )
     driver.session_obj.query_results["MATCH (m:Memory)"] = lambda _params: FakeResult(
         records=[{"id": "legacy-memory"}]
@@ -466,7 +466,7 @@ def test_neo4j_current_marker_memory_node_refuses_before_indexes_and_closes_driv
 def test_neo4j_current_marker_empty_memory_graph_proceeds_to_indexes(monkeypatch):
     driver = FakeDriver(0)
     driver.session_obj.query_results["MATCH (v:SchemaVersion"] = lambda _params: (
-        FakeResult(records=[{"version": 3}])
+        FakeResult(records=[{"version": 4}])
     )
     driver.session_obj.query_results["MATCH (m:Memory)"] = lambda _params: FakeResult(
         records=[]
@@ -482,6 +482,25 @@ def test_neo4j_current_marker_empty_memory_graph_proceeds_to_indexes(monkeypatch
     assert driver.close_calls == 0
     storage.close()
     assert driver.close_calls == 1
+
+
+def test_neo4j_v3_marker_refuses_before_indexes(monkeypatch):
+    driver = FakeDriver(0)
+    driver.session_obj.query_results["MATCH (v:SchemaVersion"] = lambda _params: (
+        FakeResult(records=[{"version": 3}])
+    )
+    monkeypatch.setattr(
+        "visp_memory.core.neo4j_storage.GraphDatabase",
+        SimpleNamespace(driver=lambda *_args, **_kwargs: driver),
+    )
+
+    with pytest.raises(StorageMigrationRequired, match="schema migration"):
+        Neo4jStorage(uri="bolt://example", user="neo4j", password="secret")
+
+    assert not any(
+        query.lstrip().startswith(("CREATE", "MERGE", "SET"))
+        for query, _ in driver.session_obj.calls
+    )
 
 
 def test_neo4j_store_memory_accepts_intent_layer():

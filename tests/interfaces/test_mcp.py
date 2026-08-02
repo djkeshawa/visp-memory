@@ -35,6 +35,70 @@ class TestMCPServer:
             pytest.skip("MCP not installed")
 
     @pytest.mark.asyncio
+    async def test_mcp_learn_schema_is_closed_and_has_no_signing_surface(
+        self, tmp_path, monkeypatch
+    ):
+        from mcp.types import ListToolsRequest
+
+        from visp_memory.interfaces.mcp import MCP_AVAILABLE, create_mcp_server
+
+        if not MCP_AVAILABLE:
+            pytest.skip("MCP not installed")
+        config = MemoryConfig()
+        config.storage.data_dir = tmp_path
+        config.embedding.provider = "noop"
+        memory = Memory(config=config)
+        monkeypatch.setenv("VISP_MEMORY_MCP_PROFILE", "full")
+        with mock.patch("visp_memory.interfaces.mcp.Memory", return_value=memory):
+            server = create_mcp_server()
+        response = await server.request_handlers[ListToolsRequest](ListToolsRequest())
+        tools = {tool.name: tool for tool in response.root.tools}
+        properties = tools["memory_learn"].inputSchema["properties"]
+
+        assert properties["category"]["enum"] == [
+            "fact",
+            "preference",
+            "procedure",
+            "prohibition",
+            "hypothesis",
+            "negative",
+        ]
+        assert "epistemic_status" not in properties
+        assert properties["authority_attestation"]["type"] == "string"
+        assert not any("sign" in name or "attest" in name for name in tools)
+
+    @pytest.mark.asyncio
+    async def test_mcp_learn_forwards_only_opaque_attestation_and_refuses_status(self):
+        from visp_memory.interfaces.mcp import handle_tool
+
+        captured = {}
+
+        class FakeMemory:
+            def learn(self, knowledge, **kwargs):
+                captured.update({"knowledge": knowledge, **kwargs})
+                return "belief-1"
+
+        result = await handle_tool(
+            "memory_learn",
+            {
+                "knowledge": "Never bypass review",
+                "category": "prohibition",
+                "authority_attestation": "opaque-attestation",
+            },
+            FakeMemory(),
+        )
+
+        assert "belief-1" in result
+        assert captured["authority_attestation"] == "opaque-attestation"
+        assert "epistemic_status" not in captured
+        with pytest.raises(ValueError, match="epistemic"):
+            await handle_tool(
+                "memory_learn",
+                {"knowledge": "Fact", "epistemic_status": "observed"},
+                FakeMemory(),
+            )
+
+    @pytest.mark.asyncio
     async def test_guarded_tools_advertise_string_or_array_runtime_scope(
         self, tmp_path, monkeypatch
     ):
@@ -105,7 +169,7 @@ class TestMCPServer:
                 memory._storage.store_memory(
                     content,
                     layer="semantic",
-                    category="convention",
+                    category="preference",
                     repo_id="repo-a",
                     tags=[provenance_tag(tier)],
                     auto_link=False,

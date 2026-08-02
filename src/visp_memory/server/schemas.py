@@ -5,8 +5,13 @@ Pydantic schemas for the Memory Server API.
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
+from visp_memory.core.beliefs import (
+    BeliefType,
+    EpistemicStatus,
+    normalize_belief_type,
+)
 from visp_memory.core.eligibility import normalize_scope_values
 from visp_memory.core.ranking import DEFAULT_RECALL_MIN_SCORE
 
@@ -34,7 +39,11 @@ class ScopedRequest(BaseModel):
 class MemoryCreate(ScopedRequest):
     content: str = Field(min_length=1)
     layer: MemoryLayer = "episodic"
-    category: str = "note"
+    category: Optional[str] = None
+    authority_attestation: Optional[str] = Field(
+        default=None,
+        description="Opaque signed authority candidate for a prohibition belief.",
+    )
     importance: float = Field(default=0.5, ge=0.0, le=1.0)
     repo_id: Optional[str] = None
     tags: List[str] = Field(
@@ -71,12 +80,33 @@ class MemoryCreate(ScopedRequest):
     pinned: bool = False
     hold: bool = False
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_caller_selected_initial_epistemic_status(cls, value):
+        if isinstance(value, dict) and "epistemic_status" in value:
+            raise ValueError(
+                "initial epistemic status is assigned by the memory service"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def validate_semantic_vocabulary(self):
+        if self.layer == "semantic":
+            self.category = normalize_belief_type(
+                self.category or BeliefType.FACT.value
+            )
+        else:
+            self.category = self.category or "note"
+        return self
+
 
 class MemoryResponse(BaseModel):
     id: str
     content: str
     layer: str
     category: str
+    belief_type: Optional[BeliefType] = None
+    epistemic_status: Optional[EpistemicStatus] = None
     importance: float = 0.5
     repo_id: Optional[str] = None
     tags: List[str] = Field(default_factory=list)

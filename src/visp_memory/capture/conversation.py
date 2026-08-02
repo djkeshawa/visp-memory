@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from visp_memory.capture.git import CaptureManifest, capture_content_hash
+from visp_memory.core.beliefs import map_producer_belief_type
 from visp_memory.core.llm import LLMClient, create_llm_client
 from visp_memory.core.memory import Memory
 from visp_memory.core.trust import Provenance, WriteChannel
@@ -143,11 +144,13 @@ If nothing relevant is found for a category, return an empty list.
                 output_memory_ids.append(str(memory_id))
 
             for learning in data.get("learnings", []):
+                legacy_category = learning.get("category", "fact")
                 memory_id = self.memory.learn(
                     knowledge=learning["knowledge"],
-                    category=learning.get("category", "fact"),
+                    category=map_producer_belief_type(legacy_category),
                     importance=learning.get("importance", 0.5),
                     repo_id=repo_id,
+                    tags=[f"legacy_category:{legacy_category}"],
                     _write_channel=WriteChannel.CONVERSATION,
                 )
                 output_memory_ids.append(str(memory_id))

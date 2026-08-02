@@ -266,7 +266,7 @@ class ProactiveRecall:
         similar_issues = self._trusted(
             self.memory.semantic.search(
                 query=query,
-                category="known_issue",
+                category="negative",
                 limit=limit,
                 repo_id=repo_id,
                 **self._runtime_scope(),
@@ -360,7 +360,7 @@ class ProactiveRecall:
         pattern_results = self._trusted(
             self.memory.semantic.search(
                 query=dir_path,
-                category="pattern",
+                category="procedure",
                 limit=10,
                 repo_id=repo_id,
                 **self._runtime_scope(),
@@ -530,7 +530,7 @@ class ProactiveRecall:
             layer = result.get("layer", "")
             category = result.get("category", "")
 
-            if category in ["fragile_area", "known_issue"]:
+            if category == "negative":
                 results["warnings"].append(result)
             elif layer == "semantic":
                 results["knowledge"].append(result)
@@ -540,7 +540,7 @@ class ProactiveRecall:
         # Search for patterns
         pattern_results = self.memory.semantic.search(
             query=task_description,
-            category="pattern",
+            category="procedure",
             limit=5,
             repo_id=self.repo_id,
             **self._runtime_scope(),

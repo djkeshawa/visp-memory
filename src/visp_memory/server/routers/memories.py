@@ -4,6 +4,7 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from visp_memory.config import load_config
+from visp_memory.core.authority import ProhibitionAuthorityError
 from visp_memory.core.clock import utc_now
 from visp_memory.core.eligibility import (
     filter_recall_eligible,
@@ -99,6 +100,8 @@ def _memory_response_payload(memory: dict):
         "content": memory["content"],
         "layer": memory["layer"],
         "category": memory["category"],
+        "belief_type": memory.get("belief_type"),
+        "epistemic_status": memory.get("epistemic_status"),
         "repo_id": memory.get("repo_id"),
         "importance": memory.get("importance", 0.5),
         "tags": memory.get("tags", []),
@@ -269,9 +272,14 @@ async def create_memory(
             source_ids=memory.source_ids,
             evidence_ids=memory.evidence_ids,
             status=memory.status,
+            authority_attestation=memory.authority_attestation,
             source=http_policy.source,
             quality_flags=memory.quality_flags,
         )
+    except ProhibitionAuthorityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
     except EvidenceReferenceError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except EvidenceUnsupportedError as exc:

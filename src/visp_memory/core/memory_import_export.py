@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Dict
 
 from visp_memory.capture.git import CaptureManifest
-from visp_memory.core.clock import utc_now
+from visp_memory.core.beliefs import migrate_legacy_belief_fields
+from visp_memory.core.clock import parse_utc, utc_now
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID
 from visp_memory.core.storage import EvidenceUnsupportedError
 from visp_memory.core.trust import WriteChannel, channel_policy, with_channel_provenance
@@ -36,7 +40,8 @@ def _scrub_memory_vectors(item: Dict[str, Any]) -> Dict[str, Any]:
     return {
         key: value
         for key, value in item.items()
-        if key != "embedding" and not key.startswith("embedding_")
+        if key not in {"embedding", "authority_attestation"}
+        and not key.startswith("embedding_")
     }
 
 
@@ -61,8 +66,61 @@ def export_memory(memory: Any, path: Path = None) -> Dict[str, Any]:
         )
     repo_id = memory.config.repo_id or UNSCOPED_REPO_ID
 
+    exported_memories = {
+        layer: _complete_export_page(
+            [
+                _scrub_memory_vectors(item)
+                for item in memory._storage.list_memories(
+                    layer=layer,
+                    limit=_MAX_GRAPH_EXPORT_ITEMS + 1,
+                    repo_id=repo_id,
+                    status="all",
+                    order_by="created_at ASC",
+                )
+            ],
+            f"{layer} memory",
+        )
+        for layer in ("raw", "episodic", "semantic", "intent")
+    }
+    authority_attestations = []
+    belief_authority = []
+    get_attestation = getattr(memory._storage, "get_authority_attestation", None)
+    for belief in exported_memories["semantic"]:
+        attestation = get_attestation(belief["id"]) if get_attestation else None
+        if attestation is None:
+            # peek, not get: exporting is not a recall, and counting it as one
+            # made the export mutate the rows it was serialising.
+            peek = getattr(memory._storage, "peek_memory", None)
+            source = (
+                peek(belief["id"]) if peek else memory._storage.get_memory(belief["id"])
+            )
+            envelope = (source or {}).get("authority_attestation")
+            if envelope:
+                parsed = json.loads(envelope)
+                attestation = {
+                    "digest": hashlib.sha256(envelope.encode("utf-8")).hexdigest(),
+                    "belief_id": belief["id"],
+                    "key_id": parsed.get("key_id"),
+                    "nonce": parsed.get("nonce"),
+                    "envelope": envelope,
+                    "created_at": belief.get("created_at"),
+                }
+        if attestation is None:
+            continue
+        attestation = dict(attestation)
+        attestation_id = f"att-{attestation['digest']}"
+        authority_attestations.append({"id": attestation_id, **attestation})
+        belief_authority.append(
+            {
+                "id": f"ba-{belief['id']}-{attestation_id}",
+                "belief_id": belief["id"],
+                "attestation_id": attestation_id,
+                "created_at": attestation.get("created_at"),
+            }
+        )
+
     export_data = {
-        "version": "2.0",
+        "version": "3.0",
         "exported_at": utc_now().isoformat(),
         "config": _redact_config_secrets(memory.config.model_dump()),
         "evidence": _complete_export_page(
@@ -71,22 +129,11 @@ def export_memory(memory: Any, path: Path = None) -> Dict[str, Any]:
             ),
             "Evidence",
         ),
-        "memories": {
-            layer: _complete_export_page(
-                [
-                    _scrub_memory_vectors(item)
-                    for item in memory._storage.list_memories(
-                        layer=layer,
-                        limit=_MAX_GRAPH_EXPORT_ITEMS + 1,
-                        repo_id=repo_id,
-                        status="all",
-                        order_by="created_at ASC",
-                    )
-                ],
-                f"{layer} memory",
-            )
-            for layer in ("raw", "episodic", "semantic", "intent")
-        },
+        "memories": exported_memories,
+        "authority_attestations": sorted(
+            authority_attestations, key=lambda item: item["id"]
+        ),
+        "belief_authority": sorted(belief_authority, key=lambda item: item["id"]),
         "intents": _complete_export_page(
             memory._storage.get_active_intents(repo_id=repo_id, status="all"),
             "intent",
@@ -177,10 +224,10 @@ def import_memories(memory: Any, path: Path) -> None:
     """Import memories from a JSON export into a Memory instance."""
     data = _validate_import_data(json.loads(Path(path).read_text(encoding="utf-8")))
     version = data.get("version")
-    if version not in (None, "1.0", "2.0"):
+    if version not in (None, "1.0", "2.0", "3.0"):
         raise ValueError(f"Unsupported memory export version: {version!r}")
 
-    if version == "2.0":
+    if version in {"2.0", "3.0"}:
         if not memory._storage.get_capabilities().atomic_graph_import:
             raise EvidenceUnsupportedError(
                 f"{memory._storage.__class__.__name__} does not support atomic graph import"
@@ -190,6 +237,8 @@ def import_memories(memory: Any, path: Path) -> None:
             raise ValueError(
                 f"{memory._storage.__class__.__name__} cannot atomically import schema-v3 graphs"
             )
+        if version == "2.0":
+            data = _quarantine_format2_graph(data)
         result = import_graph(data, default_repo_id=memory.config.repo_id)
         if data.get("capture_manifest"):
             CaptureManifest(memory).replace(data["capture_manifest"])
@@ -245,3 +294,37 @@ def import_memories(memory: Any, path: Path) -> None:
 
     if data.get("capture_manifest"):
         CaptureManifest(memory).replace(data["capture_manifest"])
+
+
+def _quarantine_format2_graph(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Conservatively add governed fields to a format-2 graph."""
+    transformed = copy.deepcopy(data)
+    transformed["version"] = "3.0"
+    transformed["_legacy_format2"] = True
+    transformed.setdefault("authority_attestations", [])
+    transformed.setdefault("belief_authority", [])
+    exported_at = parse_utc(transformed.get("exported_at"))
+    fallback_created_at = exported_at or parse_utc("1970-01-01T00:00:00+00:00")
+    for item in (transformed.get("memories") or {}).get("semantic", []):
+        legacy_category = item.get("category")
+        belief_type, epistemic_status = migrate_legacy_belief_fields(
+            legacy_category, item.get("status")
+        )
+        item["category"] = belief_type
+        item["belief_type"] = belief_type
+        item["epistemic_status"] = epistemic_status
+        item["source"] = "unknown"
+        item["quality_flags"] = list(
+            dict.fromkeys([*(item.get("quality_flags") or []), "legacy_unreviewed"])
+        )
+        item["metadata"] = {
+            **(item.get("metadata") or {}),
+            "legacy_category": legacy_category,
+        }
+        if belief_type == "hypothesis":
+            created_at = parse_utc(item.get("created_at")) or fallback_created_at
+            item["created_at"] = created_at.isoformat()
+            item["metadata"]["valid_to"] = (
+                created_at + timedelta(days=7)
+            ).isoformat()
+    return transformed
