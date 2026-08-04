@@ -148,9 +148,22 @@ VALID_MCP_PROFILES = frozenset({"core", "full", "readonly"})
 
 
 def _resolve_tool_profile() -> str:
-    """Return the configured MCP tool profile ("core" or "full")."""
-    profile = os.environ.get("VISP_MEMORY_MCP_PROFILE", "core").strip().lower()
-    return profile if profile in VALID_MCP_PROFILES else "core"
+    """Return the configured MCP tool profile ("core", "full" or "readonly")."""
+    raw = os.environ.get("VISP_MEMORY_MCP_PROFILE", "").strip()
+    profile = raw.lower()
+    if profile in VALID_MCP_PROFILES:
+        return profile
+    if raw:
+        # Never fail open in silence. These values gate a restriction: an
+        # operator who types "read-only" intends six read tools and would
+        # otherwise silently receive seventeen, writers included. The typo is
+        # theirs; the silence would have been ours.
+        logger.warning(
+            "VISP_MEMORY_MCP_PROFILE=%r is not a recognised profile (%s); using 'core' instead.",
+            raw,
+            ", ".join(sorted(VALID_MCP_PROFILES)),
+        )
+    return "core"
 
 
 def _profile_tool_names(profile: str, all_names: frozenset[str]) -> frozenset[str]:

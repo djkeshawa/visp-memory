@@ -2879,7 +2879,9 @@ def _contract_failure(reason: str) -> dict:
 @contract_app.command("recall")
 def contract_recall(
     query: str = typer.Argument(..., help="What to look for."),
-    repo: str = typer.Option(None, "--repo", help="Repository scope."),
+    repo: str = typer.Option(
+        None, "--repo", help="Repository scope (required unless configured in the project)."
+    ),
     endpoint: str = typer.Option(
         None, "--endpoint", help="Accepted for forward compatibility; local config wins."
     ),
@@ -2924,7 +2926,9 @@ def contract_recall(
 @contract_app.command("propose")
 def contract_propose(
     content: str = typer.Argument(..., help="What should be remembered."),
-    repo: str = typer.Option(None, "--repo", help="Repository scope."),
+    repo: str = typer.Option(
+        None, "--repo", help="Repository scope (required unless configured in the project)."
+    ),
     endpoint: str = typer.Option(
         None, "--endpoint", help="Accepted for forward compatibility; local config wins."
     ),
@@ -2943,9 +2947,14 @@ def contract_propose(
         # The proposal enters the reviewed lifecycle, not active service:
         # recall serves status="active" only, so a quarantined row is invisible
         # until a human resolution activates it.
-        quarantined = memory._storage.update_memory(
-            memory_id, status="quarantined", epistemic_status="hypothesized"
-        )
+        #
+        # ONLY status is set. Setting epistemic_status here was a defect that
+        # bricked the whole store: `record` writes a non-semantic row, and the
+        # storage integrity check refuses any non-semantic row carrying semantic
+        # belief fields — so every SUBSEQUENT read of the database failed, not
+        # just this one. Quarantine is a lifecycle state; epistemic status
+        # belongs to the semantic layer and this row is not entitled to it.
+        quarantined = memory._storage.update_memory(memory_id, status="quarantined")
         if not quarantined:
             _contract_print(
                 _contract_failure(
@@ -2960,11 +2969,24 @@ def contract_propose(
         _contract_print(_contract_failure(f"propose failed: {exc}"))
         raise typer.Exit(1)
 
+    # Disclose the state rather than implying durability. The proposal is real
+    # and stored, but NO command this CLI exposes can accept it, so `recall`
+    # will never return it. Reporting a bare success with an id invited an
+    # integrator to build a pipeline that stores nothing; saying so plainly is
+    # the honest minimum until the acceptance path exists.
     _contract_print(
         {
             "contractVersion": MEMORY_CONTRACT_VERSION,
             "success": True,
             "proposalId": memory_id,
+            "status": "quarantined",
+            "durable": False,
+            "note": (
+                "Stored as a quarantined proposal. It is NOT retrievable by "
+                "`contract recall`, which serves active memories only. No CLI "
+                "command currently accepts a proposal, so this content stays "
+                "invisible until the reviewed lifecycle is implemented."
+            ),
         }
     )
 
