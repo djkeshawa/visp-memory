@@ -11,7 +11,25 @@ UNSCOPED_REPO_ID = "__visp_unscoped__"
 
 
 def require_repo_id(repo_id: Any) -> str:
-    """Return a normalized repository scope or refuse an implicit global read."""
+    """Return a normalized repository scope or refuse an implicit global read.
+
+    UNSCOPED_REPO_ID is refused ON PURPOSE, and the refusal is load-bearing: it
+    is the quarantine that keeps rows of unknown provenance out of every recall.
+    Rows land there two ways — `_migrate_v2_to_v3` stamps it onto data written
+    before repository scoping existed, and an unscoped write falls back to it in
+    `store_memory`. Both carry Provenance.UNKNOWN, and neither may be surfaced
+    to a model as though it were trusted project knowledge. See
+    tests/core/test_evidence_contract.py, which pins exactly that.
+
+    So do NOT "fix" this by teaching recall to serve the bucket, or by having
+    import re-scope those rows into a real project. That is not recovering data,
+    it is laundering unattributed content into the trusted set.
+
+    What was genuinely broken was the SURFACE, not this rule: `visp-memory
+    record` in a project without a scope reported "Recorded:" and printed an ID
+    for a row it had just quarantined, and the later recall answered with an
+    unhandled traceback. Both are fixed where they belong, in the CLI.
+    """
     if not isinstance(repo_id, str) or not repo_id.strip():
         raise ValueError("repo_id is required")
     normalized = repo_id.strip()

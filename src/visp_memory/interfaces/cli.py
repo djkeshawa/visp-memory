@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 import typer
+from typer.core import TyperGroup
 from rich.console import Console, Group
 from rich.layout import Layout
 from rich.markdown import Markdown
@@ -37,14 +38,46 @@ from visp_memory.core.authority import (
 )
 from visp_memory.core.beliefs import BeliefType
 from visp_memory.core.clock import parse_utc, utc_now
+from visp_memory.core.eligibility import UNSCOPED_REPO_ID
 from visp_memory.core.ranking import projected_importance
 from visp_memory.core.reporting import MemoryIntelligenceReporter
 from visp_memory.core.trust import WriteChannel
 
-app = typer.Typer(
-    name="visp-memory", help="Human-inspired memory system for LLMs", no_args_is_help=True
-)
 console = Console()
+
+
+class _RefusalBoundary(TyperGroup):
+    """Turn a foreseeable input error into a refusal instead of a stack dump.
+
+    `visp-memory recall` used to answer a user who had simply not run `init`
+    with a full Rich traceback: source lines, frames, and every local variable
+    in scope — including the entire Memory object. That is not a debugging aid
+    for the person on the other end, it is noise that buries the one sentence
+    they needed, and it prints internal state to whatever the terminal is being
+    logged to.
+
+    A ValueError reaching this point is a refusal the domain has already
+    phrased, so it is shown as one. Set VISP_MEMORY_DEBUG=1 to re-raise and get
+    the traceback back when the cause really is a bug in here rather than a
+    problem with the input.
+    """
+
+    def invoke(self, ctx):
+        try:
+            return super().invoke(ctx)
+        except ValueError as exc:
+            if os.environ.get("VISP_MEMORY_DEBUG"):
+                raise
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
+
+
+app = typer.Typer(
+    name="visp-memory",
+    help="Human-inspired memory system for LLMs",
+    no_args_is_help=True,
+    cls=_RefusalBoundary,
+)
 
 # Global memory instance (lazy loaded)
 _memory: Optional[Memory] = None
@@ -79,8 +112,53 @@ def get_memory() -> Memory:
 
 
 def _repo_scope(memory: Memory, repo: str = None) -> str:
-    """Resolve a CLI repository override against the configured default."""
+    """Resolve a CLI repository override against the configured default.
+
+    Deliberately still returns None when nothing resolves. The `contract`
+    subcommands call this and must answer with a JSON envelope rather than
+    exit, because Hyper parses their stdout against a strict schema — raising
+    here would replace the envelope with a traceback on the channel another
+    product is reading.
+    """
     return repo or memory.config.repo_id
+
+
+def _require_repo_scope(memory: Memory, repo: str = None, *, writing: bool = False) -> str:
+    """Resolve the scope for a human CLI command, or refuse with the repair.
+
+    The domain refuses an unscoped operation with "repo_id is required", which
+    is accurate and useless: it names the field, not the fix. A person who has
+    not run `init` cannot act on it. This adds the two things they can do.
+
+    Reads and writes get different first lines because they have different
+    consequences — saying "this memory would be saved" on a `recall` would be
+    describing something the command was never going to do.
+    """
+    scope = _repo_scope(memory, repo)
+    if isinstance(scope, str) and scope.strip() and scope.strip() != UNSCOPED_REPO_ID:
+        return scope.strip()
+
+    # Naming the reserved bucket is a different mistake from naming nothing, and
+    # telling someone who passed --repo that "no scope is configured" describes
+    # a problem they do not have.
+    if isinstance(scope, str) and scope.strip() == UNSCOPED_REPO_ID:
+        console.print(
+            f"[yellow]{UNSCOPED_REPO_ID} is reserved for quarantined memories of unknown "
+            "origin, and is never searched.[/yellow]"
+        )
+        console.print("Pass [bold]--repo <name>[/bold] with your own project's scope.")
+        raise typer.Exit(1)
+
+    consequence = (
+        "so this memory would be saved where nothing can retrieve it"
+        if writing
+        else "so there is nothing to search"
+    )
+    console.print(f"[yellow]No repository scope is configured, {consequence}.[/yellow]")
+    console.print(
+        "Run [bold]visp-memory init[/bold] in your project, or pass [bold]--repo <name>[/bold]."
+    )
+    raise typer.Exit(1)
 
 
 def _parse_cli_datetime(value: Any) -> datetime:
@@ -614,6 +692,7 @@ def record(
 ):
     """Record an episodic memory (something that happened)."""
     memory = get_memory()
+    repo = _require_repo_scope(memory, repo, writing=True)
     mem_id = memory.record(
         event,
         category=category,
@@ -1020,6 +1099,10 @@ def recall(
 ):
     """Search across all memories."""
     memory = get_memory()
+    # Same refusal as the write side, and for the same reason: "repo_id is
+    # required" names the field rather than the fix, and the person reading it
+    # has no way to know that `init` is what they are missing.
+    repo = _require_repo_scope(memory, repo)
 
     layers = [layer] if layer else None
     results = memory.recall(
