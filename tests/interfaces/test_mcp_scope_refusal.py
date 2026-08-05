@@ -88,6 +88,52 @@ def test_the_reserved_bucket_is_not_an_acceptable_scope():
     assert _refuse_unscoped_write("memory_record", args, _memory(None)) is not None
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool,args",
+    [
+        ("memory_record", {"event": "an episodic event"}),
+        ("memory_decision", {"what": "rotate the keys", "why": "the old one leaked"}),
+        ("memory_learn", {"knowledge": "the retry limit is five"}),
+        ("memory_warn", {"area": "src/auth.py", "warning": "fragile"}),
+        ("memory_issue", {"issue": "login is broken on Safari"}),
+    ],
+)
+async def test_a_configured_scope_is_where_the_write_actually_lands(tool, args):
+    """The guard saying yes is not the same as the write using the scope.
+
+    `memory_issue` calls a LAYER method (semantic.known_issue) while its
+    siblings call FACADE methods (memory.learn, memory.warn). Only the facade
+    consults config.repo_id, so with no explicit repo_id the guard resolved a
+    good scope, allowed the call, and the handler wrote repo_id=None — which
+    storage turned into the quarantine bucket and stamped UNKNOWN. Every known
+    issue recorded through MCP was lost that way, in correctly initialized
+    projects, with the tool reporting success.
+
+    Asserting on the ROW is what catches it. A test that only checked the
+    guard's verdict passed throughout.
+    """
+    from visp_memory.core.trust import Provenance, provenance_of
+    from visp_memory.interfaces.mcp import handle_tool
+
+    memory = _memory("repo-a")
+    await handle_tool(tool, dict(args), memory)
+
+    stored = memory._storage.list_memories(limit=50)
+    assert stored, f"{tool} wrote nothing at all"
+
+    for row in stored:
+        assert row["repo_id"] == "repo-a", (
+            f"{tool} wrote to {row['repo_id']!r} instead of the configured scope 'repo-a'. "
+            "The quarantine bucket is unrecallable, so this content is lost while the tool "
+            "reports success."
+        )
+        assert provenance_of(row) is not Provenance.UNKNOWN, (
+            f"{tool} produced an UNKNOWN-provenance row in a scoped project, which means it "
+            "was quarantined."
+        )
+
+
 def test_read_tools_are_untouched():
     """The guard must not block reads; they refuse on their own terms."""
     for tool in ["memory_recall", "memory_remember", "memory_stats", "memory_context"]:

@@ -3409,6 +3409,15 @@ class LocalStorage(BaseStorage):
         """Set a new intent (goal/direction)."""
         intent_id = self._generate_id(description)
         context = context or {}
+        # Intents must obey the same scope invariant as memories: never NULL.
+        #
+        # `store_memory` has applied this default since the column existed, and
+        # `_migrate_v2_to_v3` explicitly rewrites NULL/empty intent scopes to the
+        # sentinel so the column can be queried uniformly — and then this method
+        # went on inserting NULLs, re-breaking the invariant the migration had
+        # just established. A NULL-scoped intent matches no scoped query at all,
+        # so `visp-memory goal` reported success for a goal nothing could list.
+        repo_id = repo_id or UNSCOPED_REPO_ID
 
         with self._get_db() as conn:
             conn.execute(

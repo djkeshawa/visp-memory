@@ -1930,15 +1930,33 @@ _WRITE_TOOLS = frozenset(
 
 
 def _refuse_unscoped_write(name: str, args: dict[str, Any], memory: Memory) -> str | None:
-    """Refuse a write with no resolvable scope. None means the call may proceed.
+    """Refuse a write with no resolvable scope, and pin the resolved one into args.
 
-    Returns the refusal as ordinary tool text: the caller is a model, and a
-    sentence it can act on beats an exception it has to interpret.
+    Returns the refusal as ordinary tool text — the caller is a model, and a
+    sentence it can act on beats an exception it has to interpret. None means
+    the call may proceed.
+
+    THE INJECTION IS NOT A CONVENIENCE. Checking that a scope resolves is not
+    the same as the write using it, and the gap between those two is a live
+    defect: `memory_issue` calls `memory.semantic.known_issue` — a LAYER method
+    — while its siblings call `memory.learn`/`memory.warn`, which are FACADE
+    methods. The facade applies `config.repo_id`; the layer does not. So with no
+    explicit repo_id the guard resolved a perfectly good scope from config, said
+    yes, and the handler then wrote `repo_id=None`, which `store_memory` turned
+    into the quarantine sentinel and stamped Provenance.UNKNOWN.
+
+    Every known issue recorded through MCP was quarantined that way, in
+    correctly initialized projects, with the tool reporting success.
+
+    Writing the resolved scope back into `args` fixes it for every tool at once
+    rather than for the one that was noticed, which is the same argument that
+    put this guard at the dispatch point instead of in nine handlers.
     """
     if name not in _WRITE_TOOLS:
         return None
     scope = args.get("repo_id") or memory.config.repo_id
     if isinstance(scope, str) and scope.strip() and scope.strip() != UNSCOPED_REPO_ID:
+        args["repo_id"] = scope.strip()
         return None
     return (
         f"Refused: {name} needs a repository scope, and none is configured. Anything written "

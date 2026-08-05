@@ -2,6 +2,7 @@ from typing import Any, Optional
 
 from fastapi import HTTPException, status
 
+from visp_memory.core.eligibility import UNSCOPED_REPO_ID
 from visp_memory.server.auth import UserContext
 
 
@@ -42,6 +43,28 @@ def require_repo_scope_access(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="repo_id is required",
+        )
+
+    # The reserved bucket is not a repository, and this gate only ever checked
+    # for a BLANK scope — so the reserved name, being a perfectly good non-blank
+    # string, walked straight through. What happened next was decided by whether
+    # each individual endpoint happened to call require_repo_id: GET /memories
+    # and GET /graph did not, and served quarantined rows; POST /recall did, and
+    # answered 500. That is not a security model, it is a coincidence.
+    #
+    # Rows land in this bucket carrying Provenance.UNKNOWN, from the v2->v3
+    # migration or from a write that never named a project. Refusing to serve
+    # them is what keeps unattributed content from reaching a model as though it
+    # were project knowledge, and no route may go around it. Refusing writes to
+    # it matters just as much: otherwise a client can deliberately park content
+    # where no recall will ever find it.
+    if repo_id.strip() == UNSCOPED_REPO_ID:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"{UNSCOPED_REPO_ID} is a reserved scope for quarantined memories of unknown "
+                "origin. It cannot be read from or written to. Use your project's repo_id."
+            ),
         )
     if user.auth_type == "pat" and user.repo_ids and repo_id not in user.repo_ids:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")

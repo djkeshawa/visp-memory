@@ -381,12 +381,19 @@ class TestMCPServer:
             assert Provenance.ASSISTED in provenances, (
                 "No MCP write was labelled assisted, so the channel policy is not being applied."
             )
-            # NOTE: `memory_issue` still lands as UNKNOWN because
-            # semantic.known_issue does not apply channel provenance the way
-            # establish() does — the same WriteChannel yields different
-            # provenance depending on which method is called. That inconsistency
-            # is reported separately; it is deliberately NOT asserted as correct
-            # here, because writing it down as expected would bless it.
+            # The earlier note here recorded that `memory_issue` still landed as
+            # UNKNOWN, pending investigation. It was not a provenance-labelling
+            # quirk: `memory_issue` calls the LAYER (semantic.known_issue) while
+            # its siblings call the FACADE (memory.learn/memory.warn), and only
+            # the facade consults config.repo_id. So it wrote repo_id=None,
+            # storage substituted the quarantine sentinel, and the row was
+            # stamped UNKNOWN as a consequence of being quarantined. Every known
+            # issue recorded through MCP was lost that way. The dispatch guard
+            # now pins the resolved scope into args, so no row here is UNKNOWN.
+            assert Provenance.UNKNOWN not in provenances, (
+                "An MCP write was quarantined in a scoped project, so its content is "
+                "unrecallable while the tool reported success."
+            )
         except ImportError:
             pytest.skip("MCP not installed")
 
