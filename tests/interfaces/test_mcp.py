@@ -1,6 +1,7 @@
 import json
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -21,7 +22,9 @@ class TestMCPServer:
                 pytest.skip("MCP not installed")
 
             with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-                config = MemoryConfig()
+                # An MCP server runs against an initialized project, which always has a
+                # repository scope. Without one every write tool is correctly refused.
+                config = MemoryConfig(repo_id="test-repo")
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
                 memory = Memory(config=config)
@@ -44,7 +47,9 @@ class TestMCPServer:
 
         if not MCP_AVAILABLE:
             pytest.skip("MCP not installed")
-        config = MemoryConfig()
+        # An MCP server runs against an initialized project, which always has a
+        # repository scope. Without one every write tool is correctly refused.
+        config = MemoryConfig(repo_id="test-repo")
         config.storage.data_dir = tmp_path
         config.embedding.provider = "noop"
         memory = Memory(config=config)
@@ -74,6 +79,11 @@ class TestMCPServer:
         captured = {}
 
         class FakeMemory:
+            # A real Memory always carries a config, and the write guard
+            # resolves a scope from it. A stub that cannot fail the way the
+            # real object fails is testing a different object.
+            config = SimpleNamespace(repo_id="test-repo")
+
             def learn(self, knowledge, **kwargs):
                 captured.update({"knowledge": knowledge, **kwargs})
                 return "belief-1"
@@ -220,7 +230,9 @@ class TestMCPServer:
             import tempfile
 
             with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-                config = MemoryConfig()
+                # An MCP server runs against an initialized project, which always has a
+                # repository scope. Without one every write tool is correctly refused.
+                config = MemoryConfig(repo_id="test-repo")
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
                 memory = Memory(config=config)
@@ -240,7 +252,9 @@ class TestMCPServer:
                 pytest.skip("MCP not installed")
 
             with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-                config = MemoryConfig()
+                # An MCP server runs against an initialized project, which always has a
+                # repository scope. Without one every write tool is correctly refused.
+                config = MemoryConfig(repo_id="test-repo")
                 config.storage.data_dir = Path(tmpdir)
                 config.repo_id = "brief-repo"
                 config.embedding.provider = "noop"
@@ -292,7 +306,9 @@ class TestMCPServer:
             import tempfile
 
             with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-                config = MemoryConfig()
+                # An MCP server runs against an initialized project, which always has a
+                # repository scope. Without one every write tool is correctly refused.
+                config = MemoryConfig(repo_id="test-repo")
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
                 memory = Memory(config=config)
@@ -314,7 +330,9 @@ class TestMCPServer:
                 pytest.skip("MCP not installed")
 
             with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-                config = MemoryConfig()
+                # An MCP server runs against an initialized project, which always has a
+                # repository scope. Without one every write tool is correctly refused.
+                config = MemoryConfig(repo_id="test-repo")
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
                 memory = Memory(config=config)
@@ -342,7 +360,33 @@ class TestMCPServer:
                 stored = memory._storage.list_memories(limit=100)
 
             assert len(stored) == 9
-            assert {provenance_of(item) for item in stored} == {Provenance.UNKNOWN}
+            provenances = {provenance_of(item) for item in stored}
+
+            # This assertion used to read `== {Provenance.UNKNOWN}`, and it could
+            # never have failed for the reason the test is named for. The fixture
+            # built an UNSCOPED store, where every row is quarantined as UNKNOWN
+            # whatever channel wrote it — so a bug that assigned MCP writes the
+            # wrong provenance would have sailed straight through. Once the
+            # fixture carries a scope (as any real MCP server does), the channel
+            # policy actually takes effect and the durable writes come back
+            # ASSISTED, which is what the test's name claims all along.
+            #
+            # The security property, stated directly: the first call claims
+            # `provenance:authored` in its tags, and that claim must not survive.
+            # A caller does not get to promote its own writes to human-authored.
+            assert Provenance.AUTHORED not in provenances, (
+                "A caller-supplied provenance:authored tag survived an MCP write. "
+                "MCP content would then be indistinguishable from what a human wrote."
+            )
+            assert Provenance.ASSISTED in provenances, (
+                "No MCP write was labelled assisted, so the channel policy is not being applied."
+            )
+            # NOTE: `memory_issue` still lands as UNKNOWN because
+            # semantic.known_issue does not apply channel provenance the way
+            # establish() does — the same WriteChannel yields different
+            # provenance depending on which method is called. That inconsistency
+            # is reported separately; it is deliberately NOT asserted as correct
+            # here, because writing it down as expected would bless it.
         except ImportError:
             pytest.skip("MCP not installed")
 
@@ -398,7 +442,9 @@ class TestMCPServer:
                 pytest.skip("MCP not installed")
 
             with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-                config = MemoryConfig()
+                # An MCP server runs against an initialized project, which always has a
+                # repository scope. Without one every write tool is correctly refused.
+                config = MemoryConfig(repo_id="test-repo")
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
                 memory = Memory(config=config)
@@ -469,7 +515,9 @@ class TestMCPServer:
                 pytest.skip("MCP not installed")
 
             with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-                config = MemoryConfig()
+                # An MCP server runs against an initialized project, which always has a
+                # repository scope. Without one every write tool is correctly refused.
+                config = MemoryConfig(repo_id="test-repo")
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
                 memory = Memory(config=config)
@@ -541,7 +589,9 @@ class TestMCPServer:
                 pytest.skip("MCP not installed")
 
             with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-                config = MemoryConfig()
+                # An MCP server runs against an initialized project, which always has a
+                # repository scope. Without one every write tool is correctly refused.
+                config = MemoryConfig(repo_id="test-repo")
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
                 memory = Memory(config=config)
@@ -731,7 +781,9 @@ class TestMCPToolProfile:
             pytest.skip("MCP not installed")
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-            config = MemoryConfig()
+            # An MCP server runs against an initialized project, which always has a
+            # repository scope. Without one every write tool is correctly refused.
+            config = MemoryConfig(repo_id="test-repo")
             config.storage.data_dir = Path(tmpdir)
             config.embedding.provider = "noop"
             memory = Memory(config=config)
@@ -754,7 +806,9 @@ class TestMCPToolProfile:
                 pytest.skip("MCP not installed")
 
             with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-                config = MemoryConfig()
+                # An MCP server runs against an initialized project, which always has a
+                # repository scope. Without one every write tool is correctly refused.
+                config = MemoryConfig(repo_id="test-repo")
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
                 memory = Memory(config=config)
@@ -779,7 +833,9 @@ class TestMCPToolProfile:
                 pytest.skip("MCP not installed")
 
             with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-                config = MemoryConfig()
+                # An MCP server runs against an initialized project, which always has a
+                # repository scope. Without one every write tool is correctly refused.
+                config = MemoryConfig(repo_id="test-repo")
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
                 memory = Memory(config=config)
@@ -803,7 +859,9 @@ class TestMCPToolProfile:
                 pytest.skip("MCP not installed")
 
             with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-                config = MemoryConfig()
+                # An MCP server runs against an initialized project, which always has a
+                # repository scope. Without one every write tool is correctly refused.
+                config = MemoryConfig(repo_id="test-repo")
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
                 memory = Memory(config=config)
@@ -835,7 +893,9 @@ class TestMCPToolProfile:
                 pytest.skip("MCP not installed")
 
             with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-                config = MemoryConfig()
+                # An MCP server runs against an initialized project, which always has a
+                # repository scope. Without one every write tool is correctly refused.
+                config = MemoryConfig(repo_id="test-repo")
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
                 memory = Memory(config=config)
@@ -866,7 +926,9 @@ class TestMCPToolProfile:
                 pytest.skip("MCP not installed")
 
             with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-                config = MemoryConfig()
+                # An MCP server runs against an initialized project, which always has a
+                # repository scope. Without one every write tool is correctly refused.
+                config = MemoryConfig(repo_id="test-repo")
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
                 memory = Memory(config=config)
@@ -891,7 +953,9 @@ class TestMCPToolProfile:
                 pytest.skip("MCP not installed")
 
             with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-                config = MemoryConfig()
+                # An MCP server runs against an initialized project, which always has a
+                # repository scope. Without one every write tool is correctly refused.
+                config = MemoryConfig(repo_id="test-repo")
                 config.storage.data_dir = Path(tmpdir)
                 config.embedding.provider = "noop"
                 memory = Memory(config=config)

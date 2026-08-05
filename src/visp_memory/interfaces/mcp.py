@@ -68,7 +68,7 @@ except ImportError:
 
 from visp_memory import Memory
 from visp_memory.core.clock import parse_utc, utc_now
-from visp_memory.core.eligibility import require_repo_id
+from visp_memory.core.eligibility import UNSCOPED_REPO_ID, require_repo_id
 from visp_memory.core.ranking import projected_importance
 from visp_memory.core.trust import WriteChannel
 
@@ -1909,6 +1909,44 @@ def _handle_graph_recall(name: str, args: dict[str, Any], memory: Memory) -> str
     return f"Unknown graph recall tool: {name}"
 
 
+#: MCP tools that persist something and therefore need a repository scope.
+#: Listed rather than inferred, so adding a write tool is a deliberate decision
+#: about whether it belongs here — the alternative is a new surface silently
+#: reopening the bug, which is exactly how the CLI ended up with nine of them.
+_WRITE_TOOLS = frozenset(
+    {
+        "memory_record",
+        "memory_decision",
+        "memory_learn",
+        "memory_warn",
+        "memory_issue",
+        "memory_goal",
+        "memory_working_on",
+        "memory_done",
+        "memory_update_intent",
+        "memory_close_intent",
+    }
+)
+
+
+def _refuse_unscoped_write(name: str, args: dict[str, Any], memory: Memory) -> str | None:
+    """Refuse a write with no resolvable scope. None means the call may proceed.
+
+    Returns the refusal as ordinary tool text: the caller is a model, and a
+    sentence it can act on beats an exception it has to interpret.
+    """
+    if name not in _WRITE_TOOLS:
+        return None
+    scope = args.get("repo_id") or memory.config.repo_id
+    if isinstance(scope, str) and scope.strip() and scope.strip() != UNSCOPED_REPO_ID:
+        return None
+    return (
+        f"Refused: {name} needs a repository scope, and none is configured. Anything written "
+        "without one is quarantined and no recall will return it. Run `visp-memory init` in the "
+        "project, or pass repo_id."
+    )
+
+
 def _handle_recording(name: str, args: dict[str, Any], memory: Memory) -> str:
     """Handle recording tools."""
     if name == "memory_record":
@@ -2227,6 +2265,18 @@ async def handle_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
     # Codex workflow
     if name in ["memory_session_start", "memory_before_change", "memory_after_work"]:
         return _handle_workflow(name, args, memory)
+
+    # Every tool below this point WRITES, so each one is checked once here.
+    #
+    # Without this, `memory_record` in a project that never ran `init` returned
+    # "Recorded event (ID: ...)" for a row the engine had quarantined, and the
+    # matching `memory_recall` raised. An agent has even less chance than a
+    # human of noticing: it gets an id back and moves on, and the memory it
+    # believes it saved is one nothing will ever return. The refusal names the
+    # repair because the model is the one that has to act on it.
+    refusal = _refuse_unscoped_write(name, args, memory)
+    if refusal is not None:
+        return refusal
 
     # Recording
     if name in ["memory_record", "memory_decision"]:
