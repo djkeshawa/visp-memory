@@ -713,6 +713,7 @@ def decision(
 ):
     """Record an architecture/design decision."""
     memory = get_memory()
+    repo = _require_repo_scope(memory, repo, writing=True)
     memory.decision(
         what,
         why,
@@ -734,6 +735,7 @@ def bug(
 ):
     """Record a bug discovery or fix."""
     memory = get_memory()
+    repo = _require_repo_scope(memory, repo, writing=True)
     memory.episodic.bug(
         description,
         cause=cause,
@@ -770,6 +772,7 @@ def learn(
 ):
     """Establish semantic knowledge (something learned)."""
     memory = get_memory()
+    repo = _require_repo_scope(memory, repo, writing=True)
     memory.learn(
         knowledge,
         category=category,
@@ -860,6 +863,7 @@ def warn(
 ):
     """Add a warning about a fragile area."""
     memory = get_memory()
+    repo = _require_repo_scope(memory, repo, writing=True)
     memory.warn(
         area,
         warning,
@@ -878,6 +882,7 @@ def convention(
 ):
     """Establish a convention or best practice."""
     memory = get_memory()
+    repo = _require_repo_scope(memory, repo, writing=True)
     memory.semantic.convention(
         rule,
         rationale,
@@ -896,6 +901,7 @@ def issue(
 ):
     """Document a known issue."""
     memory = get_memory()
+    repo = _require_repo_scope(memory, repo, writing=True)
     memory.semantic.known_issue(
         description,
         workaround,
@@ -925,6 +931,7 @@ def goal(
 ):
     """Set a goal/intent."""
     memory = get_memory()
+    repo = _require_repo_scope(memory, repo, writing=True)
     memory.goal(description, priority=priority, constraints=constraint, repo_id=repo)
     console.print(f"[green]Goal set:[/green] {description}")
 
@@ -937,6 +944,7 @@ def focus(
 ):
     """Set current focus with things to avoid."""
     memory = get_memory()
+    repo = _require_repo_scope(memory, repo, writing=True)
     memory.intent.set_focus(on, avoid, repo_id=_repo_scope(memory, repo))
     console.print(f"[green]Focus set:[/green] {on}")
     if avoid:
@@ -951,6 +959,7 @@ def working(
 ):
     """Set current task."""
     memory = get_memory()
+    repo = _require_repo_scope(memory, repo, writing=True)
     memory.working_on(task, files, repo_id=repo)
     console.print(f"[green]Working on:[/green] {task}")
 

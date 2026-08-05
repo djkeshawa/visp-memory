@@ -112,6 +112,60 @@ class TestUnscopedRoundTrip:
 
 
 @pytest.mark.usefixtures("cli_env")
+class TestEveryWriteCommandRefusesUnscoped:
+    """`record` was the reported command. It was not the only one.
+
+    The first pass at this fix guarded `record` and `recall`, because those are
+    what the bug report named. Nine sibling commands went on announcing
+    "Decision recorded:", "Goal set:", "Warning added for …" for content the
+    engine had just quarantined — the identical defect, one command over.
+
+    Parameterising over the command list is the point. Guarding them one at a
+    time is what produced the gap, and a test that named only `record` would
+    have gone green while eight commands stayed broken.
+    """
+
+    # (command, args) for every human CLI command that writes and takes --repo.
+    WRITE_COMMANDS = [
+        ("record", ["something happened"]),
+        ("decision", ["rotate the keys", "the old one leaked"]),
+        ("bug", ["login crashes on submit"]),
+        ("learn", ["the retry limit is five"]),
+        ("warn", ["src/auth.py", "this module is fragile"]),
+        ("convention", ["always use pnpm"]),
+        ("issue", ["login is broken on Safari"]),
+        ("goal", ["ship the login page"]),
+        ("focus", ["src/auth.py"]),
+        ("working", ["refactoring auth"]),
+    ]
+
+    @pytest.mark.parametrize("command,args", WRITE_COMMANDS)
+    def test_refuses_and_writes_nothing(self, command, args):
+        result = _invoke(command, *args)
+
+        assert result.exit_code != 0, (
+            f"`visp-memory {command}` reported success with no repository scope. Whatever it "
+            "wrote is quarantined and no recall will return it, so the success message is false."
+        )
+        assert not isinstance(result.exception, ValueError), (
+            f"`visp-memory {command}` leaked an unhandled {result.exception!r} instead of refusing."
+        )
+        assert "repo" in result.stdout.lower() or "scope" in result.stdout.lower(), (
+            f"`visp-memory {command}` refused without naming the repair. Got: {result.stdout!r}"
+        )
+
+    @pytest.mark.parametrize("command,args", WRITE_COMMANDS)
+    def test_still_works_with_an_explicit_scope(self, command, args):
+        """The converse, per command: refusing everything is not a fix."""
+        result = _invoke(command, *args, "--repo", "demo")
+
+        assert result.exit_code == 0, (
+            f"`visp-memory {command} --repo demo` was refused despite naming a scope: "
+            f"{result.stdout!r} {result.exception!r}"
+        )
+
+
+@pytest.mark.usefixtures("cli_env")
 class TestScopedPathStillWorks:
     """The converse. A fix must not become 'refuse everything'."""
 

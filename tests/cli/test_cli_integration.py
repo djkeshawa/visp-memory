@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 import tempfile
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -134,6 +135,12 @@ class TestCLIBasicCommands:
         captured = {}
 
         class FakeMemory:
+            # A real Memory always carries a config, and `learn` now resolves a
+            # repository scope from it before writing. The double needs it for
+            # the same reason: a stub that cannot fail the way the real object
+            # can is testing a different object.
+            config = SimpleNamespace(repo_id="test-repo")
+
             def learn(self, knowledge, **kwargs):
                 captured.update({"knowledge": knowledge, **kwargs})
                 return "belief-1"
