@@ -111,6 +111,72 @@ def get_memory() -> Memory:
     return _memory
 
 
+def _intents_matching(memory: Memory, query: str, repo: str = None) -> int:
+    """How many active intents contain the query, for a recall that found nothing.
+
+    Deliberately a plain substring count rather than a semantic search: this is
+    a signpost, not a second retrieval path, and it must never be the reason a
+    recall is slow or an unreviewed intent looks like a ranked result.
+    """
+    try:
+        intents = memory._storage.get_active_intents(repo_id=_repo_scope(memory, repo))
+    except Exception:
+        # A signpost may never be the reason a command fails.
+        return 0
+
+    terms = [term for term in query.lower().split() if len(term) > 2]
+    if not terms:
+        return 0
+    return sum(
+        1
+        for intent in intents
+        if any(term in str(intent.get("description", "")).lower() for term in terms)
+    )
+
+
+def ensure_gitignored(project_root: Path, data_dir: Path) -> list[str]:
+    """Add this tool's own store to .gitignore. Returns what was added.
+
+    `init` writes a SQLite database and binary vector indexes — data_level0.bin,
+    link_lists.bin, chroma.sqlite3 — into the working tree, roughly a megabyte
+    for a handful of memories, and never ignored them. That is not a tidiness
+    concern: during a dogfooding session the file volume stopped the project
+    owner's IDE from loading the repository, and they added the entries by hand
+    mid-run to get working again.
+
+    A tool that writes a data directory into someone's project is responsible
+    for keeping it out of their history. `visp-memory.yaml` is deliberately NOT
+    ignored: the config is meant to be committed and shared, unlike the store.
+
+    Idempotent, and it never rewrites an existing line — it appends only what
+    is genuinely absent, so a project with its own conventions keeps them.
+    """
+    gitignore = project_root / ".gitignore"
+    if not (project_root / ".git").exists():
+        return []
+
+    try:
+        existing = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""
+    except OSError:
+        return []
+
+    present = {line.strip().rstrip("/") for line in existing.splitlines()}
+    wanted = [f"{data_dir.parts[0]}/"] if data_dir.parts else []
+
+    missing = [entry for entry in wanted if entry.rstrip("/") not in present]
+    if not missing:
+        return []
+
+    separator = "" if existing.endswith("\n") or existing == "" else "\n"
+    addition = f"{separator}\n# Visp Memory's local store (database and vector indexes)\n"
+    addition += "".join(f"{entry}\n" for entry in missing)
+    try:
+        gitignore.write_text(existing + addition, encoding="utf-8")
+    except OSError:
+        return []
+    return missing
+
+
 def _repo_scope(memory: Memory, repo: str = None) -> str:
     """Resolve a CLI repository override against the configured default.
 
@@ -653,6 +719,10 @@ def init(
     console.print(f"[green]Initialized Visp Memory in {config_path}[/green]")
     console.print(f"Data directory: {config.storage.data_dir}")
 
+    ignored = ensure_gitignored(Path("."), config.storage.data_dir)
+    if ignored:
+        console.print(f"[dim]Added to .gitignore: {', '.join(ignored)}[/dim]")
+
     if not mine:
         return
 
@@ -1128,6 +1198,21 @@ def recall(
 
     if not results:
         console.print("[yellow]No results found[/yellow]")
+        # Goals live in the intent layer and `recall` searches memories, so a
+        # goal recorded seconds earlier comes back as a flat "No results found".
+        # The layering is deliberate; the silent absence is not — a weak-model
+        # evaluation recorded a goal, searched for it, saw nothing, and
+        # concluded the write had failed.
+        #
+        # Point at the command that WOULD find it rather than merging the
+        # layers, which would put unreviewed intents into recall output.
+        matching = _intents_matching(memory, query, repo)
+        if matching:
+            noun = "intent" if matching == 1 else "intents"
+            console.print(
+                f"[dim]{matching} matching {noun} in the goal layer — "
+                f"see [bold]visp-memory list-intents[/bold].[/dim]"
+            )
         return
 
     from rich.box import ROUNDED
