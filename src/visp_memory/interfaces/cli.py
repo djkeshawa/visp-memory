@@ -1380,6 +1380,11 @@ def audit(
                     "total": sum(counts.values()),
                     "by_provenance": counts,
                     "quarantined": quarantined,
+                    "pending_review": len(
+                        memory._storage.list_memories(
+                            repo_id=scope, status="quarantined", limit=1000
+                        )
+                    ),
                     "stale": stale,
                     "secret_redacted": redacted,
                     "min_trust": DEFAULT_MIN_TRUST,
@@ -1399,6 +1404,18 @@ def audit(
         f"  [yellow]quarantined:[/yellow] {quarantined} "
         f"[dim](never auto-injected — originated outside this repository)[/dim]"
     )
+    # Lifecycle quarantine is a different axis from provenance quarantine, and
+    # this command's whole purpose is that nothing in the store is invisible.
+    # Proposals from `visp learn` sat at status='quarantined' while audit —
+    # which iterates active rows — reported "quarantined: 0".
+    pending_review = len(
+        memory._storage.list_memories(repo_id=scope, status="quarantined", limit=1000)
+    )
+    if pending_review:
+        console.print(
+            f"  [yellow]pending review:[/yellow] {pending_review} "
+            f"[dim]proposal(s) awaiting a human — see visp-memory review list[/dim]"
+        )
     console.print(
         f"  [yellow]below trust threshold:[/yellow] {stale} "
         f"[dim](stale; still returned by explicit recall)[/dim]"
@@ -1432,6 +1449,110 @@ def audit(
 
     if len(rows) > limit:
         console.print(f"[dim]… {len(rows) - limit} more (use --limit)[/dim]")
+
+
+# =============================================================================
+# The reviewed lifecycle — the half `contract propose` always promised
+# =============================================================================
+#
+# `visp learn` and `visp-memory contract propose` both answer: "It becomes
+# durable only after Memory's reviewed lifecycle accepts it." Until this group
+# existed, no command implemented that lifecycle — every proposal sat at
+# status='quarantined' forever, and even `audit` could not see it.
+#
+# This is NOT a laundering path. Rows in the reserved unscoped bucket carry
+# Provenance.UNKNOWN and stay untouchable (tests/core/test_evidence_contract.py
+# pins that trust control). Review operates only inside a real repository
+# scope, on proposals that already belong to it.
+
+review_app = typer.Typer(help="Review pending proposals from `visp learn` / `contract propose`.")
+app.add_typer(review_app, name="review")
+
+
+def _pending_proposal(memory, proposal_id: str, scope: str) -> dict:
+    """Fetch a proposal the resolved scope is allowed to decide on, or refuse."""
+    row = memory._storage.peek_memory(proposal_id)
+    if row is None or row.get("status") != "quarantined":
+        console.print(f"[yellow]No pending proposal with id {proposal_id}.[/yellow]")
+        console.print("See what is waiting with [bold]visp-memory review list[/bold].")
+        raise typer.Exit(1)
+    if row.get("repo_id") != scope:
+        # Never decide across scopes, and never touch the unscoped quarantine.
+        console.print(
+            f"[yellow]Proposal {proposal_id} does not belong to this repository scope.[/yellow]"
+        )
+        console.print("Review it from its own project, with its own scope.")
+        raise typer.Exit(1)
+    return row
+
+
+@review_app.command("list")
+def review_list(
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository context"),
+):
+    """List proposals awaiting a human decision in this repository."""
+    memory = get_memory()
+    scope = _require_repo_scope(memory, repo)
+    pending = memory._storage.list_memories(repo_id=scope, status="quarantined", limit=200)
+    if not pending:
+        console.print("[dim]No proposals are waiting for review.[/dim]")
+        return
+    table = Table(title=f"Pending proposals ({scope})")
+    table.add_column("ID", style="dim", no_wrap=True)
+    table.add_column("Proposed", no_wrap=True)
+    table.add_column("Content")
+    for row in pending:
+        table.add_row(
+            str(row.get("id")),
+            str(row.get("created_at", ""))[:19],
+            str(row.get("content", ""))[:90],
+        )
+    console.print(table)
+    console.print(
+        "[dim]Accept with[/dim] visp-memory review accept <id> "
+        "[dim]— reject with[/dim] visp-memory review reject <id>"
+    )
+
+
+@review_app.command("accept")
+def review_accept(
+    proposal_id: str = typer.Argument(..., help="Proposal ID from `review list`."),
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository context"),
+):
+    """Accept a proposal: it becomes durable and recall starts serving it."""
+    memory = get_memory()
+    scope = _require_repo_scope(memory, repo, writing=True)
+    row = _pending_proposal(memory, proposal_id, scope)
+    updated = memory._storage.update_memory(
+        proposal_id,
+        status="active",
+        metadata={**(row.get("metadata") or {}), "review": {"decision": "accepted"}},
+    )
+    if not updated:
+        console.print(f"[red]Could not update proposal {proposal_id}; nothing changed.[/red]")
+        raise typer.Exit(1)
+    console.print(f"[green]Accepted:[/green] {str(row.get('content', ''))[:70]}")
+    console.print("[dim]Recall now serves it in this repository's scope.[/dim]")
+
+
+@review_app.command("reject")
+def review_reject(
+    proposal_id: str = typer.Argument(..., help="Proposal ID from `review list`."),
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository context"),
+):
+    """Reject a proposal: it is kept for audit but never served."""
+    memory = get_memory()
+    scope = _require_repo_scope(memory, repo, writing=True)
+    row = _pending_proposal(memory, proposal_id, scope)
+    updated = memory._storage.update_memory(
+        proposal_id,
+        status="rejected",
+        metadata={**(row.get("metadata") or {}), "review": {"decision": "rejected"}},
+    )
+    if not updated:
+        console.print(f"[red]Could not update proposal {proposal_id}; nothing changed.[/red]")
+        raise typer.Exit(1)
+    console.print(f"[yellow]Rejected:[/yellow] {str(row.get('content', ''))[:70]}")
 
 
 @app.command()
@@ -1957,7 +2078,13 @@ def check_conflicts(
 
 @app.command()
 def export(output: str = typer.Argument("memory-export.json", help="Output file path")):
-    """Export all memories to JSON."""
+    """Export this repository's memories to JSON.
+
+    Scoped like every other read: memories recorded under another --repo live
+    in the same physical store but are not part of this repository and are not
+    exported. The old help text said "all memories", which silently promised
+    more than the command has ever done.
+    """
     memory = get_memory()
     memory.export(Path(output))
     console.print(f"[green]Exported to {output}[/green]")
@@ -3091,11 +3218,20 @@ def contract_recall(
                 **({"caveat": caveat} if caveat else {}),
             }
         )
+    # The human CLI signposts matching intents on an empty recall; the machine
+    # contract used to drop that signal, so the coordinator answered "there was
+    # nothing to say" for the same query visp-memory itself pointed at the goal
+    # layer. Additive and optional: an older consumer simply ignores it.
+    intent_matches = 0
+    if not entries:
+        intent_matches = _intents_matching(memory, query, _repo_scope(memory, repo))
+
     _contract_print(
         {
             "contractVersion": MEMORY_CONTRACT_VERSION,
             "success": True,
             "entries": entries,
+            **({"intentMatches": intent_matches} if intent_matches > 0 else {}),
         }
     )
 
