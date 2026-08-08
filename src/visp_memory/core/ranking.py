@@ -188,6 +188,52 @@ def text_similarity(query: str, content: str) -> float:
     return len(query_terms & content_terms) / len(query_terms)
 
 
+# A recall query lists candidate handles; scoring divides matches over at most
+# this many of them. Without the cap, "add an overdue marker that compares due
+# dates in todos.json" scored LOWER than "due dates" against the same memory —
+# every filler word diluted the overlap, so the goal-shaped queries the
+# coordinator's memory fusion sends could never clear the recall threshold.
+# Queries of this length or shorter score exactly as before.
+_RECALL_QUERY_TERM_CAP = 4
+
+
+def _recall_overlap(query: str, content: str) -> float:
+    """Dilution-resistant lexical overlap, for recall ranking ONLY.
+
+    relationship_score deliberately keeps the strict full-ratio
+    text_similarity: graph links are conservative by design, and this cap
+    must never loosen them.
+    """
+    query_terms = {
+        term.lower()
+        for term in re.findall(r"[a-zA-Z0-9_]+", query)
+        if term.lower() not in _LEXICAL_STOPWORDS
+    }
+    content_terms = {
+        term.lower()
+        for term in re.findall(r"[a-zA-Z0-9_]+", content)
+        if term.lower() not in _LEXICAL_STOPWORDS
+    }
+    if not query_terms:
+        return 0.0
+    matched_terms = query_terms & content_terms
+    matched = len(matched_terms)
+    # The cap engages only for overlaps that could not be coincidence, with
+    # thresholds learned from this project's own quality floors:
+    # - fewer than three shared terms stays strict — the task-brief benchmark
+    #   requires ABSTAINING on a two-term topical graze ("payment settlement"
+    #   against one payments memory), and paths fragment into junk that
+    #   cross-matches ({src, py} from two unrelated file mentions);
+    # - at least one shared term must be substantive (five or more characters
+    #   or carrying a digit), never debris alone.
+    # A genuine goal-to-memory hit shares the nouns and the file names — three
+    # or more terms in practice — and only that shape earns the cap.
+    specific = any(len(term) >= 5 or any(ch.isdigit() for ch in term) for term in matched_terms)
+    if matched < 3 or not specific:
+        return matched / len(query_terms)
+    return min(1.0, matched / min(len(query_terms), _RECALL_QUERY_TERM_CAP))
+
+
 def relationship_score(similarity: Any, query: str, content: str) -> float:
     """
     Score whether two memories should be connected in the graph.
@@ -267,7 +313,7 @@ def score_memory_result(memory: dict[str, Any], query: str | None = None) -> flo
     small tie-breaker rather than a primary signal.
     """
     similarity = clamp_score(memory.get("similarity"), default=0.0)
-    lexical = text_similarity(query or "", str(memory.get("content", ""))) if query else 0.0
+    lexical = _recall_overlap(query or "", str(memory.get("content", ""))) if query else 0.0
     importance = clamp_score(memory.get("importance"), default=0.5)
     recency = _age_score(memory)
 
