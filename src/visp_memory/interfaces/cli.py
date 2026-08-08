@@ -3183,6 +3183,15 @@ def _contract_failure(reason: str) -> dict:
 @contract_app.command("recall")
 def contract_recall(
     query: str = typer.Argument(..., help="What to look for."),
+    min_score: float = typer.Option(
+        None,
+        "--min-score",
+        help=(
+            "Relevance floor override. The default floor is tuned for precise "
+            "human queries; a coordinator assembling an explicitly untrusted, "
+            "budget-capped context digest may deliberately ask for more recall."
+        ),
+    ),
     repo: str = typer.Option(
         None, "--repo", help="Repository scope (required unless configured in the project)."
     ),
@@ -3195,7 +3204,10 @@ def contract_recall(
     del endpoint, json_output
     try:
         memory = get_memory()
-        results = memory.recall(query, repo_id=_repo_scope(memory, repo), limit=10)
+        recall_kwargs = {} if min_score is None else {"min_score": max(0.0, min(1.0, min_score))}
+        results = memory.recall(
+            query, repo_id=_repo_scope(memory, repo), limit=10, **recall_kwargs
+        )
     except Exception as exc:  # noqa: BLE001 - the contract reports, never crashes
         _contract_print(_contract_failure(f"recall failed: {exc}"))
         raise typer.Exit(1)

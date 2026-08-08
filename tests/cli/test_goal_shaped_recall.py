@@ -63,3 +63,40 @@ class TestGoalShapedRecall:
 
         envelope = json.loads(result.output.strip().splitlines()[-1])
         assert envelope["entries"] == [], envelope
+
+
+@pytest.mark.usefixtures("cli_env")
+class TestContractMinScoreOverride:
+    """The coordinator may deliberately trade precision for recall.
+
+    Its memory pack is an explicitly untrusted, budget-capped digest, so a
+    weak-but-real association ("overdue" shared between a decision and a new
+    goal) is worth surfacing there — while the DEFAULT floor, which the human
+    recall CLI and every benchmark pin, stays exactly where it was.
+    """
+
+    def test_lower_floor_surfaces_a_weak_association(self):
+        recorded = _invoke(
+            "record",
+            "Decision: overdue todos are those due strictly before today's local date",
+            "--repo",
+            "demo-repo",
+        )
+        assert recorded.exit_code == 0, recorded.output
+
+        strict = _invoke("contract", "recall", "add a count command", "--repo", "demo-repo")
+        loose = _invoke(
+            "contract",
+            "recall",
+            "add a count command for overdue todos",
+            "--min-score",
+            "0.2",
+            "--repo",
+            "demo-repo",
+        )
+
+        strict_envelope = json.loads(strict.output.strip().splitlines()[-1])
+        loose_envelope = json.loads(loose.output.strip().splitlines()[-1])
+        assert strict_envelope["entries"] == []
+        contents = " ".join(entry["content"] for entry in loose_envelope["entries"])
+        assert "overdue" in contents, loose_envelope
