@@ -21,10 +21,16 @@ from visp_memory.core.tokens import estimate_tokens
 
 
 class ContextCompiler:
-    """Build compact context from text, graph, temporal, and code-entity signals."""
+    """Build compact context from text, graph, temporal, and code-entity signals.
 
-    def __init__(self, storage):
+    ``code_graph`` is intel's file-grain projection, or ``None``. It is optional at
+    every call site on purpose: a caller that has no checkout to point at compiles
+    exactly the context it compiled before structural conditioning existed.
+    """
+
+    def __init__(self, storage, code_graph=None):
         self.storage = storage
+        self.code_graph = code_graph
 
     @staticmethod
     def _terms(content: str) -> set[str]:
@@ -80,7 +86,7 @@ class ContextCompiler:
             confidence = float(metadata.get("confidence", 0.5) or 0.0)
             return confidence >= min_confidence
 
-        ranked = HybridRetriever(self.storage).retrieve(
+        ranked = HybridRetriever(self.storage, code_graph=self.code_graph).retrieve(
             query,
             repo_id=repo_id,
             files=files,

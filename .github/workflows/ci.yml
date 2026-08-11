@@ -110,6 +110,9 @@ jobs:
       - name: Hybrid retrieval evaluation
         run: python scripts/evaluate_hybrid_retrieval.py
 
+      - name: Structural recall evaluation (synthetic corpus)
+        run: python scripts/evaluate_structural_recall.py
+
       - name: Storage benchmark (smoke)
         run: python scripts/benchmark_memory.py --items 50 --json
 

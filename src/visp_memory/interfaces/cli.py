@@ -1630,9 +1630,12 @@ def brief(
         console.print("[red]--format must be text or json[/red]")
         raise typer.Exit(2)
     memory = get_memory()
-    result = TaskMemoryBriefCompiler(memory._storage).prepare(
+    brief_repo_id = _repo_scope(memory, repo)
+    result = TaskMemoryBriefCompiler(
+        memory._storage, code_graph=memory.code_graph(brief_repo_id)
+    ).prepare(
         task,
-        repo_id=_repo_scope(memory, repo),
+        repo_id=brief_repo_id,
         token_budget=token_budget,
         files=files or [],
         symbols=symbols or [],

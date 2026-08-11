@@ -146,6 +146,10 @@ class Memory:
         self.repos = RepositoryManager(self._storage)
         self.teams = TeamManager(self._storage)
 
+        # The verdict of the last projection read, so a null structural signal can
+        # always say why. None until something asks for the graph.
+        self.last_code_graph_load: Dict[str, Any] = None
+
         # Initialize compressor
         compress_fn = None
         if self.config.compression.llm_provider:
@@ -817,15 +821,37 @@ class Memory:
             except (NotImplementedError, ValueError):
                 pass
 
+        files_in_scope = self._unique_values(file_values)
+        graph = self.code_graph(repo_id)
+        proximity = graph.structural_proximity(files_in_scope) if graph else {}
+
         return {
             "repo_id": repo_id,
             "task": task_text,
-            "files": self._unique_values(file_values),
+            "files": files_in_scope,
             "session_id": session_id,
             "constraints": self._unique_values(constraint_values),
             "dependencies": self._unique_values(dependency_values),
             "active_intents": active_intents,
+            "file_proximity": proximity,
+            "code_graph_snapshot": graph.snapshot_id if graph else None,
         }
+
+    def code_graph(self, repo_id: str = None):
+        """Intel's file-grain projection for this repo, or ``None``.
+
+        ``None`` is the normal case and costs nothing: no configured path, no artifact,
+        an artifact built against a snapshot that was not the head, or one Memory
+        cannot parse all answer the same way, and every caller degrades to the
+        behaviour it had before this existed. The last read's verdict is kept on
+        ``last_code_graph_load`` so "structure did nothing" always has a reason
+        attached rather than being a silent ``None``.
+        """
+        from visp_memory.core.code_graph import load_for_repo
+
+        load = load_for_repo(self.config, repo_id or self.config.repo_id)
+        self.last_code_graph_load = load.as_dict()
+        return load.graph
 
     def _recall_ranking_factors(
         self, memory: Dict[str, Any], context: Dict[str, Any]
@@ -843,9 +869,18 @@ class Memory:
             if score > 0:
                 factors["task"] = {"score": score, "reason": "matched current task"}
 
-        file_score, file_reason = self._file_factor(text, context.get("files") or [])
+        file_score, file_reason = self._file_factor(
+            text,
+            context.get("files") or [],
+            context.get("file_proximity") or {},
+        )
         if file_score > 0:
             factors["file"] = {"score": file_score, "reason": file_reason}
+            snapshot = context.get("code_graph_snapshot")
+            if snapshot and file_score < 0.6:
+                # Below the basename tier the only thing that could have produced this
+                # score is the projection, so the snapshot that vouched for it is named.
+                factors["file"]["code_graph_snapshot"] = snapshot
 
         repo_id = context.get("repo_id")
         if repo_id and memory.get("repo_id") == repo_id:
@@ -913,7 +948,24 @@ class Memory:
         return str(value).lower().replace("\\", "/") in text
 
     @classmethod
-    def _file_factor(cls, text: str, files: List[str]) -> tuple[float, str | None]:
+    def _file_factor(
+        cls,
+        text: str,
+        files: List[str],
+        proximity: Dict[str, float] = None,
+    ) -> tuple[float, str | None]:
+        """Score a memory against the files in scope, identity first, structure after.
+
+        The tiers are ordered and the order is the point: exact path 1.0, basename 0.6,
+        one import/test hop 0.5, two hops 0.25. Both structural tiers sit strictly
+        below both identity tiers, so nothing that ranks above something else today can
+        invert tomorrow -- structure only distinguishes memories that used to score a
+        flat zero.
+
+        Structural tiers match on the full path only. The basename shortcut is a
+        rename-tolerance hack that is tolerable when a human wrote the path into the
+        memory and is a false-match generator when a graph supplied it.
+        """
         for file_path in files:
             normalized = str(file_path).lower().replace("\\", "/")
             if normalized and normalized in text:
@@ -921,6 +973,17 @@ class Memory:
             basename = Path(normalized).name
             if basename and basename in text:
                 return 0.6, f"matched file name {basename}"
+
+        for near_path, score in sorted(
+            (proximity or {}).items(), key=lambda item: (-item[1], item[0])
+        ):
+            normalized = str(near_path).lower().replace("\\", "/")
+            if normalized and normalized in text:
+                hops = 1 if score >= 0.5 else 2
+                return score, (
+                    f"matched {near_path}, {hops} import/test hop"
+                    f"{'s' if hops != 1 else ''} from the files in scope"
+                )
         return 0.0, None
 
     @classmethod

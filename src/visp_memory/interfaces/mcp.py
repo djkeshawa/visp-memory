@@ -1416,9 +1416,12 @@ def _handle_context(args: dict[str, Any], memory: Memory) -> str:
     if args.get("query"):
         from visp_memory.core.context_compiler import ContextCompiler
 
-        compiled = ContextCompiler(memory._storage).compile(
+        context_repo_id = args.get("repo_id") or memory.config.repo_id
+        compiled = ContextCompiler(
+            memory._storage, code_graph=memory.code_graph(context_repo_id)
+        ).compile(
             str(args["query"]),
-            repo_id=args.get("repo_id") or memory.config.repo_id,
+            repo_id=context_repo_id,
             token_budget=int(args.get("token_budget", 2000)),
             files=args.get("files") or [],
             symbols=args.get("symbols") or [],
@@ -1457,9 +1460,12 @@ def _handle_task_brief(args: dict[str, Any], memory: Memory) -> str:
     task = str(args.get("task") or "").strip()
     if not task:
         return "Error: task is required."
-    brief = TaskMemoryBriefCompiler(memory._storage).prepare(
+    brief_repo_id = args.get("repo_id") or memory.config.repo_id
+    brief = TaskMemoryBriefCompiler(
+        memory._storage, code_graph=memory.code_graph(brief_repo_id)
+    ).prepare(
         task,
-        repo_id=args.get("repo_id") or memory.config.repo_id,
+        repo_id=brief_repo_id,
         token_budget=int(args.get("token_budget", 2000)),
         files=args.get("files") or [],
         symbols=args.get("symbols") or [],

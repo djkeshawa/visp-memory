@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, Request
 
 from visp_memory.config import load_config
+from visp_memory.core.code_graph import graph_for_repo
 from visp_memory.core.context_compiler import ContextCompiler
 from visp_memory.core.task_brief import TaskMemoryBriefCompiler
 from visp_memory.server.auth import UserContext, get_current_user
@@ -22,7 +23,7 @@ async def compile_context(
     config = load_config()
     repo_id = payload.repo_id or config.repo_id
     require_repo_scope_access(storage, repo_id, user)
-    compiler = ContextCompiler(storage)
+    compiler = ContextCompiler(storage, code_graph=graph_for_repo(config, repo_id))
     return compiler.compile(
         payload.query,
         repo_id=repo_id,
@@ -50,7 +51,7 @@ async def prepare_task_brief(
     config = load_config()
     repo_id = payload.repo_id or config.repo_id
     require_repo_scope_access(storage, repo_id, user)
-    compiler = TaskMemoryBriefCompiler(storage)
+    compiler = TaskMemoryBriefCompiler(storage, code_graph=graph_for_repo(config, repo_id))
     return compiler.prepare(
         payload.task,
         repo_id=repo_id,

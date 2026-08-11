@@ -128,6 +128,31 @@ class RecallConfig(BaseSettings):
     error_matching: bool = True
 
 
+class CodeGraphConfig(BaseSettings):
+    """Where intel's consumer projection lives, if anywhere.
+
+    Unset means the structural-proximity signal is entirely inert: recall behaves
+    exactly as it did before this configuration existed. There is deliberately no
+    "enabled" flag -- a path or no path is the whole switch, so a projection cannot be
+    half-read.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="VISP_MEMORY_CODE_GRAPH_", populate_by_name=True)
+
+    #: Default projection path, used for any repo without a specific entry.
+    intel_projection_path: Optional[Path] = None
+    #: repo_id -> projection path, for a Memory serving more than one checkout.
+    intel_projection_paths: dict[str, Path] = Field(default_factory=dict)
+
+    def projection_path_for(self, repo_id: Optional[str]) -> Optional[Path]:
+        """The configured projection for a repo, or the default, or nothing."""
+        if repo_id:
+            specific = self.intel_projection_paths.get(str(repo_id))
+            if specific is not None:
+                return Path(specific)
+        return Path(self.intel_projection_path) if self.intel_projection_path else None
+
+
 class AnalysisConfig(BaseSettings):
     """Pattern detection and analysis configuration."""
 
@@ -237,6 +262,7 @@ class MemoryConfig(BaseSettings):
     capture: CaptureConfig = Field(default_factory=CaptureConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     recall: RecallConfig = Field(default_factory=RecallConfig)
+    code_graph: CodeGraphConfig = Field(default_factory=CodeGraphConfig)
     analysis: AnalysisConfig = Field(default_factory=AnalysisConfig)
     quality: QualityConfig = Field(default_factory=QualityConfig)
     feedback: FeedbackConfig = Field(default_factory=FeedbackConfig)
@@ -350,6 +376,10 @@ class MemoryConfig(BaseSettings):
                 "server",
                 "bootstrap_admin_password",
             ),
+            "VISP_MEMORY_CODE_GRAPH_INTEL_PROJECTION_PATH": (
+                "code_graph",
+                "intel_projection_path",
+            ),
         }
 
         for env_name, path in env_overrides.items():
@@ -360,7 +390,10 @@ class MemoryConfig(BaseSettings):
             for attr in path[:-1]:
                 target = getattr(target, attr)
             value = os.environ[env_name]
-            if path == ("storage", "data_dir"):
+            if path in {
+                ("storage", "data_dir"),
+                ("code_graph", "intel_projection_path"),
+            }:
                 value = Path(value)
             elif path in {
                 ("server", "auth_enabled"),

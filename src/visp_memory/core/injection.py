@@ -428,9 +428,12 @@ def select_for_injection(
     result.anchored_hits = len(anchored_ids)
 
     if policy.drop_stale_anchors and repo_root is not None:
+        from visp_memory.core.anchors import build_tree_index
         from visp_memory.core.anchors import inspect as inspect_anchors
 
-        reports = [(c, inspect_anchors(c, repo_root)) for c in candidates]
+        # One walk for the whole pool rather than one per unresolved anchor.
+        tree_index = build_tree_index(repo_root)
+        reports = [(c, inspect_anchors(c, repo_root, tree_index=tree_index)) for c in candidates]
 
         # Self-calibration. Staleness is only meaningful if this really is the tree the
         # memories describe. If *nothing* resolves, the far likelier explanation is that

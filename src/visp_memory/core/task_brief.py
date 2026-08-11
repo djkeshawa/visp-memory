@@ -83,10 +83,17 @@ STOP_WORDS = {
 
 
 class TaskMemoryBriefCompiler:
-    """Prepare a compact task brief without requiring an LLM call."""
+    """Prepare a compact task brief without requiring an LLM call.
 
-    def __init__(self, storage):
+    ``code_graph`` is intel's file-grain projection or ``None``, forwarded untouched to
+    the context compiler. Nothing in this class reads it: a brief conditioned on
+    structure is conditioned by the retriever, which is the one place the bounds on
+    that conditioning are written down and tested.
+    """
+
+    def __init__(self, storage, code_graph=None):
         self.storage = storage
+        self.code_graph = code_graph
 
     @staticmethod
     def _unique(values: list[str]) -> list[str]:
@@ -444,7 +451,7 @@ class TaskMemoryBriefCompiler:
             trust_assessments[str(item.get("id"))] = result
             return bool(result.allowed)
 
-        candidate_context = ContextCompiler(self.storage).compile(
+        candidate_context = ContextCompiler(self.storage, code_graph=self.code_graph).compile(
             query,
             repo_id=repo_id,
             token_budget=min(100000, max(4000, token_budget * 4)),

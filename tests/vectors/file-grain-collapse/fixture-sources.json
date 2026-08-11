@@ -1,0 +1,19 @@
+{
+  "provenance": "Authored in this repository for the file-grain collapse conformance vectors. It is not derived from, and contains no material from, any benchmark repository, any held-out task, or any measured project. Nothing outside this file feeds the fixture, so the whole input is auditable by reading one document.",
+  "shape": "A four-file dependency chain (config <- store <- api <- Router) so a two-hop neighbourhood has a distinct answer at every hop; one test file, so tested_by and the test entity kind are exercised; one external import, so the pathless-target rule is exercised; one file nothing imports, so the empty-neighbourhood case is a real file rather than a missing one; one barrel that re-exports itself, which is what actually produces an `imports` edge from a file to itself, so the self-edge rule has a case rather than a sentence. src/service/Router.ts and src/service/api.ts differ only in case at the first character of the basename, which is the pair that sorts differently under UTF-16 code units than under locale collation.",
+  "files": {
+    "src/core/barrel.ts": "export * from './barrel.js';\nexport const BARREL_VERSION = 1;\n",
+    "src/core/config.ts": "export const RETRY_LIMIT = 3;\nexport const TIMEOUT_MS = 250;\n",
+    "src/core/store.ts": "import { readFileSync } from 'node:fs';\nimport { RETRY_LIMIT } from './config.js';\n\nexport function load(path: string): string {\n  let attempt = 0;\n  while (attempt < RETRY_LIMIT) {\n    attempt = attempt + 1;\n    return readFileSync(path, 'utf8');\n  }\n  return '';\n}\n",
+    "src/service/api.ts": "import { load } from '../core/store.js';\n\nexport function fetchItem(path: string): string {\n  return load(path);\n}\n",
+    "src/service/Router.ts": "import { fetchItem } from './api.js';\n\nexport function route(path: string): string {\n  return fetchItem(path);\n}\n",
+    "src/isolated/orphan.ts": "export function unreferenced(): number {\n  return 0;\n}\n",
+    "tests/api.test.ts": "import { fetchItem } from '../src/service/api.js';\n\nexport function checkFetchItem(): boolean {\n  return fetchItem('src/core/config.ts').length >= 0;\n}\n"
+  },
+  "secondRevision": {
+    "note": "Applied on top of `files` to publish a second snapshot, so the stale-projection vector is a real projection of a superseded snapshot rather than a hand-edited identity block.",
+    "files": {
+      "src/service/api.ts": "import { load } from '../core/store.js';\n\nexport function fetchItem(path: string): string {\n  return load(path);\n}\n\nexport function fetchAll(paths: string[]): string[] {\n  return paths.map(fetchItem);\n}\n"
+    }
+  }
+}

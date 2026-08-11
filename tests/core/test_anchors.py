@@ -4,6 +4,7 @@ from visp_memory.core.anchors import (
     AnchorIndex,
     AnchorState,
     anchors_of,
+    build_tree_index,
     extract_anchors,
     inspect,
 )
@@ -91,6 +92,140 @@ class TestStaleness:
     def test_path_traversal_is_not_followed(self, tmp_path):
         report = inspect({"content": "see ../../etc/passwd.py"}, tmp_path)
         assert report.fully_stale
+
+
+class TestThreeStates:
+    """"I could not check" and "it is gone" must never collapse into one answer.
+
+    The third state is the load-bearing one. Inferring staleness from an empty `present`
+    would withhold exactly the memories that matter most, precisely when verification
+    was unavailable -- and it would do it silently.
+    """
+
+    def test_an_ambiguous_basename_is_unverified_not_present(self, tmp_path):
+        """The false-PRESENT generator, closed.
+
+        The old rule resolved `src/auth/session.py` against any file anywhere in the
+        tree called `session.py`. At file grain that reads as rename tolerance; at
+        symbol grain -- `handler` exists in fifty files -- it is fatal. The narrowing
+        cannot be allowed to manufacture staleness in exchange, so an ambiguous hit is
+        UNVERIFIED, not MISSING.
+        """
+        for directory in ("a", "b"):
+            (tmp_path / directory).mkdir()
+            (tmp_path / directory / "session.py").write_text("x = 1")
+
+        report = inspect({"content": "WARNING [src/auth/session.py]: race"}, tmp_path)
+
+        assert report.state is AnchorState.UNVERIFIED
+        assert report.unverified == ("src/auth/session.py",)
+        assert report.present == ()
+        assert report.missing == ()
+        assert not report.fully_stale
+
+    def test_a_unique_suffix_match_still_resolves(self, tmp_path):
+        """Rename tolerance survives, narrowed to the whole recorded path."""
+        (tmp_path / "packages" / "app" / "src" / "auth").mkdir(parents=True)
+        (tmp_path / "packages" / "app" / "src" / "auth" / "session.py").write_text("x = 1")
+
+        report = inspect({"content": "WARNING [src/auth/session.py]: race"}, tmp_path)
+
+        assert report.state is AnchorState.PRESENT
+        assert report.present == ("src/auth/session.py",)
+
+    def test_a_name_only_hit_does_not_resolve_the_path(self, tmp_path):
+        """`session.py` somewhere unrelated is not `src/auth/session.py`."""
+        (tmp_path / "vendor").mkdir()
+        (tmp_path / "vendor" / "session.py").write_text("x = 1")
+
+        report = inspect({"content": "WARNING [src/auth/session.py]: race"}, tmp_path)
+
+        assert report.state is AnchorState.UNVERIFIED
+        assert report.present == ()
+
+    def test_a_genuinely_absent_name_is_missing(self, tmp_path):
+        """Nothing by that name anywhere, on a tree that was fully walked: a verdict."""
+        (tmp_path / "unrelated.py").write_text("x = 1")
+
+        report = inspect({"content": "WARNING [src/auth/session.py]: race"}, tmp_path)
+
+        assert report.state is AnchorState.MISSING
+        assert report.fully_stale
+
+    def test_a_truncated_walk_never_reports_missing(self, tmp_path):
+        """A budget is not evidence. An unresolved anchor against a partial index is
+        UNVERIFIED, because the alternative is inventing staleness out of a limit."""
+        (tmp_path / "src").mkdir()
+        for index in range(6):
+            (tmp_path / "src" / f"file{index}.py").write_text("x = 1")
+
+        index = build_tree_index(tmp_path, max_files=2)
+        assert index.truncated
+
+        report = inspect({"content": "WARNING [src/gone.py]: careful"}, tmp_path, tree_index=index)
+
+        assert report.state is AnchorState.UNVERIFIED
+        assert not report.fully_stale
+
+    def test_an_unreadable_tree_is_unverified(self, tmp_path, monkeypatch):
+        def explode(*_args, **_kwargs):
+            raise OSError("permission denied")
+
+        monkeypatch.setattr("pathlib.Path.rglob", explode)
+        report = inspect({"content": "WARNING [src/gone.py]: careful"}, tmp_path)
+
+        assert report.state is AnchorState.UNVERIFIED
+        assert not report.fully_stale
+
+    def test_one_present_anchor_outweighs_an_unverified_one(self, tmp_path):
+        (tmp_path / "kept.py").write_text("x = 1")
+        for directory in ("a", "b"):
+            (tmp_path / directory).mkdir()
+            (tmp_path / directory / "shared.py").write_text("x = 1")
+
+        report = inspect({"content": "Modified: kept.py, src/deep/shared.py"}, tmp_path)
+
+        assert report.state is AnchorState.PRESENT
+        assert report.present == ("kept.py",)
+        assert report.unverified == ("src/deep/shared.py",)
+
+    def test_the_report_says_which_state_each_anchor_is_in(self, tmp_path):
+        """If it is surfaced, it arrives labelled -- including the third state."""
+        (tmp_path / "kept.py").write_text("x = 1")
+        report = inspect({"content": "Modified: kept.py, gone.py"}, tmp_path)
+
+        payload = report.as_dict()
+        assert set(payload) == {"anchors", "present", "missing", "unverified", "state"}
+        assert payload["present"] == ["kept.py"]
+        assert payload["missing"] == ["gone.py"]
+        assert payload["unverified"] == []
+
+    def test_a_shared_index_and_a_private_walk_agree(self, tmp_path):
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "live.py").write_text("x = 1")
+        memory = {"content": "Modified: src/live.py, src/gone.py"}
+
+        shared = inspect(memory, tmp_path, tree_index=build_tree_index(tmp_path))
+        private = inspect(memory, tmp_path)
+
+        assert shared == private
+
+    def test_an_index_built_for_another_root_is_not_trusted(self, tmp_path):
+        """A cheap index is not worth a wrong answer about a different tree."""
+        other = tmp_path / "other"
+        other.mkdir()
+        (other / "elsewhere.py").write_text("x = 1")
+        repo = tmp_path / "repo"
+        (repo / "src").mkdir(parents=True)
+        (repo / "src" / "live.py").write_text("x = 1")
+
+        report = inspect(
+            {"content": "WARNING [src/live.py]: careful"},
+            repo,
+            tree_index=build_tree_index(other),
+        )
+
+        assert report.state is AnchorState.PRESENT
 
 
 class TestAnchorIndex:

@@ -96,3 +96,90 @@ field's most-cited memory benchmark was
 and that a major vendor's headline score was
 [publicly corrected downward by 26 points](https://github.com/getzep/zep-papers/issues/5),
 under-claiming seems like the better long-term strategy.
+
+---
+
+# Benchmark: structurally conditioned recall
+
+```bash
+python3 scripts/evaluate_structural_recall.py
+```
+
+Same rules as above: no network, no API key, deterministic, run in CI on every push.
+
+## The gap it addresses
+
+Memory recalls by text, so it finds memories that *sound like* the task. Both of its
+file-aware signals — `HybridRetriever._matches_entities` and `Memory._file_factor` — are
+identity tests, and identity is zero at one structural hop. A memory recorded against
+`core/ranking.py` scores exactly nothing for a task editing `core/hybrid_retrieval.py`,
+which imports it, unless the words happen to overlap.
+
+Memory now reads intel's consumer projection read-only, collapses it to the file grain
+by the shared contract, and admits **at most three** memories per retrieval that are
+attached to files within two import/test hops of the task's files, ranked strictly below
+every identity match.
+
+## Setup
+
+Fourteen invented files with a realistic import graph — including two isolated files and
+two test files — eighteen authored memories, and eight tasks with hand-labelled
+relevance, each label carrying a written reason. Some labelled memories are structurally
+unreachable, so a perfect structural signal still cannot score 1.0.
+
+Three arms over identical fixtures:
+
+- **A — no graph.** Today's behaviour.
+- **B — the true graph.**
+- **C — a misleading graph.** Same queries, same seeds, every adjacency rotated to a
+  file that is genuinely not adjacent.
+
+## Results
+
+| Metric | A: no graph | B: true graph | C: misleading graph |
+|---|---|---|---|
+| recall@10 | 0.4688 | **0.7917** | 0.6250 |
+| recall@5 | 0.4688 | 0.7292 | 0.5938 |
+| precision@5 | 0.7812 | **0.6000** | 0.4875 |
+| MRR | 0.8438 | 0.8438 | 0.8438 |
+| mean results returned | 1.875 | 4.125 | 4.125 |
+| admitted memories that were relevant | — | 9/18 (0.500) | 4/18 (0.222) |
+
+Per-repository-shape split, which is a mandatory reporting line rather than a courtesy:
+
+| Cohort | Tasks | recall@10 before | recall@10 after |
+|---|---|---|---|
+| Connected (seeds have neighbours) | 6 | 0.3750 | 0.8056 |
+| Inert (seeds are isolated files) | 2 | 0.7500 | 0.7500 |
+
+## The headline gap is not the mechanism's benefit
+
+`B − A` is +0.3229. **That is not what the graph is worth.** This corpus has eighteen
+memories over fourteen files, so a *randomly* adjacent memory is relevant often enough
+that admitting any three raises recall on its own — which is exactly what arm C measures.
+Split honestly:
+
+- **+0.1562** — "any three extra memories". A wrong graph buys this.
+- **+0.1667** — attributable to the adjacency being correct.
+
+Admission precision separates the arms more cleanly than recall does: 0.500 with the true
+graph against 0.222 with the rotated one.
+
+## What this costs — the negative result
+
+Precision@5 falls from 0.7812 to 0.6000. Three admissions per retrieval is three more
+memories in front of a model, and a recall gain bought at an unreported cost is not a
+gain. MRR does not move in any arm, which is the ranking floor working: no structural
+admission can outrank an identity match.
+
+With a fully wrong adjacency, precision@5 falls to 0.4875 and fourteen of eighteen
+admissions are wasted — but recall never falls below arm A in any arm or on any single
+task, because admissions are added to the result rather than swapped into it.
+
+## Claim ceiling
+
+This is a **synthetic authored corpus**. It shows the mechanism does what it was built to
+do where the right answer is known. It is not a field result, it says nothing about any
+real repository, and it is not comparable to `visp-kit`'s context-pack measurements —
+different system, different corpus, different metric. Memory's claim this round is
+conformance against intel's vectors plus this benchmark, and nothing beyond it.
