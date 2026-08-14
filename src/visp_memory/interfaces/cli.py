@@ -18,6 +18,7 @@ Usage:
 
 import json
 import os
+import shlex
 from datetime import datetime
 from pathlib import Path
 from typing import Any, List, Optional
@@ -38,6 +39,12 @@ from visp_memory.core.authority import (
 )
 from visp_memory.core.beliefs import BeliefType
 from visp_memory.core.clock import parse_utc, utc_now
+from visp_memory.core.contract_recall import (
+    STRATEGY_TEXT,
+    admission_reason,
+    recall_for_task,
+    structural_caveat,
+)
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID
 from visp_memory.core.ranking import projected_importance
 from visp_memory.core.reporting import MemoryIntelligenceReporter
@@ -3162,6 +3169,17 @@ def status():
 # recall (read) and propose (a quarantined proposal through the reviewed
 # lifecycle — never a direct durable write). The envelope is versioned so a
 # consumer can detect an incompatible Memory instead of misreading it.
+#
+# Tiny is about the number of VERBS, not about how much the coordinator may say.
+# `recall` takes the task, its files, its symbols, its constraints, the session
+# and the declared scopes, because retrieval is only as good as its description
+# of the work — that is what reaches the code graph. Every one of them is
+# optional, and all of them absent is the earlier envelope, byte for byte.
+#
+# Every statement this surface makes about itself is a statement an integrator
+# will believe and build on. `propose`'s note claimed no command could accept a
+# proposal for as long as `review accept` existed; that cost the feature to
+# everyone who read it. Say what the CLI can do, and no more.
 
 MEMORY_CONTRACT_VERSION = "1.0"
 
@@ -3199,28 +3217,86 @@ def contract_recall(
         None, "--repo", help="Repository scope (required unless configured in the project)."
     ),
     endpoint: str = typer.Option(
-        None, "--endpoint", help="Accepted for forward compatibility; local config wins."
+        None,
+        "--endpoint",
+        help=(
+            "Ignored. Accepted so a coordinator's argument list stays stable; this "
+            "command always reads the locally configured store and contacts nothing."
+        ),
     ),
     json_output: bool = typer.Option(True, "--json", help="Machine-readable output (always on)."),
+    task: str = typer.Option(
+        None, "--task", "-t", help="What the coordinator is working on, for ranking."
+    ),
+    file: List[str] = typer.Option(
+        None,
+        "--file",
+        "-f",
+        help=(
+            "A file the task touches (repeatable). Memories tagged with it, and "
+            "memories within two import/test hops of it when a code-graph "
+            "projection is configured, are added to the text result."
+        ),
+    ),
+    symbol: List[str] = typer.Option(
+        None, "--symbol", "-s", help="A symbol the task touches (repeatable)."
+    ),
+    constraint: List[str] = typer.Option(
+        None, "--constraint", "-c", help="A constraint the task must preserve (repeatable)."
+    ),
+    session: str = typer.Option(None, "--session", help="Session id, for continuity ranking."),
+    environment: List[str] = typer.Option(
+        None, "--environment", help="Runtime environment scope (repeatable)."
+    ),
+    task_type: List[str] = typer.Option(
+        None, "--task-type", help="Task type scope (repeatable)."
+    ),
+    as_of: str = typer.Option(
+        None, "--as-of", help="Answer as the store stood at this timestamp."
+    ),
 ):
-    """Retrieve relevant memories as a contract-1.0 envelope."""
+    """Retrieve relevant memories as a contract-1.0 envelope.
+
+    With no task context this is text recall, unchanged. Naming the task's files
+    or symbols additionally reaches the code graph: see
+    :mod:`visp_memory.core.contract_recall` for what that may and may not do.
+    """
     del endpoint, json_output
     try:
         memory = get_memory()
-        recall_kwargs = {} if min_score is None else {"min_score": max(0.0, min(1.0, min_score))}
-        results = memory.recall(
-            query, repo_id=_repo_scope(memory, repo), limit=10, **recall_kwargs
+        outcome = recall_for_task(
+            memory,
+            query,
+            repo_id=_repo_scope(memory, repo),
+            limit=10,
+            min_score=None if min_score is None else max(0.0, min(1.0, min_score)),
+            task=task,
+            files=list(file) if file else None,
+            symbols=list(symbol) if symbol else None,
+            constraints=list(constraint) if constraint else None,
+            session_id=session,
+            environment=list(environment) if environment else None,
+            task_type=list(task_type) if task_type else None,
+            as_of=as_of,
         )
     except Exception as exc:  # noqa: BLE001 - the contract reports, never crashes
         _contract_print(_contract_failure(f"recall failed: {exc}"))
         raise typer.Exit(1)
 
+    admitted_ids = {str(item.get("id")) for item in outcome.admissions}
     entries = []
-    for item in results:
+    for item in outcome.results:
+        admitted = str(item.get("id")) in admitted_ids
         epistemic = item.get("epistemic_status")
-        caveat = None
+        caveats = []
         if epistemic in {"hypothesized", "contradicted", "stale"}:
-            caveat = f"epistemic status: {epistemic}"
+            caveats.append(f"epistemic status: {epistemic}")
+        # A structural admission is near the work, not about it, and the caveat
+        # field is the one place an integrator is already reading.
+        structural = structural_caveat(item) if admitted else None
+        if structural:
+            caveats.append(structural)
+        reached_by = admission_reason(item) if admitted else None
         entries.append(
             {
                 "kind": str(
@@ -3230,7 +3306,8 @@ def contract_recall(
                     or "memory"
                 ),
                 "content": str(item.get("content", "")),
-                **({"caveat": caveat} if caveat else {}),
+                **({"caveat": "; ".join(caveats)} if caveats else {}),
+                **({"reachedBy": reached_by} if reached_by else {}),
             }
         )
     # The human CLI signposts matching intents on an empty recall; the machine
@@ -3241,12 +3318,17 @@ def contract_recall(
     if not entries:
         intent_matches = _intents_matching(memory, query, _repo_scope(memory, repo))
 
+    # `retrieval` appears only when the caller asked for more than text, so a
+    # coordinator that has not been upgraded still receives the exact bytes it
+    # received before this existed.
+    diagnostics = outcome.diagnostics()
     _contract_print(
         {
             "contractVersion": MEMORY_CONTRACT_VERSION,
             "success": True,
             "entries": entries,
             **({"intentMatches": intent_matches} if intent_matches > 0 else {}),
+            **({"retrieval": diagnostics} if outcome.strategy != STRATEGY_TEXT else {}),
         }
     )
 
@@ -3258,7 +3340,12 @@ def contract_propose(
         None, "--repo", help="Repository scope (required unless configured in the project)."
     ),
     endpoint: str = typer.Option(
-        None, "--endpoint", help="Accepted for forward compatibility; local config wins."
+        None,
+        "--endpoint",
+        help=(
+            "Ignored. Accepted so a coordinator's argument list stays stable; this "
+            "command always reads the locally configured store and contacts nothing."
+        ),
     ),
     json_output: bool = typer.Option(True, "--json", help="Machine-readable output (always on)."),
 ):
@@ -3266,11 +3353,12 @@ def contract_propose(
     del endpoint, json_output
     try:
         memory = get_memory()
+        scope = _repo_scope(memory, repo)
         memory_id = memory.record(
             content,
             category="note",
             importance=0.5,
-            repo_id=_repo_scope(memory, repo),
+            repo_id=scope,
         )
         # The proposal enters the reviewed lifecycle, not active service:
         # recall serves status="active" only, so a quarantined row is invisible
@@ -3297,11 +3385,20 @@ def contract_propose(
         _contract_print(_contract_failure(f"propose failed: {exc}"))
         raise typer.Exit(1)
 
-    # Disclose the state rather than implying durability. The proposal is real
-    # and stored, but NO command this CLI exposes can accept it, so `recall`
-    # will never return it. Reporting a bare success with an id invited an
-    # integrator to build a pipeline that stores nothing; saying so plainly is
-    # the honest minimum until the acceptance path exists.
+    # Disclose the state rather than implying durability, and name the way out.
+    # This note said "No CLI command currently accepts a proposal" for as long
+    # as `review accept` existed and worked: the product denied its own working
+    # feature to the only audience that reads this string. An integrator who
+    # believes it builds a pipeline that stores nothing, which is the same
+    # damage the bare-success version did, arrived at by the opposite lie.
+    #
+    # The commands carry the scope this proposal was actually written to.
+    # `review accept` refuses a proposal from another scope — correctly — so a
+    # scope-less instruction would be a second false statement for any caller
+    # that passed --repo.
+    review_scope = f" --repo {shlex.quote(scope)}" if scope else ""
+    accept_command = f"visp-memory review accept {memory_id}{review_scope}"
+    reject_command = f"visp-memory review reject {memory_id}{review_scope}"
     _contract_print(
         {
             "contractVersion": MEMORY_CONTRACT_VERSION,
@@ -3311,10 +3408,14 @@ def contract_propose(
             "durable": False,
             "note": (
                 "Stored as a quarantined proposal. It is NOT retrievable by "
-                "`contract recall`, which serves active memories only. No CLI "
-                "command currently accepts a proposal, so this content stays "
-                "invisible until the reviewed lifecycle is implemented."
+                "`contract recall`, which serves active memories only. A human "
+                f"decides: `visp-memory review list{review_scope}` shows what is "
+                f"waiting, `{accept_command}` makes it durable and recall serves "
+                f"it from then on, and `{reject_command}` keeps it for audit "
+                "without ever serving it."
             ),
+            "acceptCommand": accept_command,
+            "rejectCommand": reject_command,
         }
     )
 
