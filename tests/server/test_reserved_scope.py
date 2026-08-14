@@ -20,7 +20,6 @@ Two things must hold, and they are different claims:
 The tests are written against those two, not against today's behaviour.
 """
 
-from unittest import mock
 
 import pytest
 

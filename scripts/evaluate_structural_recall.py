@@ -3,7 +3,7 @@
 
 WHAT THIS IS, AND WHAT IT IS NOT
 --------------------------------
-This is a **synthetic-corpus benchmark**. The repository is fourteen files invented
+This is a **synthetic-corpus benchmark**. The repository is thirteen files invented
 here, the memories are eighteen sentences written here, and the relevance labels are
 authored here by the rule stated below. It measures whether the mechanism does the
 thing it was built to do on a corpus where the right answer is known.

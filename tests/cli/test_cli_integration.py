@@ -10,8 +10,8 @@ import hashlib
 import json
 import re
 import tempfile
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -737,6 +737,52 @@ class TestCLIListCommands:
         assert result.exit_code == 0
         # Check that the goal appears in output (case-insensitive)
         assert "implement feature x" in result.output.lower()
+
+    def test_the_two_intent_listings_are_one_behaviour(self, cli_env):
+        """`list-intents` and `intent list` must not be able to drift apart.
+
+        They shipped as two identical function bodies. Both help strings now
+        promise the same output, and this asserts the promise rather than the
+        implementation: it compares what a user sees, so collapsing them to one
+        helper -- or to one command -- keeps passing, and a fix applied to only
+        one of them fails.
+        """
+        runner.invoke(app, ["init", "--type", "code"])
+        runner.invoke(app, ["goal", "Ship the release", "--priority", "3"])
+        runner.invoke(app, ["goal", "Second objective"])
+
+        for status in ("active", "all"):
+            flat = runner.invoke(app, ["list-intents", "--status", status])
+            grouped = runner.invoke(app, ["intent", "list", "--status", status])
+
+            assert flat.exit_code == 0
+            assert grouped.exit_code == 0
+            assert flat.output == grouped.output
+            assert "Ship the release" in flat.output
+
+        # And they reject the same bad input the same way.
+        flat_bad = runner.invoke(app, ["list-intents", "--status", "nonsense"])
+        grouped_bad = runner.invoke(app, ["intent", "list", "--status", "nonsense"])
+        assert flat_bad.exit_code != 0
+        assert grouped_bad.exit_code == flat_bad.exit_code
+
+    def test_removed_commands_stay_removed(self, cli_env):
+        """`relevant` was deleted before publication; it must not creep back.
+
+        It was an undocumented, untested fourth way to ask "what is relevant to
+        this task", without --repo, without --json, and truncating content at 80
+        characters. `brief`, `preview` and `context` answer the same question
+        properly. A reader who finds this test should read the note left at its
+        old site in cli.py before re-adding anything by that name.
+        """
+        runner.invoke(app, ["init", "--type", "code"])
+
+        result = runner.invoke(app, ["relevant", "--task", "anything"])
+
+        assert result.exit_code != 0
+        # The survivors, which are what the removal was justified by.
+        for survivor in (["brief", "some task"], ["preview", "some task"], ["context"]):
+            assert runner.invoke(app, survivor).exit_code == 0
 
     def test_intent_subcommands_update_and_record_close_outcome(self, cli_env):
         """Intent close records history but cannot transition workflow state."""

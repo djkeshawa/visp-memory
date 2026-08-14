@@ -40,6 +40,25 @@ def test_the_measured_figures_are_the_ones_reported():
     assert attribution["admitted_precision_misleading_graph"] == 0.2222
 
 
+def test_the_described_fixture_is_the_fixture():
+    """The Setup paragraph in docs/BENCHMARK.md is a claim like any other.
+
+    It said "fourteen invented files" while the graph had thirteen, and "some
+    labelled memories are structurally unreachable" while exactly one was. Small
+    errors, but they are the corpus a reader sizes every score against, and prose
+    that nobody re-derives is how the other seven wrong claims survived.
+    """
+    fixture = evaluate()["fixture"]
+
+    assert fixture == {
+        "files": 13,
+        "labels": 24,
+        "memories": 18,
+        "tasks": 8,
+        "unreachable_labels": 1,
+    }
+
+
 def test_the_cost_is_reported_and_not_zero():
     """Recall bought at an unreported cost is not a result."""
     metrics = evaluate()

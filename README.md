@@ -53,8 +53,15 @@ methodology, the caveats, and the negative results.
 | Poisoned-memory retrieval ([MemoryGraft](https://arxiv.org/html/2512.16962v1) setup) | 56.3% | **0.0%** |
 
 **What it costs:** recall is 0.62, not 1.00 — abstaining leaves about a third of the
-genuinely relevant memories on the floor. **What it does not claim:** no code-quality
-improvement (the one controlled study found none), and no live-agent results.
+genuinely relevant memories on the floor.
+
+**What it does not claim.** Every figure above comes from a small, authored corpus
+run without a live model. They say the selection policy behaves as designed; they do
+not say memory makes an agent's code better. No result in this repository does. The
+controlled A/B that would have addressed it was designed and preregistered for this
+release and then could not be run — the model access it needed was exhausted, 9
+usable pairs out of 152 planned — so **the accuracy question is open and this package
+ships with it open.** Details in [What is not measured](#what-is-not-measured).
 
 Try it on your own repository without touching it:
 
@@ -86,6 +93,7 @@ and cross-repo features are frozen. See
 | [**docs/deployment/RELEASING.md**](docs/deployment/RELEASING.md) | How to create releases |
 | [**docs/development/ARCHITECTURE.md**](docs/development/ARCHITECTURE.md) | System architecture and core components |
 | [**docs/development/MCP.md**](docs/development/MCP.md) | MCP setup, tools, examples, and verification |
+| [**docs/development/CONTRACT_SURFACE.md**](docs/development/CONTRACT_SURFACE.md) | The `contract` JSON surface for coordinators — and what is deliberately not on it |
 | [**docs/development/TESTING.md**](docs/development/TESTING.md) | Testing practices and guidelines |
 | [**docs/development/STORAGE.md**](docs/development/STORAGE.md) | Storage backends comparison and configuration |
 | [**scripts/evaluate_agent_ab.py**](scripts/evaluate_agent_ab.py) | Deterministic A/B benchmark for memory-assisted agent behavior |
@@ -368,16 +376,22 @@ Generate a compact project context for pasting into an assistant:
 visp-memory context
 ```
 
-### 5. Measure Token Savings
+### 5. Estimate Token Footprint
 
-See how many tokens your memory layer saves — auditable consolidation savings
-(many episodic memories compressed into compact semantic knowledge) plus context
-compactness (injected context vs. the full active store):
+Report two figures about your own store: consolidation deltas (how much smaller a
+compressed semantic memory is than the episodic memories it replaced) and context
+compactness (injected context versus the full active store):
 
 ```bash
 visp-memory tokens
 visp-memory tokens --format json
 ```
+
+Both are **estimates against a hypothetical baseline**, not observed savings. Token
+counts use `tiktoken` when it is installed and a chars/words heuristic otherwise, and
+the compactness figure compares against injecting your entire store — which is not
+something you would ever do. Read it as "how tight is the context I emit", not as
+tokens you were billed and no longer are.
 
 ### Migrate Between Backends
 
@@ -394,10 +408,17 @@ VISP_MEMORY_STORAGE_BACKEND=sqlite visp-memory import memory.json
 
 ## 🧪 Evaluate Agent Usefulness
 
-Visp Memory includes deterministic evaluation scripts so you can measure whether
-memory actually improves an agent workflow before wiring in a live model. These
-benchmarks use isolated SQLite stores and noop embeddings by default, so they do
-not require network access or API keys.
+Visp Memory includes deterministic evaluation scripts that check the retrieval
+machinery end to end on fixed fixtures. They use isolated SQLite stores and noop
+embeddings by default, so they need no network access and no API keys.
+
+**Read the next number carefully.** These scripts measure the *mechanism* — does
+the right memory reach the prompt, does the wrong one get refused, is the result
+the same on every run. They do **not** measure whether an agent with memory writes
+better code. Nothing in this repository measures that, and the one external
+controlled study of the question found no code-quality improvement. Every rate
+below is a property of a hand-built fixture; none of it is evidence about your
+repository. See "What is not measured" below.
 
 ### Agent A/B Benchmark
 
@@ -428,12 +449,20 @@ With memory:
 
 Risk reduction: 100% points (100% relative)
 Token proxy delta: +25.4 mean words/case
-Latency delta: +2.5 ms/case
+Latency delta: +5.9 ms/case
 ```
 
-Use this when you want a repeatable signal that project memory can surface
-guardrails, cite relevant facts, abstain on unknown secrets, and avoid risky
-agent actions. It is a deterministic proxy, not a full live-LLM coding benchmark.
+The latency line is the only machine-dependent number here; the rest are
+deterministic and identical on every run.
+
+**What those rates are and are not.** The "no memory" arm is a scripted plan
+written into the fixture, not an agent that was run. Its 0% success and 100% risky
+actions are authored, chosen to represent an agent working without the relevant
+warning — so the 100-point gap is the fixture's design, not a measurement of what
+memory earns. What the run genuinely establishes is that the memory path is
+*capable*: given a store that contains the guardrail, retrieval surfaces it, the
+answer cites it, and the unanswerable case abstains rather than guessing — five
+times out of five, reproducibly. Capability, not benefit.
 
 ### Grounding And Intelligence Checks
 
@@ -452,10 +481,34 @@ python3 scripts/benchmark_memory.py --items 100 --json
 python3 scripts/benchmark_memory.py --backend arcadedb --items 100 --json
 ```
 
-For a stronger live-agent study, reuse the same case set with your model runner:
-run each task once without memory context and once after calling `visp-memory
-recall`, MCP `memory_before_change`, or `/ai/ask`; then score task success,
-wrong edits avoided, citation coverage, token use, and latency.
+### What is not measured
+
+The honest boundary of everything above, stated once, plainly:
+
+- **No live model has been run against these cases.** Every arm is a deterministic
+  proxy over authored fixtures. A powered A/B against a real model was designed for
+  this release — paired, preregistered, with a stated effect-size bar — and could not
+  be executed: the model surface it depended on returned HTTP 403 with the account's
+  usage limit exhausted, and only 9 usable pairs were collected. Nine perfectly
+  concordant pairs resolve nothing, and are reported as resolving nothing. **The
+  accuracy question is open, not answered.**
+- **No result here is evidence about your repository.** The corpora are small,
+  invented, and written by the same people who wrote the retrieval policy. Synthetic
+  memories are cleaner and more distinguishable than a real project's history, which
+  makes every selection score here an optimistic bound.
+- **No code-quality benefit is claimed.** The only controlled study of the underlying
+  question found none. That the mechanism works is demonstrated; that it makes the
+  code better is not, by anything in this repository.
+
+That gap is deliberate to state rather than to imply. If you need the benefit
+established before you depend on it, run the study below and treat this package as
+unproven until you have.
+
+For a live-agent study, reuse the same case set with your model runner: run each
+task once without memory context and once after calling `visp-memory recall`, MCP
+`memory_before_change`, or `/ai/ask`; then score task success, wrong edits avoided,
+citation coverage, token use, and latency. Pair the runs, fix the analysis before
+the first cell, and report the sample size you actually reached.
 
 ---
 
@@ -529,14 +582,23 @@ Add to your `claude_desktop_config.json`:
 Every advertised MCP tool definition costs context tokens in *every* session. Set
 `VISP_MEMORY_MCP_PROFILE` to control how many tools are exposed:
 
-| Profile | Tools | Use when |
-|---------|-------|----------|
-| `core` (default) | 19 — the everyday recall-before-work / record-after-work loop | Default; the leanest context footprint |
-| `full` | All 36 | You want every advanced/maintenance tool advertised |
+| Profile | Tools | Advertised schema | Use when |
+|---------|-------|-------------------|----------|
+| `readonly` | 6 — retrieval and context only, no tool that writes | 5.3 KB | You want the assistant to read memory and never change it |
+| `core` (default) | 17 — the everyday recall-before-work / record-after-work loop | 12.0 KB | Default; the leanest footprint that still closes the loop |
+| `full` | All 36 | 19.9 KB | You want every advanced/maintenance tool advertised |
 
-The `core` profile cuts tool-schema overhead by roughly 40% (~1,250 fewer tokens per
-session in a typical setup). Hidden tools still work if a client calls them by name;
-the profile only changes what is advertised.
+The `core` profile cuts the advertised tool-schema payload by about **39%** against
+`full`. Hidden tools still work if a client calls them by name; the profile only
+changes what is advertised.
+
+Sizes are the serialised name, description, and input schema of every advertised
+tool — exactly what an MCP client loads into context — measured by
+`tests/interfaces/test_mcp_profile_footprint.py`, which fails if a profile drifts
+away from the figures printed here. They are **not** quoted in tokens: tokenisation
+is model-specific, this package ships no tokeniser, and the earlier "~1,250 fewer
+tokens" in this table was an estimate nothing had checked. As a rough guide, divide
+by three to four.
 
 Prepare a task in one call:
 

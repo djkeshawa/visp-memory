@@ -81,21 +81,32 @@ across Claude Code, Codex, and Cursor with minimal machinery, they get you there
 characters of context per prompt. On the evidence in
 [SWE-ContextBench](https://arxiv.org/abs/2602.08316), that is the wrong side of a
 measurable trade: unfiltered context scored 12.12 points *below* curated context and cost
-more than using no memory at all. This project injects at most ~300 tokens and frequently
-nothing. Neither of those tools publishes benchmarks or has an integrity story, so this is
+more than using no memory at all. On its automatic-injection path this project is capped
+at 4 memories and 1,200 characters — roughly 300 tokens — and frequently injects nothing
+(`DEFAULT_MAX_MEMORIES` / `DEFAULT_MAX_CHARS` in `core/injection.py`; see
+[INJECTION_POLICY.md](development/INJECTION_POLICY.md)). Explicitly requested context is
+larger by design: `visp-memory brief` defaults to a 2,000-token budget because you asked
+for it. Neither of those tools publishes benchmarks or has an integrity story, so this is
 a real difference in approach rather than marketing.
 
 ## What this project actually claims
 
-Only what is measured, reproducibly, in CI:
+Each row names the artifact that produces it. Every row except the first is a CI
+script; the first is a command you run yourself, because a mining rate depends on
+your history and no fixed number would be true of your repository.
 
 | Claim | Evidence |
 |---|---|
-| Useful in the first minute, not after weeks | `visp-memory init` mined 107 curated memories from a 117-commit history in under 5s; run `./scripts/demo.sh` against your own repo |
-| Injects far less, far more precisely | 1.00 precision at ~15 tokens/task vs 0.09 at ~190 for naive retrieval ([BENCHMARK.md](BENCHMARK.md)) |
-| Knows when to say nothing | 0 false alarms on tasks no memory can help with; naive retrieval fired on 4 of 5 |
-| Resists poisoned memory | 56.3% → 0% poisoned-retrieval, with 5/5 legitimate answers retained ([TRUST.md](TRUST.md)) |
-| Knows when its memories went stale | Memories anchored to deleted code are withheld |
+| Useful in the first minute, not after weeks | `visp-memory init` mines your existing git history at init time, in seconds. Reproduce it on your own repo with `./scripts/demo.sh` — the number it prints is the only one that matters to you. This row previously quoted "107 memories from 117 commits in under 5s" from an unnamed repository on an unnamed machine, which nothing reproduced. |
+| Injects far less, far more precisely | 1.00 precision at ~15 tokens/task vs 0.09 at ~190 for naive retrieval ([BENCHMARK.md](BENCHMARK.md), `scripts/evaluate_oracle_gap.py`) |
+| Knows when to say nothing | 0 false alarms on tasks no memory can help with; naive retrieval fired on 4 of 5 (same script) |
+| Resists poisoned memory | 56.3% → 0% poisoned-retrieval, with 5/5 legitimate answers retained ([TRUST.md](TRUST.md), `scripts/evaluate_poisoning.py`) |
+| Knows when its memories went stale | Memories anchored to deleted code are withheld (behavioural, not a rate) |
+
+Every rate above is measured on a small authored corpus with no live model. They are
+evidence that the selection policy behaves as specified. They are not evidence that
+using this package improves the code an agent writes — see the exclusions below, which
+are as much a part of the claim as the table is.
 
 And what it does **not** claim:
 

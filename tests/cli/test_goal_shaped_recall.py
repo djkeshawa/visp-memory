@@ -50,7 +50,9 @@ class TestGoalShapedRecall:
         assert "YYYY-MM-DD" in contents, envelope
 
     def test_an_unrelated_goal_still_returns_nothing(self):
-        recorded = _invoke("record", "The deploy pipeline uses blue-green cutover", "--repo", "demo-repo")
+        recorded = _invoke(
+            "record", "The deploy pipeline uses blue-green cutover", "--repo", "demo-repo"
+        )
         assert recorded.exit_code == 0, recorded.output
 
         result = _invoke(

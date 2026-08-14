@@ -122,10 +122,13 @@ every identity match.
 
 ## Setup
 
-Fourteen invented files with a realistic import graph — including two isolated files and
-two test files — eighteen authored memories, and eight tasks with hand-labelled
-relevance, each label carrying a written reason. Some labelled memories are structurally
-unreachable, so a perfect structural signal still cannot score 1.0.
+Thirteen invented files with a realistic import graph — including two isolated files
+and two test files — eighteen authored memories, and eight tasks carrying twenty-four
+hand-labelled relevance judgements, each with a written reason. One labelled memory is
+structurally unreachable, so a perfect structural signal still cannot score 1.0.
+
+Every count in this paragraph is emitted by the script itself under `fixture` in
+`--json` output; read it there rather than trusting this prose.
 
 Three arms over identical fixtures:
 
@@ -155,7 +158,7 @@ Per-repository-shape split, which is a mandatory reporting line rather than a co
 ## The headline gap is not the mechanism's benefit
 
 `B − A` is +0.3229. **That is not what the graph is worth.** This corpus has eighteen
-memories over fourteen files, so a *randomly* adjacent memory is relevant often enough
+memories over thirteen files, so a *randomly* adjacent memory is relevant often enough
 that admitting any three raises recall on its own — which is exactly what arm C measures.
 Split honestly:
 

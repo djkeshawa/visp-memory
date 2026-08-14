@@ -14,8 +14,6 @@ it out of their history.
 import subprocess
 from pathlib import Path
 
-import pytest
-
 from visp_memory.interfaces.cli import ensure_gitignored
 
 

@@ -19,7 +19,7 @@ that path. Anything outside it is honestly labelled rather than quietly implied.
 |------|--------|-------|
 | CLI (`record`, `recall`, `decision`, `warn`, `goal`, `context`, `brief`) | Stable | The primary interface. |
 | SQLite storage | Stable | Default. No external service. |
-| MCP server (`core` profile) | Stable | Default surface, 19 tools. |
+| MCP server (`core` profile) | Stable | Default surface, 17 tools. `readonly` exposes 6; `full` exposes 36. |
 | Keyword recall (no embeddings) | Stable | Default when no provider is configured. |
 | Semantic recall (OpenAI / OpenRouter / Ollama / sentence-transformers) | Stable | Auto-selected when available. |
 | Git capture (`sync_history`, commit/merge hooks) | Stable | Foundation of first-run bootstrap. |

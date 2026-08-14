@@ -42,7 +42,16 @@ htmlcov/
 
 # Project specific
 .visp-memory/data/
+# The store this package created for itself under its previous name. Still on
+# disk in some checkouts, still full of real local memories.
+.llm-memory/
 *.db
+# SQLite's write-ahead sidecars. `*.db` alone left these stageable, so a
+# `git add -A` before publication would have committed the contents of a local
+# store that the line above exists to keep out.
+*.db-wal
+*.db-shm
+*.db-journal
 chroma_db/
 # Local docker-compose secrets (use .env.example as the template)
 .env

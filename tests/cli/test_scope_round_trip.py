@@ -76,7 +76,8 @@ class TestUnscopedRoundTrip:
             f"{found.exception!r}. A store that accepts a write it can never serve is worse "
             "than one that refuses the write: the user is told it worked."
         )
-        assert CONTENT in found.stdout.replace("\n", " ").replace("  ", " ") or "retry" in found.stdout, (
+        normalised = found.stdout.replace("\n", " ").replace("  ", " ")
+        assert CONTENT in normalised or "retry" in found.stdout, (
             "recall succeeded but did not return the memory record just accepted. "
             f"Output: {found.stdout!r}"
         )

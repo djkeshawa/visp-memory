@@ -508,7 +508,10 @@ saving is made measurable (`core/tokens.py`, `Memory.token_efficiency()`, the
   (`token_savings`). This is an auditable, source-grounded figure.
 - **Context compactness** — the injected project context versus the full active store.
 - The MCP tool surface is itself token-aware: `VISP_MEMORY_MCP_PROFILE=core` advertises
-  only the everyday tools, roughly halving per-session tool-schema overhead.
+  only the everyday tools — 17 of 36, cutting the advertised schema payload from 19.9 KB
+  to 12.0 KB, about 39%. This line previously said "roughly halving" while the README
+  said "roughly 40%"; neither had been measured. It is now measured by
+  `tests/interfaces/test_mcp_profile_footprint.py` and both documents quote that test.
 
 ### Context Generation
 

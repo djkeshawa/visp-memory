@@ -24,12 +24,12 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 import typer
-from typer.core import TyperGroup
 from rich.console import Console, Group
 from rich.layout import Layout
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
+from typer.core import TyperGroup
 
 from visp_memory import Memory, MemoryConfig, __version__
 from visp_memory.config import load_config
@@ -1051,17 +1051,19 @@ def done():
     )
 
 
-@intent_app.command("list")
-def intent_list(
-    repo: str = typer.Option(None, "--repo", "-r", help="Filter by repository"),
-    status: str = typer.Option(
-        "active",
-        "--status",
-        help="Filter by status: active, completed, closed, or all",
-    ),
-):
-    """List intents by status."""
-    if status not in {"active", "completed", "closed", "all"}:
+INTENT_STATUSES = frozenset({"active", "completed", "closed", "all"})
+
+
+def _print_intents(repo: Optional[str], status: str) -> None:
+    """Render the intent table. Shared by `list-intents` and `intent list`.
+
+    These two commands shipped as separate, byte-identical function bodies. Two
+    copies of one behaviour is one copy that will eventually be wrong: a fix to
+    the status filter or the scope lookup lands in whichever the author happened
+    to open. Which of the two names should survive is the owner's call; that they
+    should not be two implementations is not.
+    """
+    if status not in INTENT_STATUSES:
         raise typer.BadParameter("status must be active, completed, closed, or all")
 
     memory = get_memory()
@@ -1075,6 +1077,19 @@ def intent_list(
         return
 
     console.print(_intent_table(intents, title=f"{status.title()} Intents"))
+
+
+@intent_app.command("list")
+def intent_list(
+    repo: str = typer.Option(None, "--repo", "-r", help="Filter by repository"),
+    status: str = typer.Option(
+        "active",
+        "--status",
+        help="Filter by status: active, completed, closed, or all",
+    ),
+):
+    """List intents by status. Same output as the top-level `list-intents`."""
+    _print_intents(repo, status)
 
 
 @intent_app.command("update")
@@ -1659,34 +1674,15 @@ def brief(
         console.print(Markdown(result["context"]))
 
 
-@app.command()
-def relevant(
-    task: str = typer.Option(None, "--task", "-t", help="Task description"),
-    files: List[str] = typer.Option(None, "--file", "-f", help="Files being worked on"),
-):
-    """Get memories relevant to a task or files."""
-    memory = get_memory()
-
-    if not task and not files:
-        console.print("[yellow]Provide --task or --file[/yellow]")
-        raise typer.Exit(1)
-
-    results = memory.relevant_for(task=task, files=files)
-
-    if results["knowledge"]:
-        console.print(Panel("[bold]Relevant Knowledge[/bold]"))
-        for k in results["knowledge"][:5]:
-            console.print(f"  - {k['content'][:80]}...")
-
-    if results["warnings"]:
-        console.print(Panel("[bold yellow]Warnings[/bold yellow]"))
-        for w in results["warnings"][:5]:
-            console.print(f"  - {w['content']}")
-
-    if results["history"]:
-        console.print(Panel("[bold]Related History[/bold]"))
-        for h in results["history"][:5]:
-            console.print(f"  - [{h['category']}] {h['content'][:60]}...")
+# `relevant` was removed before publication. It took --task/--file and printed
+# whatever Memory.relevant_for returned, and it was the worst of the four commands
+# that answer that question: `brief` cites and budgets, `preview` shows the
+# injection decision and why, `context` emits the full scoped context. `relevant`
+# had no --repo (so it could not be pointed at another repository the way every
+# sibling can), no --json (so nothing could consume it), and truncated content at
+# 80 characters with a hard-coded "..." that made a warning unreadable at exactly
+# the moment it mattered. No documentation referenced it and no test covered it.
+# Memory.relevant_for itself is retained and still used by the MCP surface.
 
 
 # =============================================================================
@@ -2178,21 +2174,8 @@ def list_intents(
         help="Filter by status: active, completed, closed, or all",
     ),
 ):
-    """List intents/goals."""
-    if status not in {"active", "completed", "closed", "all"}:
-        raise typer.BadParameter("status must be active, completed, closed, or all")
-
-    memory = get_memory()
-    intents = memory._storage.get_active_intents(
-        repo_id=_repo_scope(memory, repo),
-        status=status,
-    )
-
-    if not intents:
-        console.print(f"[yellow]No {status} intents[/yellow]")
-        return
-
-    console.print(_intent_table(intents, title=f"{status.title()} Intents"))
+    """List intents/goals. Same output as `intent list`."""
+    _print_intents(repo, status)
 
 
 @app.command()
@@ -2455,7 +2438,11 @@ def capture_tests(report: str = typer.Argument("report.xml", help="Path to JUnit
 # Repository Commands (Phase 3.2)
 # =============================================================================
 
-repo_app = typer.Typer(help="Repository management")
+# FROZEN. docs/FEATURE_STATUS.md marks cross-repo aggregation frozen: implemented
+# and tested, not actively developed, and dependent on the team server. `--help`
+# is the only status a user reads before typing a command, so it says so here too
+# rather than only in a document they may never open.
+repo_app = typer.Typer(help="[FROZEN] Cross-repository registration and dependencies")
 app.add_typer(repo_app, name="repos")
 
 
@@ -2570,10 +2557,14 @@ def repo_context(
 # Team Commands (Phase 3.3)
 # =============================================================================
 
-team_app = typer.Typer(help="Team and user management")
+# FROZEN, and only meaningful against the multi-user server. See the note on
+# repo_app above: a frozen feature that looks first-class in `--help` is a claim.
+team_app = typer.Typer(help="[FROZEN] Team and user management (multi-user server only)")
 app.add_typer(team_app, name="teams")
 
-admin_app = typer.Typer(help="Dashboard administrator management")
+admin_app = typer.Typer(
+    help="[FROZEN] Dashboard administrator management (multi-user server only)"
+)
 app.add_typer(admin_app, name="admin")
 
 
