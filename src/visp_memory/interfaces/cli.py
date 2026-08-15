@@ -49,6 +49,7 @@ from visp_memory.core.eligibility import UNSCOPED_REPO_ID
 from visp_memory.core.ranking import projected_importance
 from visp_memory.core.reporting import MemoryIntelligenceReporter
 from visp_memory.core.trust import WriteChannel
+from visp_memory.hooks.reachability import ReachabilityReport, check_reachability
 
 console = Console()
 
@@ -521,6 +522,10 @@ def _doctor_payload(verify_providers: bool = True) -> dict[str, Any]:
         },
         "storage": _storage_doctor_status(config),
         "providers": {"embedding": _embedding_provider_status(config, verify=verify_providers)},
+        # A store an agent cannot find is a store that will stay empty. Diagnostics
+        # that report only storage and providers reported "healthy" over exactly
+        # that state, so reachability is a first-class line here.
+        "agent_reachability": check_reachability(Path.cwd()).as_dict(),
     }
 
 
@@ -607,6 +612,25 @@ def _print_doctor_payload(payload: dict[str, Any], as_json: bool = False):
         f"effective={embedding['effective_provider']}, connected={embedding['connected']}"
     )
     console.print(f"Embedding status: {embedding['status']} - {embedding['status_message']}")
+
+    _print_reachability(payload.get("agent_reachability"))
+
+
+def _print_reachability(block: Optional[dict[str, Any]]) -> None:
+    """One line on whether an agent in this project could call memory at all."""
+    if not block:
+        return
+    report = ReachabilityReport(
+        status=block["status"],
+        instruction_files=list(block["instruction_files"]),
+        entry_points=list(block["entry_points"]),
+        mentions_only=list(block["mentions_only"]),
+        unreadable=list(block["unreadable"]),
+    )
+    colour = "green" if report.reachable else "yellow"
+    console.print(f"Agent reachability: [{colour}]{report.headline()}[/{colour}]")
+    if block.get("remediation"):
+        console.print(f"  [dim]Give it one:[/dim] {block['remediation']}")
 
 
 # =============================================================================
@@ -729,29 +753,34 @@ def init(
     if ignored:
         console.print(f"[dim]Added to .gitignore: {', '.join(ignored)}[/dim]")
 
-    if not mine:
-        return
+    if mine:
+        from visp_memory.capture.bootstrap import bootstrap_project
 
-    from visp_memory.capture.bootstrap import bootstrap_project
+        with console.status("Reading project history..."):
+            report = bootstrap_project(memory, Path.cwd(), limit=mine_limit)
 
-    with console.status("Reading project history..."):
-        report = bootstrap_project(memory, Path.cwd(), limit=mine_limit)
+        if report.errors and not report.total:
+            # Seeding is a bonus, never a failure: init already succeeded above.
+            console.print(f"[dim]Skipped history import: {report.errors[0]}[/dim]")
+        else:
+            console.print()
+            console.print(f"[green]{report.headline()}[/green]")
+            for line in report.detail_lines():
+                console.print(f"  [dim]•[/dim] {line}")
+            if report.errors:
+                console.print(f"  [dim]• {len(report.errors)} items could not be imported[/dim]")
 
-    if report.errors and not report.total:
-        # Seeding is a bonus, never a failure: init already succeeded above.
-        console.print(f"[dim]Skipped history import: {report.errors[0]}[/dim]")
-        return
+            if report.total:
+                console.print()
+                console.print("[dim]Try:[/dim] visp-memory recall \"why\"")
 
+    # Reported on every path, including the ones that seeded nothing. A project
+    # with no history to mine is the greenfield case, and the greenfield case is
+    # the one where an absent entry point costs the most: there is no prior
+    # context to recall, so everything memory can offer has to be written to it
+    # first — by an agent that has to be told the commands exist.
     console.print()
-    console.print(f"[green]{report.headline()}[/green]")
-    for line in report.detail_lines():
-        console.print(f"  [dim]•[/dim] {line}")
-    if report.errors:
-        console.print(f"  [dim]• {len(report.errors)} items could not be imported[/dim]")
-
-    if report.total:
-        console.print()
-        console.print("[dim]Try:[/dim] visp-memory recall \"why\"")
+    _print_reachability(check_reachability(Path.cwd()).as_dict())
 
 
 # =============================================================================

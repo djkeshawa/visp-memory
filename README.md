@@ -78,6 +78,70 @@ Try it on your own repository without touching it:
 and cross-repo features are frozen. See
 [docs/FEATURE_STATUS.md](docs/FEATURE_STATUS.md).
 
+## When this does not help
+
+### Your agent cannot find this unless you tell it to
+
+**`visp-memory init` writes nothing an agent will read.** It creates
+`visp-memory.yaml` and a gitignored data directory — a config file and a database.
+Neither one tells a coding agent that memory exists or names a single command to
+run. A repository that has run `init` and nothing else looks, from inside an agent,
+exactly like a repository where this package was never installed.
+
+That is not hypothetical. In one recorded run an agent was told to use this package
+on a project and to record and recall its decisions, and produced no memory activity
+at all. It had not crashed and it had not been called: the string `visp-memory` did
+not occur anywhere in the project tree it was working in — not in the instruction
+file it was following, not in any prompt, not in any command it was handed. It was
+obeying a workflow that never named memory, and nothing in the project contradicted
+that workflow. **There was no way in, so no way in was found.**
+
+The entry point is one command, and `doctor` will tell you whether you have one:
+
+```bash
+visp-memory doctor          # → Agent reachability: not reachable ...
+visp-memory hooks install codex        # or claude-code, cursor, aider, generic
+visp-memory doctor          # → Agent reachability: reachable - named in AGENTS.md
+```
+
+`init` reports the same line when it finishes, so the gap is visible at the moment
+it is created. Until it says `reachable`, assume your agent will not use memory no
+matter what you put in the prompt — an instruction file it is already following
+outranks a request you make once.
+
+### A first session on a brand-new project gets very little
+
+`init` seeds memory by mining git history, so **the value it can deliver on day one
+is bounded by how much history exists.** On a repository with two commits there are
+two commits to mine. On a greenfield project there is no prior decision to recall,
+because none has been made yet. If you are starting something new, this package has
+close to nothing to tell you in the first hour, and the honest expectation is that
+it starts paying on the second session and the second feature — the point where
+"why did we do it that way" has an answer that is no longer in your head.
+
+**What does work from the first minute is the write side.** Recording a decision and
+recalling it back within the same session works on an empty store, and that is the
+loop worth establishing early:
+
+```bash
+visp-memory decision "Screen wrap on all four edges" "Bouncing was rejected in the spec"
+visp-memory brief "implement screen wrap"     # → the decision, cited
+```
+
+If nobody writes anything, nothing is recalled later. That is the actual failure
+mode on new projects, and it is a workflow problem rather than a retrieval one.
+
+### The rest of the honest list
+
+- **It does not make an agent's code better, as far as anyone here has measured.**
+  No controlled A/B of this package has been run. See
+  [What is not measured](#what-is-not-measured).
+- **Team, graph, and cross-repo features are frozen** — see
+  [docs/FEATURE_STATUS.md](docs/FEATURE_STATUS.md).
+- **It abstains rather than guess.** Recall is 0.625: it will stay silent on
+  genuinely relevant memories rather than lower the bar. If you want everything
+  that might match, this is the wrong tool.
+
 ![Visp Memory Dashboard](docs/dashboard-preview.png)
 
 ---
@@ -346,7 +410,19 @@ Initialize Visp Memory in your project root:
 visp-memory init --type code
 ```
 
-### 2. Record Useful Memory
+### 2. Give your agent a way in
+
+`init` does not do this for you, and without it a coding agent has no way to learn
+that memory exists — see
+[Your agent cannot find this unless you tell it to](#your-agent-cannot-find-this-unless-you-tell-it-to).
+
+```bash
+visp-memory hooks list                 # the supported tools
+visp-memory hooks install codex        # writes the instructions into AGENTS.md
+visp-memory doctor                     # confirm: Agent reachability: reachable
+```
+
+### 3. Record Useful Memory
 
 Start building your project's memory:
 
@@ -364,7 +440,7 @@ visp-memory goal "Refactor Database Layer" --priority 2
 visp-memory recall "authentication"
 ```
 
-### 3. Start the Server & Dashboard
+### 4. Start the Server & Dashboard
 
 Launch the local server. The dashboard will be available at
 `http://localhost:8000/dashboard`.
@@ -373,7 +449,7 @@ Launch the local server. The dashboard will be available at
 visp-memory serve
 ```
 
-### 4. Give Context To An LLM
+### 5. Give Context To An LLM
 
 Generate a compact project context for pasting into an assistant:
 
@@ -381,7 +457,7 @@ Generate a compact project context for pasting into an assistant:
 visp-memory context
 ```
 
-### 5. Estimate Token Footprint
+### 6. Estimate Token Footprint
 
 Report two figures about your own store: consolidation deltas (how much smaller a
 compressed semantic memory is than the episodic memories it replaced) and context
