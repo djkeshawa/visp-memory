@@ -11,14 +11,23 @@ from pathlib import Path
 
 # Get the root directory
 root = Path(os.getcwd())
-static_dir = root / "src" / "visp_memory" / "server" / "static"
+src_dir = root / "src"
+static_dir = src_dir / "visp_memory" / "server" / "static"
 
-# Collect all static files if they exist
+# Collect all static files if they exist.
+#
+# The destination must mirror the layout of the *installed package*, because
+# server/app.py resolves the dashboard with `Path(__file__).parent / "static"`,
+# which in a frozen build is <bundle>/visp_memory/server/static. Making the
+# destination relative to `static_dir.parent` dropped the package prefix and put
+# everything in <bundle>/static, so every binary shipped the dashboard files at
+# an address the server never looks at and logged "Dashboard static files not
+# found" on startup. Anchor on `src` so the package path is preserved.
 datas = []
 if static_dir.exists():
     for file in static_dir.rglob("*"):
         if file.is_file():
-            rel_path = file.relative_to(static_dir.parent)
+            rel_path = file.relative_to(src_dir)
             datas.append((str(file), str(rel_path.parent)))
 
 # Add other data files
