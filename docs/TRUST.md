@@ -120,14 +120,18 @@ relevance:
 
 | | Poisoned Retrieval Proportion |
 |---|---|
-| Undefended (relevance ranking only) | **56.3%** |
-| Defended (provenance quarantine) | **0.0%** |
+| Undefended (relevance ranking only) | **56.25%** |
+| Defended (provenance quarantine) | **0.00%** |
 | Legitimate answers still injected | **5/5 (100%)** |
 
 The undefended number is reported and asserted in CI on purpose. A defence evaluated only
 against weak lures proves nothing; if the attack stopped capturing retrieval, this
-benchmark would be measuring its own irrelevance. At 56.3% the reproduction is somewhat
-*stronger* than the paper's reported 47.9%.
+benchmark would be measuring its own irrelevance. At 56.25% — 9 of the 16 records the
+undefended arm retrieved were poisoned — the reproduction is somewhat *stronger* than
+the paper's reported 47.9%. The figure is two decimals rather than one because 9/16 is
+exactly 56.25%: at one decimal it lands on the rounding boundary, and this page used to
+resolve that upward to 56.3%, which flattered the defence by inflating the attack it
+was measured against.
 
 The utility row matters equally. Blocking poison is trivial if you are allowed to inject
 nothing — an earlier version of this benchmark scored a perfect 0% PRP while injecting

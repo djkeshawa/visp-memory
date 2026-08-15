@@ -117,8 +117,8 @@ And what it does **not** claim:
   resolved. That needs a live model on
   [SWE-Bench-CL](https://arxiv.org/pdf/2507.00014)-style task streams, which has not been
   run.
-- **Recall is 0.62, not 1.00.** Abstaining costs about a third of the genuinely relevant
-  memories. That is a deliberate trade, and it is a real cost.
+- **Recall is 0.625, not 1.00.** Abstaining costs 37.5% of the genuinely relevant
+  memories — 3 of the 8. That is a deliberate trade, and it is a real cost.
 - **Synthetic fixtures.** Both benchmarks use constructed corpora, not field data.
 
 ## When not to use this

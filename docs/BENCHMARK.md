@@ -53,7 +53,7 @@ Three strategies are compared over identical fixtures:
 |---|---|---|---|---|---|
 | oracle | 1.00 | 1.00 | 1.00 | 23.4 | 1.00 |
 | unfiltered_top8 | 0.09 | 0.75 | 0.17 | 190.2 | 0.20 |
-| **policy** | **1.00** | **0.62** | **0.77** | **14.9** | **1.00** |
+| **policy** | **1.00** | **0.625** | **0.77** | **14.9** | **1.00** |
 
 **Oracle gap closed: 72%.**
 
@@ -64,9 +64,10 @@ Three strategies are compared over identical fixtures:
 
 ## What this costs — the negative result
 
-**Policy recall is 0.62, not 1.00.** Precision bought by abstaining is paid for in recall:
-across the answerable cases the policy left roughly a third of the genuinely relevant
-memories on the floor, mostly to the 4-memory budget and the redundancy filter.
+**Policy recall is 0.625, not 1.00.** Precision bought by abstaining is paid for in
+recall: across the answerable cases the policy retrieved 5 of the 8 genuinely relevant
+memories and left 3 on the floor — 37.5% of them — mostly to the 4-memory budget and the
+redundancy filter.
 
 That trade is deliberate. On the evidence, a wrong injection costs more than a missing
 one: unfiltered retrieval has *higher* recall (0.75) than the policy and is still far

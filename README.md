@@ -41,7 +41,10 @@ including where the alternatives win.
 
 ## Measured, not asserted
 
-Every number below is reproduced in CI on each push. See
+Every number below is recomputed in CI on each push *and compared against the figure
+printed here* by `tests/docs/test_published_figures.py`, which fails if the two
+disagree. A number that has drifted cannot survive a green build, so the figures on
+this page are the ones the current code produces. See
 [docs/BENCHMARK.md](docs/BENCHMARK.md) and [docs/TRUST.md](docs/TRUST.md) for the
 methodology, the caveats, and the negative results.
 
@@ -50,10 +53,10 @@ methodology, the caveats, and the negative results.
 | Precision of injected memories | 0.09 | **1.00** |
 | Mean tokens injected per task | 190.2 | **14.9** |
 | Correct silence on unanswerable tasks | 20% | **100%** |
-| Poisoned-memory retrieval ([MemoryGraft](https://arxiv.org/html/2512.16962v1) setup) | 56.3% | **0.0%** |
+| Poisoned-memory retrieval ([MemoryGraft](https://arxiv.org/html/2512.16962v1) setup) | 56.25% | **0.00%** |
 
-**What it costs:** recall is 0.62, not 1.00 — abstaining leaves about a third of the
-genuinely relevant memories on the floor.
+**What it costs:** recall is 0.625, not 1.00 — abstaining leaves 3 of the 8 genuinely
+relevant memories on the floor, 37.5% of them.
 
 **What it does not claim.** Every figure above comes from a small, authored corpus
 run without a live model. They say the selection policy behaves as designed; they do

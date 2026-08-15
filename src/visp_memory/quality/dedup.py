@@ -126,8 +126,9 @@ class Deduplicator:
                     "are no vectors to compare"
                 )
 
-            # If content/embedding provided, check against it
-            if content or embedding:
+            # If content/embedding provided, check against it. Tested explicitly
+            # rather than for truthiness: a numpy embedding has no truth value.
+            if content or (embedding is not None and len(embedding) > 0):
                 return self._find_similar_to_new(collection, content, embedding, threshold, limit)
 
             # Otherwise, check for duplicates within the collection (batch mode)
@@ -139,30 +140,98 @@ class Deduplicator:
     def _find_similar_to_new(
         self, collection, content: str, embedding: List[float], threshold: float, limit: int
     ) -> DedupReport:
-        """Find memories similar to new content."""
-        query_texts = [content] if content else None
-        query_embeddings = [embedding] if embedding else None
+        """Find memories similar to new content.
+
+        The query vector must come from the same provider that wrote the stored
+        vectors. Passing ``query_texts`` to Chroma does not do that: Chroma
+        embeds the text with the *collection's* embedding function, which
+        visp-memory never configures and never uses on the write path. When the
+        two providers happen to share a dimension nothing raises — the distances
+        are simply computed across two unrelated vector spaces, no candidate
+        clears the threshold, and the layer is reported clean. Verified against
+        chromadb 1.5.9: three byte-identical memories scored 0.99999 under the
+        configured provider's own vector and -0.03 under the collection's, so
+        the check returned ``determined=True, is_clean=True`` over all three.
+        That is the false green just removed from the other branches, and it is
+        why this path never hands raw text to the collection.
+        """
+        query_embedding, reason = self._query_vector(content, embedding)
+        if query_embedding is None:
+            return DedupReport.undetermined(reason)
 
         try:
             results = collection.query(
-                query_texts=query_texts, query_embeddings=query_embeddings, n_results=limit
+                query_texts=None, query_embeddings=[query_embedding], n_results=limit
             )
         except Exception as exc:
             return DedupReport.undetermined(f"the vector similarity query failed: {exc}")
 
-        duplicates = []
-        if results and results["ids"] and results["ids"][0]:
-            for i, mem_id in enumerate(results["ids"][0]):
-                distance = results["distances"][0][i] if results.get("distances") else 0
-                similarity = 1 - distance
+        # A malformed result is not an empty one. `ids: [[]]` is a collection
+        # that answered and had no neighbour to offer; a missing `ids` is a
+        # query whose outcome is unknown, and the two must not share a verdict.
+        if not isinstance(results, dict) or "ids" not in results:
+            return DedupReport.undetermined(
+                "the vector similarity query returned no result set, so whether "
+                "the layer holds duplicates is unknown"
+            )
 
-                if similarity >= threshold:
-                    mem = self.storage.get_memory(mem_id)
-                    if mem:
-                        mem["similarity"] = similarity
-                        duplicates.append(mem)
+        ids = results["ids"] or []
+        if not ids or not ids[0]:
+            return DedupReport.clear()
+
+        # A result set with no distances carries no evidence of similarity. It
+        # used to be read as distance 0 — a perfect match — so every id came
+        # back a duplicate on nothing at all. Unmeasured is not identical.
+        distances = results.get("distances") or []
+        if not distances or distances[0] is None or len(distances[0]) < len(ids[0]):
+            return DedupReport.undetermined(
+                "the vector similarity query returned matches without distance "
+                "scores, so nothing can be compared against the threshold"
+            )
+
+        duplicates = []
+        for i, mem_id in enumerate(ids[0]):
+            similarity = 1 - distances[0][i]
+            if similarity >= threshold:
+                mem = self.storage.get_memory(mem_id)
+                if mem:
+                    mem["similarity"] = similarity
+                    duplicates.append(mem)
 
         return DedupReport.checked(duplicates)
+
+    def _query_vector(
+        self, content: Optional[str], embedding: Optional[List[float]]
+    ) -> tuple[Optional[List[float]], Optional[str]]:
+        """Return the vector to query with, or the reason there cannot be one.
+
+        A caller-supplied embedding is used verbatim. Otherwise the content is
+        embedded by the storage backend's configured provider — the same one
+        that produced every vector in the collection.
+        """
+        # `if embedding:` would raise on a numpy vector, whose truth value is
+        # ambiguous — and callers that already hold a vector tend to hold that.
+        if embedding is not None and len(embedding) > 0:
+            return list(embedding), None
+
+        embedding_fn = getattr(self.storage, "_embedding_fn", None)
+        if embedding_fn is None or getattr(self.storage, "_uses_noop_embeddings", False):
+            return None, (
+                "the storage backend has no usable embedding provider, so the "
+                "content cannot be turned into a query vector comparable with "
+                "the stored ones. Pass an explicit embedding, or configure a "
+                "real embedding provider."
+            )
+
+        try:
+            vector = embedding_fn(content)
+        except Exception as exc:
+            return None, f"the configured embedding provider could not embed the content: {exc}"
+
+        if vector is None or len(vector) == 0:
+            return None, "the configured embedding provider returned an empty vector"
+
+        return list(vector), None
 
     def _find_internal_duplicates(
         self, collection, layer: str, threshold: float, limit: int
