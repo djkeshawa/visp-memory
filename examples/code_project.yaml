@@ -20,7 +20,6 @@ embedding:
 
 storage:
   data_dir: .visp-memory/data
-  vector_db: chroma
 
 compression:
   # How many related episodes before compression kicks in

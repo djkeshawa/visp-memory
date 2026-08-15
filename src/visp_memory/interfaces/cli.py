@@ -529,7 +529,6 @@ def _storage_doctor_status(config: MemoryConfig) -> dict[str, Any]:
     status = {
         "mode": config.storage.mode,
         "backend": config.storage.backend,
-        "vector_db": config.storage.vector_db,
         "data_dir": str(config.storage.data_dir),
     }
     if config.storage.mode == "client":
@@ -1872,20 +1871,32 @@ def dedup(
     """Find duplicate memories and optionally merge them."""
 
     memory = get_memory()
-    duplicates = memory.deduplicate(layer=layer, threshold=threshold)
+    report = memory.deduplicate(layer=layer, threshold=threshold)
 
-    if not duplicates:
-        console.print("[green]No duplicates found.[/green]")
+    # "Could not check" is not "nothing found". Say which one happened, and exit
+    # non-zero so a script cannot read a skipped check as a clean layer.
+    if not report.determined:
+        console.print(f"[red]Could not check for duplicates:[/red] {report.reason}")
+        console.print("[yellow]No conclusion was reached about this layer.[/yellow]")
+        raise typer.Exit(code=1)
+
+    if report.is_clean:
+        console.print(f"[green]Checked the {layer} layer: no duplicates found.[/green]")
         return
 
-    console.print(f"[yellow]Found {len(duplicates)} potential duplicates[/yellow]")
+    duplicates = report.duplicates
+    console.print(f"[yellow]Found {report.count} potential duplicates[/yellow]")
 
     # Simple listing for now
     for group in duplicates:
         console.print("--- Group ---")
         for mem in group:
+            # markup=False: the id is wrapped in square brackets, which Rich would
+            # otherwise parse as a style tag and delete — the operator could not see
+            # which memories the tool was proposing to merge.
             console.print(
-                f"[{mem['id']}] {mem['content'][:50]}... ({mem.get('similarity', 0):.2f})"
+                f"[{mem['id']}] {mem['content'][:50]}... ({mem.get('similarity', 0):.2f})",
+                markup=False,
             )
 
     if not merge:

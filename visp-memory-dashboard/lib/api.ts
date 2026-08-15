@@ -417,7 +417,6 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
         version: data.version,
         storageBackend: data.storage_backend,
         storageMode: data.storage_mode,
-        vectorDb: data.vector_db,
         embeddingProvider: data.embedding_provider,
         embeddingEffectiveProvider: data.embedding_effective_provider,
         embeddingModel: data.embedding_model,

@@ -39,7 +39,7 @@ from visp_memory.layers.episodic import EpisodeCategory, EpisodicMemory
 from visp_memory.layers.intent import IntentMemory, IntentPriority
 from visp_memory.layers.semantic import KnowledgeCategory, SemanticMemory
 from visp_memory.quality.conflict import ConflictVerdict
-from visp_memory.quality.dedup import Deduplicator
+from visp_memory.quality.dedup import Deduplicator, DedupReport
 
 logger = logging.getLogger(__name__)
 
@@ -1346,8 +1346,14 @@ class Memory:
     # Quality Management
     # =========================================================================
 
-    def deduplicate(self, layer: str = "episodic", threshold: float = 0.9) -> List[Dict[str, Any]]:
-        """Find and list duplicate memories."""
+    def deduplicate(self, layer: str = "episodic", threshold: float = 0.9) -> DedupReport:
+        """Check a layer for duplicate memories.
+
+        Returns:
+            A :class:`DedupReport`. An undetermined report means the check could
+            not run — it is not a clean bill of health, and callers must not
+            render it as one.
+        """
         return self.deduplicator.find_duplicates(layer=layer, threshold=threshold)
 
     # =========================================================================

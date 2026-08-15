@@ -10,7 +10,6 @@ embedding:
 
 storage:
   data_dir: .visp-memory/data
-  vector_db: chroma
 
 compression:
   # Writers might want more episodes before compression

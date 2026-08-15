@@ -9,10 +9,11 @@ Supports:
 
 import json
 import os
+import warnings
 from pathlib import Path
 from typing import Annotated, Any, List, Literal, Optional
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -37,13 +38,24 @@ class EmbeddingConfig(BaseSettings):
     api_base: Optional[str] = Field(default=None, validation_alias="EMBEDDING_API_BASE")
 
 
+#: Storage settings that were removed because nothing read them. They are accepted
+#: and ignored (with a warning) so a config file written against an older release
+#: still loads instead of failing validation.
+RETIRED_STORAGE_FIELDS: dict[str, str] = {
+    "vector_db": (
+        "no code path ever read it — vector storage is decided by whether ChromaDB "
+        "is importable and embeddings are real. Setting it never turned ChromaDB "
+        "on or off. Remove it from your config; nothing changes."
+    ),
+}
+
+
 class StorageConfig(BaseSettings):
     """Storage configuration."""
 
     model_config = SettingsConfigDict(env_prefix="VISP_MEMORY_STORAGE_", populate_by_name=True)
 
     data_dir: Path = Path(".visp-memory/data")
-    vector_db: Literal["chroma", "memory"] = "memory"
     backend: Literal["sqlite", "arcadedb", "neo4j"] = "sqlite"
     allow_fallback: bool = False
     connect_timeout_seconds: float = Field(default=15.0, ge=0.0, le=300.0)
@@ -58,6 +70,29 @@ class StorageConfig(BaseSettings):
     neo4j_uri: str = Field(default="bolt://localhost:7687", validation_alias="NEO4J_URI")
     neo4j_user: str = Field(default="neo4j", validation_alias="NEO4J_USER")
     neo4j_password: str = Field(default="", validation_alias="NEO4J_PASSWORD")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_retired_fields(cls, values: Any) -> Any:
+        """Accept-and-warn on settings that were removed because nothing read them.
+
+        ``extra`` is forbidden on this model, so an existing config file that
+        still carries a retired key would otherwise fail to load outright. It is
+        dropped with a warning that says the setting had no effect, which is the
+        part the user actually needs to know.
+        """
+        if not isinstance(values, dict):
+            return values
+
+        for name, why in RETIRED_STORAGE_FIELDS.items():
+            if name in values:
+                values = {key: value for key, value in values.items() if key != name}
+                warnings.warn(
+                    f"storage.{name} was removed from Visp Memory configuration: {why}",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+        return values
 
 
 class CompressionConfig(BaseSettings):

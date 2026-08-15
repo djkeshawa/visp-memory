@@ -2,8 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from visp_memory.config import LLMConfig, MemoryConfig, ServerConfig
+from visp_memory.config import LLMConfig, MemoryConfig, ServerConfig, StorageConfig
 from visp_memory.core.embeddings import NoOpProvider
+from visp_memory.interfaces.cli import _storage_doctor_status
 from visp_memory.server import app as server_app
 from visp_memory.server.app import (
     describe_embedding_connection_error,
@@ -83,6 +84,53 @@ def test_legacy_auto_complete_config_and_env_are_accepted_but_deprecated(monkeyp
     assert LLMConfig.model_json_schema()["properties"]["intent_auto_complete"]["deprecated"]
     request_schema = IntentEvaluationRequest.model_json_schema()
     assert request_schema["properties"]["allow_auto_complete"]["deprecated"]
+
+
+def test_retired_vector_db_setting_is_gone_from_the_config_surface():
+    """`storage.vector_db` was type-constrained, documented, and read by nothing.
+
+    Whether vectors are stored in ChromaDB is decided by whether ChromaDB imports
+    and whether embeddings are real, never by this field. It is removed rather
+    than wired, because wiring it to its own default ("memory") would have
+    switched vector search off for every existing install.
+    """
+    assert "vector_db" not in StorageConfig.model_fields
+    assert "vector_db" not in MemoryConfig().storage.model_dump()
+
+
+def test_an_existing_config_that_sets_vector_db_still_loads():
+    """`extra` is forbidden, so a stale key would otherwise fail validation outright."""
+    with pytest.warns(DeprecationWarning, match="vector_db"):
+        config = MemoryConfig(storage={"vector_db": "chroma", "backend": "sqlite"})
+
+    assert config.storage.backend == "sqlite"
+    assert not hasattr(config.storage, "vector_db")
+
+
+def test_retired_vector_db_config_file_still_loads(tmp_path):
+    config_path = tmp_path / "visp-memory.yaml"
+    config_path.write_text(
+        "project_name: legacy\nstorage:\n  backend: sqlite\n  vector_db: chroma\n",
+        encoding="utf-8",
+    )
+
+    with pytest.warns(DeprecationWarning, match="vector_db"):
+        config = MemoryConfig.from_file(config_path)
+
+    assert config.project_name == "legacy"
+    assert config.storage.backend == "sqlite"
+
+
+def test_runtime_status_no_longer_reports_a_setting_nothing_reads():
+    status = get_runtime_status(MemoryConfig())
+
+    assert "vector_db" not in status
+
+
+def test_storage_doctor_no_longer_reports_a_setting_nothing_reads():
+    status = _storage_doctor_status(MemoryConfig())
+
+    assert "vector_db" not in status
 
 
 def test_dashboard_file_path_resolves_exported_routes(tmp_path, monkeypatch):

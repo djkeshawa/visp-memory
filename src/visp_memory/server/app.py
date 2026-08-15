@@ -206,7 +206,6 @@ def get_runtime_status(config, embedding_provider=None, embedding_status=None):
     status = {
         "storage_backend": config.storage.backend,
         "storage_mode": config.storage.mode,
-        "vector_db": config.storage.vector_db,
         "embedding_provider": config.embedding.provider,
         "embedding_effective_provider": effective_provider,
         "embedding_model": effective_model or config.embedding.model,

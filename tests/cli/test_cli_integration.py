@@ -476,14 +476,28 @@ class TestCLIBasicCommands:
         assert "Traceback" not in result.output
 
     def test_dedup_command(self, cli_env):
-        """Test dedup command (was broken with numpy array comparison)."""
+        """Test dedup command (was broken with numpy array comparison).
+
+        This fixture runs noop embeddings, so there is no vector collection and
+        the duplicate check cannot run. It used to assert ``exit_code == 0``,
+        which is exactly what the bug produced: the command printed a green
+        "No duplicates found." for a comparison it had never made. The command
+        now reports that it could not check, and exits non-zero so a script
+        cannot mistake a skipped check for a clean layer.
+
+        What survives from the original test is the crash guard: no traceback.
+        The three-state contract is covered in
+        ``tests/cli/test_dedup_reports_a_state.py``.
+        """
         runner.invoke(app, ["init", "--type", "code"])
         runner.invoke(app, ["record", "Test memory"])
 
         result = runner.invoke(app, ["dedup", "--layer", "episodic"])
-        assert result.exit_code == 0
-        # Should not crash - may or may not find duplicates
+
+        assert "Traceback" not in result.output
         assert "duplicates" in result.output.lower()
+        assert "Could not check for duplicates" in result.output
+        assert result.exit_code == 1
 
     def test_codex_hook_install_writes_agents_and_config(self, cli_env):
         """Codex hook installs project instructions and a managed MCP block."""

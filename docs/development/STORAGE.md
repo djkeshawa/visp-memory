@@ -326,19 +326,42 @@ SET m.accessed_at = coalesce(m.accessed_at, datetime())
 
 #### Deduplication Limitations
 
-**Issue:** Full batch deduplication requires ChromaDB's `_get_collection()` method.
+**Issue:** Whole-layer deduplication scans a vector collection, which only
+`LocalStorage` backed by ChromaDB exposes.
 
 **Current Behavior:**
-- Content-based dedup works (requires content parameter)
-- Full batch dedup not supported (different data model)
+- `Deduplicator.find_duplicates(content=...)` works on any backend — it goes
+  through `search_memories`.
+- Whole-layer (no content) dedup is **not implemented** for backends without a
+  collection, and `visp-memory dedup` is a whole-layer check.
 
-**Workaround:**
+**What the command does about it.** It says so. `find_duplicates` returns a
+`DedupReport`, and an unavailable check is reported as `determined=False` with a
+reason rather than as an empty result:
+
+```
+$ visp-memory dedup
+Could not check for duplicates: whole-layer deduplication is not implemented for
+Neo4jStorage — it exposes no vector collection to scan. Pass content to check one
+memory against the layer.
+No conclusion was reached about this layer.
+$ echo $?
+1
+```
+
+This used to print `No duplicates found.` in green with exit code 0, on every
+backend without a live ChromaDB collection — including the default `sqlite`
+install whenever ChromaDB is absent or embeddings are noop. Nothing had been
+compared. Checked-and-clean, checked-and-found-N and could-not-check-because-X are
+now three distinguishable answers, and only the first is green.
+
+**To get a real whole-layer check:** use `LocalStorage` with ChromaDB installed and
+a real embedding provider, so there is a collection of vectors to compare.
+
 ```bash
-# Dedup with specific content
-visp-memory dedup --content "duplicate text"
-
-# Or use SQLite for full batch dedup
+pip install 'visp-memory[analysis]' chromadb
 export VISP_MEMORY_STORAGE_BACKEND=sqlite
+export VISP_MEMORY_EMBEDDING_PROVIDER=sentence-transformers
 visp-memory dedup
 ```
 

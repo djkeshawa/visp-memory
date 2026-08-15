@@ -76,7 +76,6 @@ export function SystemStatus({ status: initialStatus }: SystemStatusProps) {
       {status.runtime ? (
         <div className="mt-4 space-y-1 border-t border-border pt-3 text-xs text-muted-foreground">
           <div>Mode: {status.runtime.storageMode || "local"}</div>
-          <div>Vector DB: {status.runtime.vectorDb || "chroma"}</div>
           <div>
             Embedding:{" "}
             {status.runtime.embeddingEffectiveProvider ||

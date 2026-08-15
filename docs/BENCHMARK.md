@@ -59,7 +59,7 @@ Three strategies are compared over identical fixtures:
 
 - The policy never injected on a task no memory could help with (0 false alarms out of 5
   opportunities). Naive retrieval fired on 4 of 5.
-- The policy spent **13× fewer tokens** than naive retrieval (14.9 vs 190.2 per case) and
+- The policy spent **12.8× fewer tokens** than naive retrieval (14.9 vs 190.2 per case) and
   slightly fewer than the oracle itself, because it trims and budgets.
 
 ## What this costs — the negative result

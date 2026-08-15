@@ -57,11 +57,13 @@ genuinely relevant memories on the floor.
 
 **What it does not claim.** Every figure above comes from a small, authored corpus
 run without a live model. They say the selection policy behaves as designed; they do
-not say memory makes an agent's code better. No result in this repository does. The
-controlled A/B that would have addressed it was designed and preregistered for this
-release and then could not be run — the model access it needed was exhausted, 9
-usable pairs out of 152 planned — so **the accuracy question is open and this package
-ships with it open.** Details in [What is not measured](#what-is-not-measured).
+not say memory makes an agent's code better. No result in this repository does, and
+**no controlled A/B of this package has been designed or run.** The one preregistered
+A/B in the wider project has arms `bare` and `pack`: it measures the Visp Kit context
+pack, not memory, and it never touches this package. It also stopped early — the model
+access it needed was exhausted at 9 usable pairs of the 56 it preregistered — so **the
+accuracy question is open and this package ships with it open.** Details in
+[What is not measured](#what-is-not-measured).
 
 Try it on your own repository without touching it:
 
@@ -486,19 +488,24 @@ python3 scripts/benchmark_memory.py --backend arcadedb --items 100 --json
 The honest boundary of everything above, stated once, plainly:
 
 - **No live model has been run against these cases.** Every arm is a deterministic
-  proxy over authored fixtures. A powered A/B against a real model was designed for
-  this release — paired, preregistered, with a stated effect-size bar — and could not
-  be executed: the model surface it depended on returned HTTP 403 with the account's
-  usage limit exhausted, and only 9 usable pairs were collected. Nine perfectly
-  concordant pairs resolve nothing, and are reported as resolving nothing. **The
-  accuracy question is open, not answered.**
+  proxy over authored fixtures.
+- **No powered A/B of *this package* exists — not run, not designed.** The wider
+  project does have one paired, preregistered A/B with a stated effect-size bar, and
+  it is frequently mistaken for evidence about memory. It is not: **its arms are
+  `bare` and `pack`**, it measures the Visp Kit context pack, and memory is not an arm
+  in it. It also stopped early — the model surface it depended on returned HTTP 403
+  with the account's usage limit exhausted, so **9 of its 56 preregistered pairs came
+  back usable** (152 cells were planned across the two arms and their repeat trials;
+  23 reached a model), verdict `INCOMPLETE`. Nine perfectly concordant pairs resolve
+  nothing, and are reported as resolving nothing. **The accuracy question for memory
+  is open, not answered, and nothing yet built would have answered it.**
 - **No result here is evidence about your repository.** The corpora are small,
   invented, and written by the same people who wrote the retrieval policy. Synthetic
   memories are cleaner and more distinguishable than a real project's history, which
   makes every selection score here an optimistic bound.
-- **No code-quality benefit is claimed.** The only controlled study of the underlying
-  question found none. That the mechanism works is demonstrated; that it makes the
-  code better is not, by anything in this repository.
+- **No code-quality benefit is claimed.** The one *external* controlled study of the
+  underlying question found none. That the mechanism works is demonstrated; that it
+  makes the code better is not, by anything in this repository.
 
 That gap is deliberate to state rather than to imply. If you need the benefit
 established before you depend on it, run the study below and treat this package as

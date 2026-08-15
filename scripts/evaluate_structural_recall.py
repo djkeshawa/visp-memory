@@ -502,9 +502,13 @@ def evaluate() -> dict[str, Any]:
                 if summary_c["admitted_total"]
                 else None
             ),
+            # Counted from the fixture, not typed in. The hardcoded version of this
+            # sentence said "14 files" while the same payload's `fixture.files`
+            # said 13 — one artifact disagreeing with itself about its own corpus.
             "note": (
                 "The headline B-minus-A gap is NOT the mechanism's benefit. This corpus "
-                "has 18 memories over 14 files, so a randomly adjacent memory is "
+                f"has {len(MEMORIES)} memories over {len(build_graph().file_paths)} files, "
+                "so a randomly adjacent memory is "
                 "relevant often enough that admitting any three raises recall. "
                 "`correct_adjacency` is the honest figure; `any_three_extra_memories` is "
                 "what a wrong graph buys and is the amount that must not be claimed."

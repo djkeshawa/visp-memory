@@ -5,26 +5,80 @@ Identifies and merges duplicate memories.
 """
 
 import logging
-from typing import Any, Dict, List
+from dataclasses import dataclass, field
+from typing import Any, List, Optional
 
 try:
     import numpy as np
+
+    NUMPY_AVAILABLE = True
+except ImportError:
+    NUMPY_AVAILABLE = False
+
+try:
     from sklearn.metrics.pairwise import cosine_similarity
 
-    SKLEARN_AVAILABLE = True
+    SKLEARN_AVAILABLE = NUMPY_AVAILABLE
 except ImportError:
+    # Without scikit-learn the cosine similarity is computed from numpy directly.
     SKLEARN_AVAILABLE = False
-    # Fallback to simple numpy if available, or just error
-    try:
-        import numpy as np
-
-        NUMPY_AVAILABLE = True
-    except ImportError:
-        NUMPY_AVAILABLE = False
 
 from visp_memory.core.storage import BaseStorage
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class DedupReport:
+    """What a duplicate check concluded, kept distinct from why it concluded nothing.
+
+    An empty list used to mean three different things — the check ran and the
+    layer is clean, the analysis dependencies are missing, and the backend has no
+    batch duplicate check at all. Every one of them printed "No duplicates
+    found.", so on the default ``sqlite`` + no-ChromaDB configuration the CLI gave
+    a green all-clear it had never earned. An operator who acts on that is acting
+    on a check that never ran.
+
+    ``determined`` says whether the check actually completed. ``duplicates`` is
+    what it found when it did. ``reason`` says why it could not, and is set only
+    when ``determined`` is False. Checked-and-clean, checked-and-found-N, and
+    could-not-check-because-X are three answers, and a caller can now tell them
+    apart.
+    """
+
+    determined: bool
+    duplicates: List[Any] = field(default_factory=list)
+    reason: Optional[str] = None
+
+    @property
+    def count(self) -> int:
+        """How many duplicates (or duplicate groups) the check found."""
+        return len(self.duplicates)
+
+    @property
+    def found_any(self) -> bool:
+        """True only when the check ran *and* found something."""
+        return self.determined and bool(self.duplicates)
+
+    @property
+    def is_clean(self) -> bool:
+        """True only when the check ran and found nothing. Never true if it could not run."""
+        return self.determined and not self.duplicates
+
+    @classmethod
+    def checked(cls, duplicates: List[Any]) -> "DedupReport":
+        """The check ran to completion; ``duplicates`` is the whole finding."""
+        return cls(determined=True, duplicates=list(duplicates))
+
+    @classmethod
+    def clear(cls) -> "DedupReport":
+        """The check ran and there was nothing to find."""
+        return cls(determined=True)
+
+    @classmethod
+    def undetermined(cls, reason: str) -> "DedupReport":
+        """The check could not run or could not finish. Never a clean result."""
+        return cls(determined=False, reason=reason)
 
 
 class Deduplicator:
@@ -42,7 +96,7 @@ class Deduplicator:
         embedding: List[float] = None,
         threshold: float = 0.9,
         limit: int = 5,
-    ) -> List[Dict[str, Any]]:
+    ) -> DedupReport:
         """
         Find duplicates for a given content or existing memories.
 
@@ -54,31 +108,37 @@ class Deduplicator:
             limit: Max duplicates to return
 
         Returns:
-            List of similar memories with 'similarity' score
+            A :class:`DedupReport`. Check ``determined`` before trusting the
+            absence of duplicates — an undetermined report is not a clean one.
         """
-        if not self._check_deps():
-            return []
+        unmet = self._unmet_dependency()
+        if unmet:
+            return DedupReport.undetermined(unmet)
 
         # Check if storage has ChromaDB collection interface
         if hasattr(self.storage, "_get_collection"):
             # LocalStorage with ChromaDB
             collection = self.storage._get_collection(layer)
             if not collection:
-                return []
+                return DedupReport.undetermined(
+                    f"no vector collection is available for the {layer!r} layer — "
+                    "ChromaDB is not installed or embeddings are disabled, so there "
+                    "are no vectors to compare"
+                )
 
             # If content/embedding provided, check against it
             if content or embedding:
                 return self._find_similar_to_new(collection, content, embedding, threshold, limit)
 
             # Otherwise, check for duplicates within the collection (batch mode)
-            return self._find_internal_duplicates(collection, threshold, limit)
+            return self._find_internal_duplicates(collection, layer, threshold, limit)
         else:
             # Neo4jStorage or other backend - use search_memories interface
             return self._find_duplicates_via_search(layer, content, embedding, threshold, limit)
 
     def _find_similar_to_new(
         self, collection, content: str, embedding: List[float], threshold: float, limit: int
-    ) -> List[Dict[str, Any]]:
+    ) -> DedupReport:
         """Find memories similar to new content."""
         query_texts = [content] if content else None
         query_embeddings = [embedding] if embedding else None
@@ -87,8 +147,8 @@ class Deduplicator:
             results = collection.query(
                 query_texts=query_texts, query_embeddings=query_embeddings, n_results=limit
             )
-        except Exception:
-            return []
+        except Exception as exc:
+            return DedupReport.undetermined(f"the vector similarity query failed: {exc}")
 
         duplicates = []
         if results and results["ids"] and results["ids"][0]:
@@ -102,26 +162,33 @@ class Deduplicator:
                         mem["similarity"] = similarity
                         duplicates.append(mem)
 
-        return duplicates
+        return DedupReport.checked(duplicates)
 
     def _find_internal_duplicates(
-        self, collection, threshold: float, limit: int
-    ) -> List[List[Dict[str, Any]]]:
+        self, collection, layer: str, threshold: float, limit: int
+    ) -> DedupReport:
         """
         Find duplicates within existing memories.
 
-        Returns groups of duplicates.
+        Reports groups of duplicates.
         """
         # Fetch all embeddings
         # Note: robust implementation would do this in batches
         try:
             data = collection.get(include=["embeddings", "metadatas", "documents"])
-        except Exception:
-            return []
+        except Exception as exc:
+            return DedupReport.undetermined(
+                f"the {layer!r} vector collection could not be read: {exc}"
+            )
 
-        # Check if data is valid and has embeddings
-        if not data or data.get("embeddings") is None or len(data.get("embeddings", [])) == 0:
-            return []
+        # A collection that hands back no embedding data was not inspected; a
+        # collection that hands back an empty one genuinely holds nothing to compare.
+        if not data or data.get("embeddings") is None:
+            return DedupReport.undetermined(
+                f"the {layer!r} vector collection returned no embedding data"
+            )
+        if len(data["embeddings"]) == 0:
+            return DedupReport.clear()
 
         embeddings = data["embeddings"]
         ids = data["ids"]
@@ -134,8 +201,10 @@ class Deduplicator:
             matrix = np.array(embeddings)
             norm = np.linalg.norm(matrix, axis=1, keepdims=True)
             sim_matrix = np.dot(matrix, matrix.T) / (np.dot(norm, norm.T) + 1e-9)
-        else:
-            return []
+        else:  # pragma: no cover - _unmet_dependency() already rejected this case
+            return DedupReport.undetermined(
+                "no similarity backend is available (scikit-learn and numpy are both missing)"
+            )
 
         duplicate_groups = []
         visited = set()
@@ -168,7 +237,7 @@ class Deduplicator:
                 if len(duplicate_groups) >= limit:
                     break
 
-        return duplicate_groups
+        return DedupReport.checked(duplicate_groups)
 
     def merge_memories(self, memory_ids: List[str], target_content: str = None) -> str:
         """
@@ -305,20 +374,21 @@ class Deduplicator:
 
     def _find_duplicates_via_search(
         self, layer: str, content: str, embedding: List[float], threshold: float, limit: int
-    ) -> List[Dict[str, Any]]:
+    ) -> DedupReport:
         """
         Find duplicates using storage search interface (for Neo4j and others).
 
         This is simpler but less exhaustive than ChromaDB-based deduplication.
         """
         if not content:
-            # Without content, we can't do much with search-based approach
-            # For now, just return empty - full dedup requires collection access
-            logger.info(
-                "Full deduplication is not supported for this storage backend. "
-                "Provide content to check for duplicates."
+            # Without content there is no query to run, and this backend exposes no
+            # collection to scan. That is a check that did not happen, not a clean layer.
+            backend = type(self.storage).__name__
+            return DedupReport.undetermined(
+                f"whole-layer deduplication is not implemented for {backend} — "
+                "it exposes no vector collection to scan. Pass content to check "
+                "one memory against the layer."
             )
-            return []
 
         # Search for similar memories
         results = self.storage.search_memories(
@@ -328,14 +398,13 @@ class Deduplicator:
         # Filter by threshold
         duplicates = [r for r in results if r.get("similarity", 0) >= threshold]
 
-        return duplicates
+        return DedupReport.checked(duplicates)
 
-    def _check_deps(self) -> bool:
-        """Check if dependencies are available."""
+    def _unmet_dependency(self) -> Optional[str]:
+        """Return why the similarity analysis cannot run, or None when it can."""
         if not (SKLEARN_AVAILABLE or NUMPY_AVAILABLE):
-            logger.warning(
-                "Deduplication requires scikit-learn or numpy. "
-                "Install with: pip install visp-memory[analysis]"
+            return (
+                "deduplication requires scikit-learn or numpy, and neither is "
+                "installed. Install with: pip install visp-memory[analysis]"
             )
-            return False
-        return True
+        return None

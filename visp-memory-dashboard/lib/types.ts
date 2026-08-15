@@ -230,7 +230,6 @@ export interface RuntimeStatus {
   version?: string
   storageBackend?: string
   storageMode?: string
-  vectorDb?: string
   embeddingProvider?: string
   embeddingEffectiveProvider?: string | null
   embeddingModel?: string
