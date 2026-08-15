@@ -201,13 +201,24 @@ Single-file executable with embedded Python runtime and dashboard. No dependenci
 pip install pyinstaller
 ```
 
+PyInstaller freezes what is importable in the current environment, so the project
+and every extra you want inside the binary must be installed first. `build_standalone.sh`
+does this for you; a manual build must do it explicitly, or the executable builds
+cleanly and then fails with `ModuleNotFoundError` on the user's machine.
+
+The bundled set is `api,mcp,capture,analysis,chroma,neo4j`. `local-embeddings` and
+`arcadedb` are excluded on purpose: PyTorch pushes the archive past the 2 GB GitHub
+release asset limit, and ArcadeDB needs a JVM the bundle cannot carry. Override with
+`BUNDLE_EXTRAS` if you need a different set.
+
 ### Building
 
 ```bash
-# Automated build script
+# Automated build script (installs dependencies, builds, smoke tests, archives)
 ./build_standalone.sh
 
 # Manual build
+pip install -e ".[api,mcp,capture,analysis,chroma,neo4j]"
 python3 build_frontend.py
 pyinstaller visp-memory.spec
 ```
@@ -225,7 +236,8 @@ visp-memory-standalone/
 ├── start-server.sh         # Convenience script
 ├── README-STANDALONE.md    # End-user documentation
 ├── README.md               # Full documentation
-└── LICENSE
+├── LICENSE
+└── NOTICE                  # Required by Apache-2.0 section 4(d)
 ```
 
 ### Platform-Specific Builds
@@ -242,6 +254,7 @@ You must build on the target platform:
 # Creates: dist/visp-memory-standalone-Darwin-arm64.tar.gz
 
 # Windows (in PowerShell)
+pip install -e ".[api,mcp,capture,analysis,chroma,neo4j]"
 python build_frontend.py
 pyinstaller visp-memory.spec
 ```
