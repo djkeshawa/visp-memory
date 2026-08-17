@@ -15,6 +15,7 @@ try:
     from fastapi import Depends, FastAPI, Request
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+    from fastapi.security import HTTPAuthorizationCredentials
     from fastapi.staticfiles import StaticFiles
 except ImportError:
     raise ImportError("FastAPI not installed. Run: pip install visp-memory[api]")
@@ -29,7 +30,7 @@ from visp_memory.core.neo4j_storage import Neo4jStorage
 from visp_memory.core.reporting import MemoryIntelligenceReporter
 from visp_memory.core.storage import LocalStorage
 from visp_memory.recall.graph import GraphRecall
-from visp_memory.server.auth import UserContext, get_current_user
+from visp_memory.server.auth import UserContext, get_current_user, security
 from visp_memory.server.auth_store import AuthStore
 from visp_memory.server.authorization import (
     can_access_scoped_record,
@@ -404,57 +405,155 @@ app.include_router(sessions.router)
 app.include_router(diagnostics.router)
 
 
-def _get_scoped_stats(repo_id: str | None, user: UserContext) -> dict:
-    """Calculate status statistics without crossing tenant boundaries."""
-    if user.is_admin:
-        return app.state.storage.get_stats(repo_id=repo_id)
+#: Upper bound on rows read to compute tenant-filtered statistics. The visibility
+#: test is per-record, so there is no SQL aggregate to lean on and the rows have to
+#: be read; this keeps one request from pulling an unbounded store into memory.
+#: Before it, the scan inherited ``list_memories``' default of 50, which silently
+#: capped every non-admin principal's memory count — including the dashboard's.
+SCOPED_STATS_SCAN_LIMIT = 10_000
 
+
+def _get_scoped_stats(repo_id: str | None, user: UserContext) -> dict:
+    """Calculate status statistics without crossing tenant boundaries.
+
+    Both branches answer with the same keys. They did not, and the dashboard reads
+    ``active_intents`` and ``total_relationships`` — which only the admin branch
+    produced — so any other principal saw zeroes for them even once the counts it
+    did produce were right.
+    """
+    storage = app.state.storage
+    if user.is_admin or user.is_local_owner:
+        # Every row is visible to this principal, so the aggregate is exact and
+        # nothing has to be read into memory to count it.
+        return storage.get_stats(repo_id=repo_id)
+
+    scanned = storage.list_memories(repo_id=repo_id, limit=SCOPED_STATS_SCAN_LIMIT)
     memories = [
         memory
-        for memory in app.state.storage.list_memories(repo_id=repo_id)
-        if can_access_scoped_record(app.state.storage, memory, user, scope_field="metadata")
+        for memory in scanned
+        if can_access_scoped_record(storage, memory, user, scope_field="metadata")
     ]
     intents = [
         intent
-        for intent in app.state.storage.list_intents(repo_id=repo_id)
-        if can_access_scoped_record(app.state.storage, intent, user, scope_field="context")
+        for intent in storage.get_active_intents(repo_id=repo_id, status="active")
+        if can_access_scoped_record(storage, intent, user, scope_field="context")
     ]
+
     memories_by_layer: dict[str, int] = {}
+    memories_by_category: dict[str, int] = {}
     for memory in memories:
         layer = memory.get("layer", "unknown")
         memories_by_layer[layer] = memories_by_layer.get(layer, 0) + 1
+        category = memory.get("category", "unknown")
+        memories_by_category[category] = memories_by_category.get(category, 0) + 1
+
+    visible_ids = {memory["id"] for memory in memories}
+    relationships = [
+        relationship
+        for relationship in storage.get_all_relationships(repo_id=repo_id)
+        if relationship["source_id"] in visible_ids and relationship["target_id"] in visible_ids
+    ]
+
     return {
-        "total_memories": len(memories),
-        "total_intents": len(intents),
         "memories_by_layer": memories_by_layer,
+        "memories_by_category": memories_by_category,
+        "total_memories": len(memories),
+        "active_intents": len(intents),
+        "total_relationships": len(relationships),
+        # A scan that filled its bound counted a prefix of the store, not the
+        # store. Saying so is the difference between a partial number and a wrong
+        # one, and a confidently wrong number is what this whole ticket was about.
+        "truncated": len(scanned) >= SCOPED_STATS_SCAN_LIMIT,
     }
 
 
-@app.get("/", tags=["system"])
-async def root(
-    repo_id: str = None,
-    user: UserContext = Depends(get_current_user),
-):
-    """Return authenticated, tenant-scoped system status and statistics."""
+def _system_status(repo_id: str | None, user: UserContext) -> dict:
+    """Build the authenticated, tenant-scoped status and statistics payload.
+
+    An unscoped request is answered, not refused. There is no repository to gate
+    when no scope was named, and the per-record visibility filter already decides
+    what this principal may count — so an admin gets the whole store, a team user
+    gets their team's rows, and a principal entitled to nothing gets zeroes,
+    without a repo gate having to invent a verdict.
+
+    Refusing instead is how this endpoint stayed broken: it answered 400 to the
+    URL `serve` advertises, and answering 403 there instead would have handed the
+    dashboard the same blank cards for any store with no configured repo_id —
+    which is the shape of the defect this change exists to remove.
+    """
     target_repo_id = repo_id or config.repo_id
-    require_repo_scope_access(app.state.storage, target_repo_id, user)
+    if target_repo_id:
+        require_repo_scope_access(app.state.storage, target_repo_id, user)
+    stats_status = "ok"
     try:
         stats = _get_scoped_stats(target_repo_id, user)
     except Exception as e:
+        # Reported rather than only logged. Swallowing the failure into an empty
+        # dict is how a storage method the server called but no backend implemented
+        # reached users as a dashboard reading zero: every number was missing and
+        # nothing said so.
         logger.error(f"Failed to get stats: {e}")
         stats = {}
+        stats_status = "unavailable"
+    else:
+        if stats.get("truncated"):
+            stats_status = "partial"
 
     response = {
         "status": "online",
         "version": __version__,
         "timestamp": utc_now().isoformat(),
         "stats": stats,
+        "stats_status": stats_status,
     }
     runtime = get_runtime_status(config, embedding_provider, embedding_runtime_status)
     runtime["storage_backend"] = app.state.storage_backend
     response.update(runtime)
     response.update(stats)
     return response
+
+
+@app.get("/status", tags=["system"])
+async def system_status(
+    repo_id: str = None,
+    user: UserContext = Depends(get_current_user),
+):
+    """Return authenticated, tenant-scoped system status and statistics."""
+    return _system_status(repo_id, user)
+
+
+@app.get("/", tags=["system"])
+async def root(
+    request: Request,
+    repo_id: str = None,
+    auth: HTTPAuthorizationCredentials | None = Depends(security),
+):
+    """Send a browser to the dashboard; answer everything else with the status JSON.
+
+    `serve` prints this URL and it is what a user copies into a browser, where it
+    used to render an API error — the dashboard is at /dashboard, a name that
+    appeared only in a log line. Programmatic callers, which do not ask for HTML,
+    still get the status payload here; /status is the name that always means it.
+
+    The credentials are declared as a dependency, so this route still advertises
+    its security scheme in the OpenAPI document, but they are *applied* in the
+    body: the redirect has to happen before authentication, because /dashboard is
+    static and unauthenticated and demanding a token to be told where the page
+    lives would hand the same user a 401 instead of the 400 they already had.
+    """
+    if _prefers_html(request) and _dashboard_available():
+        return RedirectResponse(url="/dashboard")
+    user = await get_current_user(request, auth)
+    return _system_status(repo_id, user)
+
+
+def _prefers_html(request: Request) -> bool:
+    """Whether this is a browser navigation rather than an API call."""
+    return "text/html" in request.headers.get("accept", "")
+
+
+def _dashboard_available() -> bool:
+    return STATIC_DIR.exists() and STATIC_DIR.is_dir()
 
 
 @app.get("/healthz", tags=["system"])

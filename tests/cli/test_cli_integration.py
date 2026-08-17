@@ -1174,11 +1174,16 @@ def test_serve_loopback_starts_in_open_local_mode(monkeypatch):
 
     monkeypatch.setattr(cli_module, "load_config", _unconfigured_auth_config)
     monkeypatch.delenv("VISP_MEMORY_SERVER_ALLOW_ANONYMOUS", raising=False)
+    monkeypatch.delenv("VISP_MEMORY_SERVER_LOCAL_OWNER_MODE", raising=False)
     try:
         cli_module._ensure_serveable_auth_config("127.0.0.1")
         assert os.environ.get("VISP_MEMORY_SERVER_ALLOW_ANONYMOUS") == "true"
+        # The loopback bind is the only place this is set, and it is what lets the
+        # single user of a single-user store read it through the dashboard.
+        assert os.environ.get("VISP_MEMORY_SERVER_LOCAL_OWNER_MODE") == "true"
     finally:
         os.environ.pop("VISP_MEMORY_SERVER_ALLOW_ANONYMOUS", None)
+        os.environ.pop("VISP_MEMORY_SERVER_LOCAL_OWNER_MODE", None)
 
 
 def test_serve_public_bind_refuses_without_credentials(monkeypatch):
@@ -1191,12 +1196,15 @@ def test_serve_public_bind_refuses_without_credentials(monkeypatch):
 
     monkeypatch.setattr(cli_module, "load_config", _unconfigured_auth_config)
     monkeypatch.delenv("VISP_MEMORY_SERVER_ALLOW_ANONYMOUS", raising=False)
+    monkeypatch.delenv("VISP_MEMORY_SERVER_LOCAL_OWNER_MODE", raising=False)
     try:
         with pytest.raises(typer.Exit):
             cli_module._ensure_serveable_auth_config("0.0.0.0")
         assert os.environ.get("VISP_MEMORY_SERVER_ALLOW_ANONYMOUS") is None
+        assert os.environ.get("VISP_MEMORY_SERVER_LOCAL_OWNER_MODE") is None
     finally:
         os.environ.pop("VISP_MEMORY_SERVER_ALLOW_ANONYMOUS", None)
+        os.environ.pop("VISP_MEMORY_SERVER_LOCAL_OWNER_MODE", None)
 
 
 if __name__ == "__main__":

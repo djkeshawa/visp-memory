@@ -13,6 +13,7 @@ from visp_memory.core.repository import (
     RepositoryDependency,
     RepositoryManager,
 )
+from visp_memory.core.storage import is_implicitly_registered
 from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import require_admin
 from visp_memory.server.routers.platform import append_audit_event
@@ -154,15 +155,28 @@ async def list_project_scopes(request: Request, user: UserContext = Depends(get_
         project_ids.update(storage.list_project_ids())
     project_ids.difference_update(archived_ids)
 
+    # "Registered" means somebody declared this project, not merely that a row
+    # exists: the store now creates a placeholder row for every scope a write
+    # names, so row-existence alone would report every scope as registered and the
+    # flag would stop distinguishing anything.
     return [
         {
             "id": project_id,
-            "name": repo_by_id[project_id].name if project_id in repo_by_id else project_id,
-            "registered": project_id in repo_by_id,
+            "name": _scope_name(repo_by_id.get(project_id), project_id),
+            "registered": _is_declared(repo_by_id.get(project_id)),
             "status": repo_by_id[project_id].status if project_id in repo_by_id else "active",
         }
         for project_id in sorted(project_ids)
     ]
+
+
+def _is_declared(repo) -> bool:
+    return repo is not None and not is_implicitly_registered({"metadata": repo.metadata})
+
+
+def _scope_name(repo, project_id: str) -> str:
+    """The declared name, or the scope id for a project nobody has named."""
+    return repo.name if _is_declared(repo) else project_id
 
 
 @router.get("/{repo_id}", response_model=RepositoryResponse)

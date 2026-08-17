@@ -325,7 +325,9 @@ async function readErrorDetail(res: Response): Promise<string | undefined> {
 }
 
 export async function getStats(repoId?: string | null): Promise<Stats> {
-    const res = await request(withQuery("/", { repo_id: repoId }), { headers: authHeaders() })
+    // "/status", not "/": a browser navigation to "/" is redirected to the
+    // dashboard now, and this call must keep asking for the JSON.
+    const res = await request(withQuery("/status", { repo_id: repoId }), { headers: authHeaders() })
     const data = await res.json()
     const stats = data.stats || data
 

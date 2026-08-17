@@ -3,13 +3,22 @@ from typing import Any, Optional
 from fastapi import HTTPException, status
 
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID
+from visp_memory.core.storage import is_implicitly_registered
 from visp_memory.server.auth import UserContext
 
 
 def _get_repository(storage: Any, repo_id: Optional[str]) -> Optional[dict[str, Any]]:
+    """The registered repository for a scope, if a human registered one.
+
+    A row the store created for itself because a write named that scope is not a
+    registration and is invisible here: it has to behave exactly like the absent
+    row it replaced, or giving `repositories` its missing rows would silently
+    change who can see what.
+    """
     if not repo_id or not hasattr(storage, "get_repository"):
         return None
-    return storage.get_repository(repo_id)
+    repo = storage.get_repository(repo_id)
+    return None if is_implicitly_registered(repo) else repo
 
 
 def require_admin(user: UserContext) -> None:
@@ -68,7 +77,7 @@ def require_repo_scope_access(
         )
     if user.auth_type == "pat" and user.repo_ids and repo_id not in user.repo_ids:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
-    if user.is_admin:
+    if user.is_admin or user.is_local_owner:
         return
 
     repo = _get_repository(storage, repo_id)
@@ -94,11 +103,22 @@ def can_access_scoped_record(
     *,
     scope_field: str,
 ) -> bool:
-    """Return whether a memory/intent row belongs to the current user's team scope."""
+    """Return whether a memory/intent row belongs to the current user's team scope.
+
+    The tenancy rule below is untouched: a record is visible to a non-admin only
+    when its team, or its repository's team, is that user's team. Multi-user
+    deployments see exactly what they saw before.
+
+    The local owner is not a tenant and is not measured against that rule. It is
+    the single user of a single-user store, reading it on the machine that holds
+    it, and `visp-memory recall` already reads the same file with no tenancy
+    filter at all -- so serving it less through its own dashboard was never a
+    boundary, only the reason the dashboard read zero. It is still not an admin.
+    """
     repo_id = record.get("repo_id")
     if user.auth_type == "pat" and user.repo_ids and repo_id not in user.repo_ids:
         return False
-    if user.is_admin:
+    if user.is_admin or user.is_local_owner:
         return True
     if not user.team_id:
         return False

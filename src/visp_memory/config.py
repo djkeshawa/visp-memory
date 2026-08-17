@@ -265,6 +265,17 @@ class ServerConfig(BaseSettings):
     allow_anonymous: bool = False
     default_team: Optional[str] = None
 
+    #: Serve a single-user store to its own owner: the principal on a loopback
+    #: request gets the same view of the store that the `visp-memory` CLI already
+    #: has of the same file. It is NOT a tenancy setting and grants nothing to a
+    #: request arriving over a network interface -- see
+    #: ``visp_memory.server.auth.is_local_owner_request``.
+    #:
+    #: `visp-memory serve` sets it only when it starts open local mode on a
+    #: loopback bind. Setting it by hand on a public bind grants nothing, because
+    #: the peer address is checked again on every request.
+    local_owner_mode: bool = False
+
     @field_validator("cors_origins", "api_keys", mode="before")
     @classmethod
     def parse_cors_origins(cls, value: Any) -> List[str]:
@@ -381,6 +392,7 @@ class MemoryConfig(BaseSettings):
             "VISP_MEMORY_SERVER_API_KEYS": ("server", "api_keys"),
             "VISP_MEMORY_SERVER_ALLOW_ANONYMOUS": ("server", "allow_anonymous"),
             "VISP_MEMORY_SERVER_DEFAULT_TEAM": ("server", "default_team"),
+            "VISP_MEMORY_SERVER_LOCAL_OWNER_MODE": ("server", "local_owner_mode"),
             "VISP_MEMORY_SERVER_JWT_EXPIRY_HOURS": ("server", "jwt_expiry_hours"),
             "VISP_MEMORY_LLM_PROVIDER": ("llm", "provider"),
             "VISP_MEMORY_LLM_MODEL": ("llm", "model"),
