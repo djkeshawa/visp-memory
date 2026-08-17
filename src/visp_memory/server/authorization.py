@@ -71,8 +71,14 @@ def require_repo_scope_access(
     if user.is_admin:
         return
 
+    # An untenanted repository is not somebody else's repository. The store now
+    # creates a row for every project scope a write names (it has no principal, so
+    # the row carries no team), and that row has to stay indistinguishable from the
+    # absent row it replaced — which this gate let straight through. Only a
+    # repository that names an owning team can exclude anyone.
     repo = _get_repository(storage, repo_id)
-    if repo and repo.get("team_id") != user.team_id:
+    repo_team_id = repo.get("team_id") if repo else None
+    if repo_team_id is not None and repo_team_id != user.team_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
 
 
@@ -87,6 +93,16 @@ def require_repo_writable(storage: Any, repo_id: Optional[str], user: UserContex
         )
 
 
+def _record_team_id(storage: Any, record: dict[str, Any], *, scope_field: str) -> Optional[str]:
+    """The team that owns a memory/intent row: its own scope, else its repository's."""
+    scope = record.get(scope_field) or {}
+    if isinstance(scope, dict) and scope.get("team_id") is not None:
+        return scope["team_id"]
+
+    repo = _get_repository(storage, record.get("repo_id"))
+    return repo.get("team_id") if repo else None
+
+
 def can_access_scoped_record(
     storage: Any,
     record: dict[str, Any],
@@ -94,24 +110,26 @@ def can_access_scoped_record(
     *,
     scope_field: str,
 ) -> bool:
-    """Return whether a memory/intent row belongs to the current user's team scope."""
+    """Return whether a memory/intent row belongs to the current user's team scope.
+
+    This is tenant equality, not tenant presence. A record that names no team, in a
+    repository that names no team, belongs to nobody in particular — and the single
+    user of a local store is nobody in particular too, so the two match.
+
+    Requiring a team on both sides instead is what made the dashboard read zero
+    against a store with memories in it: `serve` starts a loopback server in open
+    local mode, whose principal is anonymous and teamless by design, so every row
+    failed a comparison neither side was ever going to satisfy. `allow_anonymous`
+    became a switch that granted 200s with empty bodies. The principal is still not
+    an admin, so nothing here opens an admin surface.
+    """
     repo_id = record.get("repo_id")
     if user.auth_type == "pat" and user.repo_ids and repo_id not in user.repo_ids:
         return False
     if user.is_admin:
         return True
-    if not user.team_id:
-        return False
 
-    scope = record.get(scope_field) or {}
-    if isinstance(scope, dict) and scope.get("team_id") is not None:
-        return scope.get("team_id") == user.team_id
-
-    repo = _get_repository(storage, record.get("repo_id"))
-    if repo:
-        return repo.get("team_id") == user.team_id
-
-    return False
+    return _record_team_id(storage, record, scope_field=scope_field) == user.team_id
 
 
 def require_scoped_record_access(

@@ -149,6 +149,26 @@ _V4_REQUIRED_COLUMNS = {
 }
 
 
+#: Marks a repositories row the store created for itself because a write named
+#: that project scope. It carries no owning team and no description, and explicit
+#: registration is allowed to take it over — see ``LocalStorage.store_repository``.
+IMPLICIT_REGISTRATION_KEY = "registration"
+IMPLICIT_REGISTRATION_VALUE = "implicit"
+IMPLICIT_REGISTRATION_METADATA = json.dumps(
+    {IMPLICIT_REGISTRATION_KEY: IMPLICIT_REGISTRATION_VALUE}
+)
+
+
+def is_implicitly_registered(repo: Optional[Dict[str, Any]]) -> bool:
+    """Whether a repository row exists only because a write named its scope."""
+    if not repo:
+        return False
+    metadata = repo.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        return False
+    return metadata.get(IMPLICIT_REGISTRATION_KEY) == IMPLICIT_REGISTRATION_VALUE
+
+
 class EvidenceError(ValueError):
     """Base error for evidence contract violations."""
 
@@ -853,12 +873,95 @@ class LocalStorage(BaseStorage):
                 "ON recall_events(event_type)"
             )
 
+            self._register_repositories_for_existing_scopes(conn)
+
             conn.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version) VALUES (?)",
                 (STORAGE_SCHEMA_VERSION,),
             )
 
             conn.commit()
+
+    @staticmethod
+    def _register_repositories_for_existing_scopes(conn: sqlite3.Connection) -> None:
+        """Give every project scope that holds records a repositories row.
+
+        A repository is not something the user declares; it is implied by having
+        memories in it. Nothing ever wrote this table — `repos register` is frozen —
+        so every repo-scoped join in the API resolved against an empty table and the
+        server answered with rows it could not attribute to anything.
+
+        Writes create the row from now on (see ``_register_repository``); this repairs
+        stores written before that. It is an idempotent data repair rather than a
+        schema change, so it carries no migration version: the shape of the table is
+        unchanged and running it twice does nothing.
+        """
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO repositories (id, name, metadata)
+            SELECT id, id, ? FROM (
+                SELECT DISTINCT repo_id AS id FROM memories
+                UNION
+                SELECT DISTINCT repo_id AS id FROM intents
+            )
+            WHERE id IS NOT NULL AND id != '' AND id != ?
+            """,
+            (IMPLICIT_REGISTRATION_METADATA, UNSCOPED_REPO_ID),
+        )
+
+    @classmethod
+    def inspect_repository_registration(cls, data_dir: Path) -> Dict[str, Any]:
+        """Report project scopes holding records that have no repositories row.
+
+        Deliberately a classmethod over the file rather than a method on an open
+        store: opening a ``LocalStorage`` runs the schema step, which registers the
+        missing rows, and a diagnostic that repairs what it measures can never
+        report it.
+        """
+        db_path = Path(data_dir) / "memories.db"
+        if not db_path.exists():
+            return {"exists": False, "project_scopes": [], "unregistered_scopes": []}
+
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=30.0)
+        try:
+            scopes = [
+                row[0]
+                for row in conn.execute(
+                    """
+                    SELECT DISTINCT repo_id FROM memories
+                    UNION
+                    SELECT DISTINCT repo_id FROM intents
+                    """
+                )
+                if row[0] and row[0] != UNSCOPED_REPO_ID
+            ]
+            registered = {row[0] for row in conn.execute("SELECT id FROM repositories")}
+        finally:
+            conn.close()
+
+        return {
+            "exists": True,
+            "project_scopes": sorted(scopes),
+            "unregistered_scopes": sorted(scope for scope in scopes if scope not in registered),
+        }
+
+    @staticmethod
+    def _register_repository(conn: sqlite3.Connection, repo_id: str) -> None:
+        """Record the project scope a write is landing in, if it is not recorded yet.
+
+        Deliberately leaves ``team_id`` NULL: storage has no principal, so an
+        implicit row must carry no tenant and must stay indistinguishable from an
+        absent row for authorization. Explicit registration through the API still
+        sets the owning team.
+
+        The reserved unscoped bucket is not a repository and never gets a row.
+        """
+        if not repo_id or repo_id == UNSCOPED_REPO_ID:
+            return
+        conn.execute(
+            "INSERT OR IGNORE INTO repositories (id, name, metadata) VALUES (?, ?, ?)",
+            (repo_id, repo_id, IMPLICIT_REGISTRATION_METADATA),
+        )
 
     @classmethod
     def _validate_v4_schema(cls, conn: sqlite3.Connection) -> None:
@@ -2776,6 +2879,7 @@ class LocalStorage(BaseStorage):
                     raise ProhibitionAuthorityError(
                         "prohibition attestation replay does not match the stored belief"
                     )
+            self._register_repository(conn, repo_id)
             conn.execute(
                 """
                 INSERT INTO memories (
@@ -3420,6 +3524,7 @@ class LocalStorage(BaseStorage):
         repo_id = repo_id or UNSCOPED_REPO_ID
 
         with self._get_db() as conn:
+            self._register_repository(conn, repo_id)
             conn.execute(
                 """
                 INSERT INTO intents (id, description, priority, context, repo_id)
@@ -4181,7 +4286,35 @@ class LocalStorage(BaseStorage):
                     ),
                 )
             except sqlite3.IntegrityError as e:
-                raise ValueError(f"Repository already exists: {repo_id}") from e
+                # A row the store created for itself is a placeholder, not a
+                # registration, so explicit registration takes it over instead of
+                # colliding with it. Without this, writing one memory would make
+                # `repos register` for that project permanently impossible.
+                existing = conn.execute(
+                    "SELECT * FROM repositories WHERE id = ?", (repo_id,)
+                ).fetchone()
+                if not is_implicitly_registered(
+                    self._row_to_dict(existing) if existing else None
+                ):
+                    raise ValueError(f"Repository already exists: {repo_id}") from e
+                conn.execute(
+                    """
+                    UPDATE repositories
+                    SET name = ?, url = ?, description = ?, tech_stack = ?,
+                        team_id = ?, metadata = ?, status = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        repo["name"],
+                        repo.get("url"),
+                        repo.get("description"),
+                        self._json_serialize(repo.get("tech_stack", [])),
+                        repo.get("team_id"),
+                        self._json_serialize(repo.get("metadata", {})),
+                        repo.get("status", "active"),
+                        repo_id,
+                    ),
+                )
             conn.commit()
         return repo_id
 

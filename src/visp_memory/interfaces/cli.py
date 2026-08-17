@@ -23,6 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, List, Optional
 
+import click
 import typer
 from rich.console import Console, Group
 from rich.layout import Layout
@@ -48,6 +49,7 @@ from visp_memory.core.contract_recall import (
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID
 from visp_memory.core.ranking import projected_importance
 from visp_memory.core.reporting import MemoryIntelligenceReporter
+from visp_memory.core.storage import LocalStorage
 from visp_memory.core.trust import WriteChannel
 from visp_memory.hooks.reachability import ReachabilityReport, check_reachability
 
@@ -78,6 +80,23 @@ class _RefusalBoundary(TyperGroup):
                 raise
             console.print(f"[red]{exc}[/red]")
             raise typer.Exit(1) from exc
+
+    def parse_args(self, ctx, args):
+        """Asking a group what it can do is not a usage error.
+
+        `no_args_is_help` prints the help and then exits non-zero, so
+        `visp-memory` — the first thing anyone types — reported failure while
+        showing the page it was supposed to show. Anything that reads the exit
+        code (a shell `set -e`, a wrapper script, an installer smoke test) is told
+        the CLI is broken. The help output is left to click; only the code is
+        corrected, so this holds whichever exit code the click version picked.
+        """
+        try:
+            return super().parse_args(ctx, args)
+        except click.exceptions.Exit as help_exit:
+            if args or not self.no_args_is_help or help_exit.exit_code == 0:
+                raise
+            raise click.exceptions.Exit(0) from None
 
 
 app = typer.Typer(
@@ -521,6 +540,7 @@ def _doctor_payload(verify_providers: bool = True) -> dict[str, Any]:
             "project_type": config.project_type,
         },
         "storage": _storage_doctor_status(config),
+        "repositories": _repository_registration_status(config),
         "providers": {"embedding": _embedding_provider_status(config, verify=verify_providers)},
         # A store an agent cannot find is a store that will stay empty. Diagnostics
         # that report only storage and providers reported "healthy" over exactly
@@ -552,6 +572,55 @@ def _storage_doctor_status(config: MemoryConfig) -> dict[str, Any]:
         status["connected"] = False
         status["status"] = "unwritable_data_dir"
         status["status_message"] = str(exc)
+    return status
+
+
+def _repository_registration_status(config: MemoryConfig) -> dict[str, Any]:
+    """Report whether every project scope holding records has a repository row.
+
+    Repo-scoped API queries resolve a memory's `repo_id` against the `repositories`
+    table. Nothing wrote that table for most of this store's life, so those queries
+    resolved against nothing — a store can be full and still answer as if it were
+    empty, which is not visible from any count. It is visible from here.
+    """
+    status: dict[str, Any] = {"project_scopes": [], "unregistered_scopes": []}
+    if config.storage.mode == "client":
+        status["status"] = "remote_mode_not_checked"
+        status["status_message"] = "Storage is client mode; registration is the server's."
+        return status
+    if config.storage.backend != "sqlite":
+        status["status"] = "backend_not_checked"
+        status["status_message"] = (
+            f"Registration reporting covers the sqlite backend; this store is "
+            f"{config.storage.backend}."
+        )
+        return status
+
+    try:
+        report = LocalStorage.inspect_repository_registration(config.storage.data_dir)
+    except Exception as exc:
+        status["status"] = "unreadable"
+        status["status_message"] = str(exc)
+        return status
+
+    status["project_scopes"] = report["project_scopes"]
+    status["unregistered_scopes"] = report["unregistered_scopes"]
+    if not report["exists"]:
+        status["status"] = "no_store"
+        status["status_message"] = "No store yet; run visp-memory init."
+    elif report["unregistered_scopes"]:
+        status["status"] = "unregistered_scopes"
+        status["status_message"] = (
+            f"{len(report['unregistered_scopes'])} project scope(s) hold records with no "
+            "repository row, so repo-scoped API queries cannot resolve them: "
+            f"{', '.join(report['unregistered_scopes'])}. Recording anything in a scope "
+            "registers it."
+        )
+    else:
+        status["status"] = "registered"
+        status["status_message"] = (
+            f"{len(report['project_scopes'])} project scope(s), all with a repository row."
+        )
     return status
 
 
@@ -606,6 +675,14 @@ def _print_doctor_payload(payload: dict[str, Any], as_json: bool = False):
         f"Storage status: {storage['status']} ({storage.get('status_message')})"
     )
 
+    repositories = payload.get("repositories")
+    if repositories:
+        colour = "yellow" if repositories["status"] == "unregistered_scopes" else "green"
+        console.print(
+            f"Repositories: [{colour}]{repositories['status']}[/{colour}] - "
+            f"{repositories['status_message']}"
+        )
+
     embedding = payload["providers"]["embedding"]
     console.print(
         f"Embedding: configured={embedding['configured_provider']}, "
@@ -650,7 +727,7 @@ def doctor(
     _print_doctor_payload(payload, as_json=as_json)
 
 
-providers_app = typer.Typer(help="Provider diagnostics")
+providers_app = typer.Typer(cls=_RefusalBoundary, help="Provider diagnostics")
 app.add_typer(providers_app, name="providers")
 
 
@@ -1021,7 +1098,7 @@ def issue(
 # Intent Commands
 # =============================================================================
 
-intent_app = typer.Typer(help="Intent lifecycle management")
+intent_app = typer.Typer(cls=_RefusalBoundary, help="Intent lifecycle management")
 app.add_typer(intent_app, name="intent")
 
 
@@ -1515,7 +1592,10 @@ def audit(
 # pins that trust control). Review operates only inside a real repository
 # scope, on proposals that already belong to it.
 
-review_app = typer.Typer(help="Review pending proposals from `visp learn` / `contract propose`.")
+review_app = typer.Typer(
+    cls=_RefusalBoundary,
+    help="Review pending proposals from `visp learn` / `contract propose`.",
+)
 app.add_typer(review_app, name="review")
 
 
@@ -1955,11 +2035,11 @@ def dedup(
 # Quality Commands
 # =============================================================================
 
-quality_app = typer.Typer(help="Memory quality management")
+quality_app = typer.Typer(cls=_RefusalBoundary, help="Memory quality management")
 app.add_typer(quality_app, name="quality")
-health_app = typer.Typer(help="Memory health and lifecycle previews")
+health_app = typer.Typer(cls=_RefusalBoundary, help="Memory health and lifecycle previews")
 app.add_typer(health_app, name="health")
-feedback_app = typer.Typer(help="Recall utility feedback")
+feedback_app = typer.Typer(cls=_RefusalBoundary, help="Recall utility feedback")
 app.add_typer(feedback_app, name="feedback")
 
 
@@ -2354,7 +2434,10 @@ def find_error(
 # =============================================================================
 
 # Create capture sub-app
-capture_app = typer.Typer(help="Automatic memory capture from development activity")
+capture_app = typer.Typer(
+    cls=_RefusalBoundary,
+    help="Automatic memory capture from development activity",
+)
 app.add_typer(capture_app, name="capture")
 
 
@@ -2482,7 +2565,10 @@ def capture_tests(report: str = typer.Argument("report.xml", help="Path to JUnit
 # and tested, not actively developed, and dependent on the team server. `--help`
 # is the only status a user reads before typing a command, so it says so here too
 # rather than only in a document they may never open.
-repo_app = typer.Typer(help="[FROZEN] Cross-repository registration and dependencies")
+repo_app = typer.Typer(
+    cls=_RefusalBoundary,
+    help="[FROZEN] Cross-repository registration and dependencies",
+)
 app.add_typer(repo_app, name="repos")
 
 
@@ -2599,11 +2685,15 @@ def repo_context(
 
 # FROZEN, and only meaningful against the multi-user server. See the note on
 # repo_app above: a frozen feature that looks first-class in `--help` is a claim.
-team_app = typer.Typer(help="[FROZEN] Team and user management (multi-user server only)")
+team_app = typer.Typer(
+    cls=_RefusalBoundary,
+    help="[FROZEN] Team and user management (multi-user server only)",
+)
 app.add_typer(team_app, name="teams")
 
 admin_app = typer.Typer(
-    help="[FROZEN] Dashboard administrator management (multi-user server only)"
+    cls=_RefusalBoundary,
+    help="[FROZEN] Dashboard administrator management (multi-user server only)",
 )
 app.add_typer(admin_app, name="admin")
 
@@ -2764,14 +2854,20 @@ def capture_conversation(
 # =============================================================================
 
 # Create hooks sub-app
-hooks_app = typer.Typer(help="Integration with LLM tools (Claude Code, Codex, Cursor, Aider)")
+hooks_app = typer.Typer(
+    cls=_RefusalBoundary,
+    help="Integration with LLM tools (Claude Code, Codex, Cursor, Aider)",
+)
 app.add_typer(hooks_app, name="hooks")
 
 # Runtime entry points invoked BY Claude Code (configured in .claude/settings.json
 # by `visp-memory hooks install claude-code`). They read the hook payload from
 # stdin, print hook JSON to stdout, and always exit 0: a memory failure must
 # never break the user's coding session.
-hook_runtime_app = typer.Typer(help="Hook runtime endpoints called by Claude Code (stdin JSON)")
+hook_runtime_app = typer.Typer(
+    cls=_RefusalBoundary,
+    help="Hook runtime endpoints called by Claude Code (stdin JSON)",
+)
 app.add_typer(hook_runtime_app, name="hook")
 
 
@@ -3214,7 +3310,10 @@ def status():
 
 MEMORY_CONTRACT_VERSION = "1.0"
 
-contract_app = typer.Typer(help="Versioned machine contract for coordinators.")
+contract_app = typer.Typer(
+    cls=_RefusalBoundary,
+    help="Versioned machine contract for coordinators.",
+)
 app.add_typer(contract_app, name="contract")
 
 
