@@ -3,13 +3,22 @@ from typing import Any, Optional
 from fastapi import HTTPException, status
 
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID
+from visp_memory.core.storage import is_implicitly_registered
 from visp_memory.server.auth import UserContext
 
 
 def _get_repository(storage: Any, repo_id: Optional[str]) -> Optional[dict[str, Any]]:
+    """The registered repository for a scope, if a human registered one.
+
+    A row the store created for itself because a write named that scope is not a
+    registration and is invisible here: it has to behave exactly like the absent
+    row it replaced, or giving `repositories` its missing rows would silently
+    change who can see what.
+    """
     if not repo_id or not hasattr(storage, "get_repository"):
         return None
-    return storage.get_repository(repo_id)
+    repo = storage.get_repository(repo_id)
+    return None if is_implicitly_registered(repo) else repo
 
 
 def require_admin(user: UserContext) -> None:
@@ -68,17 +77,11 @@ def require_repo_scope_access(
         )
     if user.auth_type == "pat" and user.repo_ids and repo_id not in user.repo_ids:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
-    if user.is_admin:
+    if user.is_admin or user.is_local_owner:
         return
 
-    # An untenanted repository is not somebody else's repository. The store now
-    # creates a row for every project scope a write names (it has no principal, so
-    # the row carries no team), and that row has to stay indistinguishable from the
-    # absent row it replaced — which this gate let straight through. Only a
-    # repository that names an owning team can exclude anyone.
     repo = _get_repository(storage, repo_id)
-    repo_team_id = repo.get("team_id") if repo else None
-    if repo_team_id is not None and repo_team_id != user.team_id:
+    if repo and repo.get("team_id") != user.team_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
 
 
@@ -93,16 +96,6 @@ def require_repo_writable(storage: Any, repo_id: Optional[str], user: UserContex
         )
 
 
-def _record_team_id(storage: Any, record: dict[str, Any], *, scope_field: str) -> Optional[str]:
-    """The team that owns a memory/intent row: its own scope, else its repository's."""
-    scope = record.get(scope_field) or {}
-    if isinstance(scope, dict) and scope.get("team_id") is not None:
-        return scope["team_id"]
-
-    repo = _get_repository(storage, record.get("repo_id"))
-    return repo.get("team_id") if repo else None
-
-
 def can_access_scoped_record(
     storage: Any,
     record: dict[str, Any],
@@ -112,24 +105,33 @@ def can_access_scoped_record(
 ) -> bool:
     """Return whether a memory/intent row belongs to the current user's team scope.
 
-    This is tenant equality, not tenant presence. A record that names no team, in a
-    repository that names no team, belongs to nobody in particular — and the single
-    user of a local store is nobody in particular too, so the two match.
+    The tenancy rule below is untouched: a record is visible to a non-admin only
+    when its team, or its repository's team, is that user's team. Multi-user
+    deployments see exactly what they saw before.
 
-    Requiring a team on both sides instead is what made the dashboard read zero
-    against a store with memories in it: `serve` starts a loopback server in open
-    local mode, whose principal is anonymous and teamless by design, so every row
-    failed a comparison neither side was ever going to satisfy. `allow_anonymous`
-    became a switch that granted 200s with empty bodies. The principal is still not
-    an admin, so nothing here opens an admin surface.
+    The local owner is not a tenant and is not measured against that rule. It is
+    the single user of a single-user store, reading it on the machine that holds
+    it, and `visp-memory recall` already reads the same file with no tenancy
+    filter at all -- so serving it less through its own dashboard was never a
+    boundary, only the reason the dashboard read zero. It is still not an admin.
     """
     repo_id = record.get("repo_id")
     if user.auth_type == "pat" and user.repo_ids and repo_id not in user.repo_ids:
         return False
-    if user.is_admin:
+    if user.is_admin or user.is_local_owner:
         return True
+    if not user.team_id:
+        return False
 
-    return _record_team_id(storage, record, scope_field=scope_field) == user.team_id
+    scope = record.get(scope_field) or {}
+    if isinstance(scope, dict) and scope.get("team_id") is not None:
+        return scope.get("team_id") == user.team_id
+
+    repo = _get_repository(storage, record.get("repo_id"))
+    if repo:
+        return repo.get("team_id") == user.team_id
+
+    return False
 
 
 def require_scoped_record_access(

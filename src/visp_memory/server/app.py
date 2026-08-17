@@ -15,6 +15,7 @@ try:
     from fastapi import Depends, FastAPI, Request
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+    from fastapi.security import HTTPAuthorizationCredentials
     from fastapi.staticfiles import StaticFiles
 except ImportError:
     raise ImportError("FastAPI not installed. Run: pip install visp-memory[api]")
@@ -421,12 +422,15 @@ def _get_scoped_stats(repo_id: str | None, user: UserContext) -> dict:
     did produce were right.
     """
     storage = app.state.storage
-    if user.is_admin:
+    if user.is_admin or user.is_local_owner:
+        # Every row is visible to this principal, so the aggregate is exact and
+        # nothing has to be read into memory to count it.
         return storage.get_stats(repo_id=repo_id)
 
+    scanned = storage.list_memories(repo_id=repo_id, limit=SCOPED_STATS_SCAN_LIMIT)
     memories = [
         memory
-        for memory in storage.list_memories(repo_id=repo_id, limit=SCOPED_STATS_SCAN_LIMIT)
+        for memory in scanned
         if can_access_scoped_record(storage, memory, user, scope_field="metadata")
     ]
     intents = [
@@ -456,13 +460,30 @@ def _get_scoped_stats(repo_id: str | None, user: UserContext) -> dict:
         "total_memories": len(memories),
         "active_intents": len(intents),
         "total_relationships": len(relationships),
+        # A scan that filled its bound counted a prefix of the store, not the
+        # store. Saying so is the difference between a partial number and a wrong
+        # one, and a confidently wrong number is what this whole ticket was about.
+        "truncated": len(scanned) >= SCOPED_STATS_SCAN_LIMIT,
     }
 
 
 def _system_status(repo_id: str | None, user: UserContext) -> dict:
-    """Build the authenticated, tenant-scoped status and statistics payload."""
+    """Build the authenticated, tenant-scoped status and statistics payload.
+
+    An unscoped request is answered, not refused. There is no repository to gate
+    when no scope was named, and the per-record visibility filter already decides
+    what this principal may count — so an admin gets the whole store, a team user
+    gets their team's rows, and a principal entitled to nothing gets zeroes,
+    without a repo gate having to invent a verdict.
+
+    Refusing instead is how this endpoint stayed broken: it answered 400 to the
+    URL `serve` advertises, and answering 403 there instead would have handed the
+    dashboard the same blank cards for any store with no configured repo_id —
+    which is the shape of the defect this change exists to remove.
+    """
     target_repo_id = repo_id or config.repo_id
-    require_repo_scope_access(app.state.storage, target_repo_id, user, allow_global=True)
+    if target_repo_id:
+        require_repo_scope_access(app.state.storage, target_repo_id, user)
     stats_status = "ok"
     try:
         stats = _get_scoped_stats(target_repo_id, user)
@@ -474,6 +495,9 @@ def _system_status(repo_id: str | None, user: UserContext) -> dict:
         logger.error(f"Failed to get stats: {e}")
         stats = {}
         stats_status = "unavailable"
+    else:
+        if stats.get("truncated"):
+            stats_status = "partial"
 
     response = {
         "status": "online",
@@ -499,7 +523,11 @@ async def system_status(
 
 
 @app.get("/", tags=["system"])
-async def root(request: Request, repo_id: str = None):
+async def root(
+    request: Request,
+    repo_id: str = None,
+    auth: HTTPAuthorizationCredentials | None = Depends(security),
+):
     """Send a browser to the dashboard; answer everything else with the status JSON.
 
     `serve` prints this URL and it is what a user copies into a browser, where it
@@ -507,14 +535,15 @@ async def root(request: Request, repo_id: str = None):
     appeared only in a log line. Programmatic callers, which do not ask for HTML,
     still get the status payload here; /status is the name that always means it.
 
-    The credentials are resolved in the body rather than declared as a dependency
-    because the redirect has to happen before authentication: /dashboard is static
-    and unauthenticated, so demanding a token to be told where the page lives would
-    hand the same user a 401 instead of the 400 they already had.
+    The credentials are declared as a dependency, so this route still advertises
+    its security scheme in the OpenAPI document, but they are *applied* in the
+    body: the redirect has to happen before authentication, because /dashboard is
+    static and unauthenticated and demanding a token to be told where the page
+    lives would hand the same user a 401 instead of the 400 they already had.
     """
     if _prefers_html(request) and _dashboard_available():
         return RedirectResponse(url="/dashboard")
-    user = await get_current_user(request, await security(request))
+    user = await get_current_user(request, auth)
     return _system_status(repo_id, user)
 
 

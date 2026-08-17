@@ -3176,6 +3176,11 @@ def _ensure_serveable_auth_config(host: str) -> None:
         # (and for the reload subprocess, which inherits the environment) makes the
         # local server usable without committing credentials.
         os.environ["VISP_MEMORY_SERVER_ALLOW_ANONYMOUS"] = "true"
+        # Set only on this branch -- a loopback bind with no credentials -- so the
+        # single user of a single-user store sees it through the dashboard the way
+        # the CLI already shows it. It is checked again per request against the
+        # peer address, so it grants nothing to anything that is not this machine.
+        os.environ["VISP_MEMORY_SERVER_LOCAL_OWNER_MODE"] = "true"
         return
 
     console.print(

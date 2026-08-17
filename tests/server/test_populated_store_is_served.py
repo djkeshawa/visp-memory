@@ -62,8 +62,12 @@ async def served_store():
         config = MemoryConfig(repo_id=REPO_ID)
         config.embedding.provider = "noop"
         # Exactly what `visp-memory serve` leaves behind on a loopback bind with no
-        # credentials configured: auth on, anonymous allowed, no default team.
-        config.server = ServerConfig(auth_enabled=True, allow_anonymous=True)
+        # credentials configured: auth on, anonymous allowed, no default team, and
+        # local owner mode. ASGITransport presents a 127.0.0.1 peer, which is the
+        # other half of what makes this principal the store's owner.
+        config.server = ServerConfig(
+            auth_enabled=True, allow_anonymous=True, local_owner_mode=True
+        )
         app.state.model_router = ModelRouter(config.llm)
         app.state.intent_evaluator = IntentEvaluator(storage, app.state.model_router, config.llm)
 
@@ -151,3 +155,25 @@ async def test_the_intent_the_store_holds_is_listed(served_store):
 
     assert response.status_code == 200
     assert [intent["description"] for intent in response.json()] == ["Ship the dashboard fix"]
+
+
+@pytest.mark.asyncio
+async def test_a_status_request_with_no_query_falls_back_to_the_configured_project(
+    served_store,
+):
+    client, _ = served_store
+
+    response = await client.get("/status")
+
+    assert response.status_code == 200
+    assert response.json()["stats"]["total_memories"] == MEMORY_COUNT
+
+
+@pytest.mark.asyncio
+async def test_a_complete_scan_is_not_reported_as_truncated(served_store):
+    client, _ = served_store
+
+    body = (await client.get(f"/status?repo_id={REPO_ID}")).json()
+
+    assert body["stats_status"] == "ok"
+    assert body["stats"].get("truncated", False) is False

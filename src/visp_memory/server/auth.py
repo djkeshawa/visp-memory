@@ -19,6 +19,10 @@ SESSION_COOKIE_NAME = "visp_memory_session"
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
+#: Peer addresses that identify a request as having come from this machine.
+LOOPBACK_CLIENT_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "::ffff:127.0.0.1"})
+
+
 class UserContext(BaseModel):
     """Authenticated user context."""
 
@@ -30,8 +34,40 @@ class UserContext(BaseModel):
     scopes: list[str] = Field(default_factory=lambda: ["*"])
     repo_ids: list[str] = Field(default_factory=list)
 
+    #: This request came from the machine holding the store, in open local mode.
+    #: It reads the store as its owner -- the same view `visp-memory recall` has
+    #: of the same file -- and nothing more: it is not an admin, so every
+    #: administrative surface refuses it exactly as it refuses any other
+    #: non-admin. Never set from a token, a session, or a network request.
+    is_local_owner: bool = False
+
     def allows(self, scope: str) -> bool:
         return self.is_admin or "*" in self.scopes or scope in self.scopes
+
+
+def is_local_owner_request(request: Request, config) -> bool:
+    """Whether this request is the local owner reading its own store.
+
+    Two independent conditions, both required. ``local_owner_mode`` is an explicit
+    statement that this is a single-user store, and `visp-memory serve` sets it
+    only when it starts open local mode on a loopback bind. The peer address is
+    then checked on every request, so setting the flag by hand and binding a
+    public interface grants a remote caller nothing.
+
+    Deliberately not keyed on ``allow_anonymous``: that is an authentication
+    setting, it is settable from the config file and the environment as well as by
+    the loopback path, and it says nothing about whether the store has one owner
+    or many tenants.
+
+    Known limit, stated rather than hidden: a reverse proxy on this same machine
+    presents a loopback peer, so a deployment that both sets the mode by hand and
+    fronts the server with a local proxy would extend the local view to whoever
+    reaches that proxy. `serve` never sets the mode on such a bind.
+    """
+    if not getattr(config.server, "local_owner_mode", False):
+        return False
+    client = getattr(request, "client", None)
+    return client is not None and client.host in LOOPBACK_CLIENT_HOSTS
 
 
 def _authorize_pat_request(request: Request, user: UserContext) -> UserContext:
@@ -107,6 +143,8 @@ async def get_current_user(
             team_id=config.server.default_team,
             is_admin=True,
         )
+
+    local_owner = is_local_owner_request(request, config)
 
     # 1. Check for API key in header (backward compatibility)
     api_key = request.headers.get("X-API-KEY")
@@ -198,7 +236,10 @@ async def get_current_user(
     # 4. Allow anonymous if configured
     if config.server.allow_anonymous:
         return UserContext(
-            user_id="anonymous", username="anonymous", team_id=config.server.default_team
+            user_id="anonymous",
+            username="anonymous",
+            team_id=config.server.default_team,
+            is_local_owner=local_owner,
         )
 
     # 5. Fail if no auth
