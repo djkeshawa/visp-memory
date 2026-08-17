@@ -84,19 +84,25 @@ class _RefusalBoundary(TyperGroup):
     def parse_args(self, ctx, args):
         """Asking a group what it can do is not a usage error.
 
-        `no_args_is_help` prints the help and then exits non-zero, so
-        `visp-memory` — the first thing anyone types — reported failure while
-        showing the page it was supposed to show. Anything that reads the exit
-        code (a shell `set -e`, a wrapper script, an installer smoke test) is told
-        the CLI is broken. The help output is left to click; only the code is
-        corrected, so this holds whichever exit code the click version picked.
+        `visp-memory` — the first thing anyone types — printed its help and then
+        reported failure, and every subcommand group answered "Missing command."
+        with the same exit code. Anything that reads it (a shell under `set -e`, a
+        wrapper script, an installer smoke test) is told the CLI is broken by the
+        one command that was meant to introduce it.
+
+        Click reaches that outcome two different ways — `NoArgsIsHelpError` when
+        `no_args_is_help` is set, `ctx.fail("Missing command.")` when it is not —
+        so the empty-argument case is answered here instead, once, for every group
+        alike. A group that runs without a subcommand is left alone.
         """
-        try:
-            return super().parse_args(ctx, args)
-        except click.exceptions.Exit as help_exit:
-            if args or not self.no_args_is_help or help_exit.exit_code == 0:
-                raise
-            raise click.exceptions.Exit(0) from None
+        if not args and not ctx.resilient_parsing and not self.invoke_without_command:
+            # Typer renders help through rich as a side effect and returns nothing;
+            # a plain click formatter returns the text for us to print.
+            help_text = ctx.get_help()
+            if help_text:
+                click.echo(help_text, color=ctx.color)
+            ctx.exit(0)
+        return super().parse_args(ctx, args)
 
 
 app = typer.Typer(
