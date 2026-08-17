@@ -922,7 +922,10 @@ class LocalStorage(BaseStorage):
         if not db_path.exists():
             return {"exists": False, "project_scopes": [], "unregistered_scopes": []}
 
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=30.0)
+        # as_uri() rather than an f-string: a Windows path is backslash-separated
+        # and drive-lettered, which is not a URI, and read-only mode is only
+        # reachable through the URI form.
+        conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True, timeout=30.0)
         try:
             scopes = [
                 row[0]
