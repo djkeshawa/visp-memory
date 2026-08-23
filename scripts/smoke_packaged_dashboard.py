@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import socket
 import subprocess
@@ -14,9 +15,15 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from visp_memory.server.authorization import UNSCOPED_CONTEXT_DETAIL
+
 ROOT = Path(__file__).resolve().parents[1]
 STATIC_DIR = ROOT / "src" / "visp_memory" / "server" / "static"
 DASHBOARD_DIR = ROOT / "visp-memory-dashboard"
+
+#: The project the browser flow prepares a brief for. The smoke server starts on an
+#: empty temporary store, so the flow has to create this scope before it can select it.
+SMOKE_REPO_ID = "visp-memory-smoke"
 
 
 def find_free_port() -> int:
@@ -25,8 +32,12 @@ def find_free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def fetch(url: str) -> tuple[int, str]:
-    request = urllib.request.Request(url, headers={"User-Agent": "visp-memory-smoke/1.0"})
+def fetch(url: str, payload: dict | None = None) -> tuple[int, str]:
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    headers = {"User-Agent": "visp-memory-smoke/1.0"}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=body, headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, response.read().decode("utf-8", errors="replace")
@@ -61,6 +72,22 @@ def assert_ok(base_url: str, path: str, expected: str | None = None) -> None:
         raise AssertionError(f"{path} response did not contain {expected!r}")
 
 
+def assert_unscoped_brief_is_actionable(base_url: str) -> None:
+    """An unscoped brief is refused, and the refusal names the repair.
+
+    LC-124: it used to answer `400 repo_id is required`, which the dashboard had
+    nothing to do with — the brief page looked hung and the browser flow below
+    waited for headings that were never coming. This runs before anything is
+    seeded, while the temporary store genuinely has no project in it.
+    """
+    status, body = fetch(f"{base_url}/context/brief", payload={"task": "smoke"})
+    if status != 400:
+        raise AssertionError(f"unscoped /context/brief returned HTTP {status}: {body[:300]}")
+    detail = json.loads(body).get("detail")
+    if detail != UNSCOPED_CONTEXT_DETAIL:
+        raise AssertionError(f"unscoped /context/brief refused with {detail!r}")
+
+
 def run_browser_smoke(base_url: str) -> None:
     node_code = """
 const { chromium } = require('@playwright/test');
@@ -87,9 +114,39 @@ const { chromium } = require('@playwright/test');
     console.log(`${path} ok title=${JSON.stringify(title)}`);
   }
 
+  // A brief is compiled inside one project, so with no project in the store there is
+  // nothing to compile from: the page says so and refuses to send the request, rather
+  // than sending one the server answers 400 to and sitting on a spinner (LC-124).
   await page.goto(process.env.VISP_MEMORY_SMOKE_URL + '/dashboard/brief', {
     waitUntil: 'domcontentloaded',
   });
+  await page.getByLabel('Task').fill('Review the authentication callback');
+  await page.getByText('Select a project to prepare a brief').waitFor({ state: 'visible' });
+  const prepare = page.getByRole('button', { name: 'Prepare brief' });
+  await prepare.waitFor({ state: 'visible' });
+  if (!(await prepare.isDisabled())) {
+    throw new Error('Prepare brief was enabled with no project selected');
+  }
+
+  const repoId = process.env.VISP_MEMORY_SMOKE_REPO_ID;
+  const seeded = await fetch(process.env.VISP_MEMORY_SMOKE_URL + '/memories', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      content: 'The authentication callback validates the state parameter before redirecting.',
+      layer: 'semantic',
+      repo_id: repoId,
+      files: ['src/auth.py'],
+    }),
+  });
+  if (!seeded.ok) {
+    throw new Error(`seeding ${repoId} returned HTTP ${seeded.status}: ${await seeded.text()}`);
+  }
+
+  await page.goto(
+    `${process.env.VISP_MEMORY_SMOKE_URL}/dashboard/brief?repo_id=${encodeURIComponent(repoId)}`,
+    { waitUntil: 'domcontentloaded' },
+  );
   await page.getByLabel('Task').fill('Review the authentication callback');
   await page.getByLabel('Files').fill('src/auth.py');
   await page.getByRole('button', { name: 'Prepare brief' }).click();
@@ -126,7 +183,11 @@ const { chromium } = require('@playwright/test');
     node_code = node_code.replace(
         "waitUntil: 'networkidle'", "waitUntil: 'domcontentloaded'"
     )
-    env = {**os.environ, "VISP_MEMORY_SMOKE_URL": base_url}
+    env = {
+        **os.environ,
+        "VISP_MEMORY_SMOKE_URL": base_url,
+        "VISP_MEMORY_SMOKE_REPO_ID": SMOKE_REPO_ID,
+    }
     subprocess.run(["node", "-e", node_code], cwd=DASHBOARD_DIR, env=env, check=True)
 
 
@@ -148,10 +209,17 @@ def main() -> int:
     base_url = f"http://127.0.0.1:{port}"
 
     with tempfile.TemporaryDirectory(prefix="visp-memory-smoke-") as tmpdir:
+        # The smoke has to start with no project scope, or "an unscoped request" is not
+        # what it sends. `load_config()` reads VISP_MEMORY_REPO_ID, and before that walks
+        # up from the working directory for a `visp-memory.yaml` / `.visp-memory/config.yaml`
+        # — which a developer who ran `visp-memory init` in this checkout has, and which
+        # short-circuits the environment overrides entirely, data_dir included. Running the
+        # server from the temporary directory puts it where no such file can be found.
         env = {
             **os.environ,
             "VISP_MEMORY_SERVER_AUTH_ENABLED": "false",
             "VISP_MEMORY_STORAGE_DATA_DIR": tmpdir,
+            "VISP_MEMORY_REPO_ID": "",
         }
         process = subprocess.Popen(
             [
@@ -164,7 +232,7 @@ def main() -> int:
                 "--port",
                 str(port),
             ],
-            cwd=ROOT,
+            cwd=tmpdir,
             env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.STDOUT,
@@ -176,6 +244,7 @@ def main() -> int:
             assert_ok(base_url, "/dashboard/recall", "<html")
             assert_ok(base_url, "/dashboard/intents", "<html")
             assert_ok(base_url, "/dashboard/graph", "<html")
+            assert_unscoped_brief_is_actionable(base_url)
 
             if args.browser:
                 run_browser_smoke(base_url)

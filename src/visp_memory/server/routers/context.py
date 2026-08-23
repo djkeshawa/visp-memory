@@ -7,7 +7,10 @@ from visp_memory.core.code_graph import graph_for_repo
 from visp_memory.core.context_compiler import ContextCompiler
 from visp_memory.core.task_brief import TaskMemoryBriefCompiler
 from visp_memory.server.auth import UserContext, get_current_user
-from visp_memory.server.authorization import can_access_scoped_record, require_repo_scope_access
+from visp_memory.server.authorization import (
+    can_access_scoped_record,
+    require_context_repo_scope,
+)
 from visp_memory.server.schemas import ContextCompileRequest, TaskMemoryBriefRequest
 
 router = APIRouter(prefix="/context", tags=["context"])
@@ -21,8 +24,7 @@ async def compile_context(
 ):
     storage = request.app.state.storage
     config = load_config()
-    repo_id = payload.repo_id or config.repo_id
-    require_repo_scope_access(storage, repo_id, user)
+    repo_id = require_context_repo_scope(storage, payload.repo_id or config.repo_id, user)
     compiler = ContextCompiler(storage, code_graph=graph_for_repo(config, repo_id))
     return compiler.compile(
         payload.query,
@@ -49,8 +51,7 @@ async def prepare_task_brief(
 ):
     storage = request.app.state.storage
     config = load_config()
-    repo_id = payload.repo_id or config.repo_id
-    require_repo_scope_access(storage, repo_id, user)
+    repo_id = require_context_repo_scope(storage, payload.repo_id or config.repo_id, user)
     compiler = TaskMemoryBriefCompiler(storage, code_graph=graph_for_repo(config, repo_id))
     return compiler.prepare(
         payload.task,
