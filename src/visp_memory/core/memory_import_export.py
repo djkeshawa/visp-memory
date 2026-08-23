@@ -262,6 +262,18 @@ def import_memories(memory: Any, path: Path) -> None:
 
     for mem in data.get("memories", {}).get("semantic", []):
         repo_id = mem.get("repo_id") or memory.config.repo_id
+        # A v1 export predates the governed belief vocabulary, so its semantic
+        # categories are legacy names ("fragile_area", "convention", ...). The
+        # v2 path migrates those through migrate_legacy_belief_fields before
+        # anything validates them; this loop passed them through raw, so the
+        # governed allow-list refused the write and the documented
+        # export -> import migration failed for every pre-schema-v3 export.
+        # Same treatment as v2: map the type, keep the original name in
+        # metadata, and flag the row as unreviewed legacy material.
+        legacy_category = mem.get("category", "fact")
+        belief_type, epistemic_status = migrate_legacy_belief_fields(
+            legacy_category, mem.get("status")
+        )
         evidence_id = memory._storage.store_evidence(
             mem["content"],
             repo_id=repo_id,
@@ -272,12 +284,15 @@ def import_memories(memory: Any, path: Path) -> None:
         memory._storage.store_memory(
             content=mem["content"],
             layer="semantic",
-            category=mem.get("category", "fact"),
+            category=belief_type,
+            epistemic_status=epistemic_status,
+            quality_flags=["legacy_unreviewed"],
             importance=mem.get("importance", 0.5),
             tags=with_channel_provenance(mem.get("tags"), WriteChannel.IMPORT),
             metadata={
                 **(mem.get("metadata") or {}),
                 "write_channel": WriteChannel.IMPORT.value,
+                "legacy_category": legacy_category,
             },
             repo_id=repo_id,
             source=import_policy.source,
