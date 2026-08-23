@@ -9,7 +9,6 @@ import base64
 import hashlib
 import json
 import re
-import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -29,40 +28,11 @@ def _extract_memory_id(output: str) -> str:
     return match.group(0)
 
 
-@pytest.fixture
-def temp_dir():
-    """Create a temporary directory for each test."""
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-        yield Path(tmpdir)
-
-
-@pytest.fixture
-def cli_env(temp_dir):
-    """Set up environment for CLI tests."""
-    # Change to temp directory
-    import os
-
-    old_cwd = os.getcwd()
-    os.chdir(temp_dir)
-
-    # Set backend to sqlite to avoid Neo4j dependency
-    os.environ["VISP_MEMORY_STORAGE_BACKEND"] = "sqlite"
-    os.environ["VISP_MEMORY_EMBEDDING_PROVIDER"] = "noop"
-
-    # Reset the global _memory instance in CLI module to avoid caching issues between tests
-    import visp_memory.interfaces.cli as cli_module
-
-    cli_module._memory = None
-
-    yield temp_dir
-
-    # Restore
-    cli_module._memory = None
-    os.chdir(old_cwd)
-    if "VISP_MEMORY_STORAGE_BACKEND" in os.environ:
-        del os.environ["VISP_MEMORY_STORAGE_BACKEND"]
-    if "VISP_MEMORY_EMBEDDING_PROVIDER" in os.environ:
-        del os.environ["VISP_MEMORY_EMBEDDING_PROVIDER"]
+# `temp_dir` and `cli_env` are the shared fixtures in tests/cli/conftest.py, which
+# were extracted from this file. The copies that stayed behind here shadowed them,
+# so these tests kept rendering at the runner's own console width after the shared
+# fixture started pinning it -- the duplication was load-bearing in the wrong
+# direction. Removed; the conftest pair is identical apart from that pin.
 
 
 class TestCLIBasicCommands:
