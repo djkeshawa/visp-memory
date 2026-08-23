@@ -140,7 +140,10 @@ def test_globbed_instruction_files_are_found(tmp_path):
 
     found = find_instruction_files(tmp_path)
 
-    assert [str(p.relative_to(tmp_path)) for p in found] == [".cursor/rules/memory.mdc"]
+    # as_posix, not str: find_instruction_files returns Path objects, which is
+    # correct, and str() of one renders with the host separator. The contract
+    # under test is which files are found, not how Windows spells a path.
+    assert [p.relative_to(tmp_path).as_posix() for p in found] == [".cursor/rules/memory.mdc"]
     assert check_reachability(tmp_path).status == REACHABLE
 
 
