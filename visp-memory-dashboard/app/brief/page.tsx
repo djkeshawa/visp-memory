@@ -55,8 +55,14 @@ export default function TaskBriefPage() {
     [brief],
   )
 
+  // A brief is always compiled inside one project. Sending repoId: null asks the server to
+  // search nothing, which it refuses — so the request is never made without a project rather
+  // than made and refused. The guard is duplicated on the handler because a disabled button is
+  // a UI affordance, not a precondition.
+  const canPrepare = Boolean(task.trim()) && Boolean(selectedRepoId)
+
   const prepareBrief = async (checkForChanges = false) => {
-    if (!task.trim()) return
+    if (!task.trim() || !selectedRepoId) return
     setIsLoading(true)
     setErrorMessage(null)
     setCopied(false)
@@ -101,7 +107,7 @@ export default function TaskBriefPage() {
           <Button
             variant="outline"
             onClick={() => void prepareBrief(true)}
-            disabled={isLoading}
+            disabled={isLoading || !canPrepare}
             className="w-fit"
           >
             <RefreshCw className={cn("mr-2 h-4 w-4", isLoading && "animate-spin")} />
@@ -172,11 +178,18 @@ export default function TaskBriefPage() {
               aria-label="Context token budget"
             />
           </div>
-          <Button onClick={() => void prepareBrief(false)} disabled={isLoading || !task.trim()}>
+          <Button onClick={() => void prepareBrief(false)} disabled={isLoading || !canPrepare}>
             <Sparkles className={cn("mr-2 h-4 w-4", isLoading && "animate-pulse")} />
             {isLoading ? "Preparing" : "Prepare brief"}
           </Button>
         </div>
+
+        {!selectedRepoId ? (
+          <p className="mt-4 text-sm text-muted-foreground">
+            Select a project to prepare a brief. A brief is compiled from one project&apos;s
+            memories, so there is nothing to search until one is chosen.
+          </p>
+        ) : null}
       </section>
 
       {errorMessage ? (
