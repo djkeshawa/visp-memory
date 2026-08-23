@@ -1516,13 +1516,12 @@ def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
             environment=args.get("environment"),
             task_type=args.get("task_type"),
         )
-        # An agent reads this number and quotes it onward, so it says what it is.
-        # Two rounds of battle-ground notes reported lexical overlap as semantic
-        # similarity because this line called it "similarity" either way.
-        # The label is always honest; the banner is only for degradation nobody
-        # chose. Appending "install embeddings" to every response of a deployment
-        # that deliberately pinned the provider to `none` is noise an agent pays
-        # for on every call.
+        # An agent reads this number and quotes it onward, so it says what it is:
+        # two rounds of battle-ground notes reported lexical overlap as semantic
+        # similarity because this line called it "similarity" either way. The
+        # label is therefore unconditional. The banner is not — appending
+        # "install embeddings" to every response of a deployment that pinned the
+        # provider to `none` on purpose is noise an agent pays for on every call.
         lexical = memory.recall_scores_are_lexical is True
         remediation = memory.lexical_recall_remediation
         banner = f"{LEXICAL_RECALL_BANNER} {remediation}" if remediation else None

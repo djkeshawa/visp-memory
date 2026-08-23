@@ -1,6 +1,6 @@
 """The one wording for what the active embedding provider means for recall.
 
-Three surfaces reported the same fact in three different ways and none of them
+Four surfaces reported the same fact in four different ways and none of them
 reached a person running the CLI. `_warn_noop_fallback()` in
 :mod:`visp_memory.core.embeddings` already carried a good remediation -- install
 the local-embeddings extra, set an API key, or run Ollama -- but it is a
