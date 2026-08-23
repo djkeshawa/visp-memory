@@ -10,6 +10,13 @@ from pathlib import Path
 from typing import Dict
 
 from visp_memory.core.clock import utc_now
+from visp_memory.core.verbs import (
+    CAPTURE_VERBS,
+    INTENT_LIFECYCLE_HEADLINE,
+    INTENT_NON_AUTHORITATIVE_NOTE,
+    INTENT_VERBS,
+    render_command_block,
+)
 from visp_memory.hooks.base import _replace_between_markers
 from visp_memory.hooks.generic import GenericAdapter
 
@@ -49,12 +56,22 @@ class ClaudeCodeAdapter(GenericAdapter):
         Returns:
             Installation status
         """
-        results = super().install()
-
-        # Add note to CLAUDE.md about memory system
+        # Seed the file BEFORE delegating. GenericAdapter.install() creates a
+        # missing context file containing nothing but the markers, so the
+        # "if not exists" branch that used to follow it could never run: every
+        # fresh install produced a CLAUDE.md that named no memory verbs at all.
+        results = {}
         if not self.context_file.exists():
-            # Create initial CLAUDE.md with instructions
-            initial_content = """# CLAUDE.md
+            self._ensure_directory(self.context_file)
+            self.context_file.write_text(self._initial_instructions(), encoding="utf-8")
+            results["claude_md_created"] = True
+
+        results.update(super().install())
+        return results
+
+    def _initial_instructions(self) -> str:
+        """Render the starter CLAUDE.md from the one canonical verb catalogue."""
+        return f"""# CLAUDE.md
 
 This file provides guidance to Claude Code when working with code in this repository.
 
@@ -66,18 +83,19 @@ This project uses visp-memory for persistent context across sessions.
 
 **At the start of each session**, the memory context below is automatically updated.
 
-**After making changes**, record them:
-```bash
-visp-memory record "description" -c <category>
-visp-memory decision "what" "why" --alt "alternative"
-visp-memory bug "issue" --fix "solution"
-```
+**Before and during the work, set the direction.** {INTENT_LIFECYCLE_HEADLINE}
 
-**When learning something important**:
-```bash
-visp-memory learn "knowledge" -c <category>
-visp-memory warn "area" "warning"
-```
+{render_command_block(INTENT_VERBS)}
+
+{INTENT_NON_AUTHORITATIVE_NOTE}
+
+Use `visp-memory intent list` to see what is already active, and
+`visp-memory intent update|complete|close <intent-id>` to revise or record an
+outcome against one.
+
+**After making changes**, record what happened:
+
+{render_command_block(CAPTURE_VERBS)}
 
 ---
 
@@ -85,10 +103,6 @@ visp-memory warn "area" "warning"
 
 <!-- LLM-MEMORY --> END
 """
-            self.context_file.write_text(initial_content, encoding="utf-8")
-            results["claude_md_created"] = True
-
-        return results
 
     def update_context(self, files: list[str] = None, task: str = None) -> bool:
         """

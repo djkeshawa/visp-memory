@@ -7,9 +7,11 @@ Usage:
     visp-memory decision "..." "..."    # Record a decision
     visp-memory learn "..."             # Establish knowledge
     visp-memory warn "area" "warning"   # Add a warning
-    visp-memory goal "..."              # Set a goal
+    visp-memory goal "..."              # Set a goal — the direction the work aims at
+    visp-memory focus "area" --avoid .. # Narrow the focus and name what to avoid
     visp-memory working "task"          # Set current task
     visp-memory done                    # Record task outcome; status is unchanged
+    visp-memory intent list             # List intents (also: update/complete/close)
     visp-memory recall "query"          # Search memories
     visp-memory context                 # Get full context
     visp-memory brief "task"            # Prepare a cited task brief
@@ -28,6 +30,7 @@ import typer
 from rich.console import Console, Group
 from rich.layout import Layout
 from rich.markdown import Markdown
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 from typer.core import TyperGroup
@@ -47,6 +50,7 @@ from visp_memory.core.contract_recall import (
     structural_caveat,
 )
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID
+from visp_memory.core.intent_usage import STATUS_NEVER_USED, check_intent_usage
 from visp_memory.core.ranking import projected_importance
 from visp_memory.core.reporting import MemoryIntelligenceReporter
 from visp_memory.core.storage import LocalStorage
@@ -547,6 +551,10 @@ def _doctor_payload(verify_providers: bool = True) -> dict[str, Any]:
         },
         "storage": _storage_doctor_status(config),
         "repositories": _repository_registration_status(config),
+        # A store with memories and zero intents is using half of what it ships,
+        # and nothing said so: `stats` printed `intents: 0` and no surface called
+        # it a finding. Descriptive only - see core/intent_usage.py.
+        "intent_usage": check_intent_usage(config).as_dict(),
         "providers": {"embedding": _embedding_provider_status(config, verify=verify_providers)},
         # A store an agent cannot find is a store that will stay empty. Diagnostics
         # that report only storage and providers reported "healthy" over exactly
@@ -696,7 +704,22 @@ def _print_doctor_payload(payload: dict[str, Any], as_json: bool = False):
     )
     console.print(f"Embedding status: {embedding['status']} - {embedding['status_message']}")
 
+    _print_intent_usage(payload.get("intent_usage"))
     _print_reachability(payload.get("agent_reachability"))
+
+
+def _print_intent_usage(block: Optional[dict[str, Any]]) -> None:
+    """One line on whether anything has ever set an intent in this store."""
+    if not block:
+        return
+    colour = "yellow" if block["status"] == STATUS_NEVER_USED else "green"
+    # escape(): an unreadable-store headline carries str(exc), and a bracketed
+    # path in it would be swallowed as markup - or raise - losing the one
+    # message this line exists to show.
+    headline = escape(block["headline"])
+    console.print(f"Intent lifecycle: [{colour}]{headline}[/{colour}]")
+    if block.get("remediation"):
+        console.print(f"  [dim]Give it direction:[/dim] {escape(block['remediation'])}")
 
 
 def _print_reachability(block: Optional[dict[str, Any]]) -> None:
@@ -2367,17 +2390,9 @@ def inject(
         output = recall.format_injection(context, format=format, max_length=max_length)
 
     elif files:
-        # File-specific context
-        if len(files) == 1:
-            context = recall.on_file_open(files[0])
-        else:
-            # Multiple files - aggregate
-            context = {"warnings": [], "bugs": [], "decisions": [], "knowledge": []}
-            for file in files:
-                file_context = recall.on_file_open(file)
-                for key in context:
-                    context[key].extend(file_context.get(key, []))
-
+        # File-specific context. The aggregation lives in ProactiveRecall so this
+        # surface and the hook adapters cannot drift apart.
+        context = recall.for_files(files)
         output = recall.format_injection(context, format=format, max_length=max_length)
 
     elif task:

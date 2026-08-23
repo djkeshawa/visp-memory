@@ -12,8 +12,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from visp_memory.core.verbs import CAPTURE_VERBS, INTENT_VERBS
 from visp_memory.hooks.base import _replace_between_markers
 from visp_memory.hooks.claude_code import ClaudeCodeAdapter
+from visp_memory.hooks.cursor import CursorAdapter
 from visp_memory.hooks.generic import GenericAdapter
 
 STUB_CONTEXT = "STUBBED-MEMORY-CONTEXT-BODY"
@@ -234,6 +236,83 @@ def test_claude_code_install_creates_file_and_update_round_trips(tmp_path):
     # Markers remain intact and unique after update.
     assert updated.count("<!-- LLM-MEMORY --> START") == 1
     assert updated.count("<!-- LLM-MEMORY --> END") == 1
+
+
+# ---------------------------------------------------------------------------
+# LC-87: the generated instructions must name the intent lifecycle
+# ---------------------------------------------------------------------------
+
+
+def test_the_claude_md_a_fresh_install_writes_names_every_intent_verb(tmp_path):
+    """An agent cannot use a verb its own instructions never mention.
+
+    The template listed only the capture verbs, so goal/focus/working/done were
+    unreachable from the file Claude Code actually reads.
+    """
+    adapter = _stub_context(ClaudeCodeAdapter(_fake_memory(), project_root=tmp_path))
+
+    adapter.install()
+    written = (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
+
+    for verb in INTENT_VERBS:
+        assert f"visp-memory {verb.name}" in written, verb.name
+
+
+def test_the_claude_md_a_fresh_install_writes_still_names_every_capture_verb(tmp_path):
+    adapter = _stub_context(ClaudeCodeAdapter(_fake_memory(), project_root=tmp_path))
+
+    adapter.install()
+    written = (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
+
+    for verb in CAPTURE_VERBS:
+        assert f"visp-memory {verb.name}" in written, verb.name
+
+
+def test_the_claude_md_a_fresh_install_writes_names_the_intent_group_commands(tmp_path):
+    adapter = _stub_context(ClaudeCodeAdapter(_fake_memory(), project_root=tmp_path))
+
+    adapter.install()
+    written = (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
+
+    assert "visp-memory intent list" in written
+    assert "visp-memory intent update|complete|close" in written
+
+
+def test_the_claude_md_a_fresh_install_writes_never_claims_an_intent_grants_authority(tmp_path):
+    """Rule 9: memory is non-authoritative. Direction is not permission."""
+    adapter = _stub_context(ClaudeCodeAdapter(_fake_memory(), project_root=tmp_path))
+
+    adapter.install()
+    written = (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
+
+    assert "direction, not permission" in written
+    assert "does not grant" in written
+    assert "the task is finished when the project's own checks and review say so" in written
+
+
+def test_the_cursorrules_a_fresh_install_writes_names_every_intent_verb(tmp_path):
+    adapter = _stub_context(CursorAdapter(_fake_memory(), project_root=tmp_path))
+
+    adapter.install()
+    written = (tmp_path / ".cursorrules").read_text(encoding="utf-8")
+
+    for verb in INTENT_VERBS:
+        assert f"visp-memory {verb.name}" in written, verb.name
+
+
+def test_a_verb_added_to_the_catalogue_reaches_the_generated_instructions(tmp_path):
+    """The catalogue is the single source: templates render it, never a copy.
+
+    This is the regression the ticket is about - the same list was hand-written
+    in several templates and the intent verbs were dropped from some of them.
+    """
+    adapter = _stub_context(ClaudeCodeAdapter(_fake_memory(), project_root=tmp_path))
+
+    adapter.install()
+    written = (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
+
+    for verb in INTENT_VERBS + CAPTURE_VERBS:
+        assert verb.example in written, verb.example
 
 
 if __name__ == "__main__":  # pragma: no cover

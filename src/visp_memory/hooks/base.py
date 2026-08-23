@@ -105,15 +105,7 @@ class LLMToolAdapter(ABC):
         if files and task:
             context = recall.find_relevant_for_task(task, files=files)
         elif files:
-            if len(files) == 1:
-                context = recall.on_file_open(files[0])
-            else:
-                # Aggregate multiple files
-                context = {"warnings": [], "bugs": [], "decisions": [], "knowledge": []}
-                for file in files:
-                    file_context = recall.on_file_open(file)
-                    for key in context:
-                        context[key].extend(file_context.get(key, []))
+            context = recall.for_files(files)
         elif task:
             context = recall.find_relevant_for_task(task)
         else:
