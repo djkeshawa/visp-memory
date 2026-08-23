@@ -69,6 +69,12 @@ except ImportError:
 from visp_memory import Memory
 from visp_memory.core.clock import parse_utc, utc_now
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID, require_repo_id
+from visp_memory.core.embedding_status import (
+    DEFAULT_SCORE_LABEL,
+    ENABLE_SEMANTIC_RECALL_REMEDIATION,
+    LEXICAL_RECALL_BANNER,
+    LEXICAL_SCORE_LABEL,
+)
 from visp_memory.core.ranking import projected_importance
 from visp_memory.core.trust import WriteChannel
 
@@ -1511,18 +1517,29 @@ def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
             environment=args.get("environment"),
             task_type=args.get("task_type"),
         )
+        # An agent reads this number and quotes it onward, so it says what it is.
+        # Two rounds of battle-ground notes reported lexical overlap as semantic
+        # similarity because this line called it "similarity" either way.
+        lexical = memory.recall_scores_are_lexical is True
+        remediation = memory.lexical_recall_remediation or ENABLE_SEMANTIC_RECALL_REMEDIATION
+        banner = f"{LEXICAL_RECALL_BANNER} {remediation}"
         if not results:
+            if lexical:
+                return f"No memories found matching query.\n\n{banner}"
             return "No memories found matching query."
 
+        score_label = LEXICAL_SCORE_LABEL if lexical else DEFAULT_SCORE_LABEL
         output = [f"Found {len(results)} memories:\n"]
         for r in results:
-            sim = f" (similarity: {r.get('similarity', 0):.2f})" if r.get("similarity") else ""
+            sim = f" ({score_label}: {r.get('similarity', 0):.2f})" if r.get("similarity") else ""
             output.append(
                 f"- [{r['id']}] [{r['layer']}/{r.get('category', 'unknown')}]{sim}: "
                 f"{r['content']}"
             )
             output.extend(_format_ranking_factor_lines(r))
             output.extend(_format_related_evidence_lines(r.get("id"), memory))
+        if lexical:
+            output.append(f"\n{banner}")
         return "\n".join(output)
 
     elif name == "memory_remember":

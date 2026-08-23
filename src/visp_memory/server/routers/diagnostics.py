@@ -5,6 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from visp_memory.config import EmbeddingConfig, load_config
 from visp_memory.core.clock import utc_now
+from visp_memory.core.embedding_status import (
+    DISABLED_STATUS_MESSAGE,
+    ENABLE_SEMANTIC_RECALL_REMEDIATION,
+)
 from visp_memory.core.indexing import (
     ReindexScope,
     inspect_embedding_index,
@@ -119,6 +123,11 @@ def _missing_config_hint(provider: str) -> Optional[str]:
         return "Set OPENAI_API_KEY and VISP_MEMORY_EMBEDDING_PROVIDER=openai."
     if provider == "ollama":
         return "Start Ollama, pull an embedding model, and set OLLAMA_HOST."
+    if provider in {"noop", "sentence-transformers"}:
+        # The noop row is the one a dashboard or CLI sees marked active when
+        # auto-selection fell through, and it used to be the only row with no
+        # repair on it. Same sentence the CLI prints.
+        return ENABLE_SEMANTIC_RECALL_REMEDIATION
     return None
 
 
@@ -179,7 +188,7 @@ def build_provider_status(
             active=True,
             connected=False,
             status="disabled",
-            message="Noop embeddings are selected; semantic vector search is disabled.",
+            message=DISABLED_STATUS_MESSAGE,
         )
 
     if not configured:

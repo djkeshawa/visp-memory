@@ -23,6 +23,10 @@ except ImportError:
 from visp_memory import __version__
 from visp_memory.config import load_config
 from visp_memory.core.arcadedb_storage import ArcadeDbStorage
+from visp_memory.core.embedding_status import (
+    DISABLED_STATUS_MESSAGE,
+    FALLBACK_STATUS_MESSAGE,
+)
 from visp_memory.core.intent_evaluator import IntentEvaluator
 from visp_memory.core.lifecycle import MemoryLifecycleManager
 from visp_memory.core.model_router import ModelRouter
@@ -131,9 +135,7 @@ def get_server_embedding_runtime(config):
             configured_provider = config.embedding.provider
             status = "disabled" if configured_provider in {"noop", "none"} else "fallback"
             message = (
-                "Embeddings are disabled."
-                if status == "disabled"
-                else "No embedding driver connected; using noop embeddings."
+                DISABLED_STATUS_MESSAGE if status == "disabled" else FALLBACK_STATUS_MESSAGE
             )
             return provider, {
                 "embedding_driver_status": status,

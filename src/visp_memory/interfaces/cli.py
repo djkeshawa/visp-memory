@@ -28,6 +28,7 @@ import typer
 from rich.console import Console, Group
 from rich.layout import Layout
 from rich.markdown import Markdown
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 from typer.core import TyperGroup
@@ -47,6 +48,13 @@ from visp_memory.core.contract_recall import (
     structural_caveat,
 )
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID
+from visp_memory.core.embedding_status import (
+    DISABLED_STATUS_MESSAGE,
+    ENABLE_SEMANTIC_RECALL_REMEDIATION,
+    FALLBACK_STATUS_MESSAGE,
+    LEXICAL_RECALL_BANNER,
+    LEXICAL_SCORE_HEADER,
+)
 from visp_memory.core.ranking import projected_importance
 from visp_memory.core.reporting import MemoryIntelligenceReporter
 from visp_memory.core.storage import LocalStorage
@@ -473,6 +481,9 @@ def _embedding_provider_status(
         "status": "pending",
         "status_message": "Not tested.",
         "error": None,
+        # What to do about it. A status word with no repair is what LC-90 was:
+        # `doctor` reported "fallback" for months and nobody could act on it.
+        "remediation": None,
         "driver_model": None,
         "dimension": None,
         "credentials": {
@@ -502,10 +513,14 @@ def _embedding_provider_status(
                 "disabled" if configured_provider in {"noop", "none"} else "fallback"
             )
             diagnostics["status_message"] = (
-                "Embeddings disabled."
+                DISABLED_STATUS_MESSAGE
                 if diagnostics["status"] == "disabled"
-                else "Fallback provider in use."
+                else FALLBACK_STATUS_MESSAGE
             )
+            # A fallback is something the operator did not choose, so it comes with
+            # the repair. "disabled" was chosen deliberately and does not.
+            if diagnostics["status"] == "fallback":
+                diagnostics["remediation"] = ENABLE_SEMANTIC_RECALL_REMEDIATION
         else:
             diagnostics["connected"] = True
             diagnostics["status"] = "connected"
@@ -660,6 +675,10 @@ def _print_provider_payload(payload: dict[str, Any], as_json: bool = False):
         if maybe_error:
             console.print(f"[yellow]Error[/yellow]: {maybe_error}")
 
+    # The error hint stays suppressed for a fallback -- it is not an error -- but
+    # the repair is exactly what someone reading this table needs.
+    _print_embedding_remediation(embedding)
+
 
 def _print_doctor_payload(payload: dict[str, Any], as_json: bool = False):
     if as_json:
@@ -694,9 +713,33 @@ def _print_doctor_payload(payload: dict[str, Any], as_json: bool = False):
         f"Embedding: configured={embedding['configured_provider']}, "
         f"effective={embedding['effective_provider']}, connected={embedding['connected']}"
     )
-    console.print(f"Embedding status: {embedding['status']} - {embedding['status_message']}")
+    # Colour carries the verdict: a provider the operator did not choose, silently
+    # standing in for the one they did, is not a healthy line on a diagnostics page.
+    colour = "yellow" if embedding["status"] in {"fallback", "failed"} else "green"
+    console.print(
+        f"Embedding status: [{colour}]{embedding['status']}[/{colour}] - "
+        f"{embedding['status_message']}"
+    )
+    _print_embedding_remediation(embedding)
 
     _print_reachability(payload.get("agent_reachability"))
+
+
+def _print_embedding_remediation(embedding: dict[str, Any]) -> None:
+    """Print the repair under an embedding status, following the reachability line."""
+    if embedding.get("remediation"):
+        _print_remediation_line(embedding["remediation"])
+
+
+def _print_remediation_line(remediation: str) -> None:
+    """Print a remediation verbatim.
+
+    Escaped, because the remediation names a pip extra -- `visp-memory[local-embeddings]`
+    -- and Rich reads square brackets as a style tag and deletes what it cannot parse.
+    Unescaped, this advice printed as `pip install 'visp-memory'`, which installs the
+    wrong thing.
+    """
+    console.print(f"  [dim]{escape(remediation)}[/dim]")
 
 
 def _print_reachability(block: Optional[dict[str, Any]]) -> None:
@@ -776,6 +819,7 @@ def providers_test(
         console.print(f"Message: {result['status_message']}")
         if result["error"]:
             console.print(f"Error: {result['error']}")
+        _print_embedding_remediation(result)
 
     if not payload["result"]["connected"]:
         raise typer.Exit(1)
@@ -1317,6 +1361,13 @@ def recall(
     repo = _require_repo_scope(memory, repo)
 
     layers = [layer] if layer else None
+    lexical = memory.recall_scores_are_lexical is True
+    # The banner goes above the results, because it changes how they should be
+    # read. It is scoped to `recall` on purpose: a notice on every unrelated
+    # command was the defect that demoted the provider log line to INFO.
+    if lexical:
+        _print_lexical_recall_banner(memory.lexical_recall_remediation)
+
     results = memory.recall(
         query,
         layers=layers,
@@ -1355,7 +1406,11 @@ def recall(
     table.add_column("Layer", style="cyan", width=10)
     table.add_column("Category", style="green", width=12)
     table.add_column("Content")
-    table.add_column("Score", justify="right", style="magenta")
+    # The header names what the number is. An unlabelled "Score" is how a lexical
+    # overlap of 0.60 was quoted as a semantic similarity of 0.60.
+    table.add_column(
+        LEXICAL_SCORE_HEADER if lexical else "Score", justify="right", style="magenta"
+    )
 
     for r in results:
         score = f"{r.get('similarity', 0):.2f}" if r.get("similarity") else "-"
@@ -1366,6 +1421,12 @@ def recall(
         table.add_row(r["id"], r["layer"], r.get("category", "-"), content, score)
 
     console.print(table)
+
+
+def _print_lexical_recall_banner(remediation: str = None) -> None:
+    """One line saying the results below were ranked without vectors, and the repair."""
+    console.print(f"[yellow]{escape(LEXICAL_RECALL_BANNER)}[/yellow]")
+    _print_remediation_line(remediation or ENABLE_SEMANTIC_RECALL_REMEDIATION)
 
 
 @app.command()
