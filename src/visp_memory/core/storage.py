@@ -909,6 +909,53 @@ class LocalStorage(BaseStorage):
             (IMPLICIT_REGISTRATION_METADATA, UNSCOPED_REPO_ID),
         )
 
+    @staticmethod
+    def _connect_readonly(data_dir: Path) -> Optional[sqlite3.Connection]:
+        """Open the store read-only, or return None when there is no store yet.
+
+        Shared by the diagnostics that must observe a store without touching it.
+        Opening a ``LocalStorage`` runs the schema step, which writes; a
+        diagnostic that repairs what it measures can never report it.
+        """
+        db_path = Path(data_dir) / "memories.db"
+        if not db_path.exists():
+            return None
+
+        # as_uri() rather than an f-string: a Windows path is backslash-separated
+        # and drive-lettered, which is not a URI, and read-only mode is only
+        # reachable through the URI form.
+        return sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True, timeout=30.0)
+
+    @classmethod
+    def inspect_intent_usage(cls, data_dir: Path) -> Dict[str, Any]:
+        """Count active memories and intents without opening or creating the store.
+
+        ``total_intents`` counts every row, not only active ones: an intent whose
+        status moved on was still an intent that was *set*, and the question this
+        answers is whether the lifecycle has ever been used at all.
+        """
+        conn = cls._connect_readonly(data_dir)
+        if conn is None:
+            return {"exists": False, "memories": 0, "active_intents": 0, "total_intents": 0}
+
+        try:
+            memories = conn.execute(
+                "SELECT COUNT(*) FROM memories WHERE status = 'active'"
+            ).fetchone()[0]
+            active_intents = conn.execute(
+                "SELECT COUNT(*) FROM intents WHERE status = 'active'"
+            ).fetchone()[0]
+            total_intents = conn.execute("SELECT COUNT(*) FROM intents").fetchone()[0]
+        finally:
+            conn.close()
+
+        return {
+            "exists": True,
+            "memories": memories,
+            "active_intents": active_intents,
+            "total_intents": total_intents,
+        }
+
     @classmethod
     def inspect_repository_registration(cls, data_dir: Path) -> Dict[str, Any]:
         """Report project scopes holding records that have no repositories row.
@@ -918,14 +965,10 @@ class LocalStorage(BaseStorage):
         missing rows, and a diagnostic that repairs what it measures can never
         report it.
         """
-        db_path = Path(data_dir) / "memories.db"
-        if not db_path.exists():
+        conn = cls._connect_readonly(data_dir)
+        if conn is None:
             return {"exists": False, "project_scopes": [], "unregistered_scopes": []}
 
-        # as_uri() rather than an f-string: a Windows path is backslash-separated
-        # and drive-lettered, which is not a URI, and read-only mode is only
-        # reachable through the URI form.
-        conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True, timeout=30.0)
         try:
             scopes = [
                 row[0]

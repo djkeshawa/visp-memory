@@ -9,7 +9,7 @@ Automatically surfaces relevant memories based on context:
 
 import hashlib
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from visp_memory.core.eligibility import (
     EligibilityFilterResult,
@@ -18,6 +18,63 @@ from visp_memory.core.eligibility import (
     require_repo_id,
 )
 from visp_memory.core.trust import TrustFilterResult, filter_unsolicited
+
+# The intent layer stores its verbs as description prefixes ("WORKING ON: ...").
+# They are storage detail, not something an assistant needs to read every turn.
+_INTENT_PREFIXES = ("WORKING ON:", "FOCUS:")
+
+# A CONSTRAINT intent says what NOT to do. Rendered under "Current direction" it
+# reads as the objective, inverting it, so it is never used as the direction.
+_CONSTRAINT_PREFIX = "CONSTRAINT:"
+
+# One line, hard-capped. The injected block is paid for on every turn, so the
+# current direction earns its place only if it stays a single short line.
+ACTIVE_INTENT_MAX_CHARS = 120
+
+_TRUNCATION_MARKER = "..."
+
+# Distinguishes "not looked up yet" from a genuine "no intent set" (None).
+_UNSET = object()
+
+# Outcomes that mean the intent is no longer what the work is aimed at. These are
+# non-authoritative history entries - they say what was reported, not that the
+# task is finished, and reading them here changes no stored status.
+_SETTLED_OUTCOMES = frozenset({"completed", "closed"})
+
+
+def _has_completion_outcome(intent: Dict[str, Any]) -> bool:
+    """True when a completion or close outcome has been recorded against it."""
+    context = intent.get("context")
+    if not isinstance(context, dict):
+        return False
+    history = context.get("outcome_history")
+    if not isinstance(history, list):
+        return False
+    return any(
+        isinstance(entry, dict) and entry.get("outcome") in _SETTLED_OUTCOMES
+        for entry in history
+    )
+
+
+def _strip_intent_prefix(description: str) -> str:
+    """Drop the stored verb prefix and clamp to one readable line.
+
+    Truncation is on a word boundary and marked. A mid-word cut of a goal like
+    "Do not delete the legacy adapter until the served pair check passes" can
+    land as a sentence that means the opposite of what was recorded, and this
+    text is read by an LLM as an instruction.
+    """
+    text = description.strip()
+    for prefix in _INTENT_PREFIXES:
+        if text.upper().startswith(prefix):
+            text = text[len(prefix):].strip()
+            break
+    if len(text) <= ACTIVE_INTENT_MAX_CHARS:
+        return text
+
+    budget = ACTIVE_INTENT_MAX_CHARS - len(_TRUNCATION_MARKER)
+    clipped = text[:budget].rsplit(" ", 1)[0].rstrip(" ,;:-")
+    return f"{clipped or text[:budget]}{_TRUNCATION_MARKER}"
 
 
 class ProactiveRecall:
@@ -55,6 +112,7 @@ class ProactiveRecall:
         self.as_of = as_of
         self.last_trust_filter = TrustFilterResult.combine([]).diagnostics()
         self.last_eligibility_filter = EligibilityFilterResult.combine([]).diagnostics()
+        self._active_intent: Any = _UNSET
 
     def _runtime_scope(self) -> Dict[str, Any]:
         return {
@@ -95,7 +153,8 @@ class ProactiveRecall:
             include_related: Also include memories from related files
 
         Returns:
-            Dict with 'warnings', 'bugs', 'decisions', 'knowledge' keys
+            Dict with 'warnings', 'bugs', 'decisions', 'knowledge' and
+            'active_intent' keys
         """
         file_path = self._normalize_path(file_path)
         repo_id = self.repo_id
@@ -211,6 +270,8 @@ class ProactiveRecall:
             min_score=None,
         )
 
+        results["active_intent"] = self.active_intent()
+
         self.last_trust_filter = TrustFilterResult.combine(trust_results).diagnostics()
         self.last_eligibility_filter = EligibilityFilterResult.combine(
             eligibility_results
@@ -218,6 +279,78 @@ class ProactiveRecall:
         results["trust_filter"] = self.last_trust_filter
         results["eligibility_filter"] = self.last_eligibility_filter
         return results
+
+    def for_files(self, files: List[str]) -> Dict[str, Any]:
+        """Context for a set of files, aggregated into one injectable block.
+
+        The per-file loop lived in two places - the CLI's `inject` and the hook
+        adapters - as byte-identical copies, and when the active intent was
+        added only one of the copies learned about it. Keeping one
+        implementation is what stops the two surfaces answering differently.
+
+        The active intent is a property of the session rather than of any one
+        file, so it is taken once instead of accumulated.
+        """
+        if len(files) == 1:
+            return self.on_file_open(files[0])
+
+        aggregated: Dict[str, Any] = {
+            "warnings": [],
+            "bugs": [],
+            "decisions": [],
+            "knowledge": [],
+        }
+        for file in files:
+            file_context = self.on_file_open(file)
+            for key in aggregated:
+                aggregated[key].extend(file_context.get(key, []))
+        aggregated["active_intent"] = self.active_intent()
+        return aggregated
+
+    def active_intent(self) -> Optional[str]:
+        """The one-line current direction, or None when no intent is set.
+
+        The live task wins over a standing focus: an assistant that is told both
+        needs the narrower one. Returns the description only - this is direction,
+        never permission, and the caller renders it as a single line so the
+        injected block stays inside its token budget.
+
+        Computed once per instance: injecting for ten files must not re-read the
+        intent layer ten times to produce one line.
+        """
+        if self._active_intent is _UNSET:
+            self._active_intent = self._read_active_intent()
+        return self._active_intent
+
+    def _read_active_intent(self) -> Optional[str]:
+        """Pick the intent that describes what the work is aimed at right now.
+
+        Skips intents that already carry a recorded completion outcome. Intent
+        *status* is externally owned and `done` deliberately leaves it alone, so
+        without this the block would keep leading with a task the user has
+        already reported finished, with no way to clear it.
+        """
+        try:
+            intents = self.memory.intent.get_active(repo_id=self.repo_id)
+        except Exception:
+            return None
+
+        live = [
+            intent
+            for intent in intents or []
+            if not _has_completion_outcome(intent)
+            and not str(intent.get("description", "")).upper().startswith(_CONSTRAINT_PREFIX)
+        ]
+        if not live:
+            return None
+
+        for prefix in _INTENT_PREFIXES:
+            for intent in live:
+                description = str(intent.get("description", ""))
+                if description.upper().startswith(prefix):
+                    return _strip_intent_prefix(description)
+
+        return _strip_intent_prefix(str(live[0].get("description", ""))) or None
 
     def on_error(
         self, error_message: str, error_type: str = None, file_path: str = None, limit: int = 5
@@ -317,7 +450,13 @@ class ProactiveRecall:
         trust_results: List[TrustFilterResult] = []
         eligibility_results: List[EligibilityFilterResult] = []
 
-        results = {"warnings": [], "conventions": [], "patterns": [], "recent_activity": []}
+        results = {
+            "warnings": [],
+            "conventions": [],
+            "patterns": [],
+            "recent_activity": [],
+            "active_intent": self.active_intent(),
+        }
 
         # Get all warnings mentioning this directory
         all_warnings = self._trusted(
@@ -424,6 +563,14 @@ class ProactiveRecall:
             return json.dumps(memories, indent=2, default=str)[:max_length]
 
         lines = []
+
+        # The current direction leads: an assistant that is told what the work is
+        # aimed at does not spend the turn re-deriving it. Direction only - this
+        # line records what memory was told, and grants nothing.
+        active_intent = memories.get("active_intent")
+        if active_intent:
+            lines.append(f"\U0001F3AF **Current direction**: {active_intent}")
+            lines.append("")
 
         # Add warnings (highest priority)
         if memories.get("warnings"):
@@ -558,6 +705,8 @@ class ProactiveRecall:
                     seen.add(item["id"])
                     deduped.append(item)
             results[key] = deduped[:limit]
+
+        results["active_intent"] = self.active_intent()
 
         self.last_trust_filter = TrustFilterResult.combine(trust_results).diagnostics()
         self.last_eligibility_filter = EligibilityFilterResult.combine(

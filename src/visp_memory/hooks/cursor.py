@@ -8,6 +8,13 @@ from pathlib import Path
 from typing import Dict
 
 from visp_memory.core.clock import utc_now
+from visp_memory.core.verbs import (
+    CAPTURE_VERBS,
+    INTENT_LIFECYCLE_HEADLINE,
+    INTENT_NON_AUTHORITATIVE_NOTE,
+    INTENT_VERBS,
+    render_command_block,
+)
 from visp_memory.hooks.base import _replace_between_markers
 from visp_memory.hooks.generic import GenericAdapter
 
@@ -44,15 +51,35 @@ class CursorAdapter(GenericAdapter):
         Returns:
             Installation status
         """
-        results = super().install()
-
-        # Create initial .cursorrules if needed
+        # Seed the file BEFORE delegating: GenericAdapter.install() creates a
+        # missing context file containing only the markers, which left this
+        # branch unreachable and every fresh .cursorrules verb-free.
+        results = {}
         if not self.context_file.exists():
-            initial_content = """# Cursor Rules
+            self._ensure_directory(self.context_file)
+            self.context_file.write_text(self._initial_rules(), encoding="utf-8")
+            results["cursorrules_created"] = True
+
+        results.update(super().install())
+        return results
+
+    def _initial_rules(self) -> str:
+        """Render the starter .cursorrules from the one canonical verb catalogue."""
+        return f"""# Cursor Rules
 
 ## Visp Memory Integration
 
 This project uses visp-memory for persistent context.
+
+Set the direction. {INTENT_LIFECYCLE_HEADLINE}
+
+{render_command_block(INTENT_VERBS)}
+
+{INTENT_NON_AUTHORITATIVE_NOTE}
+
+Record what happened:
+
+{render_command_block(CAPTURE_VERBS)}
 
 Memory context is automatically injected below:
 
@@ -60,10 +87,6 @@ Memory context is automatically injected below:
 
 # LLM-MEMORY END
 """
-            self.context_file.write_text(initial_content, encoding="utf-8")
-            results["cursorrules_created"] = True
-
-        return results
 
     def update_context(self, files: list[str] = None, task: str = None) -> bool:
         """
