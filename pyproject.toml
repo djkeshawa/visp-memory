@@ -88,6 +88,7 @@ Changelog = "https://github.com/djkeshawa/visp-memory/releases"
 [project.scripts]
 visp-memory = "visp_memory.interfaces.cli:app"
 visp-memory-mcp = "visp_memory.interfaces.mcp:main"
+visp-memory-mcp-http = "visp_memory.interfaces.mcp_http:main"
 
 [build-system]
 requires = ["hatchling"]
