@@ -6,6 +6,19 @@ from visp_memory.core.eligibility import UNSCOPED_REPO_ID
 from visp_memory.core.storage import is_implicitly_registered
 from visp_memory.server.auth import UserContext
 
+#: What an unscoped context compilation is told instead of the name of a field.
+#:
+#: `require_repo_scope_access` answers "repo_id is required", which is accurate
+#: and useless: it names the field, not the fix, and a caller who has never run
+#: `init` cannot act on it. The CLI already learned this — see
+#: `_require_repo_scope` in `interfaces/cli.py` — and the HTTP surface now says
+#: the same thing, from one place, on both routes that reach it.
+UNSCOPED_CONTEXT_DETAIL = (
+    "No project scope was selected, so there is nothing to search. "
+    "Choose a project in the dashboard, run `visp-memory init` in your project, "
+    "or send repo_id with the request."
+)
+
 
 def _get_repository(storage: Any, repo_id: Optional[str]) -> Optional[dict[str, Any]]:
     """The registered repository for a scope, if a human registered one.
@@ -83,6 +96,29 @@ def require_repo_scope_access(
     repo = _get_repository(storage, repo_id)
     if repo and repo.get("team_id") != user.team_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
+
+
+def require_context_repo_scope(storage: Any, repo_id: Optional[str], user: UserContext) -> str:
+    """Resolve the scope a context compilation runs in, or refuse with the repair.
+
+    Deliberately not `allow_global=True`. A global read here would compile one
+    brief out of every project at once — retrieval crossing project scopes, which
+    is what the reserved-scope gate above exists to prevent — and for a non-admin
+    it would only trade the 400 for a 403. The unscoped request stays refused; it
+    is refused in words the caller can act on.
+    """
+    if not isinstance(repo_id, str) or not repo_id.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=UNSCOPED_CONTEXT_DETAIL,
+        )
+
+    # Returned unchanged, not stripped. No other surface normalises a scope --
+    # `POST /memories` stores whatever string it was given -- so trimming only here
+    # would compile a brief against `repo-a` for a store whose rows are under
+    # `repo-a `, and answer with no evidence rather than with theirs.
+    require_repo_scope_access(storage, repo_id, user)
+    return repo_id
 
 
 def require_repo_writable(storage: Any, repo_id: Optional[str], user: UserContext) -> None:

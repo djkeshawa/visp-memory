@@ -1,0 +1,26 @@
+# Check every text file out with LF on every platform.
+#
+# Windows runners default to core.autocrlf=true, which rewrites the working tree
+# to CRLF at checkout. Every text path in this repository is stored LF in the
+# index today, so `eol=lf` renormalizes nothing -- it only stops a Windows
+# checkout from disagreeing with the bytes that were committed.
+#
+# visp-intel carries this same line for the same reason: its schema trust root is
+# a SHA-256 over committed text, and a CRLF checkout made the same commit compute
+# a different hash on Windows than on Linux.
+* text=auto eol=lf
+
+# The vendored conformance vectors are pinned by content, not by commit id:
+# `manifest.json` records a byte length and a SHA-256 for every document beside
+# it, and `test_vendored_vectors_match_their_manifest` verifies both on every
+# run. Memory does not regenerate these bytes, it conforms to them, so any
+# end-of-line translation is not cosmetic here -- it is the difference between
+# the recorded bytes and different bytes.
+#
+# `-text` rather than `binary` so the JSON still renders in a diff.
+#
+# Measured: under a CRLF checkout each file grows by exactly its newline count
+# (+1, +1, +19, +1, +1), and `expected-file-grain.json` -- first in the test's
+# sorted order -- goes 8449 -> 8450, which is the assertion that failed on
+# windows-latest.
+tests/vectors/** -text

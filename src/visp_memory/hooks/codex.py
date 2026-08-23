@@ -9,6 +9,13 @@ Integrates visp-memory with Codex by:
 from pathlib import Path
 from typing import Dict
 
+from visp_memory.core.verbs import (
+    CAPTURE_VERBS,
+    INTENT_NON_AUTHORITATIVE_NOTE,
+    INTENT_VERBS,
+    render_inline_commands,
+    render_inline_mcp_tools,
+)
 from visp_memory.hooks.base import _replace_between_markers
 from visp_memory.hooks.generic import GenericAdapter
 
@@ -126,6 +133,16 @@ Run `visp-memory hooks update codex` to populate current memory context.
         return True
 
     def _workflow_instructions(self) -> str:
+        """Render the managed AGENTS.md workflow block.
+
+        The verb names come from the one catalogue in ``core.verbs`` rather than
+        being spelled out here: this block used to say "follow-up goals" in prose
+        while naming only the capture verbs, so the intent lifecycle was
+        unreachable from the instructions an assistant actually reads.
+        """
+        intent_cli = render_inline_commands(INTENT_VERBS)
+        intent_mcp = render_inline_mcp_tools(INTENT_VERBS)
+        capture_cli = render_inline_commands(CAPTURE_VERBS)
         return f"""## Codex Memory Workflow
 
 Use visp-memory as the persistent project memory for this repository.
@@ -133,14 +150,18 @@ Use visp-memory as the persistent project memory for this repository.
 - Before changing code, run `visp-memory remember --repo {self.repo_id}` or call
   MCP `memory_remember`, then run `visp-memory recall "<task>" --repo {self.repo_id}`
   or call MCP `memory_recall`.
+- Set the direction before you start and keep it current with {intent_cli}
+  (MCP {intent_mcp}); `visp-memory intent list|update|complete|close` revises
+  what is already there.
 - For file-specific risk, call MCP `memory_file_context` or run
   `visp-memory inject --file <path> --task "<task>"`.
-- After meaningful work, record bug fixes, decisions, conventions, fragile areas,
-  and follow-up goals with `visp-memory record`, `visp-memory decision`,
-  `visp-memory learn`, or MCP `memory_after_work`.
+- After meaningful work, record bug fixes, decisions, conventions and fragile
+  areas with {capture_cli}, or MCP `memory_after_work`.
 - Keep memory scoped to repo `{self.repo_id}` unless intentionally recording
   cross-project knowledge.
 - Do not print secrets, prompts, responses, API keys, or unrelated repo/team memory.
+
+{INTENT_NON_AUTHORITATIVE_NOTE}
 """
 
     def _install_codex_config(self) -> bool:
