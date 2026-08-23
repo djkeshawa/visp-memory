@@ -651,6 +651,26 @@ Add to your `claude_desktop_config.json`:
 }
 ```
 
+### Stateless HTTP Deployment
+
+For a shared deployment — one server, many clients, no per-client process — run the
+stateless streamable-HTTP transport:
+
+```bash
+visp-memory-mcp-http
+```
+
+Every `POST /mcp` is self-contained: no handshake first, no session id issued or
+required, so any replica behind a load balancer can answer any request. Configure with
+`VISP_MEMORY_MCP_HTTP_HOST` (default `127.0.0.1`), `VISP_MEMORY_MCP_HTTP_PORT`
+(default `8848`), and `VISP_MEMORY_MCP_HTTP_TOKEN` (bearer token; **required** to bind
+a non-loopback address — the server refuses to expose the write surface without it).
+
+Two things differ from stdio: clients of a shared server should pass `repo_id`
+explicitly (there is no per-client working directory to infer scope from), and
+`memory_model_task` always uses the configured server-side provider (client sampling
+needs a live session, which a stateless request never has).
+
 ### Available Tools
 - `memory_prepare_task`: Build a cited, token-budgeted brief before planning or editing.
 - `memory_recall`: Search past events and knowledge.
