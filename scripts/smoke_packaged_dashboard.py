@@ -134,7 +134,9 @@ const { chromium } = require('@playwright/test');
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       content: 'The authentication callback validates the state parameter before redirecting.',
-      layer: 'semantic',
+      // Episodic on purpose: `POST /memories` refuses a semantic belief that cites no
+      // evidence (422, before storage), so seeding one would fail every time.
+      layer: 'episodic',
       repo_id: repoId,
       files: ['src/auth.py'],
     }),
