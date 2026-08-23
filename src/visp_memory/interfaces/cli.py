@@ -1408,7 +1408,12 @@ def recall(
 
     table = Table(title=f"Search Results for '{query}'", box=ROUNDED)
     table.add_column("ID", style="dim", width=16)
-    table.add_column("Layer", style="cyan", width=10)
+    # Layer names are a closed set and the longest ("episodic", "semantic") is 8,
+    # so 10 was two columns of padding. Reclaiming them pays for the wider score
+    # header below exactly, leaving Content the same width it has always had --
+    # at 80 columns those two characters are the difference between a match being
+    # visible and being truncated away.
+    table.add_column("Layer", style="cyan", width=8)
     table.add_column("Category", style="green", width=12)
     table.add_column("Content")
     # The header names what the number is. An unlabelled "Score" is how a lexical
