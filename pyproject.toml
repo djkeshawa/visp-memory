@@ -56,7 +56,7 @@ api = [
 # `>=0.1.0` meant every fresh install resolved to 2.x and shipped a broken MCP
 # server. Porting to the 2.x API is tracked separately; until then, pin to what
 # actually works.
-mcp = ["mcp>=1.0.0,<2.0.0"]
+mcp = ["mcp>=1.0.0,<3.0.0"]
 capture = [
     "defusedxml>=0.7.1",
     "gitpython>=3.1.0",
