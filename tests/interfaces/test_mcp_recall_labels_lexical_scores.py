@@ -27,6 +27,10 @@ def _memory(tmpdir: str) -> Memory:
     config.storage.backend = "sqlite"
     config.embedding.provider = "noop"
     memory = Memory(config=config)
+    # noop is what got built; `auto` is what was asked for. Reporting the
+    # difference is the whole ticket, and the banner only fires for degradation
+    # the operator did not choose.
+    memory.config.embedding.provider = "auto"
     memory.learn("Auth tokens rotate every 15 minutes")
     return memory
 

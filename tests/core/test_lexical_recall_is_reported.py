@@ -23,7 +23,9 @@ from visp_memory import Memory, MemoryConfig
 from visp_memory.core.embedding_status import (
     ENABLE_SEMANTIC_RECALL_REMEDIATION,
     ENABLE_VECTOR_INDEX_REMEDIATION,
+    PROVIDER_INIT_FAILED,
     is_noop_provider,
+    produces_no_vectors,
 )
 
 
@@ -33,6 +35,13 @@ def _memory(provider: str) -> Memory:
     config.storage.backend = "sqlite"
     config.embedding.provider = provider
     return Memory(config=config)
+
+
+def _fell_through_to_noop() -> Memory:
+    """The ticket's state: `auto` was asked for and noop is what got built."""
+    memory = _memory("noop")
+    memory.config.embedding.provider = "auto"
+    return memory
 
 
 class TestMemoryReportsHowItRanked:
@@ -74,15 +83,33 @@ class TestMemoryReportsHowItRanked:
 
 class TestTheRemediationMatchesTheCause:
     def test_a_missing_provider_is_told_to_get_a_provider(self):
-        memory = _memory("noop")
+        memory = _fell_through_to_noop()
 
         assert memory.lexical_recall_remediation == ENABLE_SEMANTIC_RECALL_REMEDIATION
 
     def test_a_missing_vector_index_is_not_told_to_reinstall_the_provider(self):
-        memory = _memory("noop")
+        memory = _fell_through_to_noop()
         memory._embedding_provider_name = "sentence-transformers"
 
         assert memory.lexical_recall_remediation == ENABLE_VECTOR_INDEX_REMEDIATION
+
+    def test_a_provider_the_operator_pinned_off_gets_no_repair(self):
+        # `none` is documented as the correct way to turn vector search off on a
+        # backend that runs its own index. Telling that operator to install
+        # embeddings is advice that cannot work, repeated on every recall.
+        memory = _memory("none")
+
+        assert memory.recall_scores_are_lexical is True
+        assert memory.lexical_recall_remediation is None
+
+    def test_a_provider_that_failed_to_start_is_not_reported_as_a_choice(self):
+        # A host reading this field must be able to raise a fault as a fault.
+        memory = _fell_through_to_noop()
+        memory._embedding_provider_name = PROVIDER_INIT_FAILED
+
+        assert memory.embedding_provider_name == PROVIDER_INIT_FAILED
+        assert memory.recall_scores_are_lexical is True
+        assert memory.lexical_recall_remediation == ENABLE_SEMANTIC_RECALL_REMEDIATION
 
     def test_the_remediation_names_the_extra_a_user_must_install(self):
         # Rich deletes unescaped square brackets, so this exact substring is what
@@ -98,3 +125,13 @@ def test_every_spelling_of_no_vectors_is_recognised(name):
 @pytest.mark.parametrize("name", ["openai", "sentence-transformers", "ollama", None, ""])
 def test_a_real_provider_is_not_mistaken_for_noop(name):
     assert is_noop_provider(name) is False
+
+
+@pytest.mark.parametrize("name", ["noop", "none", PROVIDER_INIT_FAILED])
+def test_every_state_without_vectors_is_recognised_as_such(name):
+    assert produces_no_vectors(name) is True
+
+
+def test_a_failed_provider_is_not_confused_with_a_chosen_one():
+    # Both rank on keywords; only one of them is a fault.
+    assert is_noop_provider(PROVIDER_INIT_FAILED) is False

@@ -225,8 +225,11 @@ class ProactiveRecall:
         """
         Find similar errors that occurred in the past.
 
-        Uses semantic search to find errors with similar messages,
-        along with their fixes and workarounds.
+        Ranks by whatever the active embedding provider supports: vector
+        similarity where one is configured, keyword overlap otherwise. The
+        `similarity` field it returns means different things in those two
+        cases, so a caller that displays the number must label it -- see
+        `Memory.recall_scores_are_lexical`.
 
         Args:
             error_message: The error message text
@@ -487,8 +490,9 @@ class ProactiveRecall:
         """
         Find all relevant memories for a specific task.
 
-        Combines file-based and semantic search to get
-        comprehensive context.
+        Combines file-based lookup with ranked recall to get
+        comprehensive context. The ranking is semantic only where an embedding
+        provider is active; otherwise it is keyword overlap.
 
         Args:
             task_description: What task is being worked on

@@ -23,6 +23,11 @@ from typing import Optional
 #: for the purpose of labelling a score they are the same state.
 NOOP_PROVIDER_NAMES = frozenset({"noop", "none"})
 
+#: A configured provider that would not initialise. Recall runs on the text path
+#: exactly as it does under noop, but the two must not be reported as the same
+#: thing: one is a choice and one is a fault a host should act on.
+PROVIDER_INIT_FAILED = "failed"
+
 #: What is actually happening. Stated without alarm: this is a supported
 #: configuration, not a fault -- results are still ranked.
 LEXICAL_FALLBACK_NOTICE = (
@@ -71,5 +76,18 @@ DEFAULT_SCORE_LABEL = "similarity"
 
 
 def is_noop_provider(provider_name: Optional[str]) -> bool:
-    """Report whether a provider name means recall is ranking on keywords."""
+    """Report whether a provider name means "no vectors were ever going to be built"."""
     return (provider_name or "").strip().lower() in NOOP_PROVIDER_NAMES
+
+
+def produces_no_vectors(provider_name: Optional[str]) -> bool:
+    """Report whether recall will rank on keywords under this provider.
+
+    Wider than :func:`is_noop_provider` by exactly one case: a provider that was
+    configured in good faith and failed to initialise leaves storage with no
+    embedding function, so its scores are lexical too.
+    """
+    return (
+        is_noop_provider(provider_name)
+        or (provider_name or "").strip().lower() == PROVIDER_INIT_FAILED
+    )

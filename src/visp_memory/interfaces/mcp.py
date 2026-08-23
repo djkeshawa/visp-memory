@@ -71,7 +71,6 @@ from visp_memory.core.clock import parse_utc, utc_now
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID, require_repo_id
 from visp_memory.core.embedding_status import (
     DEFAULT_SCORE_LABEL,
-    ENABLE_SEMANTIC_RECALL_REMEDIATION,
     LEXICAL_RECALL_BANNER,
     LEXICAL_SCORE_LABEL,
 )
@@ -1520,11 +1519,15 @@ def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
         # An agent reads this number and quotes it onward, so it says what it is.
         # Two rounds of battle-ground notes reported lexical overlap as semantic
         # similarity because this line called it "similarity" either way.
+        # The label is always honest; the banner is only for degradation nobody
+        # chose. Appending "install embeddings" to every response of a deployment
+        # that deliberately pinned the provider to `none` is noise an agent pays
+        # for on every call.
         lexical = memory.recall_scores_are_lexical is True
-        remediation = memory.lexical_recall_remediation or ENABLE_SEMANTIC_RECALL_REMEDIATION
-        banner = f"{LEXICAL_RECALL_BANNER} {remediation}"
+        remediation = memory.lexical_recall_remediation
+        banner = f"{LEXICAL_RECALL_BANNER} {remediation}" if remediation else None
         if not results:
-            if lexical:
+            if banner:
                 return f"No memories found matching query.\n\n{banner}"
             return "No memories found matching query."
 
@@ -1538,7 +1541,7 @@ def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
             )
             output.extend(_format_ranking_factor_lines(r))
             output.extend(_format_related_evidence_lines(r.get("id"), memory))
-        if lexical:
+        if banner:
             output.append(f"\n{banner}")
         return "\n".join(output)
 
@@ -1625,11 +1628,18 @@ def _handle_proactive(name: str, args: dict[str, Any], memory: Memory) -> str:
         if not similar:
             return "No similar errors found."
 
+        # Same storage field as memory_recall, so the same rule applies: under noop
+        # this is `text_similarity` and must not be handed to an agent as similarity.
+        error_score_label = (
+            LEXICAL_SCORE_LABEL.title()
+            if memory.recall_scores_are_lexical is True
+            else "Similarity"
+        )
         output = [f"Found {len(similar)} similar errors:\n"]
         for i, err in enumerate(similar, 1):
             similarity = err.get("similarity", 0)
             content = err["content"][:200]
-            output.append(f"{i}. [Similarity: {similarity:.2f}] {content}")
+            output.append(f"{i}. [{error_score_label}: {similarity:.2f}] {content}")
 
             if "fix" in content.lower() or "solution" in content.lower():
                 output.append("   ✓ Contains fix/solution")

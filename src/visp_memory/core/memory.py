@@ -24,7 +24,9 @@ from visp_memory.core.eligibility import (
 from visp_memory.core.embedding_status import (
     ENABLE_SEMANTIC_RECALL_REMEDIATION,
     ENABLE_VECTOR_INDEX_REMEDIATION,
+    PROVIDER_INIT_FAILED,
     is_noop_provider,
+    produces_no_vectors,
 )
 from visp_memory.core.memory_context import build_context, format_context_text
 from visp_memory.core.memory_import_export import export_memory, import_memories
@@ -129,9 +131,10 @@ class Memory:
 
                     logging.warning(f"Failed to initialize embedding provider: {e}")
                     # No embedding function reaches storage, so recall runs on the
-                    # text path exactly as it does under noop. Say so rather than
-                    # leaving the state unreportable.
-                    self._embedding_provider_name = "none"
+                    # text path exactly as it does under noop. Reported under its own
+                    # name rather than as "none": a host reading this field must be
+                    # able to tell an operator's choice from a fault it should raise.
+                    self._embedding_provider_name = PROVIDER_INIT_FAILED
 
         # Initialize storage
         if self.config.storage.mode == "client":
@@ -713,7 +716,7 @@ class Memory:
         """
         if self._embedding_provider_name is None:
             return None
-        if is_noop_provider(self._embedding_provider_name):
+        if produces_no_vectors(self._embedding_provider_name):
             return True
         try:
             return not self._storage.get_capabilities().vector_search
@@ -722,15 +725,23 @@ class Memory:
 
     @property
     def lexical_recall_remediation(self) -> str:
-        """The repair that would actually turn on semantic recall here, or None.
+        """The repair that would turn on semantic recall here, or None if none applies.
 
-        The two causes need two different answers, and offering the wrong one is
-        the same defect as offering none: someone with sentence-transformers already
-        installed does not need to be told to install sentence-transformers.
+        None for a state the operator chose. Setting the provider to ``none`` is
+        documented as the correct way to turn vector search off on a backend that
+        runs its own index, and ArcadeDB is lexical by design -- urging those
+        operators to install embeddings is advice that cannot work, on every single
+        recall. `doctor` already draws this line for the same reason; the surfaces
+        that nag have to draw it too, or the nagging is what gets ignored.
+
+        Otherwise the two causes get two answers: someone who already has
+        sentence-transformers installed must not be told to install it.
         """
         if self.recall_scores_are_lexical is not True:
             return None
-        if is_noop_provider(self._embedding_provider_name):
+        if is_noop_provider(self.config.embedding.provider):
+            return None
+        if produces_no_vectors(self._embedding_provider_name):
             return ENABLE_SEMANTIC_RECALL_REMEDIATION
         return ENABLE_VECTOR_INDEX_REMEDIATION
 

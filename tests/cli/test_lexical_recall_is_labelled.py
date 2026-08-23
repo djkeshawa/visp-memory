@@ -37,7 +37,7 @@ def _flat(output: str) -> str:
 
 
 @pytest.mark.usefixtures("cli_env")
-class TestRecallSaysWhatItsScoresAre:
+class TestRecallAlwaysNamesWhatItsScoresAre:
     def test_the_score_column_is_headed_lexical_not_score(self):
         assert _invoke("record", FACT, "--repo", REPO).exit_code == 0
 
@@ -47,6 +47,30 @@ class TestRecallSaysWhatItsScoresAre:
         assert LEXICAL_SCORE_HEADER in result.output
         assert "Score" not in result.output
 
+    def test_a_provider_the_operator_pinned_is_labelled_but_not_nagged_about(self):
+        # `cli_env` pins the provider to noop. The score is still lexical and is
+        # still labelled -- but urging this operator to install embeddings, on
+        # every recall, is advice that cannot apply. `doctor` already draws this
+        # line; the surfaces that nag have to draw it too.
+        assert _invoke("record", FACT, "--repo", REPO).exit_code == 0
+
+        result = _invoke("recall", "due dates in todos.json", "--repo", REPO)
+
+        assert LEXICAL_SCORE_HEADER in result.output
+        assert "Degraded" not in result.output
+        assert "pip install" not in result.output
+
+    def test_an_empty_result_on_a_pinned_provider_stays_a_bare_line(self):
+        # The greenfield first-session journey asserts this output exactly.
+        assert _invoke("record", FACT, "--repo", REPO).exit_code == 0
+
+        result = _invoke("recall", "how are deadlines represented", "--repo", REPO)
+
+        assert result.output.strip() == "No results found"
+
+
+@pytest.mark.usefixtures("cli_env", "auto_falls_through_to_noop")
+class TestRecallBannersDegradationNobodyChose:
     def test_a_banner_says_the_results_are_keyword_matches(self):
         assert _invoke("record", FACT, "--repo", REPO).exit_code == 0
 

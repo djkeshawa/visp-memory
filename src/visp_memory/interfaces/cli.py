@@ -54,6 +54,7 @@ from visp_memory.core.embedding_status import (
     FALLBACK_STATUS_MESSAGE,
     LEXICAL_RECALL_BANNER,
     LEXICAL_SCORE_HEADER,
+    LEXICAL_SCORE_LABEL,
 )
 from visp_memory.core.ranking import projected_importance
 from visp_memory.core.reporting import MemoryIntelligenceReporter
@@ -1361,12 +1362,16 @@ def recall(
     repo = _require_repo_scope(memory, repo)
 
     layers = [layer] if layer else None
+    # Two separate decisions. The column header is always honest: a lexical score
+    # is labelled lexical even when the operator asked for that. The banner is
+    # only for degradation nobody chose, which is why it keys off the remediation
+    # rather than off `lexical` -- and it is scoped to `recall`, because a notice
+    # on every unrelated command was the defect that demoted the provider log
+    # line to INFO.
     lexical = memory.recall_scores_are_lexical is True
-    # The banner goes above the results, because it changes how they should be
-    # read. It is scoped to `recall` on purpose: a notice on every unrelated
-    # command was the defect that demoted the provider log line to INFO.
-    if lexical:
-        _print_lexical_recall_banner(memory.lexical_recall_remediation)
+    remediation = memory.lexical_recall_remediation
+    if remediation:
+        _print_lexical_recall_banner(remediation)
 
     results = memory.recall(
         query,
@@ -1423,10 +1428,10 @@ def recall(
     console.print(table)
 
 
-def _print_lexical_recall_banner(remediation: str = None) -> None:
+def _print_lexical_recall_banner(remediation: str) -> None:
     """One line saying the results below were ranked without vectors, and the repair."""
     console.print(f"[yellow]{escape(LEXICAL_RECALL_BANNER)}[/yellow]")
-    _print_remediation_line(remediation or ENABLE_SEMANTIC_RECALL_REMEDIATION)
+    _print_remediation_line(remediation)
 
 
 @app.command()
@@ -2482,13 +2487,18 @@ def find_error(
         console.print("[yellow]No similar errors found[/yellow]")
         return
 
+    lexical = memory.recall_scores_are_lexical is True
     console.print(Panel(f"[bold]Similar Past Errors ({len(similar)})[/bold]"))
 
+    # Same field, same storage path, same defect: under noop this number is
+    # `text_similarity`, and a heading that calls it "Similarity" invites it to be
+    # quoted as one.
+    score_label = LEXICAL_SCORE_LABEL.title() if lexical else "Similarity"
     for i, err in enumerate(similar, 1):
         similarity = err.get("similarity", 0)
         content = err["content"]
 
-        console.print(f"\n[cyan]{i}. Similarity: {similarity:.2f}[/cyan]")
+        console.print(f"\n[cyan]{i}. {score_label}: {similarity:.2f}[/cyan]")
         console.print(f"   {content[:200]}")
 
         # Show fix if available

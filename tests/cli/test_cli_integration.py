@@ -18,6 +18,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from typer.testing import CliRunner
 
+from visp_memory.core.embedding_status import LEXICAL_SCORE_HEADER
 from visp_memory.interfaces.cli import app
 
 runner = CliRunner()
@@ -702,9 +703,11 @@ class TestCLIRecallCommand:
         result = runner.invoke(app, ["recall", "authentication", "--layer", "episodic"])
         assert result.exit_code == 0
 
-        # Check that scores are present and not negative
-        # The output should have Score column with values
-        assert "Score" in result.output
+        # Check that scores are present and not negative. The column is headed
+        # "Lexical" rather than "Score" because `cli_env` pins the noop provider,
+        # and under it every number here is keyword overlap (LC-90). The header
+        # this asserts is the score column either way.
+        assert LEXICAL_SCORE_HEADER in result.output
         # Should not have negative scores (which were the bug)
         assert "-0." not in result.output or result.output.count("-0.") == 0
 

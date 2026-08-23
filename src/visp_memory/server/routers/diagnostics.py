@@ -123,12 +123,22 @@ def _missing_config_hint(provider: str) -> Optional[str]:
         return "Set OPENAI_API_KEY and VISP_MEMORY_EMBEDDING_PROVIDER=openai."
     if provider == "ollama":
         return "Start Ollama, pull an embedding model, and set OLLAMA_HOST."
-    if provider in {"noop", "sentence-transformers"}:
-        # The noop row is the one a dashboard or CLI sees marked active when
-        # auto-selection fell through, and it used to be the only row with no
-        # repair on it. Same sentence the CLI prints.
-        return ENABLE_SEMANTIC_RECALL_REMEDIATION
     return None
+
+
+def _fallback_hint(provider: str, *, selected: bool) -> Optional[str]:
+    """The repair for a noop row the operator did not ask for.
+
+    The noop row is what a dashboard marks active when auto-selection fell
+    through, and it was the only row carrying no repair. Deliberately not folded
+    into `_missing_config_hint`: that is called for every provider row, so a
+    blanket answer there put "install local embeddings" on the noop row of a
+    deployment that selected noop on purpose, and on the sentence-transformers
+    row of a perfectly healthy OpenAI deployment.
+    """
+    if provider == "noop" and not selected:
+        return ENABLE_SEMANTIC_RECALL_REMEDIATION
+    return _missing_config_hint(provider)
 
 
 def _embedding_config_for_provider(config: EmbeddingConfig, provider: str) -> EmbeddingConfig:
@@ -177,7 +187,7 @@ def build_provider_status(
             error_code=runtime_status.get("embedding_connection_error"),
             message=runtime_status.get("embedding_status_message")
             or ("Provider connected." if connected else "Provider is not connected."),
-            action_hint=None if connected else _missing_config_hint(provider),
+            action_hint=None if connected else _fallback_hint(provider, selected=selected),
         )
 
     if provider == "noop" and selected:
