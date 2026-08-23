@@ -18,6 +18,7 @@ from typing import List, Optional
 import numpy as np
 
 from visp_memory.config import EmbeddingConfig
+from visp_memory.core.embedding_status import NOOP_FALLBACK_LOG_MESSAGE
 
 logger = logging.getLogger(__name__)
 
@@ -360,17 +361,18 @@ def _warn_noop_fallback() -> None:
 
     Memory() is constructed many times per process (CLI, hooks, tests), so this is
     deduplicated; repeating it trains users to ignore output.
+
+    Keeping it at INFO is only defensible because the same sentence now reaches the
+    surfaces that need it -- `doctor` and `recall` both report it from
+    :mod:`visp_memory.core.embedding_status`. Before that it was the only statement of
+    the fallback anywhere, and nothing on the CLI path configures INFO, so it was a
+    remediation nobody could read.
     """
     global _noop_fallback_warned
     if _noop_fallback_warned:
         return
     _noop_fallback_warned = True
-    logger.info(
-        "Semantic embeddings are not configured; recall is using keyword search. "
-        "Results are still ranked, but paraphrase matching is unavailable. To enable "
-        "semantic recall: pip install 'visp-memory[local-embeddings]', or set "
-        "OPENROUTER_API_KEY / OPENAI_API_KEY (or EMBEDDING_API_KEY), or run Ollama."
-    )
+    logger.info(NOOP_FALLBACK_LOG_MESSAGE)
 
 
 def cosine_similarity(a: List[float], b: List[float]) -> float:

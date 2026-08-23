@@ -21,6 +21,13 @@ from visp_memory.core.eligibility import (
     filter_recall_eligible,
     require_repo_id,
 )
+from visp_memory.core.embedding_status import (
+    ENABLE_SEMANTIC_RECALL_REMEDIATION,
+    ENABLE_VECTOR_INDEX_REMEDIATION,
+    PROVIDER_INIT_FAILED,
+    is_noop_provider,
+    produces_no_vectors,
+)
 from visp_memory.core.memory_context import build_context, format_context_text
 from visp_memory.core.memory_import_export import export_memory, import_memories
 from visp_memory.core.neo4j_storage import Neo4jStorage
@@ -103,17 +110,31 @@ class Memory:
         # that run their own vector index (e.g. Neo4j) a constant vector makes every result
         # score identically, so "none" is the correct way to turn vector search off.
         embedding_fn = None
-        if self.config.storage.mode != "client" and self.config.embedding.provider != "none":
-            try:
-                from visp_memory.core.embeddings import get_embedding_provider
+        # The provider that was actually built, which is not the one that was
+        # configured whenever auto-selection falls through. Recorded so callers can
+        # label a score for what it is instead of assuming vectors produced it.
+        # None means this process cannot tell (client mode: the server chooses).
+        self._embedding_provider_name: str = None
+        if self.config.storage.mode != "client":
+            if self.config.embedding.provider == "none":
+                self._embedding_provider_name = "none"
+            else:
+                try:
+                    from visp_memory.core.embeddings import get_embedding_provider
 
-                embedder = get_embedding_provider(self.config.embedding)
-                embedding_fn = embedder.embed
-            except Exception as e:
-                # Embedding provider initialization failed - will use fallback search
-                import logging
+                    embedder = get_embedding_provider(self.config.embedding)
+                    self._embedding_provider_name = getattr(embedder, "provider_name", None)
+                    embedding_fn = embedder.embed
+                except Exception as e:
+                    # Embedding provider initialization failed - will use fallback search
+                    import logging
 
-                logging.warning(f"Failed to initialize embedding provider: {e}")
+                    logging.warning(f"Failed to initialize embedding provider: {e}")
+                    # No embedding function reaches storage, so recall runs on the
+                    # text path exactly as it does under noop. Reported under its own
+                    # name rather than as "none": a host reading this field must be
+                    # able to tell an operator's choice from a fault it should raise.
+                    self._embedding_provider_name = PROVIDER_INIT_FAILED
 
         # Initialize storage
         if self.config.storage.mode == "client":
@@ -668,6 +689,61 @@ class Memory:
     # =========================================================================
     # Search and Recall
     # =========================================================================
+
+    @property
+    def embedding_provider_name(self) -> str:
+        """The embedding provider actually in use, or None if this process cannot tell.
+
+        Distinct from ``config.embedding.provider``, which records what was asked
+        for. When that is ``auto`` and every candidate is unavailable, the answer
+        here is ``noop`` -- the difference between the two is the whole of LC-90.
+        """
+        return self._embedding_provider_name
+
+    @property
+    def recall_scores_are_lexical(self) -> bool:
+        """Whether ``recall`` scores are keyword overlap rather than vector similarity.
+
+        True when no vectors take part in ranking, so every score returned is
+        ``text_similarity`` against the query. Two independent ways to land there,
+        and a score is lexical under either: no usable embedding provider, or a
+        backend that does not do vector search (ArcadeDB by design; sqlite without
+        ChromaDB installed).
+
+        None when this process cannot tell -- client mode ranks on the server -- so
+        a caller can decline to label rather than guess. Deliberately never claims
+        the converse: False means "not provably lexical", not "semantic".
+        """
+        if self._embedding_provider_name is None:
+            return None
+        if produces_no_vectors(self._embedding_provider_name):
+            return True
+        try:
+            return not self._storage.get_capabilities().vector_search
+        except Exception:
+            return None
+
+    @property
+    def lexical_recall_remediation(self) -> str:
+        """The repair that would turn on semantic recall here, or None if none applies.
+
+        None for a state the operator chose. Setting the provider to ``none`` is
+        documented as the correct way to turn vector search off on a backend that
+        runs its own index, and ArcadeDB is lexical by design -- urging those
+        operators to install embeddings is advice that cannot work, on every single
+        recall. `doctor` already draws this line for the same reason; the surfaces
+        that nag have to draw it too, or the nagging is what gets ignored.
+
+        Otherwise the two causes get two answers: someone who already has
+        sentence-transformers installed must not be told to install it.
+        """
+        if self.recall_scores_are_lexical is not True:
+            return None
+        if is_noop_provider(self.config.embedding.provider):
+            return None
+        if produces_no_vectors(self._embedding_provider_name):
+            return ENABLE_SEMANTIC_RECALL_REMEDIATION
+        return ENABLE_VECTOR_INDEX_REMEDIATION
 
     def recall(
         self,

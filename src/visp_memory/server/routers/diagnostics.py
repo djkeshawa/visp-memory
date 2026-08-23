@@ -5,6 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from visp_memory.config import EmbeddingConfig, load_config
 from visp_memory.core.clock import utc_now
+from visp_memory.core.embedding_status import (
+    DISABLED_STATUS_MESSAGE,
+    ENABLE_SEMANTIC_RECALL_REMEDIATION,
+)
 from visp_memory.core.indexing import (
     ReindexScope,
     inspect_embedding_index,
@@ -122,6 +126,21 @@ def _missing_config_hint(provider: str) -> Optional[str]:
     return None
 
 
+def _fallback_hint(provider: str, *, selected: bool) -> Optional[str]:
+    """The repair for a noop row the operator did not ask for.
+
+    The noop row is what a dashboard marks active when auto-selection fell
+    through, and it was the only row carrying no repair. Deliberately not folded
+    into `_missing_config_hint`: that is called for every provider row, so a
+    blanket answer there put "install local embeddings" on the noop row of a
+    deployment that selected noop on purpose, and on the sentence-transformers
+    row of a perfectly healthy OpenAI deployment.
+    """
+    if provider == "noop" and not selected:
+        return ENABLE_SEMANTIC_RECALL_REMEDIATION
+    return _missing_config_hint(provider)
+
+
 def _embedding_config_for_provider(config: EmbeddingConfig, provider: str) -> EmbeddingConfig:
     provider_config = config.model_copy(deep=True)
     provider_config.provider = "noop" if provider == "noop" else provider
@@ -168,7 +187,7 @@ def build_provider_status(
             error_code=runtime_status.get("embedding_connection_error"),
             message=runtime_status.get("embedding_status_message")
             or ("Provider connected." if connected else "Provider is not connected."),
-            action_hint=None if connected else _missing_config_hint(provider),
+            action_hint=None if connected else _fallback_hint(provider, selected=selected),
         )
 
     if provider == "noop" and selected:
@@ -179,7 +198,7 @@ def build_provider_status(
             active=True,
             connected=False,
             status="disabled",
-            message="Noop embeddings are selected; semantic vector search is disabled.",
+            message=DISABLED_STATUS_MESSAGE,
         )
 
     if not configured:

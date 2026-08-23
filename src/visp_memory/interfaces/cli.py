@@ -50,6 +50,14 @@ from visp_memory.core.contract_recall import (
     structural_caveat,
 )
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID
+from visp_memory.core.embedding_status import (
+    DISABLED_STATUS_MESSAGE,
+    ENABLE_SEMANTIC_RECALL_REMEDIATION,
+    FALLBACK_STATUS_MESSAGE,
+    LEXICAL_RECALL_BANNER,
+    LEXICAL_SCORE_HEADER,
+    LEXICAL_SCORE_LABEL,
+)
 from visp_memory.core.intent_usage import STATUS_NEVER_USED, check_intent_usage
 from visp_memory.core.ranking import projected_importance
 from visp_memory.core.reporting import MemoryIntelligenceReporter
@@ -477,6 +485,9 @@ def _embedding_provider_status(
         "status": "pending",
         "status_message": "Not tested.",
         "error": None,
+        # What to do about it. A status word with no repair is what LC-90 was:
+        # `doctor` reported "fallback" for months and nobody could act on it.
+        "remediation": None,
         "driver_model": None,
         "dimension": None,
         "credentials": {
@@ -506,10 +517,14 @@ def _embedding_provider_status(
                 "disabled" if configured_provider in {"noop", "none"} else "fallback"
             )
             diagnostics["status_message"] = (
-                "Embeddings disabled."
+                DISABLED_STATUS_MESSAGE
                 if diagnostics["status"] == "disabled"
-                else "Fallback provider in use."
+                else FALLBACK_STATUS_MESSAGE
             )
+            # A fallback is something the operator did not choose, so it comes with
+            # the repair. "disabled" was chosen deliberately and does not.
+            if diagnostics["status"] == "fallback":
+                diagnostics["remediation"] = ENABLE_SEMANTIC_RECALL_REMEDIATION
         else:
             diagnostics["connected"] = True
             diagnostics["status"] = "connected"
@@ -668,6 +683,10 @@ def _print_provider_payload(payload: dict[str, Any], as_json: bool = False):
         if maybe_error:
             console.print(f"[yellow]Error[/yellow]: {maybe_error}")
 
+    # The error hint stays suppressed for a fallback -- it is not an error -- but
+    # the repair is exactly what someone reading this table needs.
+    _print_embedding_remediation(embedding)
+
 
 def _print_doctor_payload(payload: dict[str, Any], as_json: bool = False):
     if as_json:
@@ -702,10 +721,34 @@ def _print_doctor_payload(payload: dict[str, Any], as_json: bool = False):
         f"Embedding: configured={embedding['configured_provider']}, "
         f"effective={embedding['effective_provider']}, connected={embedding['connected']}"
     )
-    console.print(f"Embedding status: {embedding['status']} - {embedding['status_message']}")
+    # Colour carries the verdict: a provider the operator did not choose, silently
+    # standing in for the one they did, is not a healthy line on a diagnostics page.
+    colour = "yellow" if embedding["status"] in {"fallback", "failed"} else "green"
+    console.print(
+        f"Embedding status: [{colour}]{embedding['status']}[/{colour}] - "
+        f"{embedding['status_message']}"
+    )
+    _print_embedding_remediation(embedding)
 
     _print_intent_usage(payload.get("intent_usage"))
     _print_reachability(payload.get("agent_reachability"))
+
+
+def _print_embedding_remediation(embedding: dict[str, Any]) -> None:
+    """Print the repair under an embedding status, following the reachability line."""
+    if embedding.get("remediation"):
+        _print_remediation_line(embedding["remediation"])
+
+
+def _print_remediation_line(remediation: str) -> None:
+    """Print a remediation verbatim.
+
+    Escaped, because the remediation names a pip extra -- `visp-memory[local-embeddings]`
+    -- and Rich reads square brackets as a style tag and deletes what it cannot parse.
+    Unescaped, this advice printed as `pip install 'visp-memory'`, which installs the
+    wrong thing.
+    """
+    console.print(f"  [dim]{escape(remediation)}[/dim]")
 
 
 def _print_intent_usage(block: Optional[dict[str, Any]]) -> None:
@@ -799,6 +842,7 @@ def providers_test(
         console.print(f"Message: {result['status_message']}")
         if result["error"]:
             console.print(f"Error: {result['error']}")
+        _print_embedding_remediation(result)
 
     if not payload["result"]["connected"]:
         raise typer.Exit(1)
@@ -1340,6 +1384,17 @@ def recall(
     repo = _require_repo_scope(memory, repo)
 
     layers = [layer] if layer else None
+    # Two separate decisions. The column header is always honest: a lexical score
+    # is labelled lexical even when the operator asked for that. The banner is
+    # only for degradation nobody chose, which is why it keys off the remediation
+    # rather than off `lexical` -- and it is scoped to `recall`, because a notice
+    # on every unrelated command was the defect that demoted the provider log
+    # line to INFO.
+    lexical = memory.recall_scores_are_lexical is True
+    remediation = memory.lexical_recall_remediation
+    if remediation:
+        _print_lexical_recall_banner(remediation)
+
     results = memory.recall(
         query,
         layers=layers,
@@ -1375,10 +1430,19 @@ def recall(
 
     table = Table(title=f"Search Results for '{query}'", box=ROUNDED)
     table.add_column("ID", style="dim", width=16)
-    table.add_column("Layer", style="cyan", width=10)
+    # Layer names are a closed set and the longest ("episodic", "semantic") is 8,
+    # so 10 was two columns of padding. Reclaiming them pays for the wider score
+    # header below exactly, leaving Content the same width it has always had --
+    # at 80 columns those two characters are the difference between a match being
+    # visible and being truncated away.
+    table.add_column("Layer", style="cyan", width=8)
     table.add_column("Category", style="green", width=12)
     table.add_column("Content")
-    table.add_column("Score", justify="right", style="magenta")
+    # The header names what the number is. An unlabelled "Score" is how a lexical
+    # overlap of 0.60 was quoted as a semantic similarity of 0.60.
+    table.add_column(
+        LEXICAL_SCORE_HEADER if lexical else "Score", justify="right", style="magenta"
+    )
 
     for r in results:
         score = f"{r.get('similarity', 0):.2f}" if r.get("similarity") else "-"
@@ -1389,6 +1453,12 @@ def recall(
         table.add_row(r["id"], r["layer"], r.get("category", "-"), content, score)
 
     console.print(table)
+
+
+def _print_lexical_recall_banner(remediation: str) -> None:
+    """One line saying the results below were ranked without vectors, and the repair."""
+    console.print(f"[yellow]{escape(LEXICAL_RECALL_BANNER)}[/yellow]")
+    _print_remediation_line(remediation)
 
 
 @app.command()
@@ -2436,13 +2506,18 @@ def find_error(
         console.print("[yellow]No similar errors found[/yellow]")
         return
 
+    lexical = memory.recall_scores_are_lexical is True
     console.print(Panel(f"[bold]Similar Past Errors ({len(similar)})[/bold]"))
 
+    # Same field, same storage path, same defect: under noop this number is
+    # `text_similarity`, and a heading that calls it "Similarity" invites it to be
+    # quoted as one.
+    score_label = LEXICAL_SCORE_LABEL.title() if lexical else "Similarity"
     for i, err in enumerate(similar, 1):
         similarity = err.get("similarity", 0)
         content = err["content"]
 
-        console.print(f"\n[cyan]{i}. Similarity: {similarity:.2f}[/cyan]")
+        console.print(f"\n[cyan]{i}. {score_label}: {similarity:.2f}[/cyan]")
         console.print(f"   {content[:200]}")
 
         # Show fix if available
