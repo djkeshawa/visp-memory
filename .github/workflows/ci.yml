@@ -207,7 +207,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build and start dashboard profile
-        run: docker compose --profile dashboard up -d --build --wait
+        run: docker compose -f docker-compose.ci-neo4j.yml up -d --build --wait
       - name: Verify readiness and core routes
         run: |
           curl --fail http://127.0.0.1:8000/readyz
@@ -277,7 +277,7 @@ jobs:
 
       - name: Show service logs on failure
         if: failure()
-        run: docker compose --profile dashboard logs --no-color
+        run: docker compose -f docker-compose.ci-neo4j.yml logs --no-color
       - name: Stop services
         if: always()
-        run: docker compose --profile dashboard down
+        run: docker compose -f docker-compose.ci-neo4j.yml down

@@ -240,9 +240,9 @@ API, and MCP server but no dashboard assets.
 Run the API, dashboard, MCP-capable package, and storage with Docker Compose.
 The `lite` profile uses SQLite and automatic embedding selection. The
 `arcadedb` profile uses the embedded ArcadeDB graph backend in the app
-container, with no separate database service. The `full` profile starts Neo4j
-plus Ollama and pulls `nomic-embed-text`, so recall uses real semantic
-embeddings out of the box.
+container, with no separate database service. Add the `ollama` profile to run a
+local Ollama with `nomic-embed-text` pulled, so recall uses real semantic
+embeddings without a cloud key.
 
 ```bash
 # Quick local server + dashboard
@@ -251,29 +251,33 @@ docker compose --profile lite up --build
 # Embedded local graph backend, no separate database service
 docker compose --profile arcadedb up --build
 
-# Full graph deployment with Neo4j included
-docker compose --profile full up --build
+# Local embeddings alongside either profile
+docker compose --profile lite --profile ollama up --build
 ```
 
-Compose publishes API and database ports on `127.0.0.1` by default. Set a
-unique `NEO4J_PASSWORD` for graph profiles and bootstrap the first dashboard
-administrator with `VISP_MEMORY_BOOTSTRAP_ADMIN_USERNAME` and
-`VISP_MEMORY_BOOTSTRAP_ADMIN_PASSWORD`. Sign in at `/dashboard/auth`, then use
-the Integrations page to create scoped personal access tokens for API and MCP
-clients. Set
+There is no Neo4j serving profile: the Neo4j backend fails closed on
+raw/episodic/semantic writes until it carries the schema-v3 Evidence graph, so
+a Neo4j deployment cannot store memories. Its contract is exercised in CI via
+`docker-compose.ci-neo4j.yml`.
+
+Compose publishes API and database ports on `127.0.0.1` by default. Bootstrap
+the first dashboard administrator with `VISP_MEMORY_BOOTSTRAP_ADMIN_USERNAME`
+and `VISP_MEMORY_BOOTSTRAP_ADMIN_PASSWORD`. Sign in at `/dashboard/auth`, then
+use the Integrations page to create scoped personal access tokens for API and
+MCP clients. Set
 `VISP_MEMORY_BIND_HOST=0.0.0.0` only when remote exposure is intentional and
 protected by TLS and network controls.
 
 Open `http://localhost:8000/dashboard`. Set `VISP_MEMORY_EMBEDDING_PROVIDER`
 to `openai` with `OPENAI_API_KEY` when you prefer hosted embeddings; automatic
-selection prefers OpenAI when a key is present, otherwise the full profile uses
-Ollama. Local sentence-transformer embeddings are intentionally optional because
-they make the image much larger:
+selection prefers OpenAI when a key is present, otherwise the `ollama` profile
+provides local embeddings. Local sentence-transformer embeddings are
+intentionally optional because they make the image much larger:
 
 ```bash
-VISP_MEMORY_EXTRAS=api,mcp,neo4j,local-embeddings \
+VISP_MEMORY_EXTRAS=api,mcp,local-embeddings \
 VISP_MEMORY_EMBEDDING_PROVIDER=sentence-transformers \
-docker compose --profile full up --build
+docker compose --profile lite up --build
 ```
 
 The default Docker image includes ArcadeDB Embedded but excludes ChromaDB and
