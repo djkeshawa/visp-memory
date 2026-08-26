@@ -11,12 +11,14 @@ import json
 import logging
 import re
 import sqlite3
+import threading
 import uuid
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import timedelta
 from enum import Enum
+from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Literal, Optional
 
@@ -217,6 +219,365 @@ class GraphImportRollbackIncompleteError(RuntimeError):
             "Graph import rolled back relational data, but vector compensation failed "
             f"for {joined}; manual vector cleanup is required before retrying"
         )
+
+
+# Repository purges must be bounded per read.  This is deliberately much smaller
+# than the historical 100,000-row cap: a purge may contain more rows than that and
+# must make progress without materialising an unbounded backend response.
+REPOSITORY_PURGE_PAGE_SIZE = 1_000
+_REPOSITORY_MUTATION_STATE_LOCK = threading.Lock()
+
+
+class RepositoryPurgedError(RuntimeError):
+    """Raised when a write races with a completed repository purge."""
+
+
+def _repository_mutation_state(storage: Any) -> tuple[dict[str, threading.RLock], set[str]]:
+    """Return the per-instance locks and completed-purge tombstones.
+
+    Storage subclasses historically do not call a shared ``BaseStorage.__init__``.
+    Initialise this state lazily under one module lock so the guard can cover all
+    built-in backends without changing their construction contracts.
+    """
+    with _REPOSITORY_MUTATION_STATE_LOCK:
+        locks = getattr(storage, "_repository_mutation_locks", None)
+        if locks is None:
+            locks = {}
+            setattr(storage, "_repository_mutation_locks", locks)
+        purged = getattr(storage, "_purged_repository_ids", None)
+        if purged is None:
+            purged = set()
+            setattr(storage, "_purged_repository_ids", purged)
+    return locks, purged
+
+
+def _repository_mutation_lock(storage: Any, repo_id: str) -> threading.RLock:
+    locks, _ = _repository_mutation_state(storage)
+    with _REPOSITORY_MUTATION_STATE_LOCK:
+        return locks.setdefault(repo_id, threading.RLock())
+
+
+def repository_memory_write(func):
+    """Serialize a memory write with purge for its repository scope."""
+
+    @wraps(func)
+    def guarded(storage, *args, **kwargs):
+        repo_id = kwargs.get("repo_id")
+        if repo_id is None and len(args) > 2:
+            repo_id = args[2]
+        repo_id = repo_id or UNSCOPED_REPO_ID
+        if repo_id == UNSCOPED_REPO_ID:
+            return func(storage, *args, **kwargs)
+
+        lock = _repository_mutation_lock(storage, repo_id)
+        with lock:
+            _, purged = _repository_mutation_state(storage)
+            if repo_id in purged:
+                raise RepositoryPurgedError(
+                    f"Repository {repo_id!r} was purged; register it before writing"
+                )
+            return func(storage, *args, **kwargs)
+
+    return guarded
+
+
+def repository_registration(func):
+    """Allow explicit registration to recreate a previously purged repository."""
+
+    @wraps(func)
+    def guarded(storage, repo, *args, **kwargs):
+        repo_id = repo.get("id") or storage._generate_id(repo["name"])
+        lock = _repository_mutation_lock(storage, repo_id)
+        with lock:
+            result = func(storage, repo, *args, **kwargs)
+            _, purged = _repository_mutation_state(storage)
+            purged.discard(repo_id)
+            return result
+
+    return guarded
+
+
+def iter_repository_memories(
+    storage: Any,
+    repo_id: str,
+    *,
+    page_size: int = REPOSITORY_PURGE_PAGE_SIZE,
+):
+    """Yield every memory in a repository using an ID keyset cursor.
+
+    All built-in backends accept ``after_id`` for this internal, deterministic
+    ordering.  The small compatibility fallback supports third-party storage
+    implementations that have not added the optional keyword yet, provided their
+    first page is short; a full page without a cursor is rejected rather than
+    silently truncating a purge.
+    """
+    page_size = max(1, int(page_size))
+    cursor = None
+    used_legacy_call = False
+    seen_ids: set[str] = set()
+
+    while True:
+        kwargs = {
+            "repo_id": repo_id,
+            "status": "all",
+            "limit": page_size,
+            "order_by": "id ASC",
+        }
+        if cursor is not None:
+            kwargs["after_id"] = cursor
+        try:
+            page = storage.list_memories(**kwargs)
+        except TypeError:
+            if cursor is not None or used_legacy_call:
+                raise
+            # Preserve compatibility with external backends that implement the
+            # pre-pagination signature.  A short page is safe; a full page is
+            # unsafe because there is no way to advance without an offset/cursor.
+            used_legacy_call = True
+            page = storage.list_memories(
+                repo_id=repo_id,
+                status="all",
+                limit=page_size,
+            )
+
+        if not page:
+            return
+
+        page_ids = []
+        for memory in page:
+            memory_id = memory.get("id") if isinstance(memory, dict) else None
+            if not isinstance(memory_id, str) or not memory_id:
+                raise ValueError("Repository memory pagination returned an invalid ID")
+            if memory_id in seen_ids:
+                raise RuntimeError(
+                    f"Repository memory pagination did not advance after {memory_id!r}"
+                )
+            seen_ids.add(memory_id)
+            page_ids.append(memory_id)
+            yield memory
+
+        if len(page) < page_size:
+            return
+        if used_legacy_call:
+            raise RuntimeError(
+                "Storage backend returned a full repository purge page without a cursor"
+            )
+        cursor = page_ids[-1]
+
+
+def _purge_repository(storage: Any, repo_id: str) -> Dict[str, Any]:
+    """Serialize purge with repository writes and retain a success tombstone."""
+    lock = _repository_mutation_lock(storage, repo_id)
+    with lock:
+        report = _purge_repository_locked(storage, repo_id)
+        if report["status"] == "purged":
+            _, purged = _repository_mutation_state(storage)
+            purged.add(repo_id)
+        return report
+
+
+def _purge_repository_locked(storage: Any, repo_id: str) -> Dict[str, Any]:
+    """Run the portable, truthful repository purge protocol.
+
+    Backend-specific implementations provide only the child cleanup and final
+    repository-row deletion hooks.  Memory deletion remains per-record so a
+    vector or child failure is observed and the repository can be retained for a
+    retry instead of being reported as successfully gone.
+    """
+    report: Dict[str, Any] = {
+        "repo_id": repo_id,
+        "status": "incomplete",
+        "purged_memory_count": 0,
+        "purged_memory_ids": [],
+        "failed_memory_ids": [],
+        "residual": {},
+        "errors": [],
+    }
+
+    if storage.get_repository(repo_id) is None:
+        report["status"] = "not_found"
+        return report
+
+    memory_ids: list[str] = []
+    memory_listing_failed = False
+    try:
+        memory_ids = [
+            memory["id"]
+            for memory in iter_repository_memories(storage, repo_id)
+        ]
+    except Exception as exc:
+        memory_listing_failed = True
+        report["errors"].append(
+            {"kind": "memory_listing", "error": exc.__class__.__name__}
+        )
+
+    if not memory_listing_failed:
+        purge_one = getattr(storage, "purge_memory", None) or storage.delete_memory
+        for memory_id in memory_ids:
+            try:
+                deleted = bool(purge_one(memory_id))
+            except Exception as exc:
+                deleted = False
+                report["errors"].append(
+                    {
+                        "kind": "memory",
+                        "id": memory_id,
+                        "error": exc.__class__.__name__,
+                    }
+                )
+            if deleted:
+                report["purged_memory_count"] += 1
+                report["purged_memory_ids"].append(memory_id)
+            else:
+                report["failed_memory_ids"].append(memory_id)
+
+        # Relationships are memory children in every backend.  Delete them
+        # through the public per-edge operation as a second line of defence for
+        # stores whose vertex delete does not detach edges automatically.
+        try:
+            relationships = storage.get_all_relationships(repo_id=repo_id) or []
+            delete_relationship = getattr(storage, "delete_relationship", None)
+            for relationship in relationships:
+                relationship_id = (
+                    relationship.get("id") if isinstance(relationship, dict) else None
+                )
+                if not relationship_id or not callable(delete_relationship):
+                    report["errors"].append(
+                        {
+                            "kind": "relationship",
+                            "id": relationship_id,
+                            "error": "unsupported_delete",
+                        }
+                    )
+                    continue
+                try:
+                    if not delete_relationship(relationship_id):
+                        report["errors"].append(
+                            {
+                                "kind": "relationship",
+                                "id": relationship_id,
+                                "error": "delete_failed",
+                            }
+                        )
+                except Exception as exc:
+                    report["errors"].append(
+                        {
+                            "kind": "relationship",
+                            "id": relationship_id,
+                            "error": exc.__class__.__name__,
+                        }
+                    )
+        except Exception as exc:
+            report["errors"].append(
+                {
+                    "kind": "relationship",
+                    "error": exc.__class__.__name__,
+                }
+            )
+
+        child_cleanup = getattr(storage, "_purge_repository_children", None)
+        if callable(child_cleanup):
+            try:
+                try:
+                    child_errors = child_cleanup(
+                        repo_id,
+                        memory_ids=report["purged_memory_ids"],
+                    ) or []
+                except TypeError:
+                    # Keep third-party hooks written against the initial one-arg
+                    # extension point working while built-ins can clean detached
+                    # edge records by the IDs they actually removed.
+                    child_errors = child_cleanup(repo_id) or []
+                if isinstance(child_errors, dict):
+                    report["errors"].append(child_errors)
+                else:
+                    report["errors"].extend(child_errors)
+            except Exception as exc:
+                report["errors"].append(
+                    {"kind": "children", "error": exc.__class__.__name__}
+                )
+
+    def residual_ids(kind: str, values: Any) -> None:
+        ids = []
+        for value in values or []:
+            if isinstance(value, dict):
+                value_id = value.get("id")
+            else:
+                value_id = value
+            if value_id:
+                ids.append(str(value_id))
+        if ids:
+            report["residual"][kind] = ids
+
+    try:
+        residual_ids(
+            "memories",
+            [memory for memory in iter_repository_memories(storage, repo_id)],
+        )
+    except Exception as exc:
+        report["errors"].append(
+            {"kind": "memory_verification", "error": exc.__class__.__name__}
+        )
+
+    try:
+        residual_ids(
+            "intents",
+            storage.get_active_intents(repo_id=repo_id, status="all"),
+        )
+    except Exception as exc:
+        report["errors"].append(
+            {"kind": "intent_verification", "error": exc.__class__.__name__}
+        )
+
+    try:
+        residual_ids("relationships", storage.get_all_relationships(repo_id=repo_id))
+    except Exception as exc:
+        report["errors"].append(
+            {"kind": "relationship_verification", "error": exc.__class__.__name__}
+        )
+
+    try:
+        residual_ids("dependencies", storage.get_repo_dependencies(repo_id))
+    except Exception as exc:
+        report["errors"].append(
+            {"kind": "dependency_verification", "error": exc.__class__.__name__}
+        )
+
+    list_evidence = getattr(storage, "list_evidence", None)
+    if callable(list_evidence):
+        try:
+            residual_ids("evidence", list_evidence(repo_id=repo_id))
+        except EvidenceUnsupportedError:
+            pass
+        except Exception as exc:
+            report["errors"].append(
+                {"kind": "evidence_verification", "error": exc.__class__.__name__}
+            )
+
+    if report["failed_memory_ids"] or report["errors"] or report["residual"]:
+        return report
+
+    delete_repository_record = getattr(storage, "_delete_repository_record", None)
+    if not callable(delete_repository_record):
+        report["errors"].append(
+            {"kind": "repository", "error": "unsupported_backend_hook"}
+        )
+        return report
+    try:
+        if not delete_repository_record(repo_id):
+            report["errors"].append(
+                {"kind": "repository", "id": repo_id, "error": "delete_failed"}
+            )
+    except Exception as exc:
+        report["errors"].append(
+            {"kind": "repository", "id": repo_id, "error": exc.__class__.__name__}
+        )
+
+    if storage.get_repository(repo_id) is not None:
+        report["residual"]["repository"] = [repo_id]
+    if not report["errors"] and not report["residual"]:
+        report["status"] = "purged"
+    return report
 
 
 @dataclass(frozen=True)
@@ -600,6 +961,25 @@ class BaseStorage(ABC):
 
     def delete_repository(self, repo_id: str) -> bool:
         """Permanently remove a repository and its scoped records."""
+        return self.purge_repository(repo_id)["status"] == "purged"
+
+    def purge_repository(self, repo_id: str) -> Dict[str, Any]:
+        """Permanently remove a repository and return a truthful retry report.
+
+        ``delete_repository`` remains the historical boolean surface.  Callers
+        that need to distinguish a missing repository from an incomplete purge
+        should use this report-producing method.
+        """
+        return _purge_repository(self, repo_id)
+
+    def _purge_repository_children(
+        self, repo_id: str, *, memory_ids: Iterable[str] = ()
+    ) -> list[Dict[str, Any]]:
+        """Delete backend-specific repository children and return failures."""
+        return []
+
+    def _delete_repository_record(self, repo_id: str) -> bool:
+        """Delete only the repository row after all children are verified gone."""
         return False
 
     @abstractmethod
@@ -2987,6 +3367,7 @@ class LocalStorage(BaseStorage):
                 raise EvidenceReferenceError("Evidence must belong to the same repository")
         return resolved
 
+    @repository_memory_write
     def store_memory(
         self,
         content: str,
@@ -3582,6 +3963,7 @@ class LocalStorage(BaseStorage):
         limit: int = 50,
         offset: int = 0,
         order_by: str = "created_at DESC",
+        after_id: str = None,
     ) -> List[Dict[str, Any]]:
         """List memories with optional filtering."""
         query = "SELECT * FROM memories WHERE 1=1"
@@ -3599,6 +3981,10 @@ class LocalStorage(BaseStorage):
             query += " AND category = ?"
             params.append(category)
 
+        if after_id is not None:
+            query += " AND id > ?"
+            params.append(after_id)
+
         if status and status != "all":
             query += " AND status = ?"
             params.append(status)
@@ -3610,6 +3996,7 @@ class LocalStorage(BaseStorage):
             "importance ASC",
             "accessed_at DESC",
             "accessed_at ASC",
+            "id ASC",
         }
         if order_by not in allowed_order_by:
             order_by = "created_at DESC"
@@ -3806,6 +4193,22 @@ class LocalStorage(BaseStorage):
         if not memory:
             return False
 
+        # The vector store is not transactional with SQLite.  Remove it first so
+        # a vector failure leaves the structured row and all of its child rows in
+        # place for a truthful retry; deleting the row first would create an
+        # orphan embedding that the caller could no longer address.
+        collection = self._get_collection(memory["layer"])
+        if collection:
+            try:
+                collection.delete(ids=[memory_id])
+            except Exception as exc:
+                logger.error(
+                    "Vector delete failed for memory %s; the row remains for retry: %s",
+                    memory_id,
+                    exc,
+                )
+                return False
+
         # Delete from SQLite. Child rows (which carry FK references to
         # memories.id) must be removed before the parent row so that
         # foreign_keys=ON enforcement does not reject the parent delete.
@@ -3818,25 +4221,6 @@ class LocalStorage(BaseStorage):
             self._drop_deleted_source_reference(conn, memory_id)
             conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
             conn.commit()
-
-        # Delete from vector DB
-        collection = self._get_collection(memory["layer"])
-        if collection:
-            try:
-                collection.delete(ids=[memory_id])
-            except Exception as exc:
-                # The row is gone but its embedding is not, so semantic search can
-                # still surface content the caller believes it deleted. Reporting
-                # success here (MG-034) meant a purge could complete "cleanly" and
-                # leave the deleted text retrievable.
-                logger.error(
-                    "Vector delete failed for memory %s; the row is deleted but an "
-                    "orphaned vector remains and may still be retrievable. Run "
-                    "rebuild_embedding_index to reconcile: %s",
-                    memory_id,
-                    exc,
-                )
-                return False
 
         return True
 
@@ -4767,6 +5151,7 @@ class LocalStorage(BaseStorage):
             return [self._row_to_dict(row) for row in cursor.fetchall()]
 
     # Repository operations
+    @repository_registration
     def store_repository(self, repo: Dict[str, Any]) -> str:
         repo_id = repo.get("id") or self._generate_id(repo["name"])
 
@@ -4871,25 +5256,35 @@ class LocalStorage(BaseStorage):
             conn.commit()
         return result.rowcount > 0
 
-    def delete_repository(self, repo_id: str) -> bool:
-        if self.get_repository(repo_id) is None:
-            return False
-        memory_ids = [
-            memory["id"]
-            for memory in self.list_memories(repo_id=repo_id, status="all", limit=100000)
-        ]
-        for memory_id in memory_ids:
-            self.delete_memory(memory_id)
+    def _purge_repository_children(self, repo_id: str) -> list[Dict[str, Any]]:
+        """Remove repository-owned rows that are not memory nodes.
+
+        Audit rows intentionally survive a purge so the destructive operation is
+        itself auditable.  Every content-bearing child is deleted in one
+        transaction and residual verification in ``BaseStorage`` decides whether
+        the repository may be removed.
+        """
+        try:
+            with self._get_db() as conn:
+                conn.execute("DELETE FROM intents WHERE repo_id = ?", (repo_id,))
+                conn.execute("DELETE FROM evidence WHERE repo_id = ?", (repo_id,))
+                conn.execute("DELETE FROM sessions WHERE repo_id = ?", (repo_id,))
+                conn.execute("DELETE FROM recall_events WHERE repo_id = ?", (repo_id,))
+                conn.execute(
+                    "DELETE FROM repository_dependencies "
+                    "WHERE source_repo_id = ? OR target_repo_id = ?",
+                    (repo_id, repo_id),
+                )
+                conn.commit()
+        except Exception as exc:
+            return [{"kind": "children", "error": exc.__class__.__name__}]
+        return []
+
+    def _delete_repository_record(self, repo_id: str) -> bool:
         with self._get_db() as conn:
-            conn.execute("DELETE FROM intents WHERE repo_id = ?", (repo_id,))
-            conn.execute(
-                "DELETE FROM repository_dependencies "
-                "WHERE source_repo_id = ? OR target_repo_id = ?",
-                (repo_id, repo_id),
-            )
-            conn.execute("DELETE FROM repositories WHERE id = ?", (repo_id,))
+            result = conn.execute("DELETE FROM repositories WHERE id = ?", (repo_id,))
             conn.commit()
-        return True
+        return result.rowcount > 0
 
     def add_repo_dependency(
         self,

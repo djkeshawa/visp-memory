@@ -29,6 +29,8 @@ from visp_memory.core.storage import (
     SessionCompletionStatus,
     StorageCapabilities,
     StorageMigrationRequired,
+    repository_memory_write,
+    repository_registration,
 )
 from visp_memory.quality.secrets import SecretBearingContentError, redact_for_storage
 
@@ -488,6 +490,7 @@ class Neo4jStorage(BaseStorage):
             "created_at": cls._format_temporal(evidence_created_at),
         }
 
+    @repository_memory_write
     def store_memory(
         self,
         content: str,
@@ -842,6 +845,7 @@ class Neo4jStorage(BaseStorage):
         layer: str = None,
         category: str = None,
         limit: int = 50,
+        after_id: str = None,
         **kwargs,
     ) -> List[Dict[str, Any]]:
         """List memories."""
@@ -855,6 +859,7 @@ class Neo4jStorage(BaseStorage):
             "importance ASC": "m.importance ASC, m.id ASC",
             "accessed_at DESC": "m.accessed_at DESC, m.id DESC",
             "accessed_at ASC": "m.accessed_at ASC, m.id ASC",
+            "id ASC": "m.id ASC",
         }
         ordering = allowed_order_by.get(order_by, allowed_order_by["created_at DESC"])
         query = f"""
@@ -863,6 +868,7 @@ class Neo4jStorage(BaseStorage):
             AND ($repo_id IS NULL OR m.repo_id = $repo_id)
             AND ($category IS NULL OR m.category = $category)
             AND ($status = 'all' OR m.status = $status OR ($status = 'active' AND m.status IS NULL))
+            AND ($after_id IS NULL OR m.id > $after_id)
             RETURN m
             ORDER BY {ordering}
             SKIP $offset
@@ -875,6 +881,7 @@ class Neo4jStorage(BaseStorage):
                 repo_id=repo_id,
                 category=category,
                 status=status,
+                after_id=after_id,
                 limit=limit,
                 offset=offset,
             )
@@ -1618,6 +1625,7 @@ class Neo4jStorage(BaseStorage):
             return [self._audit_node_to_dict(dict(record["a"])) for record in result]
 
     # Repository operations
+    @repository_registration
     def store_repository(self, repo: Dict[str, Any]) -> str:
         repo_id = repo.get("id") or self._generate_id(repo["name"])
 
@@ -1706,19 +1714,31 @@ class Neo4jStorage(BaseStorage):
             ).single()
         return bool(record and record["c"])
 
-    def delete_repository(self, repo_id: str) -> bool:
+    def _purge_repository_children(self, repo_id: str) -> list[Dict[str, Any]]:
+        """Delete repository-owned child nodes and dependency relationships."""
+        try:
+            with self.driver.session() as session:
+                session.run("MATCH (i:Intent {repo_id: $id}) DETACH DELETE i", id=repo_id)
+                session.run("MATCH (s:Session {repo_id: $id}) DETACH DELETE s", id=repo_id)
+                session.run(
+                    "MATCH (r:Repository {id: $id})-[d]-(other:Repository) DELETE d",
+                    id=repo_id,
+                )
+        except Exception as exc:
+            return [{"kind": "children", "error": exc.__class__.__name__}]
+        return []
+
+    def _delete_repository_record(self, repo_id: str) -> bool:
         with self.driver.session() as session:
             exists = session.run(
                 "MATCH (r:Repository {id: $id}) RETURN count(r) AS c", id=repo_id
-            ).single()["c"]
-            if not exists:
+            ).single()
+            if not exists or not exists["c"]:
                 return False
             session.run(
-                "MATCH (m:Memory {repo_id: $id}) DETACH DELETE m",
+                "MATCH (r:Repository {id: $id}) DETACH DELETE r",
                 id=repo_id,
             )
-            session.run("MATCH (i:Intent {repo_id: $id}) DETACH DELETE i", id=repo_id)
-            session.run("MATCH (r:Repository {id: $id}) DETACH DELETE r", id=repo_id)
         return True
 
     def list_project_ids(self) -> List[str]:

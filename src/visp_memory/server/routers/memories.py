@@ -207,13 +207,17 @@ async def list_memories(
     limit: int = 50,
     offset: int = 0,
     order_by: str = "created_at DESC",
+    after_id: str = None,
     user: UserContext = Depends(get_current_user),
 ):
     storage = request.app.state.storage
     config = load_config()
     memory_repo_id = repo_id or config.repo_id
     require_repo_scope_access(storage, memory_repo_id, user)
-    limit = max(1, min(limit, 200))
+    # Filter authorization before applying the caller's visible offset/limit.
+    # Backend pages stay bounded while internal keyset consumers may request up
+    # to the shared purge page size through the Remote adapter.
+    limit = max(1, min(limit, 1000))
     offset = max(0, offset)
     visible_memories = []
     storage_offset = 0
@@ -228,6 +232,7 @@ async def list_memories(
             category=category,
             status=status,
             order_by=order_by,
+            after_id=after_id,
         )
         visible_memories.extend(
             memory

@@ -6,7 +6,7 @@ import uuid
 from datetime import timedelta
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from visp_memory.core.authority import (
     ProhibitionAuthorityError,
@@ -23,6 +23,7 @@ from visp_memory.core.eligibility import UNSCOPED_REPO_ID
 from visp_memory.core.ranking import rank_memory_results, text_similarity, utility_rank_adjustment
 from visp_memory.core.storage import (
     REINFORCING_RECALL_EVENTS,
+    REPOSITORY_PURGE_PAGE_SIZE,
     STORAGE_SCHEMA_VERSION,
     BaseStorage,
     EvidenceError,
@@ -34,6 +35,8 @@ from visp_memory.core.storage import (
     SessionCompletionStatus,
     StorageCapabilities,
     StorageMigrationRequired,
+    repository_memory_write,
+    repository_registration,
 )
 from visp_memory.quality.secrets import SecretBearingContentError, redact_for_storage
 
@@ -829,6 +832,7 @@ class ArcadeDbStorage(BaseStorage):
         limit: int = 50,
         offset: int = 0,
         order_by: str = "created_at DESC",
+        after_id: str = None,
         exclude_raw: bool = False,
     ) -> List[Dict[str, Any]]:
         query = f"SELECT FROM {self.MEMORY_TYPE}"
@@ -848,6 +852,9 @@ class ArcadeDbStorage(BaseStorage):
         if category:
             conditions.append("category = ?")
             params.append(category)
+        if after_id is not None:
+            conditions.append("id > ?")
+            params.append(after_id)
         if status and status != "all":
             conditions.append("status = ?")
             params.append(status)
@@ -862,6 +869,7 @@ class ArcadeDbStorage(BaseStorage):
             "importance ASC",
             "accessed_at DESC",
             "accessed_at ASC",
+            "id ASC",
         }
         if order_by not in allowed_order_by:
             order_by = "created_at DESC"
@@ -1094,12 +1102,28 @@ class ArcadeDbStorage(BaseStorage):
             return [self._record_to_dict(row, fields, json_fields or set()) for row in rows]
 
     def _delete_records(self, type_name: str, filters: Dict[str, Any]) -> int:
-        records = self._list_records(type_name, ["id"], filters=filters, order_by="id ASC")
-        with self._database() as db:
-            with db.transaction():
-                for record in records:
-                    db.command("sql", f"DELETE FROM {type_name} WHERE id = ?", record["id"])
-        return len(records)
+        deleted = 0
+        # Delete the first bounded page repeatedly.  Re-reading from the start is
+        # intentional: unlike offset pagination it cannot skip rows as earlier
+        # records disappear, and it works with ArcadeDB's SQL surface across
+        # versions.
+        while True:
+            records = self._list_records(
+                type_name,
+                ["id"],
+                filters=filters,
+                limit=REPOSITORY_PURGE_PAGE_SIZE,
+                order_by="id ASC",
+            )
+            if not records:
+                return deleted
+            with self._database() as db:
+                with db.transaction():
+                    for record in records:
+                        db.command(
+                            "sql", f"DELETE FROM {type_name} WHERE id = ?", record["id"]
+                        )
+            deleted += len(records)
 
     def _create_edge(
         self,
@@ -1134,6 +1158,7 @@ class ArcadeDbStorage(BaseStorage):
             rows = self._rows(db.query("sql", f"SELECT FROM {edge_type}"))
             return [self._record_to_dict(row, fields) for row in rows]
 
+    @repository_memory_write
     def store_memory(
         self,
         content: str,
@@ -1533,6 +1558,7 @@ class ArcadeDbStorage(BaseStorage):
         limit: int = 50,
         offset: int = 0,
         order_by: str = "created_at DESC",
+        after_id: str = None,
     ) -> List[Dict[str, Any]]:
         return self._query_memories(
             layer=layer,
@@ -1542,6 +1568,7 @@ class ArcadeDbStorage(BaseStorage):
             limit=limit,
             offset=offset,
             order_by=order_by,
+            after_id=after_id,
         )
 
     def update_memory(self, memory_id: str, **kwargs) -> bool:
@@ -1966,6 +1993,7 @@ class ArcadeDbStorage(BaseStorage):
             "total_relationships": len(self.get_all_relationships(repo_id=repo_id)),
         }
 
+    @repository_registration
     def store_repository(self, repo: Dict[str, Any]) -> str:
         repo_id = repo.get("id") or self._generate_id(repo["name"])
         if self.get_repository(repo_id) is not None:
@@ -2035,13 +2063,182 @@ class ArcadeDbStorage(BaseStorage):
             json_fields=self.RECORD_JSON_FIELDS["Repository"],
         )
 
-    def delete_repository(self, repo_id: str) -> bool:
+    def _purge_repository_children(
+        self, repo_id: str, *, memory_ids: Iterable[str] = ()
+    ) -> list[Dict[str, Any]]:
+        """Delete repository records plus authority graph children of purged beliefs."""
+        errors: list[Dict[str, Any]] = []
+        for type_name in ("Intent", "Evidence", "Session", "RecallFeedback"):
+            try:
+                self._delete_records(type_name, {"repo_id": repo_id})
+            except Exception as exc:
+                errors.append({"kind": type_name, "error": exc.__class__.__name__})
+
+        purged_belief_ids = {memory_id for memory_id in memory_ids if memory_id}
+        failed_authority_beliefs: set[str] = set()
+        authority_links_available = True
+        try:
+            authority_links = self._list_edge_records(
+                self.BELIEF_AUTHORITY_EDGE, self.BELIEF_AUTHORITY_FIELDS
+            )
+            for link in authority_links:
+                belief_id = link.get("belief_id")
+                if belief_id not in purged_belief_ids:
+                    continue
+                link_id = link.get("id")
+                if not link_id:
+                    errors.append(
+                        {
+                            "kind": self.BELIEF_AUTHORITY_EDGE,
+                            "error": "missing_id",
+                        }
+                    )
+                    failed_authority_beliefs.add(belief_id)
+                    continue
+                try:
+                    with self._database() as db:
+                        with db.transaction():
+                            db.command(
+                                "sql",
+                                f"DELETE EDGE {self.BELIEF_AUTHORITY_EDGE} WHERE id = ?",
+                                link_id,
+                            )
+                except Exception as exc:
+                    failed_authority_beliefs.add(belief_id)
+                    errors.append(
+                        {
+                            "kind": self.BELIEF_AUTHORITY_EDGE,
+                            "id": link_id,
+                            "error": exc.__class__.__name__,
+                        }
+                    )
+        except Exception as exc:
+            authority_links_available = False
+            errors.append(
+                {"kind": self.BELIEF_AUTHORITY_EDGE, "error": exc.__class__.__name__}
+            )
+
+        try:
+            attestations = self._list_records(
+                "AuthorityAttestation", self.AUTHORITY_ATTESTATION_FIELDS
+            )
+            for attestation in attestations:
+                belief_id = attestation.get("belief_id")
+                if (
+                    not authority_links_available
+                    or belief_id not in purged_belief_ids
+                    or belief_id in failed_authority_beliefs
+                ):
+                    continue
+                attestation_id = attestation.get("id")
+                if not attestation_id:
+                    errors.append(
+                        {
+                            "kind": "AuthorityAttestation",
+                            "error": "missing_id",
+                        }
+                    )
+                    continue
+                try:
+                    with self._database() as db:
+                        with db.transaction():
+                            db.command(
+                                "sql",
+                                "DELETE FROM AuthorityAttestation WHERE id = ?",
+                                attestation_id,
+                            )
+                except Exception as exc:
+                    errors.append(
+                        {
+                            "kind": "AuthorityAttestation",
+                            "id": attestation_id,
+                            "error": exc.__class__.__name__,
+                        }
+                    )
+        except Exception as exc:
+            errors.append({"kind": "AuthorityAttestation", "error": exc.__class__.__name__})
+
+        # A backend may acknowledge a DELETE while leaving a record behind. Report
+        # those scoped leftovers as errors so BaseStorage retains the repository.
+        if purged_belief_ids:
+            try:
+                residual_links = self._list_edge_records(
+                    self.BELIEF_AUTHORITY_EDGE, self.BELIEF_AUTHORITY_FIELDS
+                )
+                for link in residual_links:
+                    if link.get("belief_id") in purged_belief_ids:
+                        errors.append(
+                            {
+                                "kind": self.BELIEF_AUTHORITY_EDGE,
+                                "id": link.get("id"),
+                                "error": "residual",
+                            }
+                        )
+            except Exception as exc:
+                errors.append(
+                    {
+                        "kind": "BeliefAuthority",
+                        "error": f"verification:{exc.__class__.__name__}",
+                    }
+                )
+            try:
+                residual_attestations = self._list_records(
+                    "AuthorityAttestation", self.AUTHORITY_ATTESTATION_FIELDS
+                )
+                for attestation in residual_attestations:
+                    if attestation.get("belief_id") in purged_belief_ids:
+                        errors.append(
+                            {
+                                "kind": "AuthorityAttestation",
+                                "id": attestation.get("id"),
+                                "error": "residual",
+                            }
+                        )
+            except Exception as exc:
+                errors.append(
+                    {
+                        "kind": "AuthorityAttestation",
+                        "error": f"verification:{exc.__class__.__name__}",
+                    }
+                )
+
+        try:
+            dependencies = self._list_edge_records(
+                self.REPO_DEPENDENCY_EDGE, self.REPO_DEPENDENCY_FIELDS
+            )
+            for dependency in dependencies:
+                if repo_id not in {
+                    dependency.get("source_repo_id"),
+                    dependency.get("target_repo_id"),
+                }:
+                    continue
+                try:
+                    with self._database() as db:
+                        with db.transaction():
+                            db.command(
+                                "sql",
+                                f"DELETE EDGE {self.REPO_DEPENDENCY_EDGE} WHERE id = ?",
+                                dependency.get("id"),
+                            )
+                except Exception as exc:
+                    errors.append(
+                        {
+                            "kind": "RepoDependency",
+                            "id": dependency.get("id"),
+                            "error": exc.__class__.__name__,
+                        }
+                    )
+        except Exception as exc:
+            errors.append({"kind": "RepoDependency", "error": exc.__class__.__name__})
+        return errors
+
+    def _delete_repository_record(self, repo_id: str) -> bool:
         if self.get_repository(repo_id) is None:
             return False
-        self._delete_records("Memory", {"repo_id": repo_id})
-        self._delete_records("Intent", {"repo_id": repo_id})
-        self._delete_records("Repository", {"id": repo_id})
-        return True
+        with self._database() as db:
+            with db.transaction():
+                db.command("sql", "DELETE FROM Repository WHERE id = ?", repo_id)
+        return self.get_repository(repo_id) is None
 
     def list_project_ids(self) -> List[str]:
         memories = self.list_memories(status="all", limit=100000)

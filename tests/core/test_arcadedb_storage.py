@@ -163,6 +163,10 @@ class FakeArcadeDb:
             else:
                 self.records[type_name].pop(params[0], None)
             return None
+        if sql.startswith("DELETE EDGE "):
+            edge_type = sql.split()[2]
+            self.edges[edge_type].pop(params[0], None)
+            return None
         raise AssertionError(f"Unhandled SQL command: {sql}")
 
     def query(self, language, sql, *params):
@@ -583,6 +587,103 @@ def test_arcadedb_verified_prohibition_attestation_round_trip_and_replay(
             authority_attestation=signed(now + timedelta(minutes=1)),
             auto_link=False,
         )
+
+
+def test_arcadedb_repository_purge_removes_authority_graph_only_for_purged_memories(
+    fake_arcadedb, tmp_path
+):
+    storage = ArcadeDbStorage(tmp_path)
+    storage.store_repository({"id": "repo-a", "name": "Repo A"})
+    storage.store_repository({"id": "repo-b", "name": "Repo B"})
+    purged_belief_id = storage.store_memory(
+        "Repo A prohibition placeholder",
+        layer="episodic",
+        repo_id="repo-a",
+        auto_link=False,
+    )
+    retained_belief_id = storage.store_memory(
+        "Repo B prohibition placeholder",
+        layer="episodic",
+        repo_id="repo-b",
+        auto_link=False,
+    )
+
+    for belief_id, suffix in (
+        (purged_belief_id, "a"),
+        (retained_belief_id, "b"),
+    ):
+        attestation_id = f"att-{suffix}"
+        fake_arcadedb.db.records["AuthorityAttestation"][attestation_id] = {
+            "id": attestation_id,
+            "belief_id": belief_id,
+            "key_id": f"key-{suffix}",
+            "nonce": f"nonce-{suffix}",
+            "digest": f"digest-{suffix}",
+            "envelope": f"envelope-{suffix}",
+            "created_at": "2026-08-27T00:00:00+00:00",
+        }
+        fake_arcadedb.db.edges["BeliefAuthority"][f"ba-{suffix}"] = {
+            "id": f"ba-{suffix}",
+            "belief_id": belief_id,
+            "attestation_id": attestation_id,
+            "created_at": "2026-08-27T00:00:00+00:00",
+        }
+
+    report = storage.purge_repository("repo-a")
+
+    assert report["status"] == "purged"
+    assert "att-a" not in fake_arcadedb.db.records["AuthorityAttestation"]
+    assert "ba-a" not in fake_arcadedb.db.edges["BeliefAuthority"]
+    assert "att-b" in fake_arcadedb.db.records["AuthorityAttestation"]
+    assert "ba-b" in fake_arcadedb.db.edges["BeliefAuthority"]
+
+
+def test_arcadedb_repository_purge_retains_repository_on_authority_cleanup_failure(
+    fake_arcadedb, tmp_path, monkeypatch
+):
+    storage = ArcadeDbStorage(tmp_path)
+    storage.store_repository({"id": "repo-a", "name": "Repo A"})
+    belief_id = storage.store_memory(
+        "Repo A authority cleanup failure",
+        layer="episodic",
+        repo_id="repo-a",
+        auto_link=False,
+    )
+    fake_arcadedb.db.records["AuthorityAttestation"]["att-a"] = {
+        "id": "att-a",
+        "belief_id": belief_id,
+        "key_id": "key-a",
+        "nonce": "nonce-a",
+        "digest": "digest-a",
+        "envelope": "envelope-a",
+        "created_at": "2026-08-27T00:00:00+00:00",
+    }
+    fake_arcadedb.db.edges["BeliefAuthority"]["ba-a"] = {
+        "id": "ba-a",
+        "belief_id": belief_id,
+        "attestation_id": "att-a",
+        "created_at": "2026-08-27T00:00:00+00:00",
+    }
+
+    original_command = fake_arcadedb.db.command
+
+    def fail_authority_edge_delete(language, sql, *params):
+        if sql.startswith("DELETE EDGE BeliefAuthority"):
+            raise RuntimeError("authority edge store unavailable")
+        return original_command(language, sql, *params)
+
+    monkeypatch.setattr(fake_arcadedb.db, "command", fail_authority_edge_delete)
+
+    report = storage.purge_repository("repo-a")
+
+    assert report["status"] == "incomplete"
+    assert storage.get_repository("repo-a") is not None
+    assert "ba-a" in fake_arcadedb.db.edges["BeliefAuthority"]
+    assert "att-a" in fake_arcadedb.db.records["AuthorityAttestation"]
+    assert any(
+        error["kind"] == "BeliefAuthority" and error["id"] == "ba-a"
+        for error in report["errors"]
+    )
 
 
 def test_arcadedb_v2_constructor_refuses_without_schema_or_marker_drift(

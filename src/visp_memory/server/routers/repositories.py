@@ -13,7 +13,10 @@ from visp_memory.core.repository import (
     RepositoryDependency,
     RepositoryManager,
 )
-from visp_memory.core.storage import is_implicitly_registered
+from visp_memory.core.storage import (
+    is_implicitly_registered,
+    iter_repository_memories,
+)
 from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import require_admin
 from visp_memory.server.routers.platform import append_audit_event
@@ -240,7 +243,7 @@ async def restore_repository(
 
 
 def _repository_purge_preview(storage, repo_id: str) -> dict:
-    memories = storage.list_memories(repo_id=repo_id, status="all", limit=100000)
+    memories = list(iter_repository_memories(storage, repo_id))
     intents = storage.get_active_intents(repo_id=repo_id, status="all")
     relationships = storage.get_all_relationships(repo_id=repo_id)
     return {
@@ -293,7 +296,7 @@ def _export_repository_backup(storage, repo_id: str, backup_dir) -> str:
             "contains_purged_plaintext": True,
         },
         "repository": storage.get_repository(repo_id),
-        "memories": storage.list_memories(repo_id=repo_id, status="all", limit=100000),
+        "memories": list(iter_repository_memories(storage, repo_id)),
         "intents": storage.get_active_intents(repo_id=repo_id, status="all"),
         "relationships": storage.get_all_relationships(repo_id=repo_id),
     }
@@ -330,8 +333,14 @@ async def purge_repository(
         repo_id,
         request.app.state.auth_store.path.parent / "backups",
     )
-    if not manager.purge(repo_id):
+    purge_result = manager.purge_report(repo_id)
+    if purge_result.get("status") == "not_found":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
+    if purge_result.get("status") != "purged":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=purge_result,
+        )
     append_audit_event(
         request.app.state.storage,
         event_type="repository.purged",

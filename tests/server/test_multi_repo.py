@@ -1,5 +1,7 @@
 import pytest
 
+from visp_memory.server.app import app
+
 
 @pytest.mark.asyncio
 async def test_repo_registration_and_isolation(client):
@@ -194,3 +196,37 @@ async def test_reflection_materialization_requires_a_writable_repository(client)
     )
     assert response.status_code == 409
     assert response.json()["detail"] == "Repository is archived and does not accept new writes"
+
+
+@pytest.mark.asyncio
+async def test_repository_purge_reports_conflict_and_retains_scope_on_vector_failure(
+    client, monkeypatch
+):
+    headers = {"X-API-KEY": "test_key"}
+    await client.post(
+        "/repos",
+        json={"name": "Vector Failure", "id": "vector-repo"},
+        headers=headers,
+    )
+    memory = await client.post(
+        "/memories",
+        json={"content": "Keep this if vector cleanup fails", "repo_id": "vector-repo"},
+        headers=headers,
+    )
+
+    class FailingCollection:
+        def delete(self, *, ids):
+            raise RuntimeError("vector unavailable")
+
+    monkeypatch.setattr(app.state.storage, "_get_collection", lambda _layer: FailingCollection())
+
+    purged = await client.delete(
+        "/repos/vector-repo?confirmation=vector-repo", headers=headers
+    )
+
+    assert purged.status_code == 409
+    assert purged.json()["detail"]["status"] == "incomplete"
+    assert (await client.get("/repos/vector-repo", headers=headers)).status_code == 200
+    assert (
+        await client.get(f"/memories/{memory.json()['id']}", headers=headers)
+    ).status_code == 200

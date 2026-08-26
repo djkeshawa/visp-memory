@@ -738,16 +738,44 @@ class RemoteStorage(BaseStorage):
             raise self._write_error(f"{action} repository", e) from e
 
     def delete_repository(self, repo_id: str) -> bool:
+        return self.purge_repository(repo_id)["status"] == "purged"
+
+    def purge_repository(self, repo_id: str) -> Dict[str, Any]:
+        """Purge a repository through the server's bounded purge protocol."""
         try:
             response = self.session.delete(
                 f"{self.server_url}/repos/{repo_id}", params={"confirmation": repo_id}
             )
             if response.status_code == 404:
-                return False
+                return {
+                    "repo_id": repo_id,
+                    "status": "not_found",
+                    "purged_memory_count": 0,
+                    "failed_memory_ids": [],
+                    "residual": {},
+                    "errors": [],
+                }
+            if response.status_code == 409:
+                try:
+                    payload = response.json()
+                except ValueError:
+                    payload = {}
+                if isinstance(payload, dict):
+                    detail = payload.get("detail")
+                    if isinstance(detail, dict):
+                        return detail
             response.raise_for_status()
-            return True
         except requests.RequestException as e:
             raise self._write_error("purge repository", e) from e
+
+        payload = self._response_json(response, "purge repository", dict)
+        if payload.get("status") != "purged":
+            return {
+                **payload,
+                "repo_id": payload.get("repo_id", repo_id),
+                "status": payload.get("status", "incomplete"),
+            }
+        return payload
 
     def list_project_ids(self) -> List[str]:
         try:

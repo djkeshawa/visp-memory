@@ -115,6 +115,21 @@ class RepositoryManager:
     def purge(self, repo_id: str) -> bool:
         return self.storage.delete_repository(repo_id)
 
+    def purge_report(self, repo_id: str) -> Dict[str, Any]:
+        """Return the backend's truthful purge outcome for retryable callers."""
+        purge = getattr(self.storage, "purge_repository", None)
+        if callable(purge):
+            return purge(repo_id)
+        purged = bool(self.storage.delete_repository(repo_id))
+        return {
+            "repo_id": repo_id,
+            "status": "purged" if purged else "incomplete",
+            "purged_memory_count": 0,
+            "failed_memory_ids": [],
+            "residual": {} if purged else {"repository": [repo_id]},
+            "errors": [],
+        }
+
     def add_dependency(self, dep: RepositoryDependency) -> str:
         """Add a dependency relationship. Raises NotImplementedError if backend lacks support."""
         if not self.storage.get_capabilities().repositories:
