@@ -554,6 +554,17 @@ def test_remote_storage_malformed_read_response_is_explicit_error():
         storage.list_memories()
 
 
+def test_remote_storage_memory_listing_forwards_offset():
+    storage = remote_storage_with(FakeResponse(200, []))
+
+    assert storage.list_memories(repo_id="repo-a", limit=25, offset=50) == []
+    assert storage.session.last_get_params == {
+        "repo_id": "repo-a",
+        "limit": 25,
+        "offset": 50,
+    }
+
+
 def test_remote_storage_session_round_trip_contract():
     storage = remote_storage_with(FakeResponse(200, {"id": "session-1"}))
     assert storage.start_session(repo_id="repo-a") == "session-1"

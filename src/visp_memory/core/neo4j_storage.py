@@ -846,19 +846,37 @@ class Neo4jStorage(BaseStorage):
     ) -> List[Dict[str, Any]]:
         """List memories."""
         status = kwargs.get("status", "active")
-        query = """
+        offset = max(0, kwargs.get("offset", 0))
+        order_by = kwargs.get("order_by", "created_at DESC")
+        allowed_order_by = {
+            "created_at DESC": "m.created_at DESC, m.id DESC",
+            "created_at ASC": "m.created_at ASC, m.id ASC",
+            "importance DESC": "m.importance DESC, m.id DESC",
+            "importance ASC": "m.importance ASC, m.id ASC",
+            "accessed_at DESC": "m.accessed_at DESC, m.id DESC",
+            "accessed_at ASC": "m.accessed_at ASC, m.id ASC",
+        }
+        ordering = allowed_order_by.get(order_by, allowed_order_by["created_at DESC"])
+        query = f"""
             MATCH (m:Memory)
             WHERE ($layer IS NULL OR m.layer = $layer)
             AND ($repo_id IS NULL OR m.repo_id = $repo_id)
             AND ($category IS NULL OR m.category = $category)
             AND ($status = 'all' OR m.status = $status OR ($status = 'active' AND m.status IS NULL))
             RETURN m
-            ORDER BY m.created_at DESC
+            ORDER BY {ordering}
+            SKIP $offset
             LIMIT $limit
         """
         with self.driver.session() as session:
             result = session.run(
-                query, layer=layer, repo_id=repo_id, category=category, status=status, limit=limit
+                query,
+                layer=layer,
+                repo_id=repo_id,
+                category=category,
+                status=status,
+                limit=limit,
+                offset=offset,
             )
             return [self._memory_node_to_dict(dict(record["m"])) for record in result]
 

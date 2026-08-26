@@ -72,9 +72,9 @@ class IntentMemory(BaseMemoryLayer):
             )
         """
         ctx = {
+            **(context or {}),
             "constraints": constraints or [],
             "set_at": utc_now().isoformat(),
-            **(context or {}),
         }
 
         return self.storage.set_intent(

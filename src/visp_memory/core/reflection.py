@@ -8,6 +8,7 @@ from typing import Any
 
 from visp_memory.core.clock import utc_now_iso
 from visp_memory.core.model_router import ModelRouter
+from visp_memory.core.numeric import bounded_float
 from visp_memory.core.trust import WriteChannel, channel_policy, with_channel_provenance
 from visp_memory.quality.secrets import redact_for_storage
 
@@ -106,7 +107,10 @@ class ReflectionEngine:
             provider = result["provider"]
             model = result["model"]
         confidence_values = [
-            float((memory.get("metadata") or {}).get("confidence", 0.5))
+            bounded_float(
+                (memory.get("metadata") or {}).get("confidence", 0.5),
+                default=0.5,
+            )
             for memory in evidence
         ]
         write_channel = WriteChannel.REFLECTION

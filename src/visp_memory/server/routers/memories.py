@@ -205,6 +205,7 @@ async def list_memories(
     category: str = None,
     status: str = "active",
     limit: int = 50,
+    offset: int = 0,
     order_by: str = "created_at DESC",
     user: UserContext = Depends(get_current_user),
 ):
@@ -213,18 +214,31 @@ async def list_memories(
     memory_repo_id = repo_id or config.repo_id
     require_repo_scope_access(storage, memory_repo_id, user)
     limit = max(1, min(limit, 200))
-    memories = storage.list_memories(
-        limit=limit,
-        repo_id=memory_repo_id,
-        layer=layer,
-        category=category,
-        status=status,
-        order_by=order_by,
-    )
-    memories = [
-        m for m in memories if can_access_scoped_record(storage, m, user, scope_field="metadata")
-    ]
-    return [_memory_response_payload(m) for m in memories]
+    offset = max(0, offset)
+    visible_memories = []
+    storage_offset = 0
+    storage_page_size = 200
+    visible_target = offset + limit
+    while len(visible_memories) < visible_target:
+        page = storage.list_memories(
+            limit=storage_page_size,
+            offset=storage_offset,
+            repo_id=memory_repo_id,
+            layer=layer,
+            category=category,
+            status=status,
+            order_by=order_by,
+        )
+        visible_memories.extend(
+            memory
+            for memory in page
+            if can_access_scoped_record(storage, memory, user, scope_field="metadata")
+        )
+        if len(page) < storage_page_size:
+            break
+        storage_offset += storage_page_size
+    selected = visible_memories[offset:visible_target]
+    return [_memory_response_payload(memory) for memory in selected]
 
 
 @router.post("/memories", response_model=MemoryResponse)

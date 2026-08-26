@@ -7,6 +7,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from visp_memory.core.numeric import bounded_float
+
 DEFAULT_RECALL_MIN_SCORE = 0.56
 UTILITY_RANKING_LIMIT = 0.08
 CONTEXT_RANKING_LIMIT = 0.12
@@ -69,11 +71,8 @@ _LEXICAL_STOPWORDS = {
 
 def clamp_score(value: Any, default: float = 0.0) -> float:
     """Normalize arbitrary numeric input to the 0..1 scoring range."""
-    try:
-        score = float(value)
-    except (TypeError, ValueError):
-        return default
-    return max(0.0, min(1.0, score))
+    normalized = bounded_float(value, default=default)
+    return default if normalized is None else normalized
 
 
 def utility_rank_adjustment(value: Any) -> float:

@@ -216,7 +216,8 @@ class FakeArcadeDb:
             rows.sort(key=lambda row: row.get(field) or "", reverse=direction == "DESC")
 
         limit = params[-1] if params else len(rows)
-        return rows[:limit]
+        skip = params[-2] if " SKIP ? " in sql else 0
+        return rows[skip : skip + limit]
 
 
 class FakeArcadeTransaction:
@@ -403,6 +404,20 @@ def test_arcadedb_memory_crud_list_search_stats_and_projects(fake_arcadedb, tmp_
     assert storage.delete_memory(repo_b) is True
     assert storage.delete_memory(repo_b) is False
     assert fake_arcadedb.paths[-1] == tmp_path / "arcadedb"
+
+
+def test_arcadedb_memory_listing_supports_offsets(fake_arcadedb, tmp_path):
+    storage = ArcadeDbStorage(tmp_path)
+    memory_ids = [
+        storage.store_memory(f"memory-{index}", repo_id="repo-a")
+        for index in range(3)
+    ]
+
+    page = storage.list_memories(
+        repo_id="repo-a", limit=2, offset=1, order_by="created_at ASC"
+    )
+
+    assert [item["id"] for item in page] == memory_ids[1:]
 
 
 def test_arcadedb_persists_evidence_separately_and_validates_beliefs_atomically(
@@ -1310,3 +1325,27 @@ def test_real_arcadedb_memory_smoke_skips_without_extra(tmp_path):
     memory_id = storage.store_memory("Real ArcadeDB smoke", repo_id="repo-real", auto_link=False)
 
     assert storage.get_memory(memory_id)["content"] == "Real ArcadeDB smoke"
+
+
+def test_real_arcadedb_memory_listing_supports_offsets(tmp_path):
+    if sys.platform == "win32":
+        pytest.skip("arcadedb_embedded native smoke is unstable on Windows")
+
+    try:
+        import arcadedb_embedded  # noqa: F401
+    except ImportError:
+        pytest.skip("arcadedb_embedded is not installed")
+
+    storage = ArcadeDbStorage(tmp_path)
+    memory_ids = [
+        storage.store_memory(
+            f"Real ArcadeDB page {index}", repo_id="repo-real", auto_link=False
+        )
+        for index in range(3)
+    ]
+
+    page = storage.list_memories(
+        repo_id="repo-real", limit=2, offset=1, order_by="created_at ASC"
+    )
+
+    assert [item["id"] for item in page] == memory_ids[1:]

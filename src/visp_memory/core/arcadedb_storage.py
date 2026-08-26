@@ -827,6 +827,7 @@ class ArcadeDbStorage(BaseStorage):
         category: str = None,
         status: str = "active",
         limit: int = 50,
+        offset: int = 0,
         order_by: str = "created_at DESC",
         exclude_raw: bool = False,
     ) -> List[Dict[str, Any]]:
@@ -865,8 +866,9 @@ class ArcadeDbStorage(BaseStorage):
         if order_by not in allowed_order_by:
             order_by = "created_at DESC"
 
-        query += f" ORDER BY {order_by} LIMIT ?"
-        params.append(limit)
+        query += f" ORDER BY {order_by}, id {'ASC' if order_by.endswith('ASC') else 'DESC'}"
+        query += " SKIP ? LIMIT ?"
+        params.extend((max(0, offset), limit))
 
         with self._database() as db:
             rows = self._rows(db.query("sql", query, *params))
@@ -1486,6 +1488,7 @@ class ArcadeDbStorage(BaseStorage):
         category: str = None,
         status: str = "active",
         limit: int = 50,
+        offset: int = 0,
         order_by: str = "created_at DESC",
     ) -> List[Dict[str, Any]]:
         return self._query_memories(
@@ -1494,6 +1497,7 @@ class ArcadeDbStorage(BaseStorage):
             category=category,
             status=status,
             limit=limit,
+            offset=offset,
             order_by=order_by,
         )
 

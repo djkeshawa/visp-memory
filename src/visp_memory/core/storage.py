@@ -3554,6 +3554,7 @@ class LocalStorage(BaseStorage):
         category: str = None,
         status: str = "active",
         limit: int = 50,
+        offset: int = 0,
         order_by: str = "created_at DESC",
     ) -> List[Dict[str, Any]]:
         """List memories with optional filtering."""
@@ -3591,8 +3592,8 @@ class LocalStorage(BaseStorage):
         # a timestamp/importance are not returned in arbitrary order, which makes
         # "latest"-style queries (limit=1) flaky under same-microsecond writes.
         tiebreak = "rowid ASC" if order_by.endswith("ASC") else "rowid DESC"
-        query += f" ORDER BY {order_by}, {tiebreak} LIMIT ?"
-        params.append(limit)
+        query += f" ORDER BY {order_by}, {tiebreak} LIMIT ? OFFSET ?"
+        params.extend((limit, max(0, offset)))
 
         with self._get_db() as conn:
             cursor = conn.execute(query, params)

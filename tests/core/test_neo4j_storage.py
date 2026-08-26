@@ -735,3 +735,17 @@ def test_neo4j_search_includes_raw_when_layer_requested():
 
     assert captured["params"]["exclude_raw"] is False
     assert captured["params"]["layer"] == "raw"
+
+
+def test_neo4j_memory_listing_forwards_offset_and_ordering():
+    storage = neo4j_storage_with_delete_count(0, records=[])
+
+    assert storage.list_memories(
+        repo_id="repo-a", limit=25, offset=50, order_by="created_at ASC"
+    ) == []
+
+    query, params = storage.driver.session_obj.calls[-1]
+    assert "ORDER BY m.created_at ASC, m.id ASC" in query
+    assert "SKIP $offset" in query
+    assert params["limit"] == 25
+    assert params["offset"] == 50

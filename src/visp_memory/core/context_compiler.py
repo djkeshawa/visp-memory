@@ -17,6 +17,7 @@ from visp_memory.core.eligibility import (
     require_repo_id,
 )
 from visp_memory.core.hybrid_retrieval import HybridRetriever
+from visp_memory.core.numeric import bounded_float
 from visp_memory.core.tokens import estimate_tokens
 
 
@@ -65,6 +66,11 @@ class ContextCompiler:
         symbols = symbols or []
         eligibility_rejections: dict[str, EligibilityRejection] = {}
         eligibility_allowed: dict[str, dict[str, Any]] = {}
+        confidence_by_id: dict[str, float] = {}
+        confidence_rejections: dict[str, dict[str, str]] = {}
+        normalized_min_confidence = bounded_float(min_confidence)
+        if normalized_min_confidence is None:
+            raise ValueError("min_confidence must be a finite number")
 
         def candidate_filter(memory: dict[str, Any]) -> bool:
             if memory_filter and not memory_filter(memory):
@@ -81,10 +87,26 @@ class ContextCompiler:
                     memory, eligibility
                 )
                 return False
-            eligibility_allowed[str(memory.get("id"))] = memory
             metadata = memory.get("metadata") or {}
-            confidence = float(metadata.get("confidence", 0.5) or 0.0)
-            return confidence >= min_confidence
+            memory_id = str(memory.get("id"))
+            confidence = bounded_float(metadata.get("confidence", 0.5))
+            if confidence is None:
+                confidence_rejections[memory_id] = {
+                    "memory_id": memory_id,
+                    "code": "malformed_confidence",
+                    "reason": "memory confidence is not finite numeric data",
+                }
+                return False
+            eligibility_allowed[memory_id] = memory
+            if confidence < normalized_min_confidence:
+                confidence_rejections[memory_id] = {
+                    "memory_id": memory_id,
+                    "code": "below_confidence_threshold",
+                    "reason": "memory confidence is below the configured threshold",
+                }
+                return False
+            confidence_by_id[memory_id] = confidence
+            return True
 
         ranked = HybridRetriever(self.storage, code_graph=self.code_graph).retrieve(
             query,
@@ -126,7 +148,7 @@ class ContextCompiler:
                     "source_ids": memory.get("source_ids") or [],
                     "relevance_score": memory.get("relevance_score")
                     or memory.get("similarity"),
-                    "confidence": float(metadata.get("confidence", 0.5) or 0.0),
+                    "confidence": confidence_by_id[str(memory.get("id"))],
                     "observed_at": metadata.get("observed_at") or memory.get("created_at"),
                     "valid_from": metadata.get("valid_from"),
                     "valid_to": metadata.get("valid_to"),
@@ -200,4 +222,20 @@ class ContextCompiler:
                 rejected=list(eligibility_rejections.values()),
                 considered_count=len(eligibility_allowed) + len(eligibility_rejections),
             ).diagnostics(),
+            "confidence_filter": {
+                "considered_count": len(confidence_by_id) + len(confidence_rejections),
+                "allowed_count": len(confidence_by_id),
+                "rejected_count": len(confidence_rejections),
+                "rejection_counts": {
+                    code: sum(
+                        1
+                        for rejection in confidence_rejections.values()
+                        if rejection["code"] == code
+                    )
+                    for code in {
+                        rejection["code"] for rejection in confidence_rejections.values()
+                    }
+                },
+                "rejected": list(confidence_rejections.values()),
+            },
         }

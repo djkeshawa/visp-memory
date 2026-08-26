@@ -338,6 +338,34 @@ async def test_memories_endpoint_with_api_key(client):
 
 
 @pytest.mark.asyncio
+async def test_memories_endpoint_supports_offset_pagination(client):
+    headers = {"X-API-KEY": "test_key"}
+    created = []
+    for index in range(3):
+        response = await client.post(
+            "/memories",
+            json={"content": f"page-{index}", "repo_id": "repo-a"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+        created.append(response.json()["id"])
+
+    response = await client.get(
+        "/memories",
+        params={
+            "repo_id": "repo-a",
+            "limit": 2,
+            "offset": 1,
+            "order_by": "created_at ASC",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == created[1:]
+
+
+@pytest.mark.asyncio
 async def test_create_memory_with_attribution(client):
     headers = {"X-API-KEY": "test_key"}
     payload = {
