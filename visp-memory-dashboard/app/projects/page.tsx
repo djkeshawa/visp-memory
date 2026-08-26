@@ -22,9 +22,11 @@ import {
   purgeProject,
   restoreProject,
 } from "@/lib/api"
+import { useRefreshProjectScopes } from "@/lib/project-selection"
 import type { Project } from "@/lib/types"
 
 export default function ProjectsPage() {
+  const refreshProjectScopes = useRefreshProjectScopes()
   const [projects, setProjects] = useState<Project[]>([])
   const [includeArchived, setIncludeArchived] = useState(false)
   const [name, setName] = useState("")
@@ -60,7 +62,7 @@ export default function ProjectsPage() {
       setName("")
       setId("")
       setDescription("")
-      await load()
+      await Promise.all([load(), refreshProjectScopes()])
     } catch (saveError) {
       setError(describeApiError(saveError))
     } finally {
@@ -71,7 +73,7 @@ export default function ProjectsPage() {
   const archive = async (project: Project) => {
     try {
       await archiveProject(project.id)
-      await load()
+      await Promise.all([load(), refreshProjectScopes()])
     } catch (actionError) {
       setError(describeApiError(actionError))
     }
@@ -80,7 +82,7 @@ export default function ProjectsPage() {
   const restore = async (project: Project) => {
     try {
       await restoreProject(project.id)
-      await load()
+      await Promise.all([load(), refreshProjectScopes()])
     } catch (actionError) {
       setError(describeApiError(actionError))
     }
@@ -103,7 +105,7 @@ export default function ProjectsPage() {
     try {
       await purgeProject(purgeTarget.id)
       setPurgeTarget(null)
-      await load()
+      await Promise.all([load(), refreshProjectScopes()])
     } catch (purgeError) {
       setError(describeApiError(purgeError))
     } finally {

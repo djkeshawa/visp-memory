@@ -1,6 +1,6 @@
 "use client"
 
-import { Suspense, useEffect, useState } from "react"
+import { Suspense, useEffect, useRef, useState } from "react"
 import { motion } from "framer-motion"
 import { AlertTriangle, BrainCircuit, Database, RefreshCw, Settings, Wrench } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -87,44 +87,66 @@ function SettingsContent() {
   const [isReindexing, setIsReindexing] = useState(false)
   const [isTestingModel, setIsTestingModel] = useState(false)
   const [modelMessage, setModelMessage] = useState<string | null>(null)
+  const selectedRepoIdRef = useRef(selectedRepoId)
+  const diagnosticsGenerationRef = useRef(0)
+  const reindexGenerationRef = useRef(0)
+  selectedRepoIdRef.current = selectedRepoId
+
   useEffect(() => {
+    setEmbeddingIndex(null)
+    setReindexResult(null)
+    setLoadError(null)
+    setIsReindexing(false)
     void loadDiagnostics()
   }, [selectedRepoId])
 
   const loadDiagnostics = async () => {
+    const requestedRepoId = selectedRepoId
+    const generation = ++diagnosticsGenerationRef.current
     setIsLoading(true)
     try {
       const [providerData, indexData, storageData, modelData] = await Promise.all([
         getProviderDiagnostics(),
-        getEmbeddingIndexStatus(selectedRepoId),
+        getEmbeddingIndexStatus(requestedRepoId),
         getStorageDiagnostics(),
         getModelRoutingStatus(),
       ])
+      if (generation !== diagnosticsGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
       setProviders(providerData)
       setEmbeddingIndex(indexData)
       setStorageDiagnostics(storageData)
       setModelRouting(modelData)
       setLoadError(null)
     } catch (error) {
+      if (generation !== diagnosticsGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
       console.error("Failed to fetch diagnostics:", error)
       setLoadError(describeApiError(error))
     } finally {
-      setIsLoading(false)
+      if (generation === diagnosticsGenerationRef.current && selectedRepoIdRef.current === requestedRepoId) {
+        setIsLoading(false)
+      }
     }
   }
 
   const handleReindex = async (dryRun: boolean) => {
+    const requestedRepoId = selectedRepoId
+    const generation = ++reindexGenerationRef.current
     setIsReindexing(true)
     try {
-      const result = await reindexEmbeddingIndex({ repoId: selectedRepoId, dryRun })
+      const result = await reindexEmbeddingIndex({ repoId: requestedRepoId, dryRun })
+      if (generation !== reindexGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
       setReindexResult(result)
-      const updatedIndex = await getEmbeddingIndexStatus(selectedRepoId)
+      const updatedIndex = await getEmbeddingIndexStatus(requestedRepoId)
+      if (generation !== reindexGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
       setEmbeddingIndex(updatedIndex)
       setLoadError(null)
     } catch (error) {
+      if (generation !== reindexGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
       setLoadError(describeApiError(error))
     } finally {
-      setIsReindexing(false)
+      if (generation === reindexGenerationRef.current && selectedRepoIdRef.current === requestedRepoId) {
+        setIsReindexing(false)
+      }
     }
   }
 

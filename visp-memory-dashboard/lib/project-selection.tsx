@@ -16,6 +16,7 @@ interface SelectedProjectContextValue {
   projects: ProjectScope[]
   loadError: string | null
   selectProject: (repoId: string, persist?: boolean) => void
+  refreshProjectScopes: () => Promise<void>
 }
 
 const SelectedProjectContext = createContext<SelectedProjectContextValue | null>(null)
@@ -43,15 +44,26 @@ function writeStoredRepoId(repoId: string) {
   }
 }
 
+function clearStoredRepoId() {
+  try {
+    window.localStorage.removeItem(PROJECT_STORAGE_KEY)
+  } catch {
+    /* persistence unavailable */
+  }
+}
+
 // Update the address bar in place, with no navigation and no network request. This is the crux
 // of the fix: in a Next static export served by a non-Next server, router.replace() for a
 // query-only change triggers an RSC (.txt?_rsc=) fetch the static server can't answer, which the
 // App Router recovers from with a full-page reload. history.replaceState mutates the URL without
 // any of that, so the selection sticks. window.location.pathname already includes basePath.
-function writeRepoIdToUrl(repoId: string) {
+function writeRepoIdToUrl(repoId: string | null) {
   const params = new URLSearchParams(window.location.search)
-  params.set(PROJECT_QUERY_PARAM, repoId)
-  window.history.replaceState(window.history.state, "", `${window.location.pathname}?${params.toString()}`)
+  if (repoId) params.set(PROJECT_QUERY_PARAM, repoId)
+  else params.delete(PROJECT_QUERY_PARAM)
+  const query = params.toString()
+  const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`
+  window.history.replaceState(window.history.state, "", nextUrl)
 }
 
 export function SelectedProjectProvider({ children }: { children: ReactNode }) {
@@ -62,6 +74,7 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [ready, setReady] = useState(false)
   const initializedRef = useRef(false)
+  const scopeRequestRef = useRef(0)
   // Mirror of selectedRepoId readable synchronously from event handlers (popstate) without
   // resubscribing an effect on every change.
   const selectedRef = useRef<string | null>(null)
@@ -80,6 +93,31 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
     },
     [applySelection],
   )
+
+  const refreshProjectScopes = useCallback(async () => {
+    const requestId = ++scopeRequestRef.current
+    try {
+      const scopes = await getProjectScopes()
+      if (requestId !== scopeRequestRef.current) return
+
+      const sorted = [...scopes].sort((left, right) => left.name.localeCompare(right.name))
+      setProjects(sorted)
+      setLoadError(null)
+
+      const selected = selectedRef.current
+      if (selected && sorted.some((scope) => scope.id === selected)) return
+
+      const fallback = sorted[0]?.id ?? null
+      applySelection(fallback)
+      if (fallback) writeStoredRepoId(fallback)
+      else clearStoredRepoId()
+      writeRepoIdToUrl(fallback)
+    } catch (error) {
+      if (requestId !== scopeRequestRef.current) return
+      // A failed refresh must not discard a selection or an option list that may still be valid.
+      setLoadError(describeApiError(error))
+    }
+  }, [applySelection])
 
   // One-shot initialization. Guarded by a ref (not by any state/URL value) so it can never
   // re-enter and fight itself, and StrictMode's double-invoke in dev can't wedge it (there is no
@@ -113,10 +151,20 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
       setReady(true)
     }, LOAD_TIMEOUT_MS)
 
+    const requestId = ++scopeRequestRef.current
     void (async () => {
       // allSettled, not Promise.all: a transient failure of one endpoint must not discard the
       // other's success (a runtime-status blip should not wipe out a loaded scope list).
       const [scopeResult, runtimeResult] = await Promise.allSettled([getProjectScopes(), getRuntimeStatus()])
+      if (requestId !== scopeRequestRef.current) {
+        // A mutation may have refreshed scopes while the warm-load request was still pending.
+        // The refresh owns the state now, but this superseded request still owns the readiness
+        // failsafe and must release it so it cannot surface a spurious timeout later.
+        settled = true
+        clearTimeout(failsafe)
+        setReady(true)
+        return
+      }
       const scopes: ProjectScope[] = scopeResult.status === "fulfilled" ? scopeResult.value : []
       const runtimeRepoId: string | null =
         runtimeResult.status === "fulfilled" ? runtimeResult.value.repoId ?? null : null
@@ -199,7 +247,9 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
   }, [applySelection])
 
   return (
-    <SelectedProjectContext.Provider value={{ selectedRepoId, projects, loadError, selectProject }}>
+    <SelectedProjectContext.Provider
+      value={{ selectedRepoId, projects, loadError, selectProject, refreshProjectScopes }}
+    >
       {ready ? children : <ProjectLoadingShell />}
     </SelectedProjectContext.Provider>
   )
@@ -242,6 +292,14 @@ export function useSelectProject(): (repoId: string, persist?: boolean) => void 
 export function useProjectScopes(): { projects: ProjectScope[]; loadError: string | null } {
   const ctx = useContext(SelectedProjectContext)
   return { projects: ctx?.projects ?? [], loadError: ctx?.loadError ?? null }
+}
+
+export function useRefreshProjectScopes(): () => Promise<void> {
+  const ctx = useContext(SelectedProjectContext)
+  if (!ctx) {
+    throw new Error("useRefreshProjectScopes must be used within a SelectedProjectProvider")
+  }
+  return ctx.refreshProjectScopes
 }
 
 export function projectHref(path: string, repoId?: string | null): string {

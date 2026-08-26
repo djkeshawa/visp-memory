@@ -1,6 +1,6 @@
 "use client"
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react"
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type React from "react"
 import { motion } from "framer-motion"
 import {
@@ -51,31 +51,45 @@ function IntelligenceContent() {
   const [freshness, setFreshness] = useState<DecayPreviewResponse | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const selectedRepoIdRef = useRef(selectedRepoId)
+  const requestGenerationRef = useRef(0)
+  selectedRepoIdRef.current = selectedRepoId
 
   const loadIntelligence = useCallback(async () => {
+    const requestedRepoId = selectedRepoId
+    const generation = ++requestGenerationRef.current
     setIsLoading(true)
     try {
       const [reportData, graphData, duplicateData, freshnessData] = await Promise.all([
-        getMemoryIntelligenceReport(selectedRepoId, 8),
-        getGraphData(selectedRepoId),
-        getDuplicateCandidates({ repoId: selectedRepoId, limit: 8 }),
-        getDecayPreview({ repoId: selectedRepoId, limit: 8, halflifeDays: 30, minImportance: 0.1 }),
+        getMemoryIntelligenceReport(requestedRepoId, 8),
+        getGraphData(requestedRepoId),
+        getDuplicateCandidates({ repoId: requestedRepoId, limit: 8 }),
+        getDecayPreview({ repoId: requestedRepoId, limit: 8, halflifeDays: 30, minImportance: 0.1 }),
       ])
 
+      if (generation !== requestGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
       setReport(reportData)
       setGraphEvidence(graphData.links.filter(hasRelationshipEvidence))
       setDuplicates(duplicateData.candidates)
       setFreshness(freshnessData)
       setErrorMessage(null)
     } catch (error) {
+      if (generation !== requestGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
       console.error("Failed to load memory intelligence", error)
       setErrorMessage(describeApiError(error))
     } finally {
-      setIsLoading(false)
+      if (generation === requestGenerationRef.current && selectedRepoIdRef.current === requestedRepoId) {
+        setIsLoading(false)
+      }
     }
   }, [selectedRepoId])
 
   useEffect(() => {
+    setReport(null)
+    setGraphEvidence([])
+    setDuplicates([])
+    setFreshness(null)
+    setErrorMessage(null)
     void loadIntelligence()
   }, [loadIntelligence])
 

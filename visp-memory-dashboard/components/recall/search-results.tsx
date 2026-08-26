@@ -1,9 +1,9 @@
 "use client"
 
 import { motion } from "framer-motion"
-import { Database, Brain, Target } from "lucide-react"
 import { staggerContainer, staggerItem } from "@/lib/animations"
-import type { Memory, MemoryLayer } from "@/lib/types"
+import { MEMORY_LAYER_CONFIG, isRecallableLayer, normalizeMemoryLayer } from "@/lib/layers"
+import type { Memory } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 interface SearchResultsProps {
@@ -11,29 +11,13 @@ interface SearchResultsProps {
   query: string
 }
 
-const layerConfig: Record<MemoryLayer, { icon: typeof Database; color: string; bgColor: string; label: string }> = {
-  episodic: {
-    icon: Database,
-    color: "text-blue-600 dark:text-blue-400",
-    bgColor: "bg-blue-50 dark:bg-blue-900/30",
-    label: "Episodic",
-  },
-  semantic: {
-    icon: Brain,
-    color: "text-purple-600 dark:text-purple-400",
-    bgColor: "bg-purple-50 dark:bg-purple-900/30",
-    label: "Semantic",
-  },
-  intent: {
-    icon: Target,
-    color: "text-amber-600 dark:text-amber-400",
-    bgColor: "bg-amber-50 dark:bg-amber-900/30",
-    label: "Intent",
-  },
-}
-
 export function SearchResults({ results, query }: SearchResultsProps) {
-  if (results.length === 0) {
+  // Recall is intentionally never a raw-layer browser. The API excludes raw rows too,
+  // but keeping the guard at this display boundary prevents a misconfigured/older server
+  // response from turning a recall result into an accidental raw-data disclosure.
+  const recallResults = results.filter((memory) => isRecallableLayer(memory.layer))
+
+  if (recallResults.length === 0) {
     return (
       <motion.div
         initial={{ opacity: 0, y: 20 }}
@@ -50,14 +34,14 @@ export function SearchResults({ results, query }: SearchResultsProps) {
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Found {results.length} result{results.length !== 1 && "s"} for &quot;
+        Found {recallResults.length} result{recallResults.length !== 1 && "s"} for &quot;
         <span className="text-foreground font-medium">{query}</span>&quot;
       </p>
 
       <div className="glass rounded-lg overflow-hidden">
         <motion.div className="divide-y divide-border" variants={staggerContainer} initial="hidden" animate="visible">
-          {results.map((memory) => {
-            const config = layerConfig[memory.layer] ?? layerConfig.episodic
+          {recallResults.map((memory) => {
+            const config = MEMORY_LAYER_CONFIG[normalizeMemoryLayer(memory.layer)]
             const Icon = config.icon
 
             return (

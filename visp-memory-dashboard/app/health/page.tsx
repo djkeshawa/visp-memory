@@ -1,6 +1,6 @@
 "use client"
 
-import { Suspense, useEffect, useMemo, useState } from "react"
+import { Suspense, useEffect, useMemo, useRef, useState } from "react"
 import type React from "react"
 import { motion } from "framer-motion"
 import { Activity, AlertTriangle, RefreshCw, TrendingDown } from "lucide-react"
@@ -48,28 +48,39 @@ function HealthContent() {
   const [limit, setLimit] = useState(25)
   const [isLoading, setIsLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const selectedRepoIdRef = useRef(selectedRepoId)
+  const requestGenerationRef = useRef(0)
+  selectedRepoIdRef.current = selectedRepoId
 
   const loadPreview = async () => {
+    const requestedRepoId = selectedRepoId
+    const generation = ++requestGenerationRef.current
     setIsLoading(true)
     try {
       const data = await getDecayPreview({
-        repoId: selectedRepoId,
+        repoId: requestedRepoId,
         limit,
         halflifeDays,
         minImportance: 0.1,
       })
+      if (generation !== requestGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
       setPreview(data)
       setErrorMessage(null)
     } catch (error) {
+      if (generation !== requestGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
       console.error("Failed to load memory health", error)
       setErrorMessage(describeApiError(error))
     } finally {
-      setIsLoading(false)
+      if (generation === requestGenerationRef.current && selectedRepoIdRef.current === requestedRepoId) {
+        setIsLoading(false)
+      }
     }
   }
 
   useEffect(() => {
-    loadPreview()
+    setPreview(null)
+    setErrorMessage(null)
+    void loadPreview()
   }, [selectedRepoId])
 
   const summary = useMemo(() => {

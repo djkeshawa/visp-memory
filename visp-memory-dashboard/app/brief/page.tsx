@@ -1,7 +1,7 @@
 "use client"
 
 import type { ReactNode } from "react"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { motion } from "framer-motion"
 import {
   AlertTriangle,
@@ -49,6 +49,17 @@ export default function TaskBriefPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const selectedRepoIdRef = useRef(selectedRepoId)
+  const requestGenerationRef = useRef(0)
+  selectedRepoIdRef.current = selectedRepoId
+
+  useEffect(() => {
+    ++requestGenerationRef.current
+    setBrief(null)
+    setErrorMessage(null)
+    setCopied(false)
+    setIsLoading(false)
+  }, [selectedRepoId])
 
   const evidenceItems = useMemo(
     () => (brief ? Object.values(brief.sections).flat() : []),
@@ -63,24 +74,30 @@ export default function TaskBriefPage() {
 
   const prepareBrief = async (checkForChanges = false) => {
     if (!task.trim() || !selectedRepoId) return
+    const requestedRepoId = selectedRepoId
+    const generation = ++requestGenerationRef.current
     setIsLoading(true)
     setErrorMessage(null)
     setCopied(false)
     try {
       const result = await prepareTaskMemoryBrief({
         task: task.trim(),
-        repoId: selectedRepoId,
+        repoId: requestedRepoId,
         tokenBudget,
         files: splitLines(files),
         symbols: splitLines(symbols),
         constraints: splitLines(constraints),
         previousFingerprint: checkForChanges ? brief?.fingerprint : null,
       })
+      if (generation !== requestGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
       setBrief(result)
     } catch (error) {
+      if (generation !== requestGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
       setErrorMessage(describeApiError(error))
     } finally {
-      setIsLoading(false)
+      if (generation === requestGenerationRef.current && selectedRepoIdRef.current === requestedRepoId) {
+        setIsLoading(false)
+      }
     }
   }
 

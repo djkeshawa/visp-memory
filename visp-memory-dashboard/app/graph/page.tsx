@@ -1,6 +1,6 @@
 "use client"
 
-import { Suspense, useEffect, useState } from "react"
+import { Suspense, useEffect, useRef, useState } from "react"
 import { motion } from "framer-motion"
 import { MemoryGraph } from "@/components/graph/memory-graph"
 import { pageTransition } from "@/lib/animations"
@@ -8,13 +8,28 @@ import { Network } from "lucide-react"
 import { getStats } from "@/lib/api"
 import { useSelectedProjectId } from "@/lib/project-selection"
 import type { Stats } from "@/lib/types"
+import { MEMORY_LAYERS } from "@/lib/layers"
 
 function GraphContent() {
   const selectedRepoId = useSelectedProjectId()
   const [stats, setStats] = useState<Stats | null>(null)
+  const statsRequestRef = useRef(0)
+  const selectedRepoIdRef = useRef(selectedRepoId)
+  selectedRepoIdRef.current = selectedRepoId
 
   useEffect(() => {
-    getStats(selectedRepoId).then(setStats).catch(console.error)
+    const requestId = ++statsRequestRef.current
+    const requestedRepoId = selectedRepoId
+    setStats(null)
+    getStats(requestedRepoId)
+      .then((nextStats) => {
+        if (requestId === statsRequestRef.current && selectedRepoIdRef.current === requestedRepoId) {
+          setStats(nextStats)
+        }
+      })
+      .catch((error) => {
+        if (requestId === statsRequestRef.current && selectedRepoIdRef.current === requestedRepoId) console.error(error)
+      })
   }, [selectedRepoId])
 
   return (
@@ -40,7 +55,7 @@ function GraphContent() {
             <div className="text-muted-foreground">Connections</div>
           </div>
           <div className="text-center">
-            <div className="text-2xl font-semibold text-foreground">3</div>
+            <div className="text-2xl font-semibold text-foreground">{MEMORY_LAYERS.length}</div>
             <div className="text-muted-foreground">Layers</div>
           </div>
         </div>

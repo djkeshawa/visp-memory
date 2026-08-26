@@ -5,6 +5,7 @@ import {
     EmbeddingReindexResult,
     Memory,
     Intent,
+    IntentOutcomeResponse,
     ProviderConnectionStatus,
     ProviderDiagnostic,
     RuntimeStatus,
@@ -28,6 +29,7 @@ import {
     ModelRoutingStatus,
     TaskMemoryBrief,
 } from "./types"
+import { isRecallableLayer, normalizeMemoryLayer } from "./layers"
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_VISP_MEMORY_API_URL || ""
 
@@ -570,7 +572,7 @@ function normalizeMemory(item: any): Memory {
     return {
         id: item.id,
         content: item.content,
-        layer: item.layer,
+        layer: normalizeMemoryLayer(item.layer),
         category: item.category,
         status: item.status,
         repoId: item.repo_id,
@@ -713,13 +715,13 @@ export async function getIntents(repoId?: string | null, status: string = "activ
     const data = await res.json()
 
     return data.map((item: any) => ({
-        id: item.id,
-        description: item.description,
+        id: String(item.id),
+        description: String(item.description || ""),
         priority: mapPriority(item.priority),
         priorityValue: readNumber(item.priority) ?? 1,
-        status: item.status,
-        createdAt: item.created_at,
-        updatedAt: item.updated_at,
+        status: normalizeIntentStatus(item.status),
+        createdAt: String(item.created_at),
+        updatedAt: item.updated_at ? String(item.updated_at) : undefined,
         context: item.context || {},
     }))
 }
@@ -733,16 +735,18 @@ export async function searchMemories(query: string, limit: number = 10, repoId?:
 
     const data = await res.json()
 
-    return data.map((item: any) => ({
-        id: item.id,
-        content: item.content,
-        layer: item.layer,
-        category: item.category,
-        status: item.status,
-        createdAt: item.created_at,
-        similarity: item.similarity,
-        importance: item.importance,
-    }))
+    return data
+        .map((item: any) => ({
+            id: item.id,
+            content: item.content,
+            layer: normalizeMemoryLayer(item.layer),
+            category: item.category,
+            status: item.status,
+            createdAt: item.created_at,
+            similarity: item.similarity,
+            importance: item.importance,
+        }))
+        .filter((item: SearchResult) => isRecallableLayer(item.layer))
 }
 
 export async function getGraphData(repoId?: string | null): Promise<GraphData> {
@@ -847,22 +851,25 @@ export async function updateIntent(
     }
 }
 
-export async function closeIntent(intentId: string): Promise<void> {
-    await request(`/intents/${encodeURIComponent(intentId)}/close`, {
+export async function closeIntent(intentId: string): Promise<IntentOutcomeResponse> {
+    const res = await request(`/intents/${encodeURIComponent(intentId)}/close`, {
         method: "POST",
         headers: authHeaders(),
     })
+    return normalizeIntentOutcome(await res.json())
 }
 
-export async function completeIntent(intentId: string): Promise<void> {
-    await request(`/intents/${encodeURIComponent(intentId)}/complete`, {
+export async function completeIntent(intentId: string): Promise<IntentOutcomeResponse> {
+    const res = await request(`/intents/${encodeURIComponent(intentId)}/complete`, {
         method: "POST",
         headers: authHeaders(),
     })
+    return normalizeIntentOutcome(await res.json())
 }
 
-export async function reopenIntent(intentId: string): Promise<void> {
-    await request(`/intents/${encodeURIComponent(intentId)}/reopen`, { method: "POST" })
+export async function reopenIntent(intentId: string): Promise<IntentOutcomeResponse> {
+    const res = await request(`/intents/${encodeURIComponent(intentId)}/reopen`, { method: "POST" })
+    return normalizeIntentOutcome(await res.json())
 }
 
 export async function getDecayPreview(options: {
@@ -1165,7 +1172,7 @@ function toGraphNode(record: Record<string, unknown>): GraphNode {
         label: readString(record.label) ?? "",
         full_label: readString(record.full_label),
         radius: readNumber(record.radius),
-        layer: (readString(record.layer) as GraphNode["layer"]) ?? "episodic",
+        layer: normalizeMemoryLayer(record.layer),
     }
 }
 
@@ -1296,6 +1303,21 @@ function mapPriority(priority: number): "high" | "medium" | "low" {
     if (priority >= 3) return "high"
     if (priority >= 2) return "medium"
     return "low"
+}
+
+function normalizeIntentStatus(value: unknown): Intent["status"] {
+    if (value === "completed" || value === "closed") return value
+    return "active"
+}
+
+function normalizeIntentOutcome(data: Record<string, unknown>): IntentOutcomeResponse {
+    return {
+        id: String(data.id || ""),
+        status: normalizeIntentStatus(data.status),
+        authoritative: Boolean(data.authoritative),
+        statusChanged: Boolean(data.status_changed),
+        outcomeRecorded: Boolean(data.outcome_recorded),
+    }
 }
 
 function toApiPriority(priority: number): number {

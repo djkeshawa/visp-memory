@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, Suspense } from "react"
+import { useEffect, useRef, useState, Suspense } from "react"
 import { motion } from "framer-motion"
 import { AlertTriangle, Search } from "lucide-react"
 import { SearchBar } from "@/components/recall/search-bar"
@@ -17,21 +17,38 @@ function RecallContent() {
   const [results, setResults] = useState<Memory[] | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const selectedRepoIdRef = useRef(selectedRepoId)
+  const requestGenerationRef = useRef(0)
+  selectedRepoIdRef.current = selectedRepoId
+
+  useEffect(() => {
+    ++requestGenerationRef.current
+    setQuery("")
+    setResults(null)
+    setErrorMessage(null)
+    setIsLoading(false)
+  }, [selectedRepoId])
 
   const handleSearch = async (searchQuery: string) => {
+    const requestedRepoId = selectedRepoId
+    const generation = ++requestGenerationRef.current
     setQuery(searchQuery)
     setIsLoading(true)
 
     try {
-      const searchResults = await searchMemories(searchQuery, 10, selectedRepoId)
+      const searchResults = await searchMemories(searchQuery, 10, requestedRepoId)
+      if (generation !== requestGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
       setResults(searchResults)
       setErrorMessage(null)
     } catch (error) {
+      if (generation !== requestGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
       console.error("Search failed:", error)
       setErrorMessage(describeApiError(error))
       setResults([])
     } finally {
-      setIsLoading(false)
+      if (generation === requestGenerationRef.current && selectedRepoIdRef.current === requestedRepoId) {
+        setIsLoading(false)
+      }
     }
   }
 

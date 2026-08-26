@@ -1,34 +1,13 @@
 "use client"
 
 import { motion } from "framer-motion"
-import { Database, Brain, Target } from "lucide-react"
 import { staggerContainer, staggerItem } from "@/lib/animations"
-import type { Memory, MemoryLayer } from "@/lib/types"
+import { MEMORY_LAYER_CONFIG, normalizeMemoryLayer } from "@/lib/layers"
+import type { Memory } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 interface RecentActivityProps {
   memories: Memory[]
-}
-
-const layerConfig: Record<MemoryLayer, { icon: typeof Database; color: string; bgColor: string; label: string }> = {
-  episodic: {
-    icon: Database,
-    color: "text-blue-600 dark:text-blue-400",
-    bgColor: "bg-blue-50 dark:bg-blue-900/30",
-    label: "Episodic",
-  },
-  semantic: {
-    icon: Brain,
-    color: "text-purple-600 dark:text-purple-400",
-    bgColor: "bg-purple-50 dark:bg-purple-900/30",
-    label: "Semantic",
-  },
-  intent: {
-    icon: Target,
-    color: "text-amber-600 dark:text-amber-400",
-    bgColor: "bg-amber-50 dark:bg-amber-900/30",
-    label: "Intent",
-  },
 }
 
 export function RecentActivity({ memories }: RecentActivityProps) {
@@ -51,7 +30,7 @@ export function RecentActivity({ memories }: RecentActivityProps) {
         ) : null}
 
         {memories.map((memory) => {
-          const config = layerConfig[memory.layer] ?? layerConfig.episodic
+          const config = MEMORY_LAYER_CONFIG[normalizeMemoryLayer(memory.layer)]
           const Icon = config.icon
 
           return (

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Archive, GitMerge, RefreshCw, RotateCcw, Trash2, Undo2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -21,8 +21,10 @@ import {
   restoreMemory,
   undoMemoryMerge,
 } from "@/lib/api"
+import { MEMORY_LAYER_CONFIG, normalizeMemoryLayer } from "@/lib/layers"
 import { useSelectedProjectId } from "@/lib/project-selection"
 import type { Memory, MemoryMergePreview } from "@/lib/types"
+import { cn } from "@/lib/utils"
 
 const statuses = ["active", "archived", "deleted", "merged", "superseded"] as const
 
@@ -37,21 +39,56 @@ export default function MemoriesPage() {
   const [mergeOpen, setMergeOpen] = useState(false)
   const [targetId, setTargetId] = useState("")
   const [lastOperation, setLastOperation] = useState<string | null>(null)
+  const repoIdRef = useRef(repoId)
+  const statusRef = useRef(status)
+  const requestGenerationRef = useRef(0)
+  repoIdRef.current = repoId
+  statusRef.current = status
 
   const load = async () => {
+    const requestedRepoId = repoId
+    const requestedStatus = status
+    if (repoIdRef.current !== requestedRepoId || statusRef.current !== requestedStatus) return
+    const generation = ++requestGenerationRef.current
     setLoading(true)
     try {
-      setMemories(await getMemories(repoId, status))
+      const nextMemories = await getMemories(requestedRepoId, requestedStatus)
+      if (
+        generation !== requestGenerationRef.current ||
+        repoIdRef.current !== requestedRepoId ||
+        statusRef.current !== requestedStatus
+      ) return
+      setMemories(nextMemories)
       setSelected([])
       setError(null)
     } catch (loadError) {
+      if (
+        generation !== requestGenerationRef.current ||
+        repoIdRef.current !== requestedRepoId ||
+        statusRef.current !== requestedStatus
+      ) return
       setError(describeApiError(loadError))
     } finally {
-      setLoading(false)
+      if (
+        generation === requestGenerationRef.current &&
+        repoIdRef.current === requestedRepoId &&
+        statusRef.current === requestedStatus
+      ) {
+        setLoading(false)
+      }
     }
   }
 
-  useEffect(() => { void load() }, [repoId, status])
+  useEffect(() => {
+    ++requestGenerationRef.current
+    setMemories([])
+    setSelected([])
+    setPreview(null)
+    setMergeOpen(false)
+    setLastOperation(null)
+    setError(null)
+    void load()
+  }, [repoId, status])
 
   const toggle = (memoryId: string) => {
     setSelected((current) => current.includes(memoryId) ? current.filter((id) => id !== memoryId) : [...current, memoryId])
@@ -59,69 +96,98 @@ export default function MemoriesPage() {
 
   const openMerge = async () => {
     if (selected.length < 2) return
+    const requestedRepoId = repoId
+    const requestedStatus = status
     const canonical = targetId && selected.includes(targetId) ? targetId : selected[0]
     setTargetId(canonical)
     setMergeOpen(true)
     try {
-      setPreview(await previewMemoryMerge(selected, canonical))
+      const nextPreview = await previewMemoryMerge(selected, canonical)
+      if (repoIdRef.current !== requestedRepoId || statusRef.current !== requestedStatus) return
+      setPreview(nextPreview)
     } catch (previewError) {
+      if (repoIdRef.current !== requestedRepoId || statusRef.current !== requestedStatus) return
       setError(describeApiError(previewError))
       setMergeOpen(false)
     }
   }
 
   const refreshPreview = async (canonical: string) => {
+    const requestedRepoId = repoId
+    const requestedStatus = status
     setTargetId(canonical)
-    setPreview(await previewMemoryMerge(selected, canonical))
+    try {
+      const nextPreview = await previewMemoryMerge(selected, canonical)
+      if (repoIdRef.current !== requestedRepoId || statusRef.current !== requestedStatus) return
+      setPreview(nextPreview)
+    } catch (previewError) {
+      if (repoIdRef.current !== requestedRepoId || statusRef.current !== requestedStatus) return
+      setError(describeApiError(previewError))
+    }
   }
 
   const executeMerge = async () => {
     if (!preview || preview.validationErrors.length) return
+    const requestedRepoId = repoId
     try {
       const result = await mergeMemories(selected, targetId, !preview.exactDuplicate)
+      if (repoIdRef.current !== requestedRepoId) return
       setLastOperation(result.operationId || null)
       setMergeOpen(false)
       await load()
     } catch (mergeError) {
+      if (repoIdRef.current !== requestedRepoId) return
       setError(describeApiError(mergeError))
     }
   }
 
   const remove = async (memory: Memory) => {
+    const requestedRepoId = repoId
     try {
       await deleteMemory(memory.id)
+      if (repoIdRef.current !== requestedRepoId) return
       await load()
     } catch (actionError) {
+      if (repoIdRef.current !== requestedRepoId) return
       setError(describeApiError(actionError))
     }
   }
 
   const restore = async (memory: Memory) => {
+    const requestedRepoId = repoId
     try {
       await restoreMemory(memory.id)
+      if (repoIdRef.current !== requestedRepoId) return
       await load()
     } catch (actionError) {
+      if (repoIdRef.current !== requestedRepoId) return
       setError(describeApiError(actionError))
     }
   }
 
   const purge = async (memory: Memory) => {
     if (!window.confirm(`Permanently purge memory ${memory.id}?`)) return
+    const requestedRepoId = repoId
     try {
       await purgeMemory(memory.id)
+      if (repoIdRef.current !== requestedRepoId) return
       await load()
     } catch (actionError) {
+      if (repoIdRef.current !== requestedRepoId) return
       setError(describeApiError(actionError))
     }
   }
 
   const undo = async () => {
     if (!lastOperation) return
+    const requestedRepoId = repoId
     try {
       await undoMemoryMerge(lastOperation)
+      if (repoIdRef.current !== requestedRepoId) return
       setLastOperation(null)
       await load()
     } catch (undoError) {
+      if (repoIdRef.current !== requestedRepoId) return
       setError(describeApiError(undoError))
     }
   }
@@ -146,14 +212,17 @@ export default function MemoriesPage() {
         <table className="w-full min-w-[54rem] text-left text-sm">
           <thead className="bg-secondary/60 text-xs text-muted-foreground"><tr><th className="w-12 px-4 py-3"><span className="sr-only">Select</span></th><th className="px-4 py-3">Memory</th><th className="px-4 py-3">Layer</th><th className="px-4 py-3">Category</th><th className="px-4 py-3">Created</th><th className="px-4 py-3 text-right">Actions</th></tr></thead>
           <tbody className="divide-y divide-border">
-            {memories.map((memory) => (
-              <tr key={memory.id} className={selected.includes(memory.id) ? "bg-primary/5" : undefined}>
-                <td className="px-4 py-3"><input type="checkbox" checked={selected.includes(memory.id)} onChange={() => toggle(memory.id)} disabled={status !== "active"} aria-label={`Select memory ${memory.id}`} /></td>
-                <td className="max-w-xl px-4 py-3"><p className="line-clamp-2 text-foreground">{memory.content}</p><div className="mt-1 flex flex-wrap gap-1">{memory.tags?.slice(0, 4).map((tag) => <span key={tag} className="rounded-sm bg-secondary px-1.5 py-0.5 text-[11px] text-muted-foreground">{tag}</span>)}</div><code className="mt-1 block text-[11px] text-muted-foreground">{memory.id}</code></td>
-                <td className="px-4 py-3 capitalize">{memory.layer}</td><td className="px-4 py-3 text-muted-foreground">{memory.category}</td><td className="px-4 py-3 text-muted-foreground">{new Date(memory.createdAt).toLocaleDateString()}</td>
-                <td className="px-4 py-3"><div className="flex justify-end gap-1">{status === "deleted" ? <Button size="sm" variant="ghost" title="Restore" onClick={() => void restore(memory)}><RotateCcw className="h-4 w-4" /></Button> : status === "active" || status === "archived" ? <Button size="sm" variant="ghost" title="Move to trash" onClick={() => void remove(memory)}><Archive className="h-4 w-4" /></Button> : null}{status !== "active" ? <Button size="sm" variant="ghost" title="Permanently purge" onClick={() => void purge(memory)}><Trash2 className="h-4 w-4 text-destructive" /></Button> : null}</div></td>
-              </tr>
-            ))}
+            {memories.map((memory) => {
+              const layerConfig = MEMORY_LAYER_CONFIG[normalizeMemoryLayer(memory.layer)]
+              return (
+                <tr key={memory.id} className={selected.includes(memory.id) ? "bg-primary/5" : undefined}>
+                  <td className="px-4 py-3"><input type="checkbox" checked={selected.includes(memory.id)} onChange={() => toggle(memory.id)} disabled={status !== "active"} aria-label={`Select memory ${memory.id}`} /></td>
+                  <td className="max-w-xl px-4 py-3"><p className="line-clamp-2 text-foreground">{memory.content}</p><div className="mt-1 flex flex-wrap gap-1">{memory.tags?.slice(0, 4).map((tag) => <span key={tag} className="rounded-sm bg-secondary px-1.5 py-0.5 text-[11px] text-muted-foreground">{tag}</span>)}</div><code className="mt-1 block text-[11px] text-muted-foreground">{memory.id}</code></td>
+                  <td className="px-4 py-3"><span className={cn("inline-flex rounded-full px-2 py-0.5 text-xs font-medium", layerConfig.bgColor, layerConfig.color)}>{layerConfig.label}</span></td><td className="px-4 py-3 text-muted-foreground">{memory.category}</td><td className="px-4 py-3 text-muted-foreground">{new Date(memory.createdAt).toLocaleDateString()}</td>
+                  <td className="px-4 py-3"><div className="flex justify-end gap-1">{status === "deleted" ? <Button size="sm" variant="ghost" title="Restore" onClick={() => void restore(memory)}><RotateCcw className="h-4 w-4" /></Button> : status === "active" || status === "archived" ? <Button size="sm" variant="ghost" title="Move to trash" onClick={() => void remove(memory)}><Archive className="h-4 w-4" /></Button> : null}{status !== "active" ? <Button size="sm" variant="ghost" title="Permanently purge" onClick={() => void purge(memory)}><Trash2 className="h-4 w-4 text-destructive" /></Button> : null}</div></td>
+                </tr>
+              )
+            })}
             {!loading && memories.length === 0 ? <tr><td colSpan={6} className="px-4 py-10 text-center text-muted-foreground">No {status} memories in this project.</td></tr> : null}
           </tbody>
         </table>

@@ -76,12 +76,26 @@ export function IntentCard({ intent, onComplete, onClose, onUpdate, onReopen }: 
             </Button>
           ) : null}
           {!isCompleted && !isClosed && onComplete ? (
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onComplete(intent)}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => onComplete(intent)}
+              aria-label="Record completion outcome"
+              title="Record completion outcome"
+            >
               <Check className="h-4 w-4" />
             </Button>
           ) : null}
           {!isCompleted && !isClosed && onClose ? (
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onClose(intent)}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => onClose(intent)}
+              aria-label="Record close outcome"
+              title="Record close outcome"
+            >
               <X className="h-4 w-4" />
             </Button>
           ) : null}

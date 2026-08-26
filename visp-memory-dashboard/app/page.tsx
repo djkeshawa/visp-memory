@@ -1,6 +1,6 @@
 "use client"
 
-import { Suspense, useCallback, useEffect, useState } from "react"
+import { Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { motion } from "framer-motion"
 import { AlertTriangle, Database, Target, Brain, Share2 } from "lucide-react"
 import { AnimatedStatsCard } from "@/components/dashboard/animated-stats-card"
@@ -24,27 +24,39 @@ function DashboardContent() {
   const [memories, setMemories] = useState<Memory[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const selectedRepoIdRef = useRef(selectedRepoId)
+  const requestGenerationRef = useRef(0)
+  selectedRepoIdRef.current = selectedRepoId
 
   const fetchData = useCallback(async () => {
+    const requestedRepoId = selectedRepoId
+    const generation = ++requestGenerationRef.current
     setIsLoading(true)
     try {
       const [statsData, memoriesData] = await Promise.all([
-        getStats(selectedRepoId),
-        getRecentMemories(8, selectedRepoId),
+        getStats(requestedRepoId),
+        getRecentMemories(8, requestedRepoId),
       ])
+      if (generation !== requestGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
       setStats(statsData)
       setMemories(memoriesData)
       setLoadError(null)
     } catch (error) {
+      if (generation !== requestGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
       console.error("Failed to fetch dashboard data:", error)
       setLoadError(describeLoadError(error))
     } finally {
-      setIsLoading(false)
+      if (generation === requestGenerationRef.current && selectedRepoIdRef.current === requestedRepoId) {
+        setIsLoading(false)
+      }
     }
   }, [selectedRepoId])
 
   useEffect(() => {
-    fetchData()
+    setStats(null)
+    setMemories([])
+    setLoadError(null)
+    void fetchData()
   }, [fetchData])
 
   const displayStats = stats || {

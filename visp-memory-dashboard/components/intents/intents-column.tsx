@@ -48,7 +48,7 @@ export function IntentsColumn({ title, intents, type, onComplete, onClose, onUpd
           ) : (
             <>
               <CheckCircle2 className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
-              <p className="text-sm text-muted-foreground">No completed intents</p>
+              <p className="text-sm text-muted-foreground">No recorded outcomes</p>
             </>
           )}
         </div>

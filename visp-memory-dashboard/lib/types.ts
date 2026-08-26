@@ -1,4 +1,4 @@
-export type MemoryLayer = "episodic" | "semantic" | "intent"
+export type MemoryLayer = "raw" | "episodic" | "semantic" | "intent"
 
 export interface Memory {
   id: string
@@ -109,6 +109,14 @@ export interface Intent {
   createdAt: string
   updatedAt?: string
   context?: Record<string, any>
+}
+
+export interface IntentOutcomeResponse {
+  id: string
+  status: Intent["status"]
+  authoritative: boolean
+  statusChanged: boolean
+  outcomeRecorded: boolean
 }
 
 export interface DecayPreviewItem {
