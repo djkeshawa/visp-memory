@@ -19,7 +19,7 @@ fi
 # deliberately absent: the first drags in PyTorch (multi-GB, over the GitHub
 # release asset limit) and the second needs a JVM on the user's machine, which
 # defeats the point of a self-contained binary.
-BUNDLE_EXTRAS="${BUNDLE_EXTRAS:-api,mcp,capture,analysis,chroma,neo4j}"
+BUNDLE_EXTRAS="${BUNDLE_EXTRAS:-api,capture,analysis,chroma,neo4j}"
 
 echo ""
 echo "Step 1: Installing project and bundled dependencies (${BUNDLE_EXTRAS})..."
@@ -32,7 +32,7 @@ pip install -e ".[${BUNDLE_EXTRAS}]"
 # would be a stronger check, but it opens the caller's real memory database at
 # module scope, so it fails on any machine whose store predates the current
 # schema -- a build step must not depend on the developer's local data.
-python -c "import fastapi, uvicorn, typer, mcp, chromadb, neo4j, git, sklearn, visp_memory"
+python -c "import fastapi, uvicorn, typer, chromadb, neo4j, git, sklearn, visp_memory"
 
 # Build frontend first
 echo ""
@@ -58,73 +58,11 @@ cp dist/visp-memory "$DIST_DIR/"
 cp README.md "$DIST_DIR/"
 cp LICENSE "$DIST_DIR/"
 cp NOTICE "$DIST_DIR/"
-
-# Create startup script
-cat > "$DIST_DIR/start-server.sh" << 'EOF'
-#!/bin/bash
-# Start Visp Memory server with dashboard
-
-echo "Starting Visp Memory Server..."
-echo "Dashboard will be available at: http://localhost:8000/dashboard"
-echo "API docs at: http://localhost:8000/docs"
-echo ""
-
-# Initialize memory if needed
-if [ ! -d "$HOME/.visp-memory" ]; then
-    echo "Initializing Visp Memory..."
-    ./visp-memory init --type code
-fi
-
-# Start server
-./visp-memory serve --port 8000
-EOF
-
+cp standalone/README-STANDALONE.md "$DIST_DIR/"
+cp standalone/start-server.sh "$DIST_DIR/"
+cp standalone/start-server.ps1 "$DIST_DIR/"
 chmod +x "$DIST_DIR/start-server.sh"
-
-# Create README for the distribution
-cat > "$DIST_DIR/README-STANDALONE.md" << 'EOF'
-# Visp Memory Standalone Distribution
-
-This is a standalone distribution of Visp Memory with an embedded dashboard.
-
-## Quick Start
-
-1. Run the server:
-   ```bash
-   ./start-server.sh
-   ```
-
-2. Open your browser to http://localhost:8000/dashboard
-
-3. Use the CLI:
-   ```bash
-   ./visp-memory --help
-   ```
-
-## What's Included
-
-- Visp Memory CLI tool
-- FastAPI server
-- Web dashboard (embedded)
-- All required Python dependencies
-
-## System Requirements
-
-- 64-bit Linux/macOS/Windows
-- No Python installation required
-- Minimum 2GB RAM
-- 500MB disk space
-
-## Data Storage
-
-Data is stored in `~/.visp-memory/` by default.
-
-## Configuration
-
-Edit `~/.visp-memory/config.yaml` to customize settings.
-
-For full documentation, visit: https://github.com/djkeshawa/visp-memory
-EOF
+python scripts/verify_distribution_artifacts.py "$DIST_DIR"
 
 # Smoke test the frozen binary, not just the build environment.
 #
@@ -180,6 +118,7 @@ echo "Step 6: Creating archive..."
 cd dist
 tar -czf visp-memory-standalone-$(uname -s)-$(uname -m).tar.gz visp-memory-standalone/
 cd ..
+python scripts/verify_distribution_artifacts.py "dist/visp-memory-standalone-$(uname -s)-$(uname -m).tar.gz"
 
 echo ""
 echo "================================"

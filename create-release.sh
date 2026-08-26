@@ -22,14 +22,12 @@ if ! git rev-parse --git-dir > /dev/null 2>&1; then
     exit 1
 fi
 
-# Check for uncommitted changes
-if ! git diff-index --quiet HEAD --; then
-    echo -e "${YELLOW}Warning: You have uncommitted changes${NC}"
-    read -p "Continue anyway? (y/n) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
+# A release must be reproducible from HEAD. Include untracked files because they
+# can otherwise be consumed accidentally by package or container build contexts.
+if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+    echo -e "${RED}Error: tracked or untracked worktree changes are present${NC}"
+    echo "Commit, stash, or remove them before creating a release."
+    exit 1
 fi
 
 # Get current version from pyproject.toml
@@ -70,10 +68,6 @@ echo -e "Creating release: ${GREEN}$TAG_NAME${NC}"
 echo -e "${BLUE}═══════════════════════════════════════${NC}"
 echo ""
 
-# Update version in pyproject.toml
-echo "Updating pyproject.toml..."
-sed -i "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" pyproject.toml
-
 # Ask for release notes
 echo ""
 echo "Enter release notes (Ctrl+D when done):"
@@ -103,11 +97,14 @@ echo ""
 read -p "Proceed? (y/n) " -n 1 -r
 echo
 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    # Revert pyproject.toml changes
-    git checkout pyproject.toml
     echo -e "${YELLOW}Release cancelled${NC}"
     exit 1
 fi
+
+# Mutate the worktree only after the operator's final confirmation. Cancellation
+# above is therefore side-effect free and never needs a checkout/restore step.
+echo "Updating pyproject.toml..."
+sed -i "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" pyproject.toml
 
 # Commit version bump
 echo ""

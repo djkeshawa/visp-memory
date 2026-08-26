@@ -204,6 +204,15 @@ See [docs/FEATURE_STATUS.md](docs/FEATURE_STATUS.md) for the full matrix.
 
 Choose the method that fits your workflow.
 
+| Distribution | CLI | API | Dashboard | MCP |
+| --- | --- | --- | --- | --- |
+| Python release package with `[api,mcp]` | Yes | Yes | Yes | Yes |
+| Container image | Yes | Yes | Yes | Yes |
+| Standalone archive | Yes | Yes | Yes | No |
+
+The standalone executable intentionally omits MCP. Use the Python package or
+container image for stdio or HTTP MCP transports.
+
 ### Method 1: Python Package (Recommended)
 
 Install via pip. This includes the CLI, API server, and embedded dashboard. Add
@@ -224,7 +233,7 @@ pip install visp-memory[api,mcp,local-embeddings]
 pip install "visp-memory[arcadedb,api,mcp]"
 
 # From GitHub Release (direct download)
-pip install https://github.com/djkeshawa/visp-memory/releases/download/v0.2.3/visp_memory_mcp-0.2.3-py3-none-any.whl
+pip install https://github.com/djkeshawa/visp-memory/releases/download/v<VERSION>/visp_memory-<VERSION>-py3-none-any.whl
 
 # From source (always available, no release required)
 git clone https://github.com/djkeshawa/visp-memory.git
@@ -295,7 +304,7 @@ Updates for non-Python users. Download the latest release for your platform (Lin
 
 1.  Download from [Releases](https://github.com/djkeshawa/visp-memory/releases)
 2.  Extract the archive
-3.  Run `./visp-memory`
+3.  Run `./start-server.sh` (Linux/macOS) or `./start-server.ps1` (Windows)
 
 For detailed build and distribution instructions, see [docs/deployment/PACKAGING.md](docs/deployment/PACKAGING.md).
 

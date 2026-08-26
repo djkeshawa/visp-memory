@@ -13,7 +13,7 @@ RUN npm run export
 FROM python:3.11.13-slim-bookworm AS python-builder
 
 WORKDIR /app
-COPY pyproject.toml uv.lock README.md LICENSE ./
+COPY pyproject.toml uv.lock README.md LICENSE NOTICE ./
 COPY src/ ./src/
 COPY --from=frontend-builder /app/dashboard/out ./src/visp_memory/server/static/
 
@@ -36,6 +36,10 @@ RUN useradd -m -u 1000 llmuser && \
     chown -R llmuser:llmuser /data
 
 WORKDIR /app
+
+# License and attribution files accompany the runnable image, not only the
+# intermediate wheel build.
+COPY LICENSE NOTICE ./
 
 # Copy built wheel from builder
 COPY --from=python-builder /app/dist/*.whl ./

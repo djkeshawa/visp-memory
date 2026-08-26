@@ -100,9 +100,21 @@ def main() -> int:
         if not has_module("build"):
             raise SystemExit("Python package 'build' is required. Install with: pip install build")
 
-        run([sys.executable, "-m", "build", "--wheel"])
+        run([sys.executable, "-m", "build"])
 
         dist_files = [str(path) for path in sorted((ROOT / "dist").glob("*"))]
+        distributable_files = [
+            path
+            for path in sorted((ROOT / "dist").glob("*"))
+            if path.suffix == ".whl" or path.name.endswith(".tar.gz")
+        ]
+        run(
+            [
+                sys.executable,
+                "scripts/verify_distribution_artifacts.py",
+                *(str(path) for path in distributable_files),
+            ]
+        )
         if not args.skip_twine:
             if not has_module("twine"):
                 raise SystemExit(

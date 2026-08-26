@@ -78,6 +78,9 @@ jobs:
           python -m pip install twine
           python -m twine check dist/*
 
+      - name: Verify license and notice in Python distributions
+        run: python scripts/verify_distribution_artifacts.py dist/*.whl dist/*.tar.gz
+
       - name: Verify the wheel actually contains the dashboard
         # This is the wheel that ships, and the only place the check is meaningful:
         # it runs after build_frontend.py, unlike the quality gate which builds a
@@ -202,13 +205,13 @@ jobs:
       # `local-embeddings` and `arcadedb` stay out on purpose: PyTorch exceeds the
       # 2 GB release asset limit, and ArcadeDB needs a JVM the bundle cannot carry.
       - name: Install Project and Bundled Dependencies
-        run: python -m pip install -e ".[api,mcp,capture,analysis,chroma,neo4j]"
+        run: python -m pip install -e ".[api,capture,analysis,chroma,neo4j]"
 
       # Third-party distributions only. visp_memory.server.app initialises storage
       # at module scope, so importing it here would make the build depend on the
       # runner's data directory rather than on the packaging being correct.
       - name: Verify Bundled Dependencies Are Importable
-        run: python -c "import fastapi, uvicorn, typer, mcp, chromadb, neo4j, git, sklearn, visp_memory"
+        run: python -c "import fastapi, uvicorn, typer, chromadb, neo4j, git, sklearn, visp_memory"
 
       - name: Build Executable (Linux/macOS)
         if: runner.os != 'Windows'
@@ -228,9 +231,12 @@ jobs:
           mkdir -p dist/visp-memory-standalone
           cp dist/visp-memory.exe dist/visp-memory-standalone/
           cp README.md LICENSE NOTICE dist/visp-memory-standalone/
+          cp standalone/README-STANDALONE.md standalone/start-server.sh standalone/start-server.ps1 dist/visp-memory-standalone/
           # Same smoke test build_standalone.sh runs on the other platforms.
           ./dist/visp-memory-standalone/visp-memory.exe --version
+          python scripts/verify_distribution_artifacts.py dist/visp-memory-standalone
           (cd dist && 7z a "visp-memory-standalone-Windows-x86_64.zip" visp-memory-standalone/)
+          python scripts/verify_distribution_artifacts.py dist/visp-memory-standalone-Windows-x86_64.zip
           ls -la dist/visp-memory-standalone-*
 
       - name: Upload Standalone Build

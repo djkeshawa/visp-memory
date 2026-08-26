@@ -34,6 +34,7 @@ if static_dir.exists():
 datas.extend([
     ('README.md', '.'),
     ('LICENSE', '.'),
+    ('NOTICE', '.'),
 ])
 
 block_cipher = None
@@ -54,7 +55,6 @@ a = Analysis(
         'visp_memory.layers.intent',
         'visp_memory.server.app',
         'visp_memory.server.schemas',
-        'visp_memory.interfaces.mcp',
         'chromadb',
         'sentence_transformers',
         'fastapi',

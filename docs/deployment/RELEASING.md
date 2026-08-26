@@ -87,8 +87,9 @@ It includes:
 
 ## What Gets Built
 
-Each release includes a single wheel file:
-- **Name**: `visp_memory_mcp-X.Y.Z-py3-none-any.whl`
+Each release includes a wheel and source archive:
+- **Wheel**: `visp_memory-X.Y.Z-py3-none-any.whl`
+- **Source**: `visp_memory-X.Y.Z.tar.gz`
 - **Size**: ~600 KB
 - **Contains**:
   - All Python code
@@ -309,7 +310,8 @@ If the workflow isn't set up or you prefer manual control:
    - Description: (copy from the workflow's changelog template)
 
 4. **Upload wheel:**
-   - Drag `dist/visp_memory_mcp-<version>-py3-none-any.whl` to the assets section
+   - Drag `dist/visp_memory-<version>-py3-none-any.whl` and
+     `dist/visp_memory-<version>.tar.gz` to the assets section
 
 5. **Publish release**
 

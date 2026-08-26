@@ -17,9 +17,16 @@ Visp Memory can be distributed in three ways:
 
 1. **Python Package** - Install via pip, includes embedded dashboard
 2. **Docker Container** - Containerized deployment with all dependencies
-3. **Standalone Executable** - Single binary with no dependencies required
+3. **Standalone Executable** - CLI/API/dashboard binary with no Python dependency
 
-All methods include the full functionality: CLI, API server, MCP server, and web dashboard.
+| Distribution | CLI | API | Dashboard | MCP |
+| --- | --- | --- | --- | --- |
+| Python package with `[api,mcp]` | Yes | Yes | Release wheel | Yes |
+| Docker container | Yes | Yes | Yes | Yes |
+| Standalone executable | Yes | Yes | Yes | No |
+
+MCP is intentionally available through the Python package and container, not
+the standalone archive.
 
 ## Method 1: Python Package (pip)
 
@@ -39,17 +46,17 @@ python -m build
 ```
 
 This creates:
-- `dist/visp_memory_mcp-<version>-py3-none-any.whl` - Wheel distribution
-- `dist/visp_memory_mcp-<version>.tar.gz` - Source distribution
+- `dist/visp_memory-<version>-py3-none-any.whl` - Wheel distribution
+- `dist/visp_memory-<version>.tar.gz` - Source distribution
 
 ### Installing
 
 ```bash
 # Install from local wheel
-pip install dist/visp_memory_mcp-<version>-py3-none-any.whl[all]
+pip install "dist/visp_memory-<version>-py3-none-any.whl[all]"
 
 # Lean server install without local sentence-transformer model dependencies
-pip install dist/visp_memory_mcp-<version>-py3-none-any.whl[api,mcp]
+pip install "dist/visp_memory-<version>-py3-none-any.whl[api,mcp]"
 
 # Or install directly from source
 pip install -e ".[all]"
@@ -206,10 +213,12 @@ and every extra you want inside the binary must be installed first. `build_stand
 does this for you; a manual build must do it explicitly, or the executable builds
 cleanly and then fails with `ModuleNotFoundError` on the user's machine.
 
-The bundled set is `api,mcp,capture,analysis,chroma,neo4j`. `local-embeddings` and
-`arcadedb` are excluded on purpose: PyTorch pushes the archive past the 2 GB GitHub
-release asset limit, and ArcadeDB needs a JVM the bundle cannot carry. Override with
-`BUNDLE_EXTRAS` if you need a different set.
+The bundled set is `api,capture,analysis,chroma,neo4j`. MCP is deliberately
+excluded and remains available through the Python package or container.
+`local-embeddings` and `arcadedb` are also excluded: PyTorch pushes the archive
+past the 2 GB GitHub release asset limit, and ArcadeDB needs a JVM the bundle
+cannot carry. Override `BUNDLE_EXTRAS` only for a private custom build whose
+runtime requirements you control.
 
 ### Building
 
@@ -218,7 +227,7 @@ release asset limit, and ArcadeDB needs a JVM the bundle cannot carry. Override 
 ./build_standalone.sh
 
 # Manual build
-pip install -e ".[api,mcp,capture,analysis,chroma,neo4j]"
+pip install -e ".[api,capture,analysis,chroma,neo4j]"
 python3 build_frontend.py
 pyinstaller visp-memory.spec
 ```
@@ -233,11 +242,12 @@ This creates:
 ```
 visp-memory-standalone/
 ├── visp-memory              # Main executable
-├── start-server.sh         # Convenience script
-├── README-STANDALONE.md    # End-user documentation
-├── README.md               # Full documentation
+├── start-server.sh          # Linux/macOS launcher
+├── start-server.ps1         # Windows PowerShell launcher
+├── README-STANDALONE.md     # Standalone capability and startup guide
+├── README.md                # Full documentation
 ├── LICENSE
-└── NOTICE                  # Required by Apache-2.0 section 4(d)
+└── NOTICE                   # Required by Apache-2.0 section 4(d)
 ```
 
 ### Platform-Specific Builds
@@ -254,7 +264,7 @@ You must build on the target platform:
 # Creates: dist/visp-memory-standalone-Darwin-arm64.tar.gz
 
 # Windows (in PowerShell)
-pip install -e ".[api,mcp,capture,analysis,chroma,neo4j]"
+pip install -e ".[api,capture,analysis,chroma,neo4j]"
 python build_frontend.py
 pyinstaller visp-memory.spec
 ```
