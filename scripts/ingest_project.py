@@ -63,11 +63,6 @@ def ingest_project(root_dir: str):
     for path_str, mem_id in file_ids.items():
         path = Path(path_str)
         parent = path.parent
-        if str(parent) in file_ids and str(parent) != str(
-            root_path
-        ):  # Don't link outside scanned area unless root is scanned
-            pass
-
         # Simpler: check if parent is in file_ids
         if str(parent) in file_ids:
             parent_id = file_ids[str(parent)]

@@ -134,20 +134,3 @@ If no, return JSON: {{"conflict": false}}
             # JSON — the failure was logged, and the write proceeded anyway.
             logger.warning("Conflict detection failed: %s", e)
             return ConflictVerdict.undetermined(f"conflict detection failed: {e}")
-
-    def scan_all(self, layer: str = "semantic", sample_size: int = 50) -> List[Dict[str, Any]]:
-        """
-        Scan a sample of memories for internal consistency.
-        (Expensive operation, best for periodic maintenance)
-        """
-        if not self.client:
-            return []
-
-        conflicts = []
-
-        # Naive N^2 check is too slow.
-        # Better: Group by topic/category, then check.
-        # MVP: Just check pairs that are semantically close?
-        # Leave this as a placeholder for a bounded full-scan implementation.
-
-        return conflicts

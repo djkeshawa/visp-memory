@@ -3573,10 +3573,6 @@ class LocalStorage(BaseStorage):
 
         return results
 
-    @staticmethod
-    def _text_similarity(query: str, content: str) -> float:
-        return text_similarity(query, content)
-
     def list_memories(
         self,
         layer: MemoryLayer = None,

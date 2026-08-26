@@ -326,46 +326,43 @@ class IntentMemory(BaseMemoryLayer):
         """Get all active intents, ordered by priority."""
         return self.storage.get_active_intents(repo_id=repo_id)
 
-    def get_current_focus(self, repo_id: str = None) -> Optional[Dict[str, Any]]:
-        """Get the current primary focus."""
-        intents = self.get_active(repo_id=repo_id)
-
+    @staticmethod
+    def _find_focus(intents: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         for intent in intents:
             if intent["description"].startswith("FOCUS:"):
                 return intent
-
-        # Return highest priority if no explicit focus
         return intents[0] if intents else None
 
-    def get_constraints(self, repo_id: str = None) -> List[str]:
-        """Get all active constraints as a list of strings."""
-        intents = self.get_active(repo_id=repo_id)
+    @staticmethod
+    def _extract_constraints(intents: List[Dict[str, Any]]) -> List[str]:
         constraints = []
-
         for intent in intents:
             desc = intent["description"]
-
-            # Extract CONSTRAINT intents
             if desc.startswith("CONSTRAINT:"):
                 constraints.append(desc.replace("CONSTRAINT: ", ""))
-
-            # Extract constraints from goal contexts
             ctx = intent.get("context", {})
             if isinstance(ctx, dict):
-                for c in ctx.get("constraints", []):
-                    constraints.append(c)
-
+                constraints.extend(ctx.get("constraints", []))
         return constraints
 
-    def get_working_on(self, repo_id: str = None) -> Optional[Dict[str, Any]]:
-        """Get current task being worked on."""
-        intents = self.get_active(repo_id=repo_id)
-
+    @staticmethod
+    def _find_working_on(intents: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         for intent in intents:
             if intent["description"].startswith("WORKING ON:"):
                 return intent
-
         return None
+
+    def get_current_focus(self, repo_id: str = None) -> Optional[Dict[str, Any]]:
+        """Get the current primary focus."""
+        return self._find_focus(self.get_active(repo_id=repo_id))
+
+    def get_constraints(self, repo_id: str = None) -> List[str]:
+        """Get all active constraints as a list of strings."""
+        return self._extract_constraints(self.get_active(repo_id=repo_id))
+
+    def get_working_on(self, repo_id: str = None) -> Optional[Dict[str, Any]]:
+        """Get current task being worked on."""
+        return self._find_working_on(self.get_active(repo_id=repo_id))
 
     def summarize(self, repo_id: str = None) -> Dict[str, Any]:
         """
@@ -377,9 +374,9 @@ class IntentMemory(BaseMemoryLayer):
         intents = self.get_active(repo_id=repo_id)
 
         return {
-            "focus": self.get_current_focus(repo_id=repo_id),
-            "constraints": self.get_constraints(repo_id=repo_id),
-            "current_task": self.get_working_on(repo_id=repo_id),
+            "focus": self._find_focus(intents),
+            "constraints": self._extract_constraints(intents),
+            "current_task": self._find_working_on(intents),
             "all_goals": intents,
             "total_active": len(intents),
         }
