@@ -38,7 +38,7 @@ from visp_memory.core.ranking import (
     text_similarity,
     utility_rank_adjustment,
 )
-from visp_memory.quality.secrets import redact_for_storage
+from visp_memory.quality.secrets import SecretBearingContentError, redact_for_storage
 
 try:
     import chromadb
@@ -199,6 +199,10 @@ class EvidenceUnsupportedError(EvidenceError):
     """Raised when a backend cannot represent Evidence separately."""
 
 
+class SemanticMemoryImmutableError(EvidenceError):
+    """Raised when a semantic belief is edited instead of revised."""
+
+
 class StorageMigrationRequired(RuntimeError):  # noqa: N818 - public compatibility name
     """Raised when an existing store needs an explicit, backed-up migration."""
 
@@ -314,6 +318,136 @@ class BaseStorage(ABC):
     def update_memory(self, memory_id: str, **kwargs) -> bool:
         """Update a memory."""
         pass
+
+    def revise_memory(
+        self,
+        memory_id: str,
+        content: str,
+        *,
+        evidence_ids: List[str],
+        authority_attestation: str = None,
+        metadata: Dict[str, Any] = None,
+        quality_flags: List[str] = None,
+        reason: str = None,
+        importance: float = None,
+        tags: List[str] = None,
+    ) -> str:
+        """Create an evidence-backed successor for an immutable semantic belief.
+
+        The implementation is deliberately expressed in terms of the portable storage
+        contract so RemoteStorage and graph backends get the same governance behavior.
+        Backends that cannot store governed Evidence fail through ``store_memory``.
+        """
+        if not isinstance(content, str) or not content:
+            raise ValueError("Revised semantic content must be a non-empty string")
+        resolved_evidence_ids = list(dict.fromkeys(evidence_ids or []))
+        if not resolved_evidence_ids:
+            raise EvidenceReferenceError(
+                "A semantic revision requires at least one evidence record"
+            )
+
+        peek = getattr(self, "peek_memory", None)
+        existing = peek(memory_id) if callable(peek) else self.get_memory(memory_id)
+        if existing is None:
+            raise ValueError(f"Memory not found: {memory_id}")
+        if existing.get("layer") != "semantic":
+            raise ValueError("Only semantic memories can be revised")
+        if existing.get("status") in NON_SERVABLE_STATUSES:
+            raise ValueError(
+                f"Cannot revise a {existing.get('status')} semantic memory"
+            )
+        existing_evidence_ids = set(existing.get("evidence_ids") or [])
+        if not any(
+            evidence_id not in existing_evidence_ids
+            for evidence_id in resolved_evidence_ids
+        ):
+            raise EvidenceReferenceError(
+                "A semantic revision requires new evidence not already linked to the original"
+            )
+
+        try:
+            sanitized_content, sanitized_flags = redact_for_storage(
+                content,
+                [*(existing.get("quality_flags") or []), *(quality_flags or [])],
+                reject_if_redacted=authority_attestation is not None,
+            )
+        except SecretBearingContentError as exc:
+            from visp_memory.core.authority import ProhibitionAuthorityError
+
+            raise ProhibitionAuthorityError(str(exc)) from exc
+
+        belief_type = existing.get("belief_type") or existing.get("category")
+        if belief_type == "prohibition" and authority_attestation is None:
+            from visp_memory.core.authority import ProhibitionAuthorityError
+
+            raise ProhibitionAuthorityError(
+                "prohibition revision requires a new authority attestation"
+            )
+        if belief_type != "prohibition" and authority_attestation is not None:
+            raise ValueError(
+                "authority attestation applies only to a prohibition revision"
+            )
+
+        revision_reason = reason or "Evidence-backed semantic revision"
+        revision_reason, _ = redact_for_storage(revision_reason, None)
+        revision_importance = existing.get("importance", 0.5)
+        if importance is not None:
+            revision_importance = max(float(revision_importance or 0.0), float(importance))
+        successor_metadata = {
+            **(existing.get("metadata") or {}),
+            **(metadata or {}),
+            "revision_of": memory_id,
+        }
+        successor_id = self.store_memory(
+            sanitized_content,
+            layer="semantic",
+            repo_id=existing.get("repo_id"),
+            category=belief_type,
+            importance=revision_importance,
+            tags=list(existing.get("tags") or []) if tags is None else list(tags),
+            metadata=successor_metadata,
+            evidence_ids=resolved_evidence_ids,
+            status="active",
+            authority_attestation=authority_attestation,
+            replaces_belief_id=memory_id if belief_type == "prohibition" else None,
+            source=existing.get("source"),
+            quality_flags=sanitized_flags,
+            auto_link=False,
+        )
+
+        try:
+            self.add_relationship(
+                successor_id,
+                memory_id,
+                "supersedes",
+                evidence={
+                    "confidence": "observed",
+                    "source": "semantic_revision",
+                    "reason": revision_reason,
+                },
+            )
+            old_metadata = {
+                **(existing.get("metadata") or {}),
+                "superseded_by": successor_id,
+                "superseded_reason": revision_reason,
+                "invalid_at": utc_now().isoformat(),
+            }
+            if not self.update_memory(
+                memory_id, status="superseded", metadata=old_metadata
+            ):
+                raise RuntimeError(
+                    f"Could not mark revised memory {memory_id!r} as superseded"
+                )
+        except Exception:
+            try:
+                self.delete_memory(successor_id)
+            except Exception:
+                logger.exception(
+                    "Failed to remove incomplete semantic revision %s", successor_id
+                )
+            raise
+
+        return successor_id
 
     @abstractmethod
     def delete_memory(self, memory_id: str) -> bool:
@@ -1199,6 +1333,11 @@ class LocalStorage(BaseStorage):
         relationships_by_id = indexed(relationship_items, "relationship")
         authority_by_id = indexed(authority_items, "AuthorityAttestation")
         authority_links_by_id = indexed(authority_link_items, "BeliefAuthority")
+        attested_memory_ids = {
+            item.get("belief_id")
+            for item in [*authority_items, *authority_link_items]
+            if item.get("belief_id")
+        }
 
         portable_evidence_ids = {
             evidence_id
@@ -1239,6 +1378,29 @@ class LocalStorage(BaseStorage):
                 "intent",
             }:
                 raise ValueError(f"Imported memory {memory_id!r} is malformed")
+            original_content = content
+            try:
+                content, imported_flags = redact_for_storage(
+                    content,
+                    item.get("quality_flags") or [],
+                    reject_if_redacted=(
+                        memory_id in attested_memory_ids
+                        or item.get("authority_attestation") is not None
+                        or item.get("belief_type") == "prohibition"
+                    ),
+                )
+            except SecretBearingContentError as exc:
+                from visp_memory.core.authority import ProhibitionAuthorityError
+
+                raise ProhibitionAuthorityError(str(exc)) from exc
+            if legacy_format2 and content != original_content:
+                raise SecretBearingContentError(
+                    "Legacy format-2 memory "
+                    f"{memory_id!r} contains secret-bearing content; import refused "
+                    "without rewriting the historical record"
+                )
+            item["content"] = content
+            item["quality_flags"] = imported_flags or []
             item["repo_id"] = repo_id
             belief_type = item.get("belief_type")
             epistemic_status = item.get("epistemic_status")
@@ -2424,7 +2586,8 @@ class LocalStorage(BaseStorage):
         errors: list[dict[str, str]] = []
         for memory in candidates:
             try:
-                embedding = self._embedding_fn(memory["content"])
+                safe_content, _ = redact_for_storage(memory["content"], None)
+                embedding = self._embedding_fn(safe_content)
             except Exception as exc:
                 errors.append({"id": memory["id"], "error": exc.__class__.__name__})
                 continue
@@ -2443,7 +2606,7 @@ class LocalStorage(BaseStorage):
                 layer, {"ids": [], "documents": [], "metadatas": [], "embeddings": []}
             )
             layer_group["ids"].append(memory["id"])
-            layer_group["documents"].append(memory["content"])
+            layer_group["documents"].append(safe_content)
             layer_group["metadatas"].append(metadata)
             layer_group["embeddings"].append(embedding)
 
@@ -2502,7 +2665,8 @@ class LocalStorage(BaseStorage):
 
         for memory in memories:
             try:
-                embedding = self._embedding_fn(memory["content"])
+                safe_content, _ = redact_for_storage(memory["content"], None)
+                embedding = self._embedding_fn(safe_content)
             except Exception:
                 continue
 
@@ -2516,7 +2680,7 @@ class LocalStorage(BaseStorage):
                 metadata["repo_id"] = memory["repo_id"]
 
             ids.append(memory["id"])
-            documents.append(memory["content"])
+            documents.append(safe_content)
             metadatas.append(metadata)
             embeddings.append(embedding)
 
@@ -2801,6 +2965,7 @@ class LocalStorage(BaseStorage):
         status: MemoryStatus = "active",
         epistemic_status: str = None,
         authority_attestation: str = None,
+        replaces_belief_id: str = None,
         source: str = None,
         quality_flags: List[str] = None,
         embedding: List[float] = None,
@@ -2832,7 +2997,16 @@ class LocalStorage(BaseStorage):
         """
         # Enforce the secrets policy at the single choke point every write path funnels
         # through, so a new caller cannot opt out. See visp_memory.quality.secrets.
-        content, quality_flags = redact_for_storage(content, quality_flags)
+        try:
+            content, quality_flags = redact_for_storage(
+                content,
+                quality_flags,
+                reject_if_redacted=authority_attestation is not None,
+            )
+        except SecretBearingContentError as exc:
+            from visp_memory.core.authority import ProhibitionAuthorityError
+
+            raise ProhibitionAuthorityError(str(exc)) from exc
         memory_id = memory_id or self._generate_id(content)
         repo_id = repo_id or UNSCOPED_REPO_ID
         tags = tags or []
@@ -2881,6 +3055,10 @@ class LocalStorage(BaseStorage):
             if belief_type != "prohibition" and authority_attestation is not None:
                 raise ValueError(
                     "authority attestation applies only to a prohibition belief"
+                )
+            if replaces_belief_id is not None and belief_type != "prohibition":
+                raise ValueError(
+                    "replaces_belief_id applies only to a prohibition belief"
                 )
         elif epistemic_status is not None:
             raise ValueError(
@@ -2950,6 +3128,7 @@ class LocalStorage(BaseStorage):
                     repo_id=repo_id,
                     metadata=metadata,
                     evidence=evidence_claim,
+                    expected_replaces_belief_id=replaces_belief_id,
                 )
                 nonce_row = conn.execute(
                     "SELECT digest, belief_id FROM authority_attestations "
@@ -3213,6 +3392,7 @@ class LocalStorage(BaseStorage):
         Returns:
             List of matching memories with similarity scores
         """
+        query, _ = redact_for_storage(query, None)
         results = []
         seen_ids = set()
 
@@ -3306,6 +3486,7 @@ class LocalStorage(BaseStorage):
         status: str = "active",
     ) -> List[Dict[str, Any]]:
         """Fallback SQLite search used when vector search is unavailable or incomplete."""
+        query, _ = redact_for_storage(query, None)
         exclude_ids = exclude_ids or set()
         terms = [term.lower() for term in query.split() if term.strip()]
         sql = "SELECT * FROM memories WHERE importance >= ?"
@@ -3436,8 +3617,24 @@ class LocalStorage(BaseStorage):
         params = []
 
         if content is not None:
+            existing = self._get_memory_row(memory_id, track_access=False)
+            if existing is None:
+                return False
+            if existing.get("layer") == "semantic":
+                raise SemanticMemoryImmutableError(
+                    "Semantic belief content is immutable; create an evidence-backed "
+                    "successor with revise_memory"
+                )
+            existing_flags = existing.get("quality_flags") or []
+            original_content = content
+            content, redaction_flags = redact_for_storage(
+                content,
+                quality_flags if quality_flags is not None else existing_flags,
+            )
             updates.append("content = ?")
             params.append(content)
+            if content != original_content:
+                quality_flags = redaction_flags
 
         if importance is not None:
             updates.append("importance = ?")

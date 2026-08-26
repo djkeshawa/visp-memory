@@ -53,7 +53,7 @@ class TestReconcileDecisions:
         row = memory._storage.get_memory(first)
         assert row["importance"] == pytest.approx(0.9)
 
-    def test_more_detailed_restatement_updates_in_place(self, memory):
+    def test_more_detailed_restatement_creates_successor(self, memory):
         first = memory.learn(
             "Pin container image digests in the deploy pipeline", category="preference"
         )
@@ -63,10 +63,13 @@ class TestReconcileDecisions:
             category="preference",
         )
 
-        assert second == first
-        row = memory._storage.get_memory(first)
-        assert "registry manifest" in row["content"]
-        assert row["metadata"]["reconcile_action"] == "update"
+        assert second != first
+        successor = memory._storage.get_memory(second)
+        assert "registry manifest" in successor["content"]
+        assert successor["metadata"]["reconcile_action"] == "update"
+        old = memory._storage.get_memory(first)
+        assert old["status"] == "superseded"
+        assert old["metadata"]["superseded_by"] == second
         assert _semantic_count(memory) == 1
 
     def test_unrelated_knowledge_adds_new_memory(self, memory):

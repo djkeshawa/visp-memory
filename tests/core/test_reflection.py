@@ -4,6 +4,8 @@ from visp_memory.core.reflection import ReflectionEngine
 from visp_memory.core.storage import LocalStorage
 from visp_memory.core.trust import Provenance, provenance_of
 
+SECRET = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz"
+
 
 def test_reflection_proposals_preserve_evidence_lineage(tmp_path):
     storage = LocalStorage(tmp_path)
@@ -35,3 +37,27 @@ def test_reflection_proposals_preserve_evidence_lineage(tmp_path):
     assert memory["metadata"]["write_channel"] == "reflection"
     assert memory["metadata"]["legacy_category"] == "runbook"
     assert provenance_of(memory) is Provenance.ASSISTED
+
+
+def test_reflection_sanitizes_title_in_content_metadata_and_response(tmp_path):
+    storage = LocalStorage(tmp_path)
+    evidence_ids = [
+        storage.store_memory(
+            f"Observation {index}", repo_id="repo-a", auto_link=False
+        )
+        for index in range(2)
+    ]
+    engine = ReflectionEngine(storage, ModelRouter(LLMConfig()))
+
+    reflected = engine.materialize(
+        repo_id="repo-a",
+        title=f"Runbook for {SECRET}",
+        evidence_ids=evidence_ids,
+        actor_id="admin",
+    )
+
+    stored = storage.get_memory(reflected["id"])
+    assert SECRET not in reflected["content"]
+    assert SECRET not in reflected["metadata"]["title"]
+    assert SECRET not in stored["content"]
+    assert SECRET not in stored["metadata"]["title"]

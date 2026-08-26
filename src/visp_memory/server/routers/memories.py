@@ -16,6 +16,7 @@ from visp_memory.core.storage import (
     EvidenceImmutableError,
     EvidenceReferenceError,
     EvidenceUnsupportedError,
+    SemanticMemoryImmutableError,
 )
 from visp_memory.core.trust import (
     WriteChannel,
@@ -23,6 +24,7 @@ from visp_memory.core.trust import (
     filter_unsolicited,
     with_channel_provenance,
 )
+from visp_memory.quality.secrets import SecretBearingContentError, redact_for_storage
 from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import (
     can_access_scoped_record,
@@ -41,6 +43,7 @@ from visp_memory.server.schemas import (
     MemoryMergeRequest,
     MemoryPurgeRequest,
     MemoryResponse,
+    MemoryRevision,
     MemoryUpdate,
     RelatedMemoryResponse,
     SearchQuery,
@@ -230,6 +233,16 @@ async def create_memory(
 ):
     storage = request.app.state.storage
     config = load_config()
+    try:
+        content, quality_flags = redact_for_storage(
+            memory.content,
+            memory.quality_flags,
+            reject_if_redacted=memory.authority_attestation is not None,
+        )
+    except SecretBearingContentError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
     memory_repo_id = memory.repo_id or config.repo_id
     require_repo_writable(storage, memory_repo_id, user)
     if memory.layer == "semantic" and not memory.evidence_ids:
@@ -262,7 +275,7 @@ async def create_memory(
     http_policy = channel_policy(WriteChannel.HTTP)
     try:
         mem_id = storage.store_memory(
-            content=memory.content,
+            content=content,
             layer=memory.layer,
             category=memory.category,
             importance=memory.importance,
@@ -274,7 +287,7 @@ async def create_memory(
             status=memory.status,
             authority_attestation=memory.authority_attestation,
             source=http_policy.source,
-            quality_flags=memory.quality_flags,
+            quality_flags=quality_flags or [],
         )
     except ProhibitionAuthorityError as exc:
         raise HTTPException(
@@ -765,6 +778,92 @@ async def verify_memory_consistency(
     return request.app.state.memory_lifecycle.verify_consistency(repo_id)
 
 
+@router.post("/memories/{memory_id}/revisions", response_model=MemoryResponse)
+async def revise_memory(
+    request: Request,
+    memory_id: str,
+    revision: MemoryRevision,
+    user: UserContext = Depends(get_current_user),
+):
+    """Create an evidence-backed successor without mutating belief content."""
+    storage = request.app.state.storage
+    existing = require_scoped_record_access(
+        storage,
+        storage.get_memory(memory_id),
+        user,
+        scope_field="metadata",
+        not_found_detail="Memory not found",
+    )
+    if existing.get("layer") != "semantic":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Only semantic memories can be revised",
+        )
+    require_repo_writable(storage, existing.get("repo_id"), user)
+    for evidence_id in revision.evidence_ids:
+        require_scoped_record_access(
+            storage,
+            storage.get_evidence(evidence_id),
+            user,
+            scope_field="metadata",
+            not_found_detail="Evidence not found",
+        )
+
+    metadata = dict(revision.metadata or {})
+    if not user.is_admin:
+        existing_metadata = existing.get("metadata") or {}
+        for reserved_key in ("author_id", "team_id", "environment", "task_type"):
+            if reserved_key in existing_metadata:
+                metadata[reserved_key] = existing_metadata[reserved_key]
+            else:
+                metadata.pop(reserved_key, None)
+
+    try:
+        content, quality_flags = redact_for_storage(
+            revision.content,
+            revision.quality_flags,
+            reject_if_redacted=revision.authority_attestation is not None,
+        )
+        successor_id = storage.revise_memory(
+            memory_id,
+            content,
+            evidence_ids=revision.evidence_ids,
+            authority_attestation=revision.authority_attestation,
+            metadata=metadata,
+            quality_flags=quality_flags,
+            reason=revision.reason,
+            importance=revision.importance,
+            tags=revision.tags,
+        )
+    except SecretBearingContentError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
+    except ProhibitionAuthorityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
+    except EvidenceReferenceError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except EvidenceUnsupportedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)
+        ) from exc
+    except SemanticMemoryImmutableError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    append_audit_event(
+        storage,
+        event_type="memory.revised",
+        actor_id=user.user_id,
+        repo_id=existing.get("repo_id"),
+        target_type="memory",
+        target_id=successor_id,
+        metadata={"supersedes": memory_id},
+    )
+    return _memory_response_payload(storage.get_memory(successor_id))
+
+
 @router.patch("/memories/{memory_id}")
 async def update_memory(
     request: Request,
@@ -782,6 +881,23 @@ async def update_memory(
     update_data = {k: v for k, v in update.model_dump().items() if v is not None}
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields to update")
+    if "content" in update_data and mem.get("layer") == "semantic":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Semantic belief content is immutable; use the evidence-backed "
+                "revision endpoint"
+            ),
+        )
+    if "content" in update_data:
+        original_content = update_data["content"]
+        sanitized_content, redaction_flags = redact_for_storage(
+            original_content,
+            update_data.get("quality_flags") or mem.get("quality_flags") or [],
+        )
+        update_data["content"] = sanitized_content
+        if sanitized_content != original_content:
+            update_data["quality_flags"] = redaction_flags
     if "metadata" in update_data and not user.is_admin:
         metadata = dict(update_data["metadata"] or {})
         existing_metadata = mem.get("metadata") or {}
@@ -799,7 +915,10 @@ async def update_memory(
         update_data["approved_by"] = user.user_id
         update_data["approved_at"] = utc_now().isoformat()
 
-    success = storage.update_memory(memory_id, **update_data)
+    try:
+        success = storage.update_memory(memory_id, **update_data)
+    except SemanticMemoryImmutableError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if not success:
         raise HTTPException(status_code=404, detail="Memory not found")
     event_type = "memory.archived" if update_data.get("status") == "archived" else "memory.updated"

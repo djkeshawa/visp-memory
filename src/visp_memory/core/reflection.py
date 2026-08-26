@@ -9,6 +9,7 @@ from typing import Any
 from visp_memory.core.clock import utc_now_iso
 from visp_memory.core.model_router import ModelRouter
 from visp_memory.core.trust import WriteChannel, channel_policy, with_channel_provenance
+from visp_memory.quality.secrets import redact_for_storage
 
 
 class ReflectionEngine:
@@ -81,17 +82,19 @@ class ReflectionEngine:
         if len(evidence) < 2:
             raise ValueError("At least two evidence memories are required")
 
+        safe_title, _ = redact_for_storage(title, None)
         evidence_text = "\n".join(
-            f"- [{memory['id']}] {memory.get('content', '')}" for memory in evidence
+            f"- [{memory['id']}] {redact_for_storage(str(memory.get('content', '')), None)[0]}"
+            for memory in evidence
         )
-        content = f"{title}\n\n{evidence_text}"
+        content = f"{safe_title}\n\n{evidence_text}"
         provider = "deterministic"
         model = None
         if self.model_router.configured:
             result = self.model_router.complete(
                 "reflection",
                 (
-                    f"Create a concise coding runbook titled '{title}' from this evidence. "
+                    f"Create a concise coding runbook titled '{safe_title}' from this evidence. "
                     "Preserve important constraints and cite source IDs.\n\n"
                     f"{evidence_text[:12000]}"
                 ),
@@ -99,7 +102,7 @@ class ReflectionEngine:
                     "Produce a durable, evidence-grounded runbook. Do not invent facts."
                 ),
             )
-            content = result["text"]
+            content, _ = redact_for_storage(result["text"], None)
             provider = result["provider"]
             model = result["model"]
         confidence_values = [
@@ -109,7 +112,7 @@ class ReflectionEngine:
         write_channel = WriteChannel.REFLECTION
         policy = channel_policy(write_channel)
         metadata = {
-            "title": title,
+            "title": safe_title,
             "reflection": True,
             "reflection_type": "runbook",
             "evidence": [{"memory_id": memory["id"]} for memory in evidence],

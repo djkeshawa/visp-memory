@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from visp_memory.core.llm import LLMClient, create_llm_client
 from visp_memory.core.storage import BaseStorage
+from visp_memory.quality.secrets import redact_for_storage
 
 logger = logging.getLogger(__name__)
 
@@ -83,13 +84,18 @@ class ConflictDetector:
             A ConflictVerdict. Check ``determined`` before trusting the absence
             of a conflict — an undetermined verdict is not a clear one.
         """
+        new_content, _ = redact_for_storage(new_content, None)
         # Nothing to contradict is a real answer; no detector is not.
         if not relevant_memories:
             return ConflictVerdict.clear()
         if not self.client:
             return ConflictVerdict.undetermined("no conflict detector is configured")
 
-        mem_text = "\n".join([f"- [{m['id']}] {m['content']}" for m in relevant_memories])
+        safe_memories = []
+        for memory in relevant_memories:
+            safe_content, _ = redact_for_storage(str(memory.get("content", "")), None)
+            safe_memories.append(f"- [{memory['id']}] {safe_content}")
+        mem_text = "\n".join(safe_memories)
 
         prompt = f"""Analyze if the NEW FACT conflicts with existing KNOWLEDGE.
 

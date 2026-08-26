@@ -7,7 +7,8 @@ resolved to one of four actions:
 
 - ``add``       — genuinely new knowledge; store it.
 - ``noop``      — an existing memory already says this; reinforce it instead.
-- ``update``    — an existing memory says this less completely; refresh it in place.
+- ``update``    — an existing memory says this less completely; create an
+  evidence-backed successor and supersede the older belief.
 - ``supersede`` — decided by the caller when an (LLM-confirmed) contradiction is
   found; the old memory is invalidated non-destructively.
 
@@ -23,6 +24,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from visp_memory.core.ranking import _LEXICAL_STOPWORDS
+from visp_memory.quality.secrets import redact_for_storage
 
 DEFAULT_NOOP_THRESHOLD = 0.95
 DEFAULT_UPDATE_THRESHOLD = 0.8
@@ -85,6 +87,7 @@ class Reconciler:
         repo_id: str = None,
         category: str = None,
     ) -> ReconcileDecision:
+        content, _ = redact_for_storage(content, None)
         new_tokens = _tokens(content)
         best: dict[str, Any] | None = None
         best_overlap = 0.0

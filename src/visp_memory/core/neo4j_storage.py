@@ -30,7 +30,7 @@ from visp_memory.core.storage import (
     StorageCapabilities,
     StorageMigrationRequired,
 )
-from visp_memory.quality.secrets import redact_for_storage
+from visp_memory.quality.secrets import SecretBearingContentError, redact_for_storage
 
 logger = logging.getLogger(__name__)
 _RELATIONSHIP_TYPE_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
@@ -513,11 +513,21 @@ class Neo4jStorage(BaseStorage):
         # check could run, which the server surfaced as a 500 rather than a 501.
         epistemic_status: str = None,
         authority_attestation: str = None,
+        replaces_belief_id: str = None,
     ) -> str:
         """Store a memory node."""
         # Enforce the secrets policy at the single choke point every write path funnels
         # through, so a new caller cannot opt out. See visp_memory.quality.secrets.
-        content, quality_flags = redact_for_storage(content, quality_flags)
+        try:
+            content, quality_flags = redact_for_storage(
+                content,
+                quality_flags,
+                reject_if_redacted=authority_attestation is not None,
+            )
+        except SecretBearingContentError as exc:
+            from visp_memory.core.authority import ProhibitionAuthorityError
+
+            raise ProhibitionAuthorityError(str(exc)) from exc
         if layer not in _VALID_LAYERS:
             raise ValueError(
                 "Memory layer must be one of: " + ", ".join(sorted(_VALID_LAYERS))
@@ -720,6 +730,7 @@ class Neo4jStorage(BaseStorage):
     ) -> List[Dict[str, Any]]:
         """Search memories using vector similarity or text filtering."""
 
+        query, _ = redact_for_storage(query, None)
         embedding = kwargs.get("embedding")
         status = kwargs.get("status", "active")
 
@@ -876,6 +887,16 @@ class Neo4jStorage(BaseStorage):
         params = {"id": memory_id}
         content = kwargs.get("content")
 
+        if content is not None:
+            original_content = content
+            content, redaction_flags = redact_for_storage(
+                content,
+                kwargs.get("quality_flags") or [],
+            )
+            kwargs["content"] = content
+            if content != original_content:
+                kwargs["quality_flags"] = redaction_flags
+
         for k, v in kwargs.items():
             if k not in self._UPDATABLE_FIELDS:
                 logger.warning("Ignoring unsupported memory update field: %s", k)
@@ -889,7 +910,13 @@ class Neo4jStorage(BaseStorage):
         if not clauses:
             return False
 
-        query = "MATCH (m:Memory {id: $id}) " + "\n".join(clauses) + " RETURN count(m) as c"
+        guard = "WHERE coalesce(m.layer, '') <> 'semantic'\n" if content is not None else ""
+        query = (
+            "MATCH (m:Memory {id: $id}) "
+            + guard
+            + "\n".join(clauses)
+            + " RETURN count(m) as c"
+        )
 
         with self.driver.session() as session:
             result = session.run(query, **params)
@@ -1035,7 +1062,8 @@ class Neo4jStorage(BaseStorage):
         with self.driver.session() as session:
             for memory in candidates:
                 try:
-                    embedding = self._embedding_fn(memory["content"])
+                    safe_content, _ = redact_for_storage(memory["content"], None)
+                    embedding = self._embedding_fn(safe_content)
                     session.run(
                         """
                         MATCH (m:Memory {id: $id})

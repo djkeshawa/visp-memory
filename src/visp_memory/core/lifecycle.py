@@ -12,6 +12,7 @@ from typing import Any, Iterator, Optional
 
 from visp_memory.core.clock import parse_utc, utc_now, utc_now_iso
 from visp_memory.core.tokens import estimate_tokens
+from visp_memory.quality.secrets import redact_for_storage
 
 
 class LifecycleError(ValueError):
@@ -64,6 +65,7 @@ class MemoryLifecycleManager:
     def _snapshot(memory: dict[str, Any]) -> dict[str, Any]:
         return {
             "id": memory["id"],
+            "layer": memory.get("layer"),
             "content": memory.get("content", ""),
             "importance": memory.get("importance", 0.5),
             "tags": memory.get("tags") or [],
@@ -134,6 +136,11 @@ class MemoryLifecycleManager:
         proposed_content = (
             target_content if target_content is not None else target.get("content", "")
         )
+        proposed_content, _ = redact_for_storage(proposed_content, None)
+        if target.get("layer") == "semantic" and proposed_content != target.get("content", ""):
+            errors.append(
+                "Semantic belief content is immutable; use the evidence-backed revision endpoint"
+            )
         result_tokens = estimate_tokens(proposed_content)
         relationships = self.storage.get_all_relationships(repo_id=target.get("repo_id"))
         selected_ids = {memory["id"] for memory in memories}
@@ -541,14 +548,18 @@ class MemoryLifecycleManager:
 
     def _restore_snapshots(self, snapshots: dict[str, dict[str, Any]]) -> None:
         for memory_id, snapshot in snapshots.items():
-            self.storage.update_memory(
-                memory_id,
-                content=snapshot["content"],
-                importance=snapshot["importance"],
-                tags=snapshot["tags"],
-                metadata=snapshot["metadata"],
-                status=snapshot["status"],
-            )
+            updates = {
+                "importance": snapshot["importance"],
+                "tags": snapshot["tags"],
+                "metadata": snapshot["metadata"],
+                "status": snapshot["status"],
+            }
+            # Semantic belief text is append-only. Exact duplicate merges do not
+            # change it, so undo only restores mutable lifecycle fields and never
+            # routes the original content through the generic update API.
+            if snapshot.get("layer") != "semantic":
+                updates["content"] = snapshot["content"]
+            self.storage.update_memory(memory_id, **updates)
 
     def _retarget_relationships(
         self, target_id: str, source_ids: list[str], repo_id: Optional[str]

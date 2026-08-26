@@ -47,6 +47,7 @@ from visp_memory.layers.intent import IntentMemory, IntentPriority
 from visp_memory.layers.semantic import KnowledgeCategory, SemanticMemory
 from visp_memory.quality.conflict import ConflictVerdict
 from visp_memory.quality.dedup import Deduplicator, DedupReport
+from visp_memory.quality.secrets import redact_for_storage
 
 logger = logging.getLogger(__name__)
 
@@ -326,6 +327,17 @@ class Memory:
         if reconcile is None:
             reconcile = self.config.quality.write_reconciliation
 
+        # Sanitize before creating Evidence or invoking conflict/reconciliation. Storage
+        # repeats this check as defense in depth, but the facade is the first boundary
+        # that can keep raw input out of every downstream model/search call.
+        knowledge, quality_flags = redact_for_storage(
+            knowledge,
+            kwargs.get("quality_flags"),
+            reject_if_redacted=kwargs.get("authority_attestation") is not None,
+        )
+        if quality_flags is not None:
+            kwargs["quality_flags"] = quality_flags
+
         effective_repo_id = repo_id or self.config.repo_id or UNSCOPED_REPO_ID
         category_value = cat.value if hasattr(cat, "value") else str(cat)
         if category_value == KnowledgeCategory.PROHIBITION.value:
@@ -384,7 +396,9 @@ class Memory:
                     knowledge,
                     importance,
                     evidence_ids=evidence_ids,
+                    source_episodes=source_episodes,
                     repo_id=effective_repo_id,
+                    write_channel=_write_channel,
                 )
 
         conflict = verdict.conflict
@@ -405,6 +419,7 @@ class Memory:
         # passing an unsupported `metadata=` kwarg into establish().
         if conflict and conflict.get("conflicting_ids"):
             reason = conflict.get("reason", "Detected contradictory knowledge")
+            reason, _ = redact_for_storage(str(reason), None)
             for conflicting_id in conflict["conflicting_ids"]:
                 try:
                     self._storage.add_relationship(
@@ -493,8 +508,8 @@ class Memory:
                     **(existing.get("metadata") or {}),
                     "contradiction_unrecorded": {
                         "conflicting_id": conflicting_id,
-                        "reason": reason,
-                        "error": str(exc),
+                        "reason": redact_for_storage(str(reason), None)[0],
+                        "error": redact_for_storage(str(exc), None)[0],
                     },
                 },
             )
@@ -511,7 +526,9 @@ class Memory:
         importance: float,
         *,
         evidence_ids: List[str],
+        source_episodes: List[str],
         repo_id: str,
+        write_channel: WriteChannel,
     ) -> str:
         """Reinforce or refresh an existing memory instead of inserting a duplicate."""
         from visp_memory.core.clock import utc_now_iso
@@ -520,14 +537,60 @@ class Memory:
         if not existing:  # pragma: no cover - race between decide and apply
             return decision.target_id
         merged_importance = max(float(existing.get("importance", 0.5) or 0.0), float(importance))
-        updates: Dict[str, Any] = {"importance": merged_importance}
         if decision.action == "update":
-            updates["content"] = knowledge
-            updates["metadata"] = {
-                **(existing.get("metadata") or {}),
-                "reconciled_at": utc_now_iso(),
-                "reconcile_action": "update",
-            }
+            revision_evidence_ids = list(dict.fromkeys(evidence_ids or []))
+            # A source-episode semantic write normally lets storage resolve lineage
+            # through ``source_ids``.  Revisions are a new row, so carry the source
+            # rows' Evidence explicitly or the successor would fail the governed
+            # evidence requirement (and, worse, reconciliation would behave
+            # differently from a first write).
+            peek = getattr(self._storage, "peek_memory", None)
+            for source_id in source_episodes or []:
+                source = (
+                    peek(source_id)
+                    if callable(peek)
+                    else self._storage.get_memory(source_id)
+                )
+                if source:
+                    revision_evidence_ids.extend(source.get("evidence_ids") or [])
+            revision_evidence_ids = list(dict.fromkeys(revision_evidence_ids))
+            existing_evidence_ids = set(existing.get("evidence_ids") or [])
+            if not any(
+                evidence_id not in existing_evidence_ids
+                for evidence_id in revision_evidence_ids
+            ):
+                policy = channel_policy(write_channel)
+                revision_evidence_ids.append(
+                    self._storage.store_evidence(
+                        knowledge,
+                        repo_id=repo_id,
+                        evidence_type="caller_input",
+                        provenance=policy.provenance.value,
+                        metadata={"write_channel": write_channel.value},
+                    )
+                )
+            successor_id = self._storage.revise_memory(
+                decision.target_id,
+                knowledge,
+                evidence_ids=revision_evidence_ids,
+                metadata={
+                    **(existing.get("metadata") or {}),
+                    "reconciled_at": utc_now_iso(),
+                    "reconcile_action": "update",
+                },
+                importance=merged_importance,
+                reason="Write-time reconciliation supplied a more detailed belief",
+            )
+            logger.info(
+                "Reconciled knowledge into successor %s (supersedes %s, overlap=%.2f): %s",
+                successor_id,
+                decision.target_id,
+                decision.similarity,
+                decision.reason,
+            )
+            return successor_id
+
+        updates: Dict[str, Any] = {"importance": merged_importance}
         if evidence_ids:
             evidence_repo_id = repo_id
             if evidence_repo_id != UNSCOPED_REPO_ID:
@@ -556,6 +619,7 @@ class Memory:
         belief stopped being held (bi-temporal validity, Zep-style).
         """
         from visp_memory.core.clock import utc_now_iso
+        reason, _ = redact_for_storage(str(reason), None)
 
         try:
             existing = self._storage.get_memory(memory_id)
@@ -593,6 +657,7 @@ class Memory:
         Returns:
             A ConflictVerdict. An undetermined verdict is not a clear one.
         """
+        content, _ = redact_for_storage(content, None)
         # Search the repository the write is actually going to. Using the
         # configured one meant a write scoped to repo B was checked against
         # repo A, so a contradiction inside repo B was never seen (MG-027).
@@ -603,6 +668,36 @@ class Memory:
         )
 
         return self.conflict_detector.detect_conflicts(content, relevant)
+
+    def revise(
+        self,
+        memory_id: str,
+        content: str,
+        *,
+        evidence_ids: List[str],
+        authority_attestation: str = None,
+        metadata: Dict[str, Any] = None,
+        quality_flags: List[str] = None,
+        reason: str = None,
+    ) -> str:
+        """Create an evidence-backed successor for a semantic belief."""
+        content, quality_flags = redact_for_storage(
+            content,
+            quality_flags,
+            reject_if_redacted=authority_attestation is not None,
+        )
+        return self._storage.revise_memory(
+            memory_id,
+            content,
+            evidence_ids=evidence_ids,
+            authority_attestation=authority_attestation,
+            metadata=metadata,
+            quality_flags=quality_flags,
+            reason=reason,
+        )
+
+    # Mirror the storage operation name for callers that use the lower-level contract.
+    revise_memory = revise
 
     def warn(
         self,
@@ -776,6 +871,7 @@ class Memory:
         Returns:
             List of matching memories with similarity scores
         """
+        query, _ = redact_for_storage(query, None)
         layers = layers or ["episodic", "semantic", "intent"]
         results = []
 

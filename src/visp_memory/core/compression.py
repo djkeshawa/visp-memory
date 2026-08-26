@@ -21,6 +21,7 @@ from visp_memory.core.ranking import projected_importance
 from visp_memory.core.storage import BaseStorage
 from visp_memory.core.tokens import compute_savings
 from visp_memory.core.trust import WriteChannel, channel_policy, with_channel_provenance
+from visp_memory.quality.secrets import redact_for_storage
 
 COMPRESSION_PROMPT_HEADER = (
     "Compress these {count} related memories into a single piece of actionable "
@@ -133,7 +134,7 @@ class MemoryCompressor:
             return None
         repo_id, inherited_scope = compression_scope
 
-        contents = [ep["content"] for ep in episodes]
+        contents = [redact_for_storage(ep["content"], None)[0] for ep in episodes]
         source_ids = [ep["id"] for ep in episodes]
 
         # Calculate importance (average + boost for count)

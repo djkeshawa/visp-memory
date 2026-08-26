@@ -411,6 +411,19 @@ class MemoryUpdate(BaseModel):
     quality_flags: Optional[List[str]] = None
 
 
+class MemoryRevision(BaseModel):
+    """Request to create an evidence-backed successor for a semantic belief."""
+
+    content: str = Field(min_length=1)
+    evidence_ids: List[str] = Field(min_length=1)
+    authority_attestation: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    quality_flags: Optional[List[str]] = None
+    reason: Optional[str] = None
+    importance: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    tags: Optional[List[str]] = None
+
+
 class MemoryMergePreviewRequest(BaseModel):
     memory_ids: List[str] = Field(min_length=2)
     target_id: Optional[str] = None

@@ -65,6 +65,18 @@ def remote_storage_with(response):
     return storage
 
 
+def test_remote_revision_uses_plural_public_endpoint():
+    storage = remote_storage_with(FakeResponse(payload={"id": "successor"}))
+
+    assert storage.revise_memory(
+        "old-memory", "New content", evidence_ids=["new-evidence"]
+    ) == "successor"
+
+    assert storage.session.last_post_url.endswith(
+        "/memories/old-memory/revisions"
+    )
+
+
 @pytest.mark.parametrize(
     ("operation", "call"),
     [

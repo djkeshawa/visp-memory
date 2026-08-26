@@ -34,7 +34,7 @@ from visp_memory.core.storage import (
     StorageCapabilities,
     StorageMigrationRequired,
 )
-from visp_memory.quality.secrets import redact_for_storage
+from visp_memory.quality.secrets import SecretBearingContentError, redact_for_storage
 
 logger = logging.getLogger(__name__)
 
@@ -1144,6 +1144,7 @@ class ArcadeDbStorage(BaseStorage):
         status: MemoryStatus = "active",
         epistemic_status: str = None,
         authority_attestation: str = None,
+        replaces_belief_id: str = None,
         source: str = None,
         quality_flags: List[str] = None,
         embedding: List[float] = None,
@@ -1155,7 +1156,14 @@ class ArcadeDbStorage(BaseStorage):
     ) -> str:
         # Enforce the secrets policy at the single choke point every write path funnels
         # through, so a new caller cannot opt out. See visp_memory.quality.secrets.
-        content, quality_flags = redact_for_storage(content, quality_flags)
+        try:
+            content, quality_flags = redact_for_storage(
+                content,
+                quality_flags,
+                reject_if_redacted=authority_attestation is not None,
+            )
+        except SecretBearingContentError as exc:
+            raise ProhibitionAuthorityError(str(exc)) from exc
         requested_memory_id = memory_id
         memory_id = memory_id or self._generate_id(content)
         repo_id = repo_id or UNSCOPED_REPO_ID
@@ -1202,6 +1210,10 @@ class ArcadeDbStorage(BaseStorage):
             if belief_type != "prohibition" and authority_attestation is not None:
                 raise ValueError(
                     "authority attestation applies only to a prohibition belief"
+                )
+            if replaces_belief_id is not None and belief_type != "prohibition":
+                raise ValueError(
+                    "replaces_belief_id applies only to a prohibition belief"
                 )
         elif epistemic_status is not None:
             raise ValueError("epistemic status applies only to a semantic belief")
@@ -1270,6 +1282,7 @@ class ArcadeDbStorage(BaseStorage):
                         repo_id=repo_id,
                         metadata=metadata,
                         evidence=evidence_claim,
+                        expected_replaces_belief_id=replaces_belief_id,
                     )
                     for stored in self._rows(
                         db.query("sql", "SELECT FROM AuthorityAttestation")
@@ -1435,6 +1448,7 @@ class ArcadeDbStorage(BaseStorage):
         status: str = "active",
         **_kwargs,
     ) -> List[Dict[str, Any]]:
+        query, _ = redact_for_storage(query, None)
         # When no layer is requested, exclude the 'raw' layer from search results
         # (canonical SQLite behavior: search only episodic/semantic/intent). An explicit
         # ``layer='raw'`` request is still honored. list_memories keeps all layers.
@@ -1482,8 +1496,26 @@ class ArcadeDbStorage(BaseStorage):
         )
 
     def update_memory(self, memory_id: str, **kwargs) -> bool:
-        if self._query_memory(memory_id) is None:
+        existing = self._query_memory(memory_id)
+        if existing is None:
             return False
+        if kwargs.get("content") is not None:
+            if existing.get("layer") == "semantic":
+                from visp_memory.core.storage import SemanticMemoryImmutableError
+
+                raise SemanticMemoryImmutableError(
+                    "Semantic belief content is immutable; create an evidence-backed "
+                    "successor with revise_memory"
+                )
+            original_content = kwargs["content"]
+            kwargs["content"], redaction_flags = redact_for_storage(
+                original_content,
+                kwargs.get("quality_flags")
+                if kwargs.get("quality_flags") is not None
+                else existing.get("quality_flags") or [],
+            )
+            if kwargs["content"] != original_content:
+                kwargs["quality_flags"] = redaction_flags
 
         allowed_fields = {
             "content",

@@ -11,8 +11,8 @@ The project already documented this risk in ``docs/development/MEMORY_GOVERNANCE
 ("Do not record API keys, credentials, tokens..."), but documentation is advice, not
 enforcement. This module is the enforcement.
 
-**Redact, do not reject.** Refusing the whole memory loses the surrounding fact, which
-is usually the part worth keeping. Rewriting
+**Redact, do not reject unsigned input.** Refusing the whole memory loses the surrounding
+fact, which is usually the part worth keeping. Rewriting
 
     "deploy fails unless AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 
@@ -22,6 +22,10 @@ into
 
 keeps the engineering fact and drops the credential. The finding is recorded on the
 memory so ``visp-memory audit`` can show that redaction happened.
+
+Authority-attested content is the exception: it is rejected when scanning would change
+the signed bytes, because redaction would invalidate the attestation rather than safely
+preserve it.
 
 **Bias towards precision.** A false positive silently corrupts a legitimate memory, and
 the user may never notice. Patterns here are anchored to real credential formats rather
@@ -175,9 +179,15 @@ def redact(text: str, *, marker: str = "[REDACTED:{kind}]") -> RedactionResult:
 REDACTED_FLAG = "secret_redacted"
 
 
+class SecretBearingContentError(ValueError):
+    """Raised when content carrying a signed authority assertion contains a secret."""
+
+
 def redact_for_storage(
     content: str,
     quality_flags: list[str] | None,
+    *,
+    reject_if_redacted: bool = False,
 ) -> tuple[str, list[str] | None]:
     """Redact ``content`` and record the fact on the memory's quality flags.
 
@@ -190,6 +200,10 @@ def redact_for_storage(
     can show both that redaction happened and what was found.
     """
     outcome = redact(content)
+    if reject_if_redacted and outcome.redacted:
+        raise SecretBearingContentError(
+            "Authority-signed claim cannot contain credentials or other secrets"
+        )
     if not outcome.redacted:
         return content, quality_flags
 
