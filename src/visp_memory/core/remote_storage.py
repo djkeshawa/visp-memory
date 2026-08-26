@@ -542,6 +542,22 @@ class RemoteStorage(BaseStorage):
         except requests.RequestException as e:
             raise self._write_error("update intent", e) from e
 
+    def append_intent_outcome(
+        self, intent_id: str, outcome: Dict[str, Any]
+    ) -> bool:
+        """Append through the server's single atomic outcome endpoint."""
+        try:
+            response = self.session.post(
+                f"{self.server_url}/intents/{intent_id}/outcomes",
+                json={"outcome": str(outcome.get("outcome") or "")},
+            )
+            if response.status_code == 404:
+                return False
+            response.raise_for_status()
+            return True
+        except requests.RequestException as e:
+            raise self._write_error("append intent outcome", e) from e
+
     # Relationship Operations
     def add_relationship(
         self,

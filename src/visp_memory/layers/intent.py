@@ -187,37 +187,21 @@ class IntentMemory(BaseMemoryLayer):
         Intent status belongs to the external workflow authority. This history is
         informational and deliberately cannot make the recorded outcome current.
         """
-        intent = next(
-            (
-                item
-                for item in self.storage.get_active_intents(repo_id=None, status="all")
-                if item["id"] == intent_id
-            ),
-            None,
-        )
-        if intent is None:
-            return False
-
         parsed_channel = parse_write_channel(channel)
         policy = channel_policy(parsed_channel)
-        context = dict(intent.get("context") or {})
-        history = list(context.get("outcome_history") or [])
-        history.append(
-            {
-                "outcome": outcome,
-                "recorded_at": utc_now().isoformat(),
-                "actor_id": actor_id,
-                "provenance": {
-                    "source": policy.source,
-                    "channel": parsed_channel.value,
-                    "tier": policy.provenance.value,
-                },
-                "authoritative": False,
-                "status_changed": False,
-            }
-        )
-        context["outcome_history"] = history
-        return self.storage.update_intent(intent_id, context=context)
+        entry = {
+            "outcome": outcome,
+            "recorded_at": utc_now().isoformat(),
+            "actor_id": actor_id,
+            "provenance": {
+                "source": policy.source,
+                "channel": parsed_channel.value,
+                "tier": policy.provenance.value,
+            },
+            "authoritative": False,
+            "status_changed": False,
+        }
+        return self.storage.append_intent_outcome(intent_id, entry)
 
     def complete(
         self,

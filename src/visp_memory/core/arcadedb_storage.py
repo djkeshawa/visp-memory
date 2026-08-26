@@ -5,6 +5,7 @@ import logging
 import uuid
 from datetime import timedelta
 from pathlib import Path
+from threading import Lock
 from typing import Any, Dict, List, Optional
 
 from visp_memory.core.authority import (
@@ -238,6 +239,7 @@ class ArcadeDbStorage(BaseStorage):
         self._embedding_fn = embedding_fn
         self._upgrade_session_schema_marker = False
         self._embedding_dimension = embedding_dimension
+        self._intent_outcome_lock = Lock()
         # ArcadeDB search is lexical (keyword) only — embeddings are not indexed.
         # Surface that explicitly so an operator who configured a real vector
         # provider knows vector recall is unavailable on this backend.
@@ -1635,6 +1637,53 @@ class ArcadeDbStorage(BaseStorage):
             updates,
             json_fields=self.RECORD_JSON_FIELDS["Intent"],
         )
+
+    def append_intent_outcome(
+        self, intent_id: str, outcome: Dict[str, Any]
+    ) -> bool:
+        """Append with a compare-and-swap over the serialized context value."""
+        with self._intent_outcome_lock:
+            return self._append_intent_outcome_locked(intent_id, outcome)
+
+    def _append_intent_outcome_locked(
+        self, intent_id: str, outcome: Dict[str, Any]
+    ) -> bool:
+        """Run the CAS without overlapping embedded database handles."""
+        for _attempt in range(20):
+            with self._database() as db:
+                rows = self._rows(
+                    db.query(
+                        "sql",
+                        "SELECT context FROM Intent WHERE id = ?",
+                        intent_id,
+                    )
+                )
+                if not rows:
+                    return False
+                serialized = self._record_get(rows[0], "context")
+                context = self._json_deserialize(serialized) or {}
+                history = context.get("outcome_history")
+                history = list(history) if isinstance(history, list) else []
+                history.append(dict(outcome))
+                context["outcome_history"] = history
+                with db.transaction():
+                    updated = self._rows(
+                        db.command(
+                            "sql",
+                            "UPDATE Intent SET context = ?, updated_at = ? "
+                            "WHERE id = ? AND context = ?",
+                            self._json_serialize(context),
+                            utc_now().isoformat(),
+                            intent_id,
+                            serialized,
+                        )
+                    )
+                if sum(
+                    int(self._record_get(item, "count", 0) or 0)
+                    for item in updated
+                ) > 0:
+                    return True
+        raise RuntimeError("Concurrent intent outcome append did not converge")
 
     def add_relationship(
         self,

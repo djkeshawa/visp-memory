@@ -488,6 +488,12 @@ class BaseStorage(ABC):
         """Update an intent."""
         pass
 
+    def append_intent_outcome(
+        self, intent_id: str, outcome: Dict[str, Any]
+    ) -> bool:
+        """Atomically append one non-authoritative outcome history entry."""
+        raise NotImplementedError
+
     # Relationship Operations
     @abstractmethod
     def add_relationship(
@@ -3904,6 +3910,34 @@ class LocalStorage(BaseStorage):
                 WHERE id = ?
                 """,
                 params,
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def append_intent_outcome(
+        self, intent_id: str, outcome: Dict[str, Any]
+    ) -> bool:
+        """Append an outcome under a write transaction so concurrent writers cannot race."""
+        with self._get_db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT context FROM intents WHERE id = ?", (intent_id,)
+            ).fetchone()
+            if row is None:
+                conn.rollback()
+                return False
+            context = self._json_deserialize(row["context"]) or {}
+            history = context.get("outcome_history")
+            history = list(history) if isinstance(history, list) else []
+            history.append(dict(outcome))
+            context["outcome_history"] = history
+            cursor = conn.execute(
+                """
+                UPDATE intents
+                SET context = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (self._json_serialize(context), intent_id),
             )
             conn.commit()
             return cursor.rowcount > 0

@@ -1190,6 +1190,39 @@ class Neo4jStorage(BaseStorage):
             )
             return result.single()["c"] > 0
 
+    def append_intent_outcome(
+        self, intent_id: str, outcome: Dict[str, Any]
+    ) -> bool:
+        """Append with an optimistic compare-and-swap over the serialized context."""
+        for _attempt in range(20):
+            with self.driver.session() as session:
+                current = session.run(
+                    "MATCH (i:Intent {id: $id}) RETURN i.context AS context",
+                    id=intent_id,
+                ).single()
+                if current is None:
+                    return False
+                serialized = current["context"]
+                context = self._json_deserialize(serialized) or {}
+                history = context.get("outcome_history")
+                history = list(history) if isinstance(history, list) else []
+                history.append(dict(outcome))
+                context["outcome_history"] = history
+                result = session.run(
+                    """
+                    MATCH (i:Intent {id: $id})
+                    WHERE i.context = $expected
+                    SET i.context = $context, i.updated_at = datetime()
+                    RETURN count(i) AS c
+                    """,
+                    id=intent_id,
+                    expected=serialized,
+                    context=self._json_serialize(context),
+                )
+                if result.single()["c"] > 0:
+                    return True
+        raise RuntimeError("Concurrent intent outcome append did not converge")
+
     # Relationship Operations
     def _get_memory_repo_id(self, memory_id: str) -> Optional[Dict[str, Any]]:
         """Fetch a memory's repo_id for validation without bumping access_count.

@@ -77,6 +77,19 @@ def test_remote_revision_uses_plural_public_endpoint():
     )
 
 
+def test_remote_intent_outcome_uses_single_atomic_endpoint():
+    storage = remote_storage_with(FakeResponse(payload={"outcome_recorded": True}))
+
+    assert storage.append_intent_outcome(
+        "intent-1", {"outcome": "completed", "actor_id": "caller"}
+    )
+
+    assert storage.session.last_post_url == (
+        "http://memory.example/intents/intent-1/outcomes"
+    )
+    assert storage.session.last_post_json == {"outcome": "completed"}
+
+
 @pytest.mark.parametrize(
     ("operation", "call"),
     [

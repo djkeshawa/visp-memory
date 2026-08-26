@@ -365,6 +365,10 @@ class IntentResponse(IntentCreate):
     updated_at: Optional[datetime] = None
 
 
+class IntentOutcomeAppendRequest(BaseModel):
+    outcome: str = Field(min_length=1, max_length=200)
+
+
 class IntentEvaluationRequest(BaseModel):
     summary: str = Field(min_length=1, max_length=20000)
     memory_ids: List[str] = Field(default_factory=list)

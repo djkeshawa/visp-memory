@@ -1168,6 +1168,31 @@ async def test_complete_intent_endpoint_records_outcome_without_status_change(cl
 
 
 @pytest.mark.asyncio
+async def test_atomic_intent_outcome_endpoint_uses_authenticated_provenance(client):
+    headers = {"X-API-KEY": "test_key"}
+    created = await client.post(
+        "/intents",
+        json={"description": "Record one remote outcome", "repo_id": "repo-a"},
+        headers=headers,
+    )
+    intent_id = created.json()["id"]
+
+    response = await client.post(
+        f"/intents/{intent_id}/outcomes",
+        json={"outcome": "verified-by-ci"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    listed = await client.get("/intents?repo_id=repo-a", headers=headers)
+    stored = next(item for item in listed.json() if item["id"] == intent_id)
+    entry = stored["context"]["outcome_history"][-1]
+    assert entry["outcome"] == "verified-by-ci"
+    assert entry["actor_id"] != "caller"
+    assert entry["provenance"]["channel"] == "rest"
+
+
+@pytest.mark.asyncio
 async def test_intents_can_be_listed_updated_and_close_is_history_only(client):
     headers = {"X-API-KEY": "test_key"}
     create_response = await client.post(

@@ -18,6 +18,7 @@ from visp_memory.server.routers.platform import append_audit_event
 from visp_memory.server.schemas import (
     IntentCreate,
     IntentEvaluationRequest,
+    IntentOutcomeAppendRequest,
     IntentResponse,
     IntentUpdate,
 )
@@ -183,6 +184,52 @@ async def complete_intent(
         target_type="intent",
         target_id=intent_id,
         metadata={"outcome": "completed", "authoritative": False, "status_changed": False},
+    )
+    return {
+        "id": intent_id,
+        "status": intent.get("status", "active"),
+        "authoritative": False,
+        "status_changed": False,
+        "outcome_recorded": True,
+    }
+
+
+@router.post("/{intent_id}/outcomes")
+async def append_intent_outcome(
+    request: Request,
+    intent_id: str,
+    payload: IntentOutcomeAppendRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Atomic Remote-storage endpoint for one non-authoritative outcome."""
+    storage = request.app.state.storage
+    intent = require_scoped_record_access(
+        storage,
+        _find_intent(storage, intent_id),
+        user,
+        scope_field="context",
+        not_found_detail="Intent not found",
+    )
+    recorded = IntentMemory(storage).record_outcome(
+        intent_id,
+        payload.outcome,
+        actor_id=user.user_id,
+        channel=WriteChannel.REST,
+    )
+    if not recorded:
+        raise HTTPException(status_code=404, detail="Intent not found")
+    append_audit_event(
+        storage,
+        event_type="intent.outcome_recorded",
+        actor_id=user.user_id,
+        repo_id=intent.get("repo_id"),
+        target_type="intent",
+        target_id=intent_id,
+        metadata={
+            "outcome": payload.outcome,
+            "authoritative": False,
+            "status_changed": False,
+        },
     )
     return {
         "id": intent_id,
