@@ -7,7 +7,7 @@ import requests
 from visp_memory import Memory, MemoryConfig
 from visp_memory.core.hybrid_retrieval import HybridRetriever
 from visp_memory.core.remote_storage import RemoteStorage, RemoteStorageError
-from visp_memory.core.storage import EvidenceImmutableError
+from visp_memory.core.storage import EvidenceImmutableError, SessionCompletionStatus
 from visp_memory.layers.episodic import EpisodicMemory
 from visp_memory.layers.semantic import SemanticMemory
 from visp_memory.recall.graph import GraphRecall
@@ -531,11 +531,15 @@ def test_remote_storage_malformed_read_response_is_explicit_error():
 
 def test_remote_storage_session_round_trip_contract():
     storage = remote_storage_with(FakeResponse(200, {"id": "session-1"}))
-    assert storage.start_session() == "session-1"
+    assert storage.start_session(repo_id="repo-a") == "session-1"
     assert storage.session.last_post_url == "http://memory.example/sessions"
+    assert storage.session.last_post_json == {"repo_id": "repo-a"}
 
     storage = remote_storage_with(FakeResponse(200, {"status": "completed"}))
-    assert storage.end_session("session-1", "Done", ["memory-1"]) is True
+    assert (
+        storage.end_session("session-1", "Done", ["memory-1"])
+        is SessionCompletionStatus.COMPLETED
+    )
     assert storage.session.last_post_url == "http://memory.example/sessions/session-1/complete"
     assert storage.session.last_post_json == {
         "summary": "Done",
@@ -543,6 +547,23 @@ def test_remote_storage_session_round_trip_contract():
     }
 
 
-def test_remote_storage_missing_session_returns_false():
+def test_remote_storage_missing_session_returns_typed_status():
     storage = remote_storage_with(FakeResponse(404, {"detail": "Session not found"}))
-    assert storage.end_session("missing", "", []) is False
+    assert (
+        storage.end_session("missing", "", [])
+        is SessionCompletionStatus.NOT_FOUND
+    )
+
+
+def test_remote_storage_get_session_contract():
+    payload = {
+        "id": "session-1",
+        "owner_id": "alice",
+        "team_id": "team-a",
+        "repo_id": "repo-a",
+        "memory_ids": [],
+    }
+    storage = remote_storage_with(FakeResponse(200, payload))
+
+    assert storage.get_session("session-1") == payload
+    assert storage.session.last_get_url == "http://memory.example/sessions/session-1"

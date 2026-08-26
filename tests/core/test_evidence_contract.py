@@ -299,7 +299,12 @@ def _create_governed_migration_v3_fixture(path):
         conn.execute("ALTER TABLE memories DROP COLUMN belief_type")
         conn.execute("ALTER TABLE memories DROP COLUMN epistemic_status")
         conn.execute("DROP TABLE authority_attestations")
-        conn.execute("DELETE FROM schema_migrations WHERE version = 4")
+        conn.execute("DROP INDEX IF EXISTS idx_sessions_owner")
+        conn.execute("DROP INDEX IF EXISTS idx_sessions_repo")
+        conn.execute("ALTER TABLE sessions DROP COLUMN owner_id")
+        conn.execute("ALTER TABLE sessions DROP COLUMN team_id")
+        conn.execute("ALTER TABLE sessions DROP COLUMN repo_id")
+        conn.execute("DELETE FROM schema_migrations WHERE version > 3")
         conn.execute("INSERT INTO schema_migrations(version) VALUES (3)")
 
 
@@ -324,6 +329,13 @@ def _create_malformed_v4_fixture(path, defect):
     storage.close()
     with sqlite3.connect(path) as conn:
         conn.execute("PRAGMA journal_mode=DELETE")
+        conn.execute("DROP INDEX IF EXISTS idx_sessions_owner")
+        conn.execute("DROP INDEX IF EXISTS idx_sessions_repo")
+        conn.execute("ALTER TABLE sessions DROP COLUMN owner_id")
+        conn.execute("ALTER TABLE sessions DROP COLUMN team_id")
+        conn.execute("ALTER TABLE sessions DROP COLUMN repo_id")
+        conn.execute("DELETE FROM schema_migrations WHERE version > 4")
+        conn.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (4)")
         if defect == "missing_required_table":
             conn.execute("DROP TABLE relationships")
         elif defect == "missing_legacy_memory_column":
@@ -592,7 +604,7 @@ def test_v3_to_v4_migration_maps_governed_fields_and_preserves_legacy_state(tmp_
         LocalStorage(data_dir)
 
     report = LocalStorage.migrate_schema(data_dir, backup_path=backup)
-    assert report == {"from_version": 3, "to_version": 4, "status": "migrated"}
+    assert report == {"from_version": 3, "to_version": 5, "status": "migrated"}
     with sqlite3.connect(backup) as conn:
         assert conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (3,)
         assert {
@@ -624,7 +636,7 @@ def test_v2_to_v4_runs_evidence_then_governed_transform_in_one_migration(tmp_pat
         data_dir, backup_path=tmp_path / "rollback-v2-v4.db"
     )
 
-    assert report == {"from_version": 2, "to_version": 4, "status": "migrated"}
+    assert report == {"from_version": 2, "to_version": 5, "status": "migrated"}
     belief = LocalStorage(data_dir).get_memory("legacy-belief")
     assert belief["belief_type"] == belief["category"] == "fact"
     assert belief["epistemic_status"] == "contradicted"

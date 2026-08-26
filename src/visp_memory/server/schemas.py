@@ -181,6 +181,21 @@ class SessionCreateResponse(BaseModel):
     status: Literal["started"] = "started"
 
 
+class SessionCreateRequest(BaseModel):
+    repo_id: str = Field(min_length=1)
+
+
+class SessionResponse(BaseModel):
+    id: str
+    owner_id: Optional[str] = None
+    team_id: Optional[str] = None
+    repo_id: Optional[str] = None
+    summary: Optional[str] = None
+    memory_ids: List[str] = Field(default_factory=list)
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+
+
 class SessionCompleteRequest(BaseModel):
     summary: str = ""
     memory_ids: List[str] = Field(default_factory=list)

@@ -31,6 +31,7 @@ from visp_memory.core.storage import (
     EvidenceImmutableError,
     EvidenceReferenceError,
     LocalStorage,
+    SessionCompletionStatus,
     StorageMigrationRequired,
 )
 from visp_memory.core.trust import Provenance, provenance_tag
@@ -140,13 +141,17 @@ class FakeArcadeDb:
             record_id = params[-1]
             if record_id in self.records[type_name]:
                 record = self.records[type_name][record_id]
+                if "ended_at IS NULL" in sql and record.get("ended_at") is not None:
+                    return []
                 param_values = iter(params[:-1])
                 for field, spec in _update_assignments(sql):
                     if spec == "increment":
                         record[field] = int(record.get(field) or 0) + 1
                     else:
                         record[field] = next(param_values)
-            return None
+                if "RETURN AFTER" in sql:
+                    return [record]
+            return [] if "RETURN AFTER" in sql else None
         if sql.startswith("DELETE FROM "):
             type_name = sql.split()[2]
             self.records[type_name].pop(params[0], None)
@@ -616,6 +621,23 @@ def _configure_current_arcadedb(fake_arcadedb, tmp_path):
     }
 
 
+def test_arcadedb_v4_marker_upgrade_preserves_unbound_legacy_session(
+    fake_arcadedb, tmp_path
+):
+    _configure_current_arcadedb(fake_arcadedb, tmp_path)
+    fake_arcadedb.db.records["SchemaVersion"]["storage"]["version"] = 4
+    fake_arcadedb.db.records["Session"]["legacy-session"] = {
+        "id": "legacy-session",
+        "started_at": "2026-01-01T00:00:00+00:00",
+    }
+
+    storage = ArcadeDbStorage(tmp_path)
+
+    assert fake_arcadedb.db.records["SchemaVersion"]["storage"]["version"] == 5
+    assert storage.get_session("legacy-session")["owner_id"] is None
+    assert storage.get_session("legacy-session")["repo_id"] is None
+
+
 def _add_current_arcadedb_evidence_graph(fake_arcadedb):
     fake_arcadedb.db.records["Memory"]["belief-1"] = {
         "id": "belief-1",
@@ -758,12 +780,33 @@ def test_arcadedb_search_excludes_raw_layer_by_default(fake_arcadedb, tmp_path):
 def test_arcadedb_sessions_round_trip(fake_arcadedb, tmp_path):
     storage = ArcadeDbStorage(tmp_path)
 
-    session_id = storage.start_session()
-    storage.end_session(session_id, "Finished backend selection", ["mem-a", "mem-b"])
+    session_id = storage.start_session(
+        owner_id="alice", team_id="team-a", repo_id="repo-a"
+    )
+    assert (
+        storage.end_session(session_id, "Finished backend selection", ["mem-a", "mem-b"])
+        is SessionCompletionStatus.COMPLETED
+    )
 
     session = fake_arcadedb.db.sessions[session_id]
+    assert session["owner_id"] == "alice"
+    assert session["repo_id"] == "repo-a"
     assert session["summary"] == "Finished backend selection"
     assert storage._json_deserialize(session["memory_ids"]) == ["mem-a", "mem-b"]
+    assert storage.get_session(session_id)["team_id"] == "team-a"
+    assert (
+        storage.end_session(session_id, "Again", [])
+        is SessionCompletionStatus.ALREADY_COMPLETED
+    )
+    assert session["summary"] == "Finished backend selection"
+    completion_updates = [
+        command
+        for command in fake_arcadedb.db.commands
+        if command.startswith("UPDATE Session SET summary")
+    ]
+    assert completion_updates
+    assert "ended_at IS NULL" in completion_updates[0]
+    assert "RETURN AFTER" in completion_updates[0]
 
 
 def test_arcadedb_get_collection_is_none_for_conservative_vector_v1(fake_arcadedb, tmp_path):

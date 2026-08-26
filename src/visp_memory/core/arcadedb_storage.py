@@ -30,6 +30,7 @@ from visp_memory.core.storage import (
     LocalStorage,
     MemoryLayer,
     MemoryStatus,
+    SessionCompletionStatus,
     StorageCapabilities,
     StorageMigrationRequired,
 )
@@ -235,6 +236,7 @@ class ArcadeDbStorage(BaseStorage):
         self.data_dir = Path(data_dir) / "arcadedb"
         self.data_dir.parent.mkdir(parents=True, exist_ok=True)
         self._embedding_fn = embedding_fn
+        self._upgrade_session_schema_marker = False
         self._embedding_dimension = embedding_dimension
         # ArcadeDB search is lexical (keyword) only — embeddings are not indexed.
         # Surface that explicitly so an operator who configured a real vector
@@ -274,6 +276,14 @@ class ArcadeDbStorage(BaseStorage):
                         "storage",
                         STORAGE_SCHEMA_VERSION,
                         utc_now().isoformat(),
+                    )
+                elif self._upgrade_session_schema_marker:
+                    db.command(
+                        "sql",
+                        "UPDATE SchemaVersion SET version = ?, applied_at = ? WHERE id = ?",
+                        STORAGE_SCHEMA_VERSION,
+                        utc_now().isoformat(),
+                        "storage",
                     )
 
     def _probe_schema_compatibility(self, db) -> bool:
@@ -336,12 +346,14 @@ class ArcadeDbStorage(BaseStorage):
                     "Storage schema is newer than this visp-memory build "
                     f"({stored_version} > {STORAGE_SCHEMA_VERSION})"
                 )
-            if stored_version < STORAGE_SCHEMA_VERSION:
+            if stored_version < STORAGE_SCHEMA_VERSION - 1:
                 raise StorageMigrationRequired(
                     "ArcadeDB schema migration is not implemented; export the older "
-                    "store with its original build before using schema v4"
+                    f"store with its original build before using schema v{STORAGE_SCHEMA_VERSION}"
                 )
             self._validate_current_v4_graph(db, type_kinds, type_counts)
+            if stored_version == STORAGE_SCHEMA_VERSION - 1:
+                self._upgrade_session_schema_marker = True
             return True
         if any(type_counts.values()):
             raise StorageMigrationRequired(
@@ -1681,34 +1693,88 @@ class ArcadeDbStorage(BaseStorage):
             seen_ids.add(related_id)
         return related
 
-    def start_session(self) -> str:
+    def start_session(
+        self,
+        *,
+        owner_id: str = None,
+        team_id: str = None,
+        repo_id: str = None,
+    ) -> str:
         session_id = self._generate_id("session")
         now = utc_now().isoformat()
         with self._database() as db:
             with db.transaction():
                 db.command(
                     "sql",
-                    f"INSERT INTO {self.SESSION_TYPE} SET id = ?, started_at = ?",
+                    f"INSERT INTO {self.SESSION_TYPE} SET id = ?, owner_id = ?, "
+                    "team_id = ?, repo_id = ?, started_at = ?",
                     session_id,
+                    owner_id,
+                    team_id,
+                    repo_id,
                     now,
                 )
         return session_id
 
-    def end_session(self, session_id: str, summary: str, memory_ids: List[str]):
+    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        with self._database() as db:
+            records = self._rows(
+                db.query(
+                    "sql",
+                    f"SELECT FROM {self.SESSION_TYPE} WHERE id = ?",
+                    session_id,
+                )
+            )
+        if not records:
+            return None
+        record = records[0]
+        return {
+            "id": self._record_get(record, "id"),
+            "owner_id": self._record_get(record, "owner_id"),
+            "team_id": self._record_get(record, "team_id"),
+            "repo_id": self._record_get(record, "repo_id"),
+            "summary": self._record_get(record, "summary"),
+            "memory_ids": self._json_deserialize(
+                self._record_get(record, "memory_ids")
+            ) or [],
+            "started_at": self._record_get(record, "started_at"),
+            "ended_at": self._record_get(record, "ended_at"),
+        }
+
+    def end_session(
+        self, session_id: str, summary: str, memory_ids: List[str]
+    ) -> SessionCompletionStatus:
         ended_at = utc_now().isoformat()
         with self._database() as db:
             with db.transaction():
-                db.command(
-                    "sql",
-                    f"""
+                updated = self._rows(
+                    db.command(
+                        "sql",
+                        f"""
                     UPDATE {self.SESSION_TYPE}
                     SET summary = ?, memory_ids = ?, ended_at = ?
-                    WHERE id = ?
+                    WHERE id = ? AND ended_at IS NULL
+                    RETURN AFTER @this
                     """,
-                    summary,
-                    self._json_serialize(memory_ids),
-                    ended_at,
-                    session_id,
+                        summary,
+                        self._json_serialize(memory_ids),
+                        ended_at,
+                        session_id,
+                    )
+                )
+                if updated:
+                    return SessionCompletionStatus.COMPLETED
+                records = self._rows(
+                    db.query(
+                        "sql",
+                        f"SELECT FROM {self.SESSION_TYPE} WHERE id = ?",
+                        session_id,
+                    )
+                )
+                return (
+                    SessionCompletionStatus.ALREADY_COMPLETED
+                    if records
+                    else SessionCompletionStatus.NOT_FOUND
                 )
 
     def get_all_relationships(self, repo_id: str = None) -> List[Dict[str, Any]]:

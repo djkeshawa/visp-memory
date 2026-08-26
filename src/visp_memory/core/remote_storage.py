@@ -20,6 +20,7 @@ from visp_memory.core.storage import (
     BaseStorage,
     EvidenceImmutableError,
     MemoryLayer,
+    SessionCompletionStatus,
     StorageCapabilities,
 )
 
@@ -554,24 +555,47 @@ class RemoteStorage(BaseStorage):
             raise self._write_error("delete relationship", e) from e
 
     # Session Operations
-    def start_session(self) -> str:
+    def start_session(
+        self,
+        *,
+        owner_id: str = None,
+        team_id: str = None,
+        repo_id: str = None,
+    ) -> str:
         try:
-            response = self.session.post(f"{self.server_url}/sessions")
+            del owner_id, team_id
+            response = self.session.post(
+                f"{self.server_url}/sessions", json={"repo_id": repo_id}
+            )
             response.raise_for_status()
             return self._response_id(response, "start session")
         except requests.RequestException as e:
             raise self._write_error("start session", e) from e
 
-    def end_session(self, session_id: str, summary: str, memory_ids: List[str]):
+    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            response = self.session.get(f"{self.server_url}/sessions/{session_id}")
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            return self._response_json(response, "get session", dict)
+        except requests.RequestException as e:
+            raise self._write_error("get session", e) from e
+
+    def end_session(
+        self, session_id: str, summary: str, memory_ids: List[str]
+    ) -> SessionCompletionStatus:
         try:
             response = self.session.post(
                 f"{self.server_url}/sessions/{session_id}/complete",
                 json={"summary": summary, "memory_ids": memory_ids},
             )
             if response.status_code == 404:
-                return False
+                return SessionCompletionStatus.NOT_FOUND
+            if response.status_code == 409:
+                return SessionCompletionStatus.ALREADY_COMPLETED
             response.raise_for_status()
-            return True
+            return SessionCompletionStatus.COMPLETED
         except requests.RequestException as e:
             raise self._write_error("complete session", e) from e
 

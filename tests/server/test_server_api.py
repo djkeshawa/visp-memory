@@ -182,7 +182,9 @@ async def test_related_memories_and_sessions_round_trip(client):
     assert related.status_code == 200
     assert related.json() == []
 
-    started = await client.post("/sessions", headers=headers)
+    started = await client.post(
+        "/sessions", json={"repo_id": "repo-a"}, headers=headers
+    )
     assert started.status_code == 200
     session_id = started.json()["id"]
     completed = await client.post(

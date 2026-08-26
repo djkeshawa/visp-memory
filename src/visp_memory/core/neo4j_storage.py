@@ -26,6 +26,7 @@ from visp_memory.core.storage import (
     EvidenceUnsupportedError,
     LocalStorage,
     MemoryLayer,
+    SessionCompletionStatus,
     StorageCapabilities,
     StorageMigrationRequired,
 )
@@ -79,7 +80,10 @@ class Neo4jStorage(BaseStorage):
         "id", "username", "email", "display_name", "metadata", "created_at", "last_active",
     }
     TEAM_NODE_FIELDS = {"id", "name", "description", "metadata", "created_at"}
-    SESSION_NODE_FIELDS = {"id", "summary", "memory_ids", "started_at", "ended_at"}
+    SESSION_NODE_FIELDS = {
+        "id", "owner_id", "team_id", "repo_id", "summary", "memory_ids",
+        "started_at", "ended_at",
+    }
     AUDIT_NODE_FIELDS = {
         "id", "event_type", "actor_id", "repo_id", "target_type", "target_id", "metadata",
         "created_at",
@@ -114,6 +118,7 @@ class Neo4jStorage(BaseStorage):
         self._vector_index = self._vector_index_name(self._embedding_dimension)
         embedding_owner_name = embedding_owner.__class__.__name__.lower() if embedding_owner else ""
         self._uses_noop_embeddings = embedding_owner_name == "noopprovider"
+        self._upgrade_session_schema_marker = False
 
         try:
             self.driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password))
@@ -121,6 +126,8 @@ class Neo4jStorage(BaseStorage):
             marker_exists = self._probe_schema_compatibility()
             if not marker_exists:
                 self._ensure_schema_version()
+            elif self._upgrade_session_schema_marker:
+                self._upgrade_v4_session_schema()
             self._ensure_indexes()
         except Exception as e:
             logger.error(f"Failed to initialize Neo4j driver: {e}")
@@ -163,6 +170,12 @@ class Neo4jStorage(BaseStorage):
             session.run(
                 "CREATE CONSTRAINT session_id_unique IF NOT EXISTS "
                 "FOR (s:Session) REQUIRE s.id IS UNIQUE"
+            )
+            session.run(
+                "CREATE INDEX session_owner IF NOT EXISTS FOR (s:Session) ON (s.owner_id)"
+            )
+            session.run(
+                "CREATE INDEX session_repo IF NOT EXISTS FOR (s:Session) ON (s.repo_id)"
             )
             session.run(
                 "CREATE CONSTRAINT repo_id_unique IF NOT EXISTS "
@@ -236,9 +249,23 @@ class Neo4jStorage(BaseStorage):
                 )
             if stored_version < STORAGE_SCHEMA_VERSION:
                 raise StorageMigrationRequired(
-                    "Neo4j schema migration is not implemented; export the v2 store "
-                    "with its original build before using schema v3"
+                    "Neo4j schema marker could not be initialized at the current version"
                 )
+
+    def _upgrade_v4_session_schema(self) -> None:
+        """Advance the marker for additive Session properties on schema-less nodes."""
+        with self.driver.session() as session:
+            record = session.run(
+                """
+                MATCH (v:SchemaVersion {component: 'storage', version: $from_version})
+                SET v.version = $to_version, v.applied_at = datetime()
+                RETURN v.version AS version
+                """,
+                from_version=STORAGE_SCHEMA_VERSION - 1,
+                to_version=STORAGE_SCHEMA_VERSION,
+            ).single()
+        if not record or int(record["version"]) != STORAGE_SCHEMA_VERSION:
+            raise StorageMigrationRequired("Neo4j session schema marker upgrade failed")
 
     def _probe_schema_compatibility(self) -> bool:
         """Read marker and graph emptiness before any constraint or marker write."""
@@ -260,10 +287,10 @@ class Neo4jStorage(BaseStorage):
                         "Storage schema is newer than this visp-memory build "
                         f"({stored_version} > {STORAGE_SCHEMA_VERSION})"
                     )
-                if stored_version < STORAGE_SCHEMA_VERSION:
+                if stored_version < STORAGE_SCHEMA_VERSION - 1:
                     raise StorageMigrationRequired(
-                        "Neo4j schema migration is not implemented; export the v2 store "
-                        "with its original build before using schema v3"
+                        "Neo4j schema migration is not implemented; export the older store "
+                        f"with its original build before using schema v{STORAGE_SCHEMA_VERSION}"
                     )
                 if list(
                     session.run(
@@ -271,9 +298,11 @@ class Neo4jStorage(BaseStorage):
                     )
                 ):
                     raise StorageMigrationRequired(
-                        "Neo4j schema v3 cannot serve existing Memory nodes because "
+                        "Neo4j storage cannot serve existing Memory nodes because "
                         "the governed Evidence graph is unsupported"
                     )
+                if stored_version == STORAGE_SCHEMA_VERSION - 1:
+                    self._upgrade_session_schema_marker = True
                 return True
             if list(session.run("MATCH (n) RETURN true AS present LIMIT 1")):
                 raise StorageMigrationRequired(
@@ -1331,25 +1360,73 @@ class Neo4jStorage(BaseStorage):
         return bool(record and record["c"])
 
     # Session Ops
-    def start_session(self) -> str:
+    def start_session(
+        self,
+        *,
+        owner_id: str = None,
+        team_id: str = None,
+        repo_id: str = None,
+    ) -> str:
         sid = self._generate_id("session")
         with self.driver.session() as session:
-            session.run("create (s:Session {id: $id, started_at: datetime()})", id=sid)
+            session.run(
+                "CREATE (s:Session {id: $id, owner_id: $owner_id, team_id: $team_id, "
+                "repo_id: $repo_id, started_at: datetime()})",
+                id=sid,
+                owner_id=owner_id,
+                team_id=team_id,
+                repo_id=repo_id,
+            )
         return sid
 
-    def end_session(self, session_id: str, summary: str, memory_ids: List[str]):
+    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         with self.driver.session() as session:
-            session.run(
+            record = session.run(
                 """
                 MATCH (s:Session {id: $id})
+                RETURN s.id AS id, s.owner_id AS owner_id, s.team_id AS team_id,
+                       s.repo_id AS repo_id, s.summary AS summary,
+                       coalesce(s.memory_ids, []) AS memory_ids,
+                       s.started_at AS started_at, s.ended_at AS ended_at
+                """,
+                id=session_id,
+            ).single()
+        if not record:
+            return None
+        return self._normalize_node(
+            dict(record),
+            fields=self.SESSION_NODE_FIELDS,
+            json_fields={"memory_ids"},
+            defaults={"memory_ids": []},
+        )
+
+    def end_session(
+        self, session_id: str, summary: str, memory_ids: List[str]
+    ) -> SessionCompletionStatus:
+        with self.driver.session() as session:
+            record = session.run(
+                """
+                MATCH (s:Session {id: $id})
+                WHERE s.ended_at IS NULL
                 SET s.summary = $summary,
                     s.memory_ids = $mem_ids,
                     s.ended_at = datetime()
+                RETURN s.id AS id
             """,
                 id=session_id,
                 summary=summary,
                 mem_ids=memory_ids,
-            )
+            ).single()
+            if record:
+                return SessionCompletionStatus.COMPLETED
+            exists = session.run(
+                "MATCH (s:Session {id: $id}) RETURN s.id AS id", id=session_id
+            ).single()
+        return (
+            SessionCompletionStatus.ALREADY_COMPLETED
+            if exists
+            else SessionCompletionStatus.NOT_FOUND
+        )
 
     def get_stats(self, repo_id: str = None) -> Dict[str, Any]:
         with self.driver.session() as session:

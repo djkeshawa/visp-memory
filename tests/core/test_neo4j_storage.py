@@ -3,7 +3,12 @@ from types import SimpleNamespace
 import pytest
 
 from visp_memory.core.neo4j_storage import Neo4jStorage
-from visp_memory.core.storage import EvidenceUnsupportedError, StorageMigrationRequired
+from visp_memory.core.storage import (
+    EvidenceUnsupportedError,
+    SessionCompletionStatus,
+    StorageMigrationRequired,
+)
+from visp_memory.server.schemas import SessionResponse
 
 
 class FakeResult:
@@ -115,6 +120,49 @@ def test_neo4j_delete_memory_returns_true_when_deleted():
     query, params = storage.driver.session_obj.calls[0]
     assert "DETACH DELETE" in query
     assert params == {"id": "memory-id"}
+
+
+def test_neo4j_session_scope_and_completion_contract():
+    storage = neo4j_storage_with_delete_count(1)
+
+    session_id = storage.start_session(
+        owner_id="alice", team_id="team-a", repo_id="repo-a"
+    )
+    create_query, create_params = storage.driver.session_obj.calls[-1]
+    assert "owner_id" in create_query
+    assert create_params["owner_id"] == "alice"
+    assert create_params["repo_id"] == "repo-a"
+
+    storage.driver.session_obj.query_results["WHERE s.ended_at IS NULL"] = (
+        lambda _params: FakeResult(single_value={"id": session_id})
+    )
+    assert (
+        storage.end_session(session_id, "Done", ["memory-1"])
+        is SessionCompletionStatus.COMPLETED
+    )
+
+
+def test_neo4j_get_session_normalizes_temporal_values():
+    storage = neo4j_storage_with_delete_count(1)
+    storage.driver.session_obj.query_results["RETURN s.id AS id"] = (
+        lambda _params: FakeResult(
+            single_value={
+                "id": "session-1",
+                "owner_id": "alice",
+                "team_id": "team-a",
+                "repo_id": "repo-a",
+                "summary": None,
+                "memory_ids": [],
+                "started_at": FakeNeo4jDateTime(),
+                "ended_at": None,
+            }
+        )
+    )
+
+    session = storage.get_session("session-1")
+
+    assert session["started_at"] == "2026-06-06T00:00:00+00:00"
+    assert SessionResponse.model_validate(session).started_at is not None
 
 
 def test_neo4j_add_relationship_rejects_unsafe_relationship_type():
@@ -465,9 +513,12 @@ def test_neo4j_current_marker_memory_node_refuses_before_indexes_and_closes_driv
 
 def test_neo4j_current_marker_empty_memory_graph_proceeds_to_indexes(monkeypatch):
     driver = FakeDriver(0)
-    driver.session_obj.query_results["MATCH (v:SchemaVersion"] = lambda _params: (
-        FakeResult(records=[{"version": 4}])
-    )
+    def schema_marker(params):
+        if "to_version" in params:
+            return FakeResult(single_value={"version": params["to_version"]})
+        return FakeResult(records=[{"version": 4}])
+
+    driver.session_obj.query_results["MATCH (v:SchemaVersion"] = schema_marker
     driver.session_obj.query_results["MATCH (m:Memory)"] = lambda _params: FakeResult(
         records=[]
     )

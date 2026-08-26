@@ -16,6 +16,7 @@ from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import timedelta
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Literal, Optional
 
@@ -78,7 +79,7 @@ RECALL_EVENT_WEIGHTS: dict[str, float] = {
 # deliberately do not reinforce, to avoid popularity bias from mere exposure.
 REINFORCING_RECALL_EVENTS = frozenset({"used", "task_linked", "outcome_linked"})
 SENSITIVE_RECALL_METADATA_KEYS = {"prompt", "response", "query", "content", "messages"}
-STORAGE_SCHEMA_VERSION = 4
+STORAGE_SCHEMA_VERSION = 5
 _STORAGE_TABLE_NAMES = frozenset(
     {
         "audit_logs",
@@ -147,6 +148,19 @@ _V4_REQUIRED_COLUMNS = {
         "outcome", "metadata", "created_at",
     },
 }
+_V5_REQUIRED_COLUMNS = {
+    **_V4_REQUIRED_COLUMNS,
+    "sessions": _V4_REQUIRED_COLUMNS["sessions"]
+    | {"owner_id", "team_id", "repo_id"},
+}
+
+
+class SessionCompletionStatus(str, Enum):
+    """Result of atomically completing a persisted work session."""
+
+    COMPLETED = "completed"
+    NOT_FOUND = "not_found"
+    ALREADY_COMPLETED = "already_completed"
 
 
 #: Marks a repositories row the store created for itself because a write named
@@ -357,12 +371,25 @@ class BaseStorage(ABC):
 
     # Session Operations
     @abstractmethod
-    def start_session(self) -> str:
+    def start_session(
+        self,
+        *,
+        owner_id: str = None,
+        team_id: str = None,
+        repo_id: str = None,
+    ) -> str:
         """Start a session."""
         pass
 
     @abstractmethod
-    def end_session(self, session_id: str, summary: str, memory_ids: List[str]):
+    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Return persisted session metadata when supported."""
+        pass
+
+    @abstractmethod
+    def end_session(
+        self, session_id: str, summary: str, memory_ids: List[str]
+    ) -> SessionCompletionStatus:
         """End a session."""
         pass
 
@@ -525,7 +552,7 @@ class LocalStorage(BaseStorage):
                     "LocalStorage.migrate_schema(...)"
                 )
             if stored_version == STORAGE_SCHEMA_VERSION:
-                self._validate_v4_schema(conn)
+                self._validate_v5_schema(conn)
 
             # Enable WAL only after compatibility checks: it persists in the
             # database header and legacy stores must remain byte-for-byte unchanged.
@@ -710,12 +737,17 @@ class LocalStorage(BaseStorage):
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS sessions (
                     id TEXT PRIMARY KEY,
+                    owner_id TEXT DEFAULT NULL,
+                    team_id TEXT DEFAULT NULL,
+                    repo_id TEXT DEFAULT NULL,
                     summary TEXT,
                     memory_ids TEXT DEFAULT '[]',
                     started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     ended_at TIMESTAMP DEFAULT NULL
                 )
             """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_repo ON sessions(repo_id)")
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS repositories (
@@ -1041,6 +1073,7 @@ class LocalStorage(BaseStorage):
                         raise ValueError(
                             f"semantic memory {row['id']!r} has divergent category and type"
                         )
+
                 elif row["belief_type"] is not None or row["epistemic_status"] is not None:
                     raise ValueError(
                         f"non-semantic memory {row['id']!r} carries semantic belief fields"
@@ -1113,6 +1146,20 @@ class LocalStorage(BaseStorage):
                 f"Storage schema 4 is malformed: {exc}; restore a valid backup or "
                 "run a supported migration"
             ) from exc
+
+    @classmethod
+    def _validate_v5_schema(cls, conn: sqlite3.Connection) -> None:
+        """Refuse a malformed declared-v5 graph without repairing it."""
+        cls._validate_v4_schema(conn)
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(sessions)")
+        }
+        missing = _V5_REQUIRED_COLUMNS["sessions"] - columns
+        if missing:
+            raise StorageMigrationRequired(
+                "Declared schema v5 sessions table is missing columns: "
+                + ", ".join(sorted(missing))
+            )
 
     def import_graph(
         self, data: Dict[str, Any], *, default_repo_id: str
@@ -1643,7 +1690,7 @@ class LocalStorage(BaseStorage):
 
     @classmethod
     def migrate_schema(cls, data_dir: Path, *, backup_path: Path) -> Dict[str, Any]:
-        """Explicitly migrate a backed-up SQLite v2/v3 store to schema v4."""
+        """Explicitly migrate a backed-up SQLite v2/v3/v4 store to schema v5."""
         data_dir = Path(data_dir)
         db_path = data_dir / "memories.db"
         backup_path = Path(backup_path)
@@ -1666,9 +1713,9 @@ class LocalStorage(BaseStorage):
                 "to_version": STORAGE_SCHEMA_VERSION,
                 "status": "already_current",
             }
-        if stored_version not in {2, 3}:
+        if stored_version not in {2, 3, 4}:
             raise StorageMigrationRequired(
-                f"Only schema versions 2 and 3 can be migrated to "
+                f"Only schema versions 2, 3 and 4 can be migrated to "
                 f"{STORAGE_SCHEMA_VERSION}; "
                 f"found {stored_version}"
             )
@@ -1677,8 +1724,10 @@ class LocalStorage(BaseStorage):
             validation_conn.row_factory = sqlite3.Row
             if stored_version == 2:
                 cls._prevalidate_legacy_evidence_content(validation_conn)
-            else:
+            elif stored_version == 3:
                 cls._prevalidate_v3_graph(validation_conn)
+            else:
+                cls._validate_v4_schema(validation_conn)
 
         if backup_path.exists():
             raise FileExistsError(f"Migration backup already exists: {backup_path}")
@@ -1717,8 +1766,11 @@ class LocalStorage(BaseStorage):
                 raise RuntimeError(
                     f"Evidence migration integrity check found {invalid_hashes} invalid hashes"
                 )
-            cls._migrate_v3_to_v4(conn)
-            conn.execute("INSERT INTO schema_migrations(version) VALUES (4)")
+            if stored_version < 4:
+                cls._migrate_v3_to_v4(conn)
+                conn.execute("INSERT INTO schema_migrations(version) VALUES (4)")
+            cls._migrate_v4_to_v5(conn)
+            conn.execute("INSERT INTO schema_migrations(version) VALUES (5)")
             conn.commit()
         except Exception:
             conn.rollback()
@@ -1954,6 +2006,15 @@ class LocalStorage(BaseStorage):
                     row["id"],
                 ),
             )
+
+    @staticmethod
+    def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
+        """Bind new sessions to a principal and repository; legacy rows stay unbound."""
+        conn.execute("ALTER TABLE sessions ADD COLUMN owner_id TEXT DEFAULT NULL")
+        conn.execute("ALTER TABLE sessions ADD COLUMN team_id TEXT DEFAULT NULL")
+        conn.execute("ALTER TABLE sessions ADD COLUMN repo_id TEXT DEFAULT NULL")
+        conn.execute("CREATE INDEX idx_sessions_owner ON sessions(owner_id)")
+        conn.execute("CREATE INDEX idx_sessions_repo ON sessions(repo_id)")
 
     @staticmethod
     def _ensure_supporting_v4_schema(conn: sqlite3.Connection) -> None:
@@ -3816,28 +3877,62 @@ class LocalStorage(BaseStorage):
             conn.commit()
         return result.rowcount > 0
 
-    def start_session(self) -> str:
+    def start_session(
+        self,
+        *,
+        owner_id: str = None,
+        team_id: str = None,
+        repo_id: str = None,
+    ) -> str:
         """Start a new session for tracking."""
         session_id = self._generate_id("session")
 
         with self._get_db() as conn:
-            conn.execute("INSERT INTO sessions (id) VALUES (?)", (session_id,))
+            conn.execute(
+                "INSERT INTO sessions (id, owner_id, team_id, repo_id) VALUES (?, ?, ?, ?)",
+                (session_id, owner_id, team_id, repo_id),
+            )
             conn.commit()
 
         return session_id
 
-    def end_session(self, session_id: str, summary: str, memory_ids: List[str]):
-        """End a session with summary."""
+    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         with self._get_db() as conn:
-            conn.execute(
+            row = conn.execute(
+                "SELECT id, owner_id, team_id, repo_id, summary, memory_ids, "
+                "started_at, ended_at FROM sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        session = dict(row)
+        session["memory_ids"] = self._json_deserialize(session.get("memory_ids")) or []
+        return session
+
+    def end_session(
+        self, session_id: str, summary: str, memory_ids: List[str]
+    ) -> SessionCompletionStatus:
+        """Atomically complete an open session."""
+        with self._get_db() as conn:
+            result = conn.execute(
                 """
                 UPDATE sessions
                 SET summary = ?, memory_ids = ?, ended_at = CURRENT_TIMESTAMP
-                WHERE id = ?
+                WHERE id = ? AND ended_at IS NULL
             """,
                 (summary, self._json_serialize(memory_ids), session_id),
             )
             conn.commit()
+            if result.rowcount:
+                return SessionCompletionStatus.COMPLETED
+            exists = conn.execute(
+                "SELECT 1 FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+        return (
+            SessionCompletionStatus.ALREADY_COMPLETED
+            if exists
+            else SessionCompletionStatus.NOT_FOUND
+        )
 
     def get_stats(self, repo_id: str = None) -> Dict[str, Any]:
         """Get storage statistics."""
