@@ -17,6 +17,7 @@ from visp_memory.core.eligibility import (
     normalize_optional_scope_values,
     require_repo_id,
 )
+from visp_memory.core.ranking import graph_edge_score
 from visp_memory.core.trust import TrustFilterResult, filter_unsolicited
 
 # The intent layer stores its verbs as description prefixes ("WORKING ON: ...").
@@ -40,6 +41,21 @@ _UNSET = object()
 # non-authoritative history entries - they say what was reported, not that the
 # task is finished, and reading them here changes no stored status.
 _SETTLED_OUTCOMES = frozenset({"completed", "closed"})
+_INJECTION_MEMORY_LIMIT = 4
+_RELATED_CANDIDATE_LIMIT = 16
+_RELATED_MIN_CONFIDENCE = 0.5
+_MEMORY_CONTEXT_KEYS = (
+    "warnings",
+    "bugs",
+    "decisions",
+    "knowledge",
+    "related",
+    "conventions",
+    "recent_changes",
+    "patterns",
+    "recent_activity",
+    "history",
+)
 
 
 def _has_completion_outcome(intent: Dict[str, Any]) -> bool:
@@ -174,6 +190,7 @@ class ProactiveRecall:
             "bugs": [],
             "decisions": [],
             "knowledge": [],
+            "related": [],
             "recent_changes": [],
         }
 
@@ -278,6 +295,53 @@ class ProactiveRecall:
             min_score=None,
         )
 
+        if include_related:
+            direct_ids = list(
+                dict.fromkeys(
+                    item.get("id")
+                    for key in (
+                        "warnings",
+                        "bugs",
+                        "decisions",
+                        "knowledge",
+                        "recent_changes",
+                    )
+                    for item in results[key]
+                    if item.get("id")
+                )
+            )
+            related_candidates: List[Dict[str, Any]] = []
+            seen_related = set(direct_ids)
+            for source_id in direct_ids:
+                for item in self.memory._storage.get_related_memories(source_id):
+                    related_id = item.get("id")
+                    if not related_id or related_id in seen_related:
+                        continue
+                    if graph_edge_score(
+                        item.get("strength"), item.get("relationship_evidence")
+                    ) < _RELATED_MIN_CONFIDENCE:
+                        continue
+                    seen_related.add(related_id)
+                    related_candidates.append(item)
+                    if len(related_candidates) >= _RELATED_CANDIDATE_LIMIT:
+                        break
+                if len(related_candidates) >= _RELATED_CANDIDATE_LIMIT:
+                    break
+
+            trusted_related = self._trusted(
+                related_candidates,
+                trust_results,
+                eligibility_results,
+            )
+            results["related"] = self.memory.rank_with_context(
+                trusted_related,
+                query=file_path,
+                repo_id=repo_id,
+                files=[file_path],
+                limit=_INJECTION_MEMORY_LIMIT,
+                min_score=None,
+            )
+
         results["active_intent"] = self.active_intent()
 
         self.last_trust_filter = TrustFilterResult.combine(trust_results).diagnostics()
@@ -307,6 +371,7 @@ class ProactiveRecall:
             "bugs": [],
             "decisions": [],
             "knowledge": [],
+            "related": [],
         }
         for file in files:
             file_context = self.on_file_open(file)
@@ -568,6 +633,8 @@ class ProactiveRecall:
         Returns:
             Formatted string for injection
         """
+        memories = self._budget_injection_memories(memories)
+
         if format == "json":
             import json
 
@@ -615,6 +682,12 @@ class ProactiveRecall:
                 lines.append(f"  • {content}")
             lines.append("")
 
+        if memories.get("related"):
+            lines.append("🔗 **Related Context**")
+            for item in memories["related"]:
+                lines.append(f"  • {item['content'][:150]}")
+            lines.append("")
+
         # Add conventions
         if memories.get("conventions"):
             lines.append("📐 **Conventions**")
@@ -638,6 +711,34 @@ class ProactiveRecall:
             output = output[: max_length - 100] + "\n\n... (truncated for length)"
 
         return output
+
+    @staticmethod
+    def _budget_injection_memories(
+        context: Dict[str, Any], limit: int = _INJECTION_MEMORY_LIMIT
+    ) -> Dict[str, Any]:
+        """Return a de-duplicated copy with one budget across every memory section."""
+        budgeted = dict(context)
+        seen_ids = set()
+        selected = 0
+        for key in _MEMORY_CONTEXT_KEYS:
+            values = context.get(key)
+            if not isinstance(values, list):
+                continue
+            kept = []
+            for item in values:
+                if not isinstance(item, dict):
+                    continue
+                memory_id = item.get("id")
+                dedupe_key = memory_id or (item.get("layer"), item.get("content"))
+                if dedupe_key in seen_ids:
+                    continue
+                if selected >= limit:
+                    break
+                seen_ids.add(dedupe_key)
+                kept.append(item)
+                selected += 1
+            budgeted[key] = kept
+        return budgeted
 
     def find_relevant_for_task(
         self, task_description: str, files: List[str] = None, limit: int = 10
