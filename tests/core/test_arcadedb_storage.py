@@ -32,6 +32,7 @@ from visp_memory.core.storage import (
     EvidenceImmutableError,
     EvidenceReferenceError,
     LocalStorage,
+    SemanticMemoryImmutableError,
     SessionCompletionStatus,
     StorageMigrationRequired,
 )
@@ -429,6 +430,34 @@ def test_arcadedb_memory_listing_supports_offsets(fake_arcadedb, tmp_path):
     )
 
     assert [item["id"] for item in page] == memory_ids[1:]
+
+
+def test_arcadedb_semantic_content_is_immutable_and_episodic_updates_redact(
+    fake_arcadedb, tmp_path
+):
+    storage = ArcadeDbStorage(tmp_path)
+    evidence_id = storage.store_evidence("Observed semantic content", repo_id="repo-a")
+    belief_id = storage.store_memory(
+        "Immutable governed fact",
+        layer="semantic",
+        repo_id="repo-a",
+        evidence_ids=[evidence_id],
+        auto_link=False,
+    )
+
+    with pytest.raises(SemanticMemoryImmutableError):
+        storage.update_memory(belief_id, content="Attempted replacement")
+    assert storage.get_memory(belief_id)["content"] == "Immutable governed fact"
+
+    episodic_id = storage.store_memory(
+        "Mutable observation", repo_id="repo-a", auto_link=False
+    )
+    secret = "sk-proj-abcdefghijklmnopqrstuvwxyz123456"
+    assert storage.update_memory(episodic_id, content=f"Updated with {secret}") is True
+
+    updated = storage.get_memory(episodic_id)
+    assert secret not in updated["content"]
+    assert "secret_redacted" in updated["quality_flags"]
 
 
 def test_arcadedb_persists_evidence_separately_and_validates_beliefs_atomically(

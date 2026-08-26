@@ -424,6 +424,59 @@ def test_neo4j_update_memory_refreshes_dimension_specific_vector():
     assert vector_params["embedding"] == [15.0, 0.0]
 
 
+def test_neo4j_memory_reads_normalize_contract_fields_and_search_scores():
+    storage = neo4j_storage_with_delete_count(0)
+    session = storage.driver.session_obj
+    node = {
+        "id": "memory-1",
+        "content": "Deploy authentication safely",
+        "layer": "intent",
+        "repo_id": "repo-a",
+        "category": "general",
+        "tags": '["deploy"]',
+        "metadata": '{"environment": "prod"}',
+        "source_ids": "[]",
+        "quality_flags": "[]",
+        "status": "active",
+        "access_count": 2,
+        "created_at": FakeNeo4jDateTime(),
+        "embedding_3": [0.1, 0.2, 0.3],
+        "private_driver_property": "must not escape",
+    }
+    session.query_results["SET m.access_count"] = lambda _params: FakeResult(
+        single_value={"m": node}
+    )
+    session.query_results["RETURN m, 0.0 as score"] = lambda _params: FakeResult(
+        records=[{"m": node, "score": 0.87}]
+    )
+
+    memory = storage.get_memory("memory-1")
+
+    assert memory["id"] == "memory-1"
+    assert memory["tags"] == ["deploy"]
+    assert memory["metadata"] == {"environment": "prod"}
+    assert memory["created_at"] == "2026-06-06T00:00:00+00:00"
+    assert "embedding_3" not in memory
+    assert "private_driver_property" not in memory
+
+    results = storage.search_memories("authentication", repo_id="repo-a", limit=1)
+
+    assert results[0]["id"] == "memory-1"
+    assert results[0]["similarity"] == 0.87
+    search_params = session.calls[-1][1]
+    assert search_params["repo_id"] == "repo-a"
+    assert search_params["exclude_raw"] is True
+
+
+def test_neo4j_semantic_content_updates_are_filtered_by_storage_contract():
+    storage = neo4j_storage_with_delete_count(0)
+
+    assert storage.update_memory("semantic-id", content="replacement") is False
+
+    query, _params = storage.driver.session_obj.calls[0]
+    assert "coalesce(m.layer, '') <> 'semantic'" in query
+
+
 def test_neo4j_store_memory_rejects_invalid_layer():
     storage = neo4j_storage_with_delete_count(1)
 

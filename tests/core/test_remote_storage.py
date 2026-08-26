@@ -138,6 +138,29 @@ def test_remote_storage_write_requires_returned_id():
         storage.store_memory("remember this")
 
 
+def test_remote_memory_delete_and_purge_use_distinct_confirmation_contracts():
+    storage = remote_storage_with(FakeResponse(204))
+
+    assert storage.delete_memory("memory-1") is True
+    assert storage.session.last_delete_url == "http://memory.example/memories/memory-1"
+    assert storage.session.last_delete_params is None
+
+    storage = remote_storage_with(FakeResponse(200, {"purged_ids": ["memory-1"]}))
+
+    assert storage.purge_memory("memory-1") is True
+    assert storage.session.last_delete_url == (
+        "http://memory.example/memories/memory-1/purge"
+    )
+    assert storage.session.last_delete_params == {"confirmation": "memory-1"}
+
+
+def test_remote_memory_delete_and_purge_report_missing_rows_without_success():
+    for operation in ("delete_memory", "purge_memory"):
+        storage = remote_storage_with(FakeResponse(404))
+
+        assert getattr(storage, operation)("missing-memory") is False
+
+
 def test_remote_storage_evidence_contract_and_immutability():
     storage = remote_storage_with(FakeResponse(200, {"id": "evidence-1"}))
 

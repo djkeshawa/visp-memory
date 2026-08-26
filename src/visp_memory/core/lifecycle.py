@@ -224,14 +224,15 @@ class MemoryLifecycleManager:
                 *(target_metadata.get("merge_operation_ids") or []),
                 operation_id,
             ]
-            self.storage.update_memory(
-                target["id"],
-                content=preview["target_content"],
-                importance=max(float(memory.get("importance", 0.5)) for memory in memories),
-                tags=preview["merged_tags"],
-                metadata=target_metadata,
-                status="active",
-            )
+            target_updates = {
+                "importance": max(float(memory.get("importance", 0.5)) for memory in memories),
+                "tags": preview["merged_tags"],
+                "metadata": target_metadata,
+                "status": "active",
+            }
+            if target.get("layer") != "semantic":
+                target_updates["content"] = preview["target_content"]
+            self.storage.update_memory(target["id"], **target_updates)
             for memory in memories:
                 if memory["id"] == target["id"]:
                     continue
