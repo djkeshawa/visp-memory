@@ -163,3 +163,34 @@ async def test_repository_archive_restore_and_confirmed_purge(client):
     assert (await client.get("/repos/lifecycle-repo", headers=headers)).status_code == 404
     memory_lookup = await client.get(f"/memories/{memory.json()['id']}", headers=headers)
     assert memory_lookup.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_reflection_materialization_requires_a_writable_repository(client):
+    headers = {"X-API-KEY": "test_key"}
+    await client.post(
+        "/repos",
+        json={"name": "Reflection", "id": "reflection-repo"},
+        headers=headers,
+    )
+    first = await client.post(
+        "/memories", json={"content": "Evidence one", "repo_id": "reflection-repo"}, headers=headers
+    )
+    second = await client.post(
+        "/memories", json={"content": "Evidence two", "repo_id": "reflection-repo"}, headers=headers
+    )
+    assert first.status_code == second.status_code == 200
+    await client.post("/repos/reflection-repo/archive", headers=headers)
+
+    response = await client.post(
+        "/ai/reflections",
+        json={
+            "repo_id": "reflection-repo",
+            "title": "Archived runbook",
+            "evidence_ids": [first.json()["id"], second.json()["id"]],
+            "reviewed": True,
+        },
+        headers=headers,
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Repository is archived and does not accept new writes"

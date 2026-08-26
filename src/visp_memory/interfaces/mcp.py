@@ -39,10 +39,15 @@ the stateless streamable-HTTP transport instead: ``visp-memory-mcp-http``
 server built by :func:`create_mcp_server`.
 """
 
+from __future__ import annotations
+
 import json
 import logging
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any, Iterator
 
 import anyio
 
@@ -55,6 +60,7 @@ try:
         PromptArgument,
         PromptMessage,
         Resource,
+        ResourceTemplate,
         SamplingMessage,
         TextContent,
         Tool,
@@ -80,6 +86,7 @@ from visp_memory.core.embedding_status import (
     LEXICAL_RECALL_BANNER,
     LEXICAL_SCORE_LABEL,
 )
+from visp_memory.core.model_router import ModelUnavailableError
 from visp_memory.core.ranking import projected_importance
 from visp_memory.core.trust import WriteChannel
 
@@ -88,14 +95,21 @@ from visp_memory.core.trust import WriteChannel
 # namespace tests and integrators import from.
 from visp_memory.interfaces.mcp_tools import (  # noqa: F401,E402
     CORE_TOOL_NAMES,
+    HTTP_HIDDEN_TOOL_NAMES,
+    HTTP_REPO_TOOL_NAMES,
+    HTTP_REPO_WRITE_TOOL_NAMES,
     READONLY_TOOL_NAMES,
     RUNTIME_SCOPE_SCHEMA,
     VALID_MCP_PROFILES,
     _filter_tools_by_profile,
+    _http_scoped_tool,
     _profile_tool_names,
     _resolve_tool_profile,
     build_tool_definitions,
 )
+
+if TYPE_CHECKING:
+    from visp_memory.server.auth import UserContext
 
 logger = logging.getLogger("visp-memory-mcp")
 
@@ -106,6 +120,196 @@ VALID_LAYERS = frozenset({"raw", "episodic", "semantic", "intent"})
 VALID_INTENT_STATUSES = frozenset({"active", "completed", "closed"})
 
 
+@dataclass(frozen=True)
+class MCPRequestContext:
+    """Transport and principal metadata for one MCP request."""
+
+    transport: str = "stdio"
+    principal: UserContext | None = None
+    request_id: str | None = None
+    require_explicit_scope: bool = False
+
+
+_request_context: ContextVar[MCPRequestContext] = ContextVar(
+    "visp_memory_mcp_request_context", default=MCPRequestContext()
+)
+
+
+def current_mcp_request_context() -> MCPRequestContext:
+    """Return the current transport context, defaulting to the stdio contract."""
+    return _request_context.get()
+
+
+@contextmanager
+def bind_mcp_request_context(context: MCPRequestContext) -> Iterator[None]:
+    """Bind request metadata across the MCP SDK's child tasks and worker thread."""
+    token = _request_context.set(context)
+    try:
+        yield
+    finally:
+        _request_context.reset(token)
+
+
+class MCPAuthorizationError(RuntimeError):
+    """A safe, actionable authorization refusal for an MCP client."""
+
+
+def _mcp_error_payload(code: str, message: str, **extra: Any) -> dict[str, Any]:
+    """Return the stable, correlated shape used for client-visible MCP errors."""
+    payload: dict[str, Any] = {
+        "success": False,
+        "code": code,
+        "request_id": current_mcp_request_context().request_id,
+        "message": message,
+    }
+    payload.update(extra)
+    return payload
+
+
+def _mcp_error_text(code: str, message: str, **extra: Any) -> str:
+    return json.dumps(_mcp_error_payload(code, message, **extra))
+
+
+def _requires_explicit_scope() -> bool:
+    """Treat HTTP as scoped even for callers that build the legacy context shape."""
+    context = current_mcp_request_context()
+    return context.require_explicit_scope or context.transport == "http"
+
+
+def _http_resource_templates() -> list[ResourceTemplate]:
+    """Describe only resources that carry an explicit repository scope."""
+    return [
+        ResourceTemplate(
+            uriTemplate="memory://repo/{repo_id}/context",
+            name="Repository Memory Context",
+            description="Full memory context for one repository",
+            mimeType="text/markdown",
+        ),
+        ResourceTemplate(
+            uriTemplate="memory://repo/{repo_id}/warnings",
+            name="Repository Warnings",
+            description="Warnings for one repository",
+            mimeType="text/plain",
+        ),
+        ResourceTemplate(
+            uriTemplate="memory://repo/{repo_id}/goals",
+            name="Repository Goals",
+            description="Active goals for one repository",
+            mimeType="text/plain",
+        ),
+        ResourceTemplate(
+            uriTemplate="memory://repo/{repo_id}/conventions",
+            name="Repository Conventions",
+            description="Conventions for one repository",
+            mimeType="text/plain",
+        ),
+        ResourceTemplate(
+            uriTemplate="memory://repo/{repo_id}/stats",
+            name="Repository Memory Statistics",
+            description="Memory statistics for one repository",
+            mimeType="application/json",
+        ),
+        ResourceTemplate(
+            uriTemplate="memory://repo/{repo_id}/file/{path}",
+            name="Repository File Context",
+            description="Context for a file in one repository",
+            mimeType="text/markdown",
+        ),
+        ResourceTemplate(
+            uriTemplate="memory://repo/{repo_id}/session",
+            name="Repository Session",
+            description="Current session context for one repository",
+            mimeType="text/markdown",
+        ),
+    ]
+
+
+def _read_http_resource(uri_str: str, memory: Memory) -> str:
+    """Read a repository resource after validating its explicit URI scope."""
+    from urllib.parse import unquote
+
+    parts = uri_str.split("/", 4)
+    if len(parts) < 5 or parts[:3] != ["memory:", "", "repo"]:
+        raise ValueError(
+            _mcp_error_text(
+                "authorization_denied",
+                "An explicit repository-scoped resource URI is required over HTTP.",
+            )
+        )
+
+    repo_id = unquote(parts[3])
+    resource = unquote(parts[4])
+    try:
+        _http_authorize_repo(repo_id, memory, write=False)
+    except MCPAuthorizationError as error:
+        logger.warning(
+            "MCP resource authorization denied request_id=%s reason=%s",
+            current_mcp_request_context().request_id,
+            error,
+        )
+        raise ValueError(
+            _mcp_error_text(
+                "authorization_denied",
+                "The requested resource is not available to this token.",
+            )
+        ) from error
+
+    if resource == "context":
+        return memory.context(format="text", repo_id=repo_id)
+    if resource == "warnings":
+        warnings = memory.semantic.get_warnings(repo_id=repo_id)
+        return "No warnings." if not warnings else "\n".join(
+            f"- {warning['content']}" for warning in warnings
+        )
+    if resource == "goals":
+        intents = memory.intent.get_active(repo_id=repo_id)
+        if not intents:
+            return "No active goals."
+        priority_labels = {0: "LOW", 1: "NORMAL", 2: "HIGH", 3: "CRITICAL"}
+        return "\n".join(
+            f"[{priority_labels.get(intent.get('priority', 1), str(intent.get('priority')))}] "
+            f"{intent['description']}"
+            for intent in intents
+        )
+    if resource == "conventions":
+        conventions = memory.semantic.get_conventions(repo_id=repo_id)
+        return "No conventions established." if not conventions else "\n".join(
+            f"- {convention['content']}" for convention in conventions
+        )
+    if resource == "stats":
+        return json.dumps(memory.stats(repo_id=repo_id), indent=2)
+    if resource == "session":
+        summary = memory.intent.summarize(repo_id=repo_id)
+        lines = ["# Current Session\n"]
+        if summary.get("current_task"):
+            lines.append(f"**Current Task:** {summary['current_task']['description']}\n")
+        if summary.get("focus"):
+            lines.append(f"**Focus:** {summary['focus']['description']}\n")
+        if summary.get("constraints"):
+            lines.append("\n**Constraints:**")
+            lines.extend(f"- {constraint}" for constraint in summary["constraints"])
+            lines.append("")
+        recent = memory.episodic.recent(limit=5, repo_id=repo_id)
+        if recent:
+            lines.append("\n**Recent Activity:**")
+            lines.extend(
+                f"- [{item['category']}] {item['content'][:100]}" for item in recent
+            )
+        return "\n".join(lines)
+    if resource.startswith("file/"):
+        from visp_memory.recall.proactive import ProactiveRecall
+
+        file_path = resource[len("file/") :]
+        recall = ProactiveRecall(memory, repo_id=repo_id)
+        context = recall.on_file_open(file_path)
+        formatted = recall.format_injection(context, format="markdown")
+        return f"# Context for {file_path}\n\n{formatted}"
+
+    raise ValueError(
+        _mcp_error_text("resource_not_found", "The requested memory resource is not available.")
+    )
+
+
 def create_mcp_server() -> "Server":
     """Create and configure the MCP server."""
     if not MCP_AVAILABLE:
@@ -113,6 +317,9 @@ def create_mcp_server() -> "Server":
 
     server = Server("visp-memory")
     memory = Memory()
+    # The HTTP wrapper needs the same Memory config to select the credential
+    # database. Keep this private attachment out of the public MCP API.
+    server._visp_memory = memory
 
     # =========================================================================
     # Tool Definitions
@@ -124,6 +331,12 @@ def create_mcp_server() -> "Server":
         all_tools = build_tool_definitions()
         profile = _resolve_tool_profile()
         tools = _filter_tools_by_profile(all_tools, profile)
+        if _requires_explicit_scope():
+            tools = [tool for tool in tools if tool.name not in HTTP_HIDDEN_TOOL_NAMES]
+            tools = [
+                _http_scoped_tool(tool) if tool.name in HTTP_REPO_TOOL_NAMES else tool
+                for tool in tools
+            ]
         logger.info(
             "Advertising %d/%d MCP tools (profile=%s)", len(tools), len(all_tools), profile
         )
@@ -145,17 +358,29 @@ def create_mcp_server() -> "Server":
         if profile != "full":
             allowed = _profile_tool_names(profile, frozenset())
             if name not in allowed:
-                refusal = {
-                    "success": False,
-                    "error": "tool_not_in_profile",
-                    "profile": profile,
-                    "tool": name,
-                    "reason": (
-                        f"The active MCP profile '{profile}' does not permit {name}. "
-                        "Set VISP_MEMORY_MCP_PROFILE=full to expose the full surface."
-                    ),
-                }
-                return [TextContent(type="text", text=json.dumps(refusal))]
+                message = (
+                    f"The active MCP profile '{profile}' does not permit {name}. "
+                    "Set VISP_MEMORY_MCP_PROFILE=full to expose the full surface."
+                )
+                logger.warning(
+                    "MCP tool denied by profile request_id=%s tool=%s profile=%s",
+                    current_mcp_request_context().request_id,
+                    name,
+                    profile,
+                )
+                return [
+                    TextContent(
+                        type="text",
+                        text=_mcp_error_text(
+                            "tool_not_in_profile",
+                            message,
+                            error="tool_not_in_profile",
+                            profile=profile,
+                            tool=name,
+                            reason=message,
+                        ),
+                    )
+                ]
         try:
             if name == "memory_model_task":
                 from visp_memory.core.model_router import ModelRouter
@@ -201,25 +426,86 @@ def create_mcp_server() -> "Server":
                         "text": output,
                     }
                 else:
-                    result = ModelRouter(memory.config.llm).complete(
-                        task,
-                        prompt,
-                        system_prompt=system_prompt or None,
+                    # ModelRouter is deliberately synchronous. A stateless HTTP
+                    # request must not pin the event loop while a provider waits on
+                    # network I/O or retries.
+                    result = await anyio.to_thread.run_sync(
+                        lambda: ModelRouter(memory.config.llm).complete(
+                            task,
+                            prompt,
+                            system_prompt=system_prompt or None,
+                        )
                     )
                 return [TextContent(type="text", text=json.dumps(result, indent=2))]
             result = await handle_tool(name, arguments, memory)
             return [TextContent(type="text", text=result)]
-        except Exception as e:
-            logger.error(f"Error handling tool {name}: {e}")
-            return [TextContent(type="text", text=f"Error: {str(e)}")]
+        except MCPAuthorizationError as error:
+            logger.warning(
+                "MCP authorization denied request_id=%s tool=%s reason=%s",
+                current_mcp_request_context().request_id,
+                name,
+                error,
+            )
+            return [
+                TextContent(
+                    type="text",
+                    text=_mcp_error_text(
+                        "authorization_denied",
+                        str(error),
+                        error="authorization_denied",
+                    ),
+                )
+            ]
+        except ModelUnavailableError:
+            # Keep the operator repair, but never echo provider-generated text.
+            logger.warning(
+                "MCP model unavailable request_id=%s tool=%s",
+                current_mcp_request_context().request_id,
+                name,
+            )
+            return [
+                TextContent(
+                    type="text",
+                    text=_mcp_error_text(
+                        "model_unavailable",
+                        "No server-side LLM provider is configured.",
+                    ),
+                )
+            ]
+        except Exception:
+            # Exception text can contain provider responses, filesystem paths, SQL,
+            # or credentials. Keep it in server logs only.
+            logger.exception(
+                "Error handling MCP tool request_id=%s tool=%s",
+                current_mcp_request_context().request_id,
+                name,
+            )
+            return [
+                TextContent(
+                    type="text",
+                    text=_mcp_error_text(
+                        "request_failed",
+                        "The server could not complete the request; check server logs.",
+                    ),
+                )
+            ]
 
     # =========================================================================
     # Resources
     # =========================================================================
 
+    @server.list_resource_templates()
+    async def list_resource_templates() -> list[ResourceTemplate]:
+        """Advertise repository-scoped resources only to the HTTP transport."""
+        if not _requires_explicit_scope():
+            return []
+        return _http_resource_templates()
+
     @server.list_resources()
     async def list_resources() -> list[Resource]:
         """List available memory resources."""
+        if _requires_explicit_scope():
+            return []
         return [
             Resource(
                 uri="memory://context",
@@ -269,6 +555,8 @@ def create_mcp_server() -> "Server":
     async def read_resource(uri: AnyUrl) -> str:
         """Read a memory resource."""
         uri_str = str(uri)
+        if _requires_explicit_scope():
+            return _read_http_resource(uri_str, memory)
         if uri_str == "memory://context":
             return memory.context(format="text")
 
@@ -348,6 +636,8 @@ def create_mcp_server() -> "Server":
     @server.list_prompts()
     async def list_prompts() -> list[Prompt]:
         """List available prompts."""
+        if current_mcp_request_context().transport == "http":
+            return []
         return [
             Prompt(
                 name="start_session",
@@ -386,6 +676,10 @@ def create_mcp_server() -> "Server":
     @server.get_prompt()
     async def get_prompt(name: str, arguments: dict[str, str] | None) -> GetPromptResult:
         """Get a prompt by name."""
+        if current_mcp_request_context().transport == "http":
+            raise ValueError(
+                "Prompts are unavailable over stateless HTTP; use a scoped MCP tool."
+            )
         if name == "start_session":
             context = memory.context(format="text")
             return GetPromptResult(
@@ -628,7 +922,9 @@ def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
         )
 
     elif name == "memory_relevant":
-        relevant = memory.relevant_for(task=args.get("task"), files=args.get("files"))
+        relevant = memory.relevant_for(
+            task=args.get("task"), files=args.get("files"), repo_id=args.get("repo_id")
+        )
         return _format_relevant_memory(relevant, memory)
 
     return f"Unknown search tool: {name}"
@@ -639,7 +935,7 @@ def _handle_proactive(name: str, args: dict[str, Any], memory: Memory) -> str:
     if name == "memory_file_context":
         from visp_memory.recall.proactive import ProactiveRecall
 
-        recall = ProactiveRecall(memory)
+        recall = ProactiveRecall(memory, repo_id=args.get("repo_id"))
 
         context = recall.on_file_open(
             file_path=args["file_path"], include_related=args.get("include_related", True)
@@ -651,7 +947,7 @@ def _handle_proactive(name: str, args: dict[str, Any], memory: Memory) -> str:
     elif name == "memory_find_error":
         from visp_memory.recall.proactive import ProactiveRecall
 
-        recall = ProactiveRecall(memory)
+        recall = ProactiveRecall(memory, repo_id=args.get("repo_id"))
 
         similar = recall.on_error(
             error_message=args["error_message"],
@@ -684,7 +980,7 @@ def _handle_proactive(name: str, args: dict[str, Any], memory: Memory) -> str:
     elif name == "memory_directory_context":
         from visp_memory.recall.proactive import ProactiveRecall
 
-        recall = ProactiveRecall(memory)
+        recall = ProactiveRecall(memory, repo_id=args.get("repo_id"))
 
         context = recall.on_directory(
             dir_path=args["dir_path"], recursive=args.get("recursive", False)
@@ -993,8 +1289,118 @@ _WRITE_TOOLS = frozenset(
         "memory_done",
         "memory_update_intent",
         "memory_close_intent",
+        "memory_after_work",
+        "memory_feedback_log",
+        "memory_feedback_reset",
     }
 )
+
+
+def _http_refusal(message: str) -> MCPAuthorizationError:
+    """Build a refusal whose text contains no user-controlled or backend data."""
+    return MCPAuthorizationError(message)
+
+
+def _http_authorize_repo(repo_id: Any, memory: Memory, *, write: bool) -> str:
+    """Authorize one explicitly named repository for the current HTTP principal."""
+    context = current_mcp_request_context()
+    principal = context.principal
+    if not _requires_explicit_scope():
+        return str(repo_id)
+    if principal is None:
+        raise _http_refusal("An authenticated HTTP principal is required.")
+    if not isinstance(repo_id, str) or not repo_id.strip():
+        raise _http_refusal("An explicit repo_id is required for stateless HTTP requests.")
+    required_scope = "memory:write" if write else "memory:read"
+    if not principal.allows(required_scope):
+        raise _http_refusal("The personal access token lacks the required memory scope.")
+    try:
+        from visp_memory.server.authorization import (
+            require_repo_scope_access,
+            require_repo_writable,
+        )
+
+        if write:
+            require_repo_writable(memory._storage, repo_id, principal)
+        else:
+            require_repo_scope_access(memory._storage, repo_id, principal)
+    except Exception as error:
+        # Authorization helpers are shared with FastAPI and use HTTPException.
+        # Do not pass their detail through: a future helper may include a path,
+        # repository metadata, or another value supplied by the caller.
+        status_code = getattr(error, "status_code", None)
+        if status_code == 409:
+            raise _http_refusal("The requested repository is archived.") from error
+        if status_code == 400 and "repo_id" in str(getattr(error, "detail", "")):
+            raise _http_refusal(
+                "An explicit repo_id is required for stateless HTTP requests."
+            ) from error
+        raise _http_refusal("The requested repository is not available to this token.") from error
+    return repo_id
+
+
+def _http_validate_record_ids(
+    args: dict[str, Any],
+    memory: Memory,
+    repo_id: str,
+    principal: UserContext | None = None,
+) -> None:
+    """Prevent ID-addressed reads and mutations from escaping the chosen repo."""
+    from visp_memory.server.authorization import can_access_scoped_record
+
+    principal = principal or current_mcp_request_context().principal
+    if principal is None:
+        raise _http_refusal("An authenticated HTTP principal is required.")
+
+    memory_ids: list[Any] = []
+    for key in ("memory_id", "source_id", "target_id"):
+        if args.get(key):
+            memory_ids.append(args[key])
+    memory_ids.extend(args.get("memory_ids") or [])
+    for memory_id in memory_ids:
+        record = memory._storage.get_memory(str(memory_id))
+        if (
+            not record
+            or record.get("repo_id") != repo_id
+            or not can_access_scoped_record(
+                memory._storage, record, principal, scope_field="metadata"
+            )
+        ):
+            raise _http_refusal("The requested memory is not available in this repository scope.")
+
+    intent_id = args.get("intent_id")
+    if intent_id:
+        intents = memory._storage.get_active_intents(repo_id=None, status="all")
+        intent = next((item for item in intents if item.get("id") == intent_id), None)
+        if (
+            not intent
+            or intent.get("repo_id") != repo_id
+            or not can_access_scoped_record(
+                memory._storage, intent, principal, scope_field="context"
+            )
+        ):
+            raise _http_refusal("The requested intent is not available in this repository scope.")
+
+
+def _http_preflight(name: str, args: dict[str, Any], memory: Memory) -> None:
+    """Apply the common HTTP policy before any tool can touch durable state."""
+    context = current_mcp_request_context()
+    if not _requires_explicit_scope():
+        return
+    if name in HTTP_HIDDEN_TOOL_NAMES:
+        raise _http_refusal("Global maintenance tools are disabled over stateless HTTP.")
+    if name not in HTTP_REPO_TOOL_NAMES:
+        return
+    principal = context.principal
+    repo_id = _http_authorize_repo(
+        args.get("repo_id"),
+        memory,
+        write=name in HTTP_REPO_WRITE_TOOL_NAMES
+        or (name == "memory_recall" and bool(args.get("log_utility"))),
+    )
+    if principal is None:  # _http_authorize_repo normally raises first.
+        raise _http_refusal("An authenticated HTTP principal is required.")
+    _http_validate_record_ids(args, memory, repo_id, principal)
 
 
 def _refuse_unscoped_write(name: str, args: dict[str, Any], memory: Memory) -> str | None:
@@ -1117,7 +1523,9 @@ def _handle_intent(name: str, args: dict[str, Any], memory: Memory) -> str:
         return f"Working on: {args['task']}"
 
     elif name == "memory_done":
-        recorded = memory.done(actor_id="mcp-client", channel=WriteChannel.MCP)
+        recorded = memory.done(
+            repo_id=args.get("repo_id"), actor_id="mcp-client", channel=WriteChannel.MCP
+        )
         return f"Recorded {recorded} task outcome(s); intent status unchanged"
 
     elif name == "memory_update_intent":
@@ -1225,11 +1633,11 @@ def _format_decay_preview(args: dict[str, Any], memory: Memory) -> str:
 def _handle_utility(name: str, args: dict[str, Any], memory: Memory) -> str:
     """Handle utility tools."""
     if name == "memory_stats":
-        stats = memory.stats()
+        stats = memory.stats(repo_id=args.get("repo_id"))
         return json.dumps(stats, indent=2)
 
     elif name == "memory_list_warnings":
-        warnings = memory.semantic.get_warnings()
+        warnings = memory.semantic.get_warnings(repo_id=args.get("repo_id"))
         if not warnings:
             return "No warnings."
         return "\n".join(f"- {w['content']}" for w in warnings)
@@ -1342,6 +1750,8 @@ async def handle_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
 
 def _dispatch_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
     """Route tool calls to specialized handlers."""
+
+    _http_preflight(name, args, memory)
 
     # Context
     if name == "memory_prepare_task":

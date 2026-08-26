@@ -10,6 +10,7 @@ that test serialises exactly what a client receives and asserts the ``core``
 profile's documented byte saving, so edits here are measured, not free.
 """
 
+import copy
 import logging
 import os
 
@@ -85,6 +86,58 @@ READONLY_TOOL_NAMES = frozenset(
     }
 )
 
+# Stateless HTTP has no client working directory or ambient repository. Keep this
+# inventory explicit so a new tool cannot accidentally fall back to the process
+# config and cross project boundaries. The stdio transport continues to use the
+# existing optional/ambient schemas below.
+HTTP_REPO_READ_TOOL_NAMES = frozenset(
+    {
+        "memory_prepare_task",
+        "memory_context",
+        "memory_recall",
+        "memory_remember",
+        "memory_relevant",
+        "memory_trace",
+        "memory_neighbors",
+        "memory_path",
+        "memory_why_relevant",
+        "memory_file_context",
+        "memory_find_error",
+        "memory_directory_context",
+        "memory_before_change",
+        "memory_stats",
+        "memory_list_warnings",
+        "memory_list_intents",
+        "memory_feedback_inspect",
+        "memory_decay_preview",
+    }
+)
+
+HTTP_REPO_WRITE_TOOL_NAMES = frozenset(
+    {
+        "memory_session_start",
+        "memory_after_work",
+        "memory_record",
+        "memory_decision",
+        "memory_learn",
+        "memory_warn",
+        "memory_issue",
+        "memory_goal",
+        "memory_working_on",
+        "memory_done",
+        "memory_update_intent",
+        "memory_close_intent",
+        "memory_feedback_log",
+        "memory_feedback_reset",
+    }
+)
+
+HTTP_HIDDEN_TOOL_NAMES = frozenset(
+    {"memory_compress", "memory_decay", "memory_clear_goals"}
+)
+
+HTTP_REPO_TOOL_NAMES = HTTP_REPO_READ_TOOL_NAMES | HTTP_REPO_WRITE_TOOL_NAMES
+
 VALID_MCP_PROFILES = frozenset({"core", "full", "readonly"})
 
 
@@ -122,6 +175,29 @@ def _filter_tools_by_profile(tools: list["Tool"], profile: str) -> list["Tool"]:
         return tools
     allowed = _profile_tool_names(profile, frozenset(tool.name for tool in tools))
     return [tool for tool in tools if tool.name in allowed]
+
+
+def _http_scoped_tool(tool: "Tool") -> "Tool":
+    """Return an HTTP advertisement that makes repository scope mandatory.
+
+    Tool definitions are rebuilt per request, so cloning the schema here does not
+    alter the stdio contract or the profile footprint assertions. The runtime
+    preflight remains authoritative because MCP clients may ignore JSON Schema.
+    """
+    schema = copy.deepcopy(tool.inputSchema)
+    properties = schema.setdefault("properties", {})
+    properties.setdefault(
+        "repo_id",
+        {
+            "type": "string",
+            "description": "Repository/project ID; required for stateless HTTP requests",
+        },
+    )
+    required = list(schema.get("required", []))
+    if "repo_id" not in required:
+        required.append("repo_id")
+    schema["required"] = required
+    return tool.model_copy(update={"inputSchema": schema})
 
 
 def build_tool_definitions() -> list["Tool"]:

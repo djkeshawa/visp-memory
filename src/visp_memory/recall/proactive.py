@@ -94,7 +94,15 @@ class ProactiveRecall:
         dir_context = recall.on_directory("src/auth/")
     """
 
-    def __init__(self, memory, *, environment: Any = None, task_type: Any = None, as_of=None):
+    def __init__(
+        self,
+        memory,
+        *,
+        repo_id: str = None,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of=None,
+    ):
         """
         Initialize proactive recall.
 
@@ -102,7 +110,7 @@ class ProactiveRecall:
             memory: Memory instance to recall from
         """
         self.memory = memory
-        self.repo_id = require_repo_id(memory.config.repo_id)
+        self.repo_id = require_repo_id(repo_id or memory.config.repo_id)
         self.environment = list(
             normalize_optional_scope_values(environment, field="environment")
         ) or None

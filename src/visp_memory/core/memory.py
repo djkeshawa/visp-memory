@@ -771,12 +771,13 @@ class Memory:
     def done(
         self,
         *,
+        repo_id: str = None,
         actor_id: str = "library-caller",
         channel: WriteChannel | str = WriteChannel.LIBRARY,
     ) -> int:
         """Record task completion outcomes without changing intent status."""
         return self.intent.clear_task(
-            repo_id=self.config.repo_id,
+            repo_id=repo_id or self.config.repo_id,
             actor_id=actor_id,
             channel=channel,
         )
@@ -1532,9 +1533,9 @@ class Memory:
     # Maintenance
     # =========================================================================
 
-    def stats(self) -> Dict[str, Any]:
+    def stats(self, repo_id: str = None) -> Dict[str, Any]:
         """Get memory statistics."""
-        return self._storage.get_stats(repo_id=self.config.repo_id)
+        return self._storage.get_stats(repo_id=repo_id or self.config.repo_id)
 
     def token_efficiency(self, repo_id: str = None) -> Dict[str, Any]:
         """Quantify how the memory layer reduces tokens.

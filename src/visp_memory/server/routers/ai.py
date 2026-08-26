@@ -11,6 +11,7 @@ from visp_memory.server.authorization import (
     can_access_scoped_record,
     require_admin,
     require_repo_scope_access,
+    require_repo_writable,
 )
 from visp_memory.server.schemas import (
     AskMemoryCitation,
@@ -192,7 +193,7 @@ async def materialize_reflection(
     payload: ReflectionCreateRequest,
     user: UserContext = Depends(get_current_user),
 ):
-    require_repo_scope_access(request.app.state.storage, payload.repo_id, user)
+    require_repo_writable(request.app.state.storage, payload.repo_id, user)
     if not payload.reviewed:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
