@@ -665,8 +665,11 @@ def test_initialize_storage_retries_neo4j_and_supports_explicit_fallback(tmp_pat
 
     clock = iter([0.0, 0.5])
     monkeypatch.setattr(server_app, "Neo4jStorage", EventuallyAvailable)
-    monkeypatch.setattr(server_app.time, "monotonic", lambda: next(clock))
-    monkeypatch.setattr(server_app.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        server_app,
+        "time",
+        SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _seconds: None),
+    )
 
     storage, backend = server_app.initialize_storage(config)
 
@@ -689,8 +692,11 @@ def test_initialize_storage_handles_bounded_neo4j_failure(tmp_path, monkeypatch,
 
     clock = iter([0.0, 2.0])
     monkeypatch.setattr(server_app, "Neo4jStorage", AlwaysUnavailable)
-    monkeypatch.setattr(server_app.time, "monotonic", lambda: next(clock))
-    monkeypatch.setattr(server_app.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        server_app,
+        "time",
+        SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _seconds: None),
+    )
 
     if allow_fallback:
         storage, backend = server_app.initialize_storage(config)
