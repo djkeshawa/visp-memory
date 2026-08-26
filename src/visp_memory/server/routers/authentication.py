@@ -251,6 +251,11 @@ async def create_token(
     payload: TokenCreateRequest,
     user: UserContext = Depends(get_current_user),
 ):
+    if not request.app.state.auth_store.get_account(user.user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="A persistent account is required to create personal access tokens",
+        )
     scopes = sorted(set(payload.scopes))
     invalid = set(scopes) - ALLOWED_TOKEN_SCOPES
     if invalid:
