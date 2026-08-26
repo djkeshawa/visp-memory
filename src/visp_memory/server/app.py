@@ -38,6 +38,7 @@ from visp_memory.server.auth import UserContext, get_current_user, security
 from visp_memory.server.auth_store import AuthStore
 from visp_memory.server.authorization import (
     can_access_scoped_record,
+    has_admin_privileges,
     require_repo_scope_access,
 )
 from visp_memory.server.routers import (
@@ -614,6 +615,37 @@ def _require_graph_repo_access(repo_id: str | None, user: UserContext) -> str | 
     return graph_repo_id
 
 
+def _memory_intelligence_reporter(user: UserContext) -> MemoryIntelligenceReporter:
+    """Build a report over only the records visible to this principal.
+
+    The deterministic reporter is also used by the local CLI, where it should
+    retain its complete-store behavior. HTTP routes, however, may serve several
+    teams from one store, so the server supplies the visibility policy without
+    making the core reporting module depend on server authorization.
+    """
+    storage = app.state.storage
+    if has_admin_privileges(user) or user.is_local_owner:
+        return MemoryIntelligenceReporter(storage)
+
+    def memory_filter(memory: dict) -> bool:
+        return can_access_scoped_record(storage, memory, user, scope_field="metadata")
+
+    def relationship_filter(relationship: dict) -> bool:
+        source = storage.get_memory(relationship.get("source_id"))
+        target = storage.get_memory(relationship.get("target_id"))
+        return bool(source and target and memory_filter(source) and memory_filter(target))
+
+    def intent_filter(intent: dict) -> bool:
+        return can_access_scoped_record(storage, intent, user, scope_field="context")
+
+    return MemoryIntelligenceReporter(
+        storage,
+        memory_filter=memory_filter,
+        relationship_filter=relationship_filter,
+        intent_filter=intent_filter,
+    )
+
+
 @app.post("/graph-recall/trace", response_model=GraphRecallResponse, tags=["graph-recall"])
 async def graph_recall_trace(
     payload: GraphTraceRequest, user: UserContext = Depends(get_current_user)
@@ -705,7 +737,7 @@ async def memory_intelligence_report(
 ):
     """Return deterministic memory intelligence report JSON."""
     report_repo_id = _require_graph_repo_access(repo_id, user)
-    return MemoryIntelligenceReporter(app.state.storage).generate(
+    return _memory_intelligence_reporter(user).generate(
         repo_id=report_repo_id,
         limit=limit,
     )
@@ -719,7 +751,7 @@ async def memory_intelligence_report_text(
 ):
     """Return deterministic memory intelligence report text."""
     report_repo_id = _require_graph_repo_access(repo_id, user)
-    report = MemoryIntelligenceReporter(app.state.storage).generate(
+    report = _memory_intelligence_reporter(user).generate(
         repo_id=report_repo_id,
         limit=limit,
     )

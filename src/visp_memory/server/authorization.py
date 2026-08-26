@@ -34,6 +34,18 @@ def _get_repository(storage: Any, repo_id: Optional[str]) -> Optional[dict[str, 
     return None if is_implicitly_registered(repo) else repo
 
 
+def has_admin_privileges(user: UserContext) -> bool:
+    """Return whether this principal may exercise global administrator access."""
+    return bool(
+        user.is_admin
+        and (
+            user.auth_type != "pat"
+            or "admin" in user.scopes
+            or "*" in user.scopes
+        )
+    )
+
+
 def require_admin(user: UserContext) -> None:
     """Require an administrative principal for global or destructive operations.
 
@@ -41,9 +53,7 @@ def require_admin(user: UserContext) -> None:
     this is a no-op there; with auth enabled, anonymous and ordinary team users
     are rejected.
     """
-    if not user.is_admin or (
-        user.auth_type == "pat" and "admin" not in user.scopes and "*" not in user.scopes
-    ):
+    if not has_admin_privileges(user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Administrator privileges are required for this operation",
@@ -90,7 +100,7 @@ def require_repo_scope_access(
         )
     if user.auth_type == "pat" and user.repo_ids and repo_id not in user.repo_ids:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
-    if user.is_admin or user.is_local_owner:
+    if has_admin_privileges(user) or user.is_local_owner:
         return
 
     repo = _get_repository(storage, repo_id)
@@ -154,7 +164,7 @@ def can_access_scoped_record(
     repo_id = record.get("repo_id")
     if user.auth_type == "pat" and user.repo_ids and repo_id not in user.repo_ids:
         return False
-    if user.is_admin or user.is_local_owner:
+    if has_admin_privileges(user) or user.is_local_owner:
         return True
     if not user.team_id:
         return False

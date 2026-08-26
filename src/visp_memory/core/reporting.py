@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 THRESHOLDS = {
     "high_impact_importance": 0.75,
@@ -27,14 +27,26 @@ SECTION_TITLES = {
 class MemoryIntelligenceReporter:
     """Generate compact, deterministic memory health reports."""
 
-    def __init__(self, storage):
+    def __init__(
+        self,
+        storage,
+        *,
+        memory_filter: Callable[[dict[str, Any]], bool] | None = None,
+        relationship_filter: Callable[[dict[str, Any]], bool] | None = None,
+        intent_filter: Callable[[dict[str, Any]], bool] | None = None,
+    ):
         self.storage = storage
+        self.memory_filter = memory_filter
+        self.relationship_filter = relationship_filter
+        self.intent_filter = intent_filter
 
     def generate(self, repo_id: str | None = None, limit: int = 10) -> dict[str, Any]:
         section_limit = max(1, min(int(limit or THRESHOLDS["section_limit"]), 50))
-        memories = self._list_memories(repo_id)
-        relationships = self._relationships(repo_id)
-        intents = self._intents(repo_id)
+        memories = self._filtered(self._list_memories(repo_id), self.memory_filter)
+        relationships = self._filtered(
+            self._relationships(repo_id), self.relationship_filter
+        )
+        intents = self._filtered(self._intents(repo_id), self.intent_filter)
         as_of = self._as_of(memories, intents)
 
         sections = {
@@ -93,6 +105,16 @@ class MemoryIntelligenceReporter:
             },
             "sections": sections,
         }
+
+    @staticmethod
+    def _filtered(
+        records: list[dict[str, Any]],
+        predicate: Callable[[dict[str, Any]], bool] | None,
+    ) -> list[dict[str, Any]]:
+        """Apply an optional caller-owned visibility policy to report records."""
+        if predicate is None:
+            return records
+        return [record for record in records if predicate(record)]
 
     @staticmethod
     def format_text(report: dict[str, Any]) -> str:
