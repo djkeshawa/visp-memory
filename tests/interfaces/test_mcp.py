@@ -439,6 +439,59 @@ class TestMCPServer:
         except ImportError:
             pytest.skip("MCP not installed")
 
+    def test_http_feedback_tools_preflight_scope_and_preserve_repository_boundaries(
+        self, tmp_path
+    ):
+        """Direct dispatch has the same HTTP scope contract as the transport."""
+        from visp_memory.interfaces.mcp import (
+            MCPAuthorizationError,
+            MCPRequestContext,
+            _dispatch_tool,
+            bind_mcp_request_context,
+        )
+        from visp_memory.server.auth import UserContext
+
+        config = MemoryConfig(repo_id="repo-a")
+        config.storage.data_dir = Path(tmp_path)
+        config.embedding.provider = "noop"
+        memory = Memory(config=config)
+        repo_a_memory = memory.record("repo-a tool feedback", repo_id="repo-a")
+        repo_b_memory = memory.record("repo-b tool feedback", repo_id="repo-b")
+        memory.record_utility_feedback(repo_a_memory, "used", repo_id="repo-a")
+        memory.record_utility_feedback(repo_b_memory, "used", repo_id="repo-b")
+        context = MCPRequestContext(
+            transport="http",
+            principal=UserContext(
+                user_id="local",
+                username="local",
+                is_admin=True,
+                auth_type="local",
+            ),
+        )
+
+        with bind_mcp_request_context(context):
+            with pytest.raises(MCPAuthorizationError):
+                _dispatch_tool("memory_feedback_inspect", {}, memory)
+            report = json.loads(
+                _dispatch_tool(
+                    "memory_feedback_inspect", {"repo_id": "repo-a"}, memory
+                )
+            )
+            with pytest.raises(MCPAuthorizationError):
+                _dispatch_tool("memory_feedback_reset", {"confirm": True}, memory)
+            deleted = _dispatch_tool(
+                "memory_feedback_reset",
+                {"repo_id": "repo-a", "confirm": True},
+                memory,
+            )
+
+        assert report["summary"]["total_events"] == 1
+        assert [event["memory_id"] for event in report["events"]] == [repo_a_memory]
+        assert "Deleted 1 feedback events." == deleted
+        assert memory._storage.inspect_recall_utility(repo_id="repo-b")["summary"][
+            "total_events"
+        ] == 1
+
     @pytest.mark.asyncio
     async def test_mcp_clear_goals_requires_confirmation_and_preserves_status(self):
         """memory_clear_goals records assisted history and never clears status."""

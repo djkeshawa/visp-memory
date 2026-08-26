@@ -924,6 +924,114 @@ class TestSearch:
         assert memory.reset_utility_signals(memory_id=mem_id) == 3
         assert memory.inspect_utility_signals(memory_id=mem_id)["summary"]["total_events"] == 0
 
+    def test_recall_utility_rejects_a_repository_mismatch(self, memory):
+        """A feedback caller cannot attribute an event to another repository."""
+        mem_id = memory.record("Repository-scoped recall", repo_id="repo-a")
+
+        with pytest.raises(ValueError, match="repository mismatch"):
+            memory.record_utility_feedback(mem_id, "used", repo_id="repo-b")
+        with pytest.raises(ValueError, match="repository mismatch"):
+            memory.inspect_utility_signals(memory_id=mem_id, repo_id="repo-b")
+        with pytest.raises(ValueError, match="repository mismatch"):
+            memory.reset_utility_signals(memory_id=mem_id, repo_id="repo-b")
+
+        with memory._storage._get_db() as conn:
+            assert conn.execute(
+                "SELECT COUNT(*) FROM recall_events WHERE memory_id = ?", (mem_id,)
+            ).fetchone()[0] == 0
+
+    def test_recall_utility_filters_canonical_scope_and_verifies_history(self, memory):
+        """Legacy cross-repository events are excluded but remain diagnosable."""
+        mem_id = memory.record("Repository-scoped recall", repo_id="repo-a")
+        good_id = memory.record_utility_feedback(mem_id, "used", repo_id="repo-a")
+        with memory._storage._get_db() as conn:
+            conn.execute(
+                """
+                INSERT INTO recall_events (
+                    id, memory_id, event_type, repo_id, query_hash, task_id,
+                    outcome, metadata, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "legacy-cross-repo-event",
+                    mem_id,
+                    "dismissed",
+                    "repo-b",
+                    None,
+                    None,
+                    None,
+                    "{}",
+                    "2024-01-01T00:00:00+00:00",
+                ),
+            )
+            conn.commit()
+
+        report = memory.inspect_utility_signals(memory_id=mem_id)
+        assert report["summary"]["total_events"] == 1
+        assert report["summary"]["by_event_type"] == {"used": 1}
+        assert [event["id"] for event in report["events"]] == [good_id]
+        assert report["verification"] == {
+            "valid": False,
+            "checked_events": 2,
+            "cross_repository_events": 1,
+            "violations": [
+                {
+                    "event_id": "legacy-cross-repo-event",
+                    "memory_id": mem_id,
+                    "event_repo_id": "repo-b",
+                    "memory_repo_id": "repo-a",
+                }
+            ],
+        }
+
+        # Repository-wide inspection follows the memory's canonical scope too.
+        assert memory.inspect_utility_signals(repo_id="repo-a")["summary"][
+            "total_events"
+        ] == 1
+        assert memory.inspect_utility_signals(repo_id="repo-b")["summary"][
+            "total_events"
+        ] == 0
+        assert memory.reset_utility_signals(repo_id="repo-b") == 0
+
+        # Reset only removes canonical events; verification is read-only.
+        assert memory.reset_utility_signals(memory_id=mem_id) == 1
+        with memory._storage._get_db() as conn:
+            row = conn.execute(
+                "SELECT repo_id FROM recall_events WHERE id = ?",
+                ("legacy-cross-repo-event",),
+            ).fetchone()
+        assert row[0] == "repo-b"
+
+    def test_recall_utility_aggregation_ignores_cross_repository_history(self, memory):
+        """Ranking signals count only events matching the memory's repository."""
+        mem_id = memory.record("Repository-scoped recall", repo_id="repo-a")
+        memory.record_utility_feedback(mem_id, "used", repo_id="repo-a")
+        with memory._storage._get_db() as conn:
+            conn.execute(
+                """
+                INSERT INTO recall_events (
+                    id, memory_id, event_type, repo_id, query_hash, task_id,
+                    outcome, metadata, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "legacy-cross-repo-used",
+                    mem_id,
+                    "used",
+                    "repo-b",
+                    None,
+                    None,
+                    None,
+                    "{}",
+                    "2024-01-01T00:00:00+00:00",
+                ),
+            )
+            conn.commit()
+
+        row = memory._storage.peek_memory(mem_id)
+        memory._storage._attach_recall_utility_scores([row])
+        assert row["utility_signal"]["counts"] == {"used": 1}
+
     def test_recall_uses_and_exposes_intent_aware_factors(self, memory):
         """Contextual recall factors influence ordering and are exposed."""
         memory.goal(

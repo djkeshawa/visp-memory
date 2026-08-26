@@ -1254,6 +1254,22 @@ class Memory:
             )
         return resetter(memory_id=memory_id, repo_id=repo_id, event_type=event_type)
 
+    def verify_utility_signals(
+        self,
+        memory_id: str = None,
+        repo_id: str = None,
+        event_type: str = None,
+    ) -> Dict[str, Any]:
+        """Verify historical recall event repository attribution without rewriting it."""
+        verifier = getattr(self._storage, "verify_recall_utility", None)
+        if not callable(verifier):
+            backend = type(self._storage).__name__
+            raise NotImplementedError(
+                f"Recall utility verification is not supported by the {backend} backend; "
+                "use local SQLite or ArcadeDB storage for this feature."
+            )
+        return verifier(memory_id=memory_id, repo_id=repo_id, event_type=event_type)
+
     def graph_neighbors(
         self,
         memory_id: str,

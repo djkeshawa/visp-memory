@@ -260,6 +260,36 @@ class BaseStorage(ABC):
             "status": "ready",
         }
 
+    def _resolve_recall_memory_scope(
+        self, memory_id: str, repo_id: str = None
+    ) -> tuple[Dict[str, Any], str | None]:
+        """Resolve a memory's repository before reading or writing recall events.
+
+        Recall utility events describe how a particular memory was used.  The
+        repository on that memory is therefore authoritative; accepting a
+        caller-provided repository here would let a malformed or stale caller
+        attribute the event to another repository.  Prefer a no-access read for
+        backends that provide one, and fall back to the backend's ordinary read
+        for portable implementations.
+        """
+        peek = getattr(self, "peek_memory", None)
+        if callable(peek):
+            memory = peek(memory_id)
+        else:
+            query = getattr(self, "_query_memory", None)
+            memory = query(memory_id) if callable(query) else self.get_memory(memory_id)
+        if memory is None:
+            raise ValueError(f"Memory not found: {memory_id}")
+
+        canonical_repo_id = memory.get("repo_id")
+        if repo_id is not None and repo_id != canonical_repo_id:
+            raise ValueError(
+                "Recall utility repository mismatch for memory "
+                f"{memory_id!r}: memory belongs to {canonical_repo_id!r}, "
+                f"caller supplied {repo_id!r}"
+            )
+        return memory, canonical_repo_id
+
     def store_evidence(self, content: str, repo_id: str, **kwargs) -> str:
         raise EvidenceUnsupportedError(
             f"{self.__class__.__name__} does not support separate Evidence records"
@@ -4242,12 +4272,9 @@ class LocalStorage(BaseStorage):
     ) -> str:
         """Record a privacy-conscious recall utility event."""
         normalized_type = self._normalize_recall_event_type(event_type)
-        memory = self._get_memory_row(memory_id, track_access=False)
-        if not memory:
-            raise ValueError(f"Memory not found: {memory_id}")
+        _, canonical_repo_id = self._resolve_recall_memory_scope(memory_id, repo_id)
 
         event_id = self._generate_id(f"{memory_id}:{normalized_type}")
-        event_repo_id = repo_id if repo_id is not None else memory.get("repo_id")
         with self._get_db() as conn:
             conn.execute(
                 """
@@ -4261,7 +4288,7 @@ class LocalStorage(BaseStorage):
                     event_id,
                     memory_id,
                     normalized_type,
-                    event_repo_id,
+                    canonical_repo_id,
                     self._hash_recall_query(query),
                     task_id,
                     outcome,
@@ -4291,7 +4318,25 @@ class LocalStorage(BaseStorage):
         limit: int = 50,
     ) -> Dict[str, Any]:
         """Return recall utility signals and recent sanitized events."""
-        where, params = self._recall_event_filters(memory_id, repo_id, event_type)
+        canonical_repo_id = None
+        if memory_id is not None:
+            _, canonical_repo_id = self._resolve_recall_memory_scope(memory_id, repo_id)
+        if memory_id is None and repo_id is not None:
+            where = (
+                "WHERE memory_id IN (SELECT id FROM memories WHERE repo_id = ?) "
+                "AND recall_events.repo_id = ?"
+            )
+            params: list[Any] = [repo_id, repo_id]
+            if event_type:
+                where += " AND event_type = ?"
+                params.append(self._normalize_recall_event_type(event_type))
+        else:
+            where, params = self._recall_event_filters(
+                memory_id,
+                canonical_repo_id,
+                event_type,
+                repo_id_is_null=memory_id is not None and canonical_repo_id is None,
+            )
         with self._get_db() as conn:
             count_cursor = conn.execute(
                 f"""
@@ -4370,6 +4415,72 @@ class LocalStorage(BaseStorage):
             },
             "signals": signals,
             "events": events,
+            "verification": self.verify_recall_utility(
+                memory_id=memory_id,
+                repo_id=repo_id,
+                event_type=event_type,
+            ),
+        }
+
+    def verify_recall_utility(
+        self,
+        memory_id: str = None,
+        repo_id: str = None,
+        event_type: str = None,
+    ) -> Dict[str, Any]:
+        """Verify historical recall event repository attribution without rewriting it."""
+        if memory_id is not None:
+            self._resolve_recall_memory_scope(memory_id, repo_id)
+
+        conditions = ["1=1"]
+        params: list[Any] = []
+        if memory_id is not None:
+            conditions.append("e.memory_id = ?")
+            params.append(memory_id)
+        elif repo_id is not None:
+            conditions.append(
+                "EXISTS (SELECT 1 FROM memories scoped WHERE scoped.id = e.memory_id "
+                "AND scoped.repo_id = ?)"
+            )
+            params.append(repo_id)
+        if event_type:
+            conditions.append("e.event_type = ?")
+            params.append(self._normalize_recall_event_type(event_type))
+
+        with self._get_db() as conn:
+            cursor = conn.execute(
+                f"""
+                SELECT e.id, e.memory_id, e.repo_id AS event_repo_id,
+                       m.id AS matched_memory_id, m.repo_id AS memory_repo_id
+                FROM recall_events e
+                LEFT JOIN memories m ON m.id = e.memory_id
+                WHERE {' AND '.join(conditions)}
+                ORDER BY e.created_at ASC, e.rowid ASC
+                """,
+                params,
+            )
+            rows = cursor.fetchall()
+
+        violations = []
+        for row in rows:
+            if row["matched_memory_id"] is None:
+                continue
+            if row["event_repo_id"] == row["memory_repo_id"]:
+                continue
+            violations.append(
+                {
+                    "event_id": row["id"],
+                    "memory_id": row["memory_id"],
+                    "event_repo_id": row["event_repo_id"],
+                    "memory_repo_id": row["memory_repo_id"],
+                }
+            )
+
+        return {
+            "valid": not violations,
+            "checked_events": len(rows),
+            "cross_repository_events": len(violations),
+            "violations": violations,
         }
 
     def reset_recall_utility(
@@ -4379,7 +4490,25 @@ class LocalStorage(BaseStorage):
         event_type: str = None,
     ) -> int:
         """Delete recall utility events matching optional filters."""
-        where, params = self._recall_event_filters(memory_id, repo_id, event_type)
+        canonical_repo_id = None
+        if memory_id is not None:
+            _, canonical_repo_id = self._resolve_recall_memory_scope(memory_id, repo_id)
+        if memory_id is None and repo_id is not None:
+            where = (
+                "WHERE memory_id IN (SELECT id FROM memories WHERE repo_id = ?) "
+                "AND recall_events.repo_id = ?"
+            )
+            params: list[Any] = [repo_id, repo_id]
+            if event_type:
+                where += " AND event_type = ?"
+                params.append(self._normalize_recall_event_type(event_type))
+        else:
+            where, params = self._recall_event_filters(
+                memory_id,
+                canonical_repo_id,
+                event_type,
+                repo_id_is_null=memory_id is not None and canonical_repo_id is None,
+            )
         with self._get_db() as conn:
             cursor = conn.execute(f"DELETE FROM recall_events {where}", params)
             conn.commit()
@@ -4395,10 +4524,13 @@ class LocalStorage(BaseStorage):
         with self._get_db() as conn:
             cursor = conn.execute(
                 f"""
-                SELECT memory_id, event_type, COUNT(*) AS count
-                FROM recall_events
-                WHERE memory_id IN ({placeholders})
-                GROUP BY memory_id, event_type
+                SELECT e.memory_id, e.event_type, COUNT(*) AS count
+                FROM recall_events e
+                JOIN memories m ON m.id = e.memory_id
+                WHERE e.memory_id IN ({placeholders})
+                  AND (e.repo_id = m.repo_id
+                       OR (e.repo_id IS NULL AND m.repo_id IS NULL))
+                GROUP BY e.memory_id, e.event_type
                 """,
                 memory_ids,
             )
@@ -4460,13 +4592,17 @@ class LocalStorage(BaseStorage):
         memory_id: str = None,
         repo_id: str = None,
         event_type: str = None,
+        *,
+        repo_id_is_null: bool = False,
     ) -> tuple[str, list[Any]]:
         where = "WHERE 1=1"
         params: list[Any] = []
-        if memory_id:
+        if memory_id is not None:
             where += " AND memory_id = ?"
             params.append(memory_id)
-        if repo_id:
+        if repo_id_is_null:
+            where += " AND repo_id IS NULL"
+        elif repo_id is not None:
             where += " AND repo_id = ?"
             params.append(repo_id)
         if event_type:

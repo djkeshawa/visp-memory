@@ -304,6 +304,108 @@ class TestStatelessTransport:
         ] == 0
 
     @pytest.mark.asyncio
+    async def test_feedback_http_scope_is_required_and_limited_to_one_repository(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("VISP_MEMORY_MCP_PROFILE", "full")
+        app = _build_app(tmp_path)
+        memory = app._manager.app._visp_memory
+        repo_a_memory = memory.record("repo-a feedback", repo_id="repo-a")
+        repo_b_memory = memory.record("repo-b feedback", repo_id="repo-b")
+        memory.record_utility_feedback(repo_a_memory, "used", repo_id="repo-a")
+        memory.record_utility_feedback(repo_b_memory, "used", repo_id="repo-b")
+
+        async with _Client(app) as client:
+            listed = await client.post(
+                "/mcp", json=_rpc("tools/list"), headers=HEADERS
+            )
+            unscoped_inspect = await client.post(
+                "/mcp",
+                json=_tool_call("memory_feedback_inspect", {}),
+                headers=HEADERS,
+            )
+            scoped_inspect = await client.post(
+                "/mcp",
+                json=_tool_call(
+                    "memory_feedback_inspect",
+                    {"repo_id": "repo-a"},
+                ),
+                headers=HEADERS,
+            )
+            unscoped_reset = await client.post(
+                "/mcp",
+                json=_tool_call("memory_feedback_reset", {"confirm": True}),
+                headers=HEADERS,
+            )
+            scoped_reset = await client.post(
+                "/mcp",
+                json=_tool_call(
+                    "memory_feedback_reset",
+                    {"repo_id": "repo-a", "confirm": True},
+                ),
+                headers=HEADERS,
+            )
+
+        tools = {
+            item["name"]: item for item in json.loads(listed.text)["result"]["tools"]
+        }
+        for name in ("memory_feedback_inspect", "memory_feedback_reset"):
+            assert "repo_id" in tools[name]["inputSchema"]["required"]
+
+        unscoped_text = _result_text(unscoped_inspect)
+        assert json.loads(unscoped_text)["code"] == "authorization_denied"
+        assert repo_a_memory not in unscoped_text
+        assert repo_b_memory not in unscoped_text
+
+        scoped_report = json.loads(_result_text(scoped_inspect))
+        assert scoped_report["summary"]["total_events"] == 1
+        assert [event["memory_id"] for event in scoped_report["events"]] == [repo_a_memory]
+        assert repo_b_memory not in _result_text(scoped_inspect)
+
+        assert json.loads(_result_text(unscoped_reset))["code"] == "authorization_denied"
+        assert "Deleted 1 feedback events" in _result_text(scoped_reset)
+        assert memory._storage.inspect_recall_utility(repo_id="repo-b")["summary"][
+            "total_events"
+        ] == 1
+
+    @pytest.mark.asyncio
+    async def test_feedback_reset_requires_write_scope_over_http(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("VISP_MEMORY_MCP_PROFILE", "full")
+        store = AuthStore(tmp_path / "auth.db")
+        account = store.create_account(
+            username="feedback-read-only",
+            password="a-secure-password-123",
+            user_id="user-feedback-read-only",
+        )
+        _, token = store.create_token(
+            user_id=account["id"],
+            name="feedback-read-only",
+            scopes=["memory:read"],
+            repo_ids=["repo-a"],
+        )
+        app = _build_app(tmp_path, auth_store=store)
+        memory = app._manager.app._visp_memory
+        memory_id = memory.record("read-only feedback", repo_id="repo-a")
+        memory.record_utility_feedback(memory_id, "used", repo_id="repo-a")
+        headers = {**HEADERS, "authorization": f"Bearer {token}"}
+
+        async with _Client(app) as client:
+            response = await client.post(
+                "/mcp",
+                json=_tool_call(
+                    "memory_feedback_reset",
+                    {"repo_id": "repo-a", "confirm": True},
+                ),
+                headers=headers,
+            )
+
+        payload = json.loads(_result_text(response))
+        assert payload["code"] == "authorization_denied"
+        assert memory._storage.inspect_recall_utility(repo_id="repo-a")["summary"][
+            "total_events"
+        ] == 1
+
+    @pytest.mark.asyncio
     async def test_intent_id_checks_context_scope(self, tmp_path, monkeypatch):
         monkeypatch.setenv("VISP_MEMORY_MCP_PROFILE", "full")
         store = AuthStore(tmp_path / "auth.db")

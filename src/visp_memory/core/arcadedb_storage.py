@@ -1479,7 +1479,50 @@ class ArcadeDbStorage(BaseStorage):
             memory["similarity"] = text_similarity(query, content)
             results.append(memory)
 
+        self._attach_recall_utility_scores(results)
         return rank_memory_results(results, query=query, limit=limit)
+
+    def _attach_recall_utility_scores(self, memories: List[Dict[str, Any]]) -> None:
+        """Attach canonical, repository-matched utility signals to search rows."""
+        memory_repositories = {
+            memory.get("id"): memory.get("repo_id")
+            for memory in memories
+            if memory.get("id")
+        }
+        if not memory_repositories:
+            return
+
+        events = self._list_records(
+            "RecallFeedback",
+            self.RECALL_EVENT_FIELDS,
+            json_fields=self.RECORD_JSON_FIELDS["RecallFeedback"],
+            limit=100000,
+            order_by="created_at ASC",
+        )
+        counts_by_memory: Dict[str, Dict[str, int]] = {}
+        for event in events:
+            memory_id = event.get("memory_id")
+            if memory_id not in memory_repositories:
+                continue
+            memory_repo_id = memory_repositories[memory_id]
+            event_repo_id = event.get("repo_id")
+            if event_repo_id != memory_repo_id and not (
+                event_repo_id is None and memory_repo_id is None
+            ):
+                continue
+            event_type = event.get("event_type")
+            counts = counts_by_memory.setdefault(memory_id, {})
+            counts[event_type] = counts.get(event_type, 0) + 1
+
+        for memory in memories:
+            counts = counts_by_memory.get(memory.get("id"), {})
+            utility_score = LocalStorage._recall_utility_score_from_counts(counts)
+            memory["utility_score"] = utility_score
+            memory["utility_signal"] = {
+                "counts": counts,
+                "total_events": sum(counts.values()),
+                "rank_adjustment": utility_rank_adjustment(utility_score),
+            }
 
     def list_memories(
         self,
@@ -1571,6 +1614,11 @@ class ArcadeDbStorage(BaseStorage):
             return False
         with self._database() as db:
             with db.transaction():
+                db.command(
+                    "sql",
+                    "DELETE FROM RecallFeedback WHERE memory_id = ?",
+                    memory_id,
+                )
                 db.command("sql", f"DELETE FROM {self.MEMORY_TYPE} WHERE id = ?", memory_id)
         return True
 
@@ -2178,10 +2226,7 @@ class ArcadeDbStorage(BaseStorage):
         outcome: str = None,
         metadata: Dict[str, Any] = None,
     ) -> str:
-        memory = self._query_memory(memory_id)
-        if memory is None:
-            raise ValueError(f"Memory not found: {memory_id}")
-        memory_data = self._memory_record_to_dict(memory)
+        _, canonical_repo_id = self._resolve_recall_memory_scope(memory_id, repo_id)
         normalized_type = LocalStorage._normalize_recall_event_type(event_type)
         event_id = self._generate_id(f"{memory_id}:{normalized_type}")
         self._insert_record(
@@ -2190,7 +2235,7 @@ class ArcadeDbStorage(BaseStorage):
                 "id": event_id,
                 "memory_id": memory_id,
                 "event_type": normalized_type,
-                "repo_id": repo_id if repo_id is not None else memory_data.get("repo_id"),
+                "repo_id": canonical_repo_id,
                 "query_hash": LocalStorage._hash_recall_query(query),
                 "task_id": task_id,
                 "outcome": outcome,
@@ -2223,21 +2268,17 @@ class ArcadeDbStorage(BaseStorage):
         event_type: str = None,
         limit: int = 50,
     ) -> Dict[str, Any]:
+        canonical_repo_id = None
+        if memory_id is not None:
+            _, canonical_repo_id = self._resolve_recall_memory_scope(memory_id, repo_id)
+        normalized_event_type = (
+            LocalStorage._normalize_recall_event_type(event_type) if event_type else None
+        )
         filters = {
             "memory_id": memory_id,
-            "repo_id": repo_id,
-            "event_type": LocalStorage._normalize_recall_event_type(event_type)
-            if event_type
-            else None,
+            "repo_id": repo_id if memory_id is None else None,
+            "event_type": normalized_event_type,
         }
-        events = self._list_records(
-            "RecallFeedback",
-            self.RECALL_EVENT_FIELDS,
-            json_fields=self.RECORD_JSON_FIELDS["RecallFeedback"],
-            filters=filters,
-            limit=limit,
-            order_by="created_at DESC",
-        )
         all_events = self._list_records(
             "RecallFeedback",
             self.RECALL_EVENT_FIELDS,
@@ -2246,6 +2287,19 @@ class ArcadeDbStorage(BaseStorage):
             limit=100000,
             order_by="created_at DESC",
         )
+        if memory_id is not None:
+            all_events = [
+                event for event in all_events if event.get("repo_id") == canonical_repo_id
+            ]
+        elif repo_id is not None:
+            memory_repos = self._recall_memory_repositories()
+            all_events = [
+                event
+                for event in all_events
+                if memory_repos.get(event.get("memory_id")) == repo_id
+                and event.get("repo_id") == repo_id
+            ]
+        events = all_events[: max(0, int(limit))]
         by_event_type: dict[str, int] = {}
         signals_by_memory: dict[str, dict[str, Any]] = {}
         for event in all_events:
@@ -2285,7 +2339,83 @@ class ArcadeDbStorage(BaseStorage):
             },
             "signals": signals,
             "events": events,
+            "verification": self.verify_recall_utility(
+                memory_id=memory_id,
+                repo_id=repo_id,
+                event_type=event_type,
+            ),
         }
+
+    def verify_recall_utility(
+        self,
+        memory_id: str = None,
+        repo_id: str = None,
+        event_type: str = None,
+    ) -> Dict[str, Any]:
+        """Verify historical recall event repository attribution without rewriting it."""
+        canonical_repo_id = None
+        if memory_id is not None:
+            _, canonical_repo_id = self._resolve_recall_memory_scope(memory_id, repo_id)
+
+        normalized_event_type = (
+            LocalStorage._normalize_recall_event_type(event_type) if event_type else None
+        )
+        filters = {
+            "memory_id": memory_id,
+            # Verification must inspect every event attached to the selected
+            # memory/repository, including rows whose historical event scope is
+            # the defect being diagnosed.
+            "repo_id": None,
+            "event_type": normalized_event_type,
+        }
+        events = self._list_records(
+            "RecallFeedback",
+            self.RECALL_EVENT_FIELDS,
+            json_fields=self.RECORD_JSON_FIELDS["RecallFeedback"],
+            filters=filters,
+            limit=100000,
+            order_by="created_at ASC",
+        )
+
+        if memory_id is not None:
+            memory_repos = {memory_id: canonical_repo_id}
+        else:
+            memory_repos = self._recall_memory_repositories()
+            if repo_id is not None:
+                events = [
+                    event
+                    for event in events
+                    if memory_repos.get(event.get("memory_id")) == repo_id
+                ]
+
+        violations = []
+        for event in events:
+            if event.get("memory_id") not in memory_repos:
+                continue
+            memory_repo_id = memory_repos[event["memory_id"]]
+            if event.get("repo_id") == memory_repo_id:
+                continue
+            violations.append(
+                {
+                    "event_id": event.get("id"),
+                    "memory_id": event.get("memory_id"),
+                    "event_repo_id": event.get("repo_id"),
+                    "memory_repo_id": memory_repo_id,
+                }
+            )
+
+        return {
+            "valid": not violations,
+            "checked_events": len(events),
+            "cross_repository_events": len(violations),
+            "violations": violations,
+        }
+
+    def _recall_memory_repositories(self) -> Dict[str, Any]:
+        memories = self._list_records(
+            "Memory", ["id", "repo_id"], limit=100000, order_by="id ASC"
+        )
+        return {memory["id"]: memory.get("repo_id") for memory in memories}
 
     def reset_recall_utility(
         self,
@@ -2293,8 +2423,56 @@ class ArcadeDbStorage(BaseStorage):
         repo_id: str = None,
         event_type: str = None,
     ) -> int:
+        if memory_id is not None:
+            _, canonical_repo_id = self._resolve_recall_memory_scope(memory_id, repo_id)
+            normalized_event_type = (
+                LocalStorage._normalize_recall_event_type(event_type) if event_type else None
+            )
+            events = self._list_records(
+                "RecallFeedback",
+                self.RECALL_EVENT_FIELDS,
+                filters={"memory_id": memory_id},
+                limit=100000,
+                order_by="id ASC",
+            )
+            matching_ids = [
+                event["id"]
+                for event in events
+                if event.get("repo_id") == canonical_repo_id
+                and (
+                    normalized_event_type is None
+                    or event.get("event_type") == normalized_event_type
+                )
+            ]
+            deleted = 0
+            for event_id in matching_ids:
+                deleted += self._delete_records("RecallFeedback", {"id": event_id})
+            return deleted
+
+        if repo_id is not None:
+            normalized_event_type = (
+                LocalStorage._normalize_recall_event_type(event_type) if event_type else None
+            )
+            events = self._list_records(
+                "RecallFeedback",
+                self.RECALL_EVENT_FIELDS,
+                filters={"event_type": normalized_event_type},
+                limit=100000,
+                order_by="id ASC",
+            )
+            memory_repos = self._recall_memory_repositories()
+            matching_ids = [
+                event["id"]
+                for event in events
+                if memory_repos.get(event.get("memory_id")) == repo_id
+                and event.get("repo_id") == repo_id
+            ]
+            deleted = 0
+            for event_id in matching_ids:
+                deleted += self._delete_records("RecallFeedback", {"id": event_id})
+            return deleted
+
         filters = {
-            "memory_id": memory_id,
             "repo_id": repo_id,
             "event_type": LocalStorage._normalize_recall_event_type(event_type)
             if event_type

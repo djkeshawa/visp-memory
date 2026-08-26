@@ -25,6 +25,7 @@ from visp_memory.core.authority import (
     build_prohibition_claim,
     sign_prohibition_attestation,
 )
+from visp_memory.core.ranking import utility_rank_adjustment
 from visp_memory.core.storage import (
     STORAGE_SCHEMA_VERSION,
     EvidenceError,
@@ -154,7 +155,13 @@ class FakeArcadeDb:
             return [] if "RETURN AFTER" in sql else None
         if sql.startswith("DELETE FROM "):
             type_name = sql.split()[2]
-            self.records[type_name].pop(params[0], None)
+            if "WHERE memory_id = ?" in sql:
+                memory_id = params[0]
+                for record_id, record in list(self.records[type_name].items()):
+                    if record.get("memory_id") == memory_id:
+                        self.records[type_name].pop(record_id, None)
+            else:
+                self.records[type_name].pop(params[0], None)
             return None
         raise AssertionError(f"Unhandled SQL command: {sql}")
 
@@ -1154,6 +1161,59 @@ def test_arcadedb_audit_and_recall_feedback(fake_arcadedb, tmp_path):
         storage.log_recall_event("missing", "used")
 
 
+def test_arcadedb_delete_memory_removes_recall_feedback(fake_arcadedb, tmp_path):
+    """Deleting a memory purges its feedback just like LocalStorage."""
+    storage = ArcadeDbStorage(tmp_path)
+    deleted_id = storage.store_memory("ArcadeDB feedback to purge", repo_id="repo-a")
+    retained_id = storage.store_memory("ArcadeDB feedback to retain", repo_id="repo-a")
+    deleted_event = storage.log_recall_event(deleted_id, "used")
+    retained_event = storage.log_recall_event(retained_id, "used")
+
+    assert storage.delete_memory(deleted_id) is True
+    assert deleted_event not in fake_arcadedb.db.records["RecallFeedback"]
+    assert retained_event in fake_arcadedb.db.records["RecallFeedback"]
+    assert storage.inspect_recall_utility(repo_id="repo-a")["summary"] == {
+        "total_events": 1,
+        "by_event_type": {"used": 1},
+        "memories": 1,
+    }
+
+
+def test_arcadedb_search_attaches_canonical_recall_utility_scores(
+    fake_arcadedb, tmp_path
+):
+    """ArcadeDB search ranks the same canonical utility signals as SQLite."""
+    storage = ArcadeDbStorage(tmp_path)
+    memory_id = storage.store_memory("ArcadeDB utility ranking parity", repo_id="repo-a")
+    storage.log_recall_event(memory_id, "used")
+    storage._insert_record(
+        "RecallFeedback",
+        {
+            "id": "cross-repo-search-event",
+            "memory_id": memory_id,
+            "event_type": "dismissed",
+            "repo_id": "repo-b",
+            "query_hash": None,
+            "task_id": None,
+            "outcome": None,
+            "metadata": {},
+            "created_at": "2024-01-01T00:00:00+00:00",
+        },
+        storage.RECALL_EVENT_FIELDS,
+        storage.RECORD_JSON_FIELDS["RecallFeedback"],
+    )
+
+    results = storage.search_memories("utility ranking", repo_id="repo-a")
+
+    assert results[0]["id"] == memory_id
+    assert results[0]["utility_score"] > 0
+    assert results[0]["utility_signal"] == {
+        "counts": {"used": 1},
+        "total_events": 1,
+        "rank_adjustment": utility_rank_adjustment(results[0]["utility_score"]),
+    }
+
+
 def test_arcadedb_reinforces_on_use_in_parity_with_local(fake_arcadedb, tmp_path):
     # Backend parity: a used memory must strengthen (access_count++) just like SQLite,
     # while a merely-surfaced one must not.
@@ -1171,6 +1231,63 @@ def test_arcadedb_reinforces_on_use_in_parity_with_local(fake_arcadedb, tmp_path
     assert access_count() == 1  # surfaced/dismissed do not reinforce
     storage.log_recall_event(memory_id, "task_linked")
     assert access_count() == 2
+
+
+def test_arcadedb_recall_utility_enforces_scope_and_verifies_history(
+    fake_arcadedb, tmp_path
+):
+    storage = ArcadeDbStorage(tmp_path)
+    memory_id = storage.store_memory("ArcadeDB repository-scoped recall", repo_id="repo-a")
+
+    with pytest.raises(ValueError, match="repository mismatch"):
+        storage.log_recall_event(memory_id, "used", repo_id="repo-b")
+    with pytest.raises(ValueError, match="repository mismatch"):
+        storage.inspect_recall_utility(memory_id=memory_id, repo_id="repo-b")
+    with pytest.raises(ValueError, match="repository mismatch"):
+        storage.reset_recall_utility(memory_id=memory_id, repo_id="repo-b")
+
+    good_id = storage.log_recall_event(memory_id, "used", repo_id="repo-a")
+    storage._insert_record(
+        "RecallFeedback",
+        {
+            "id": "legacy-arcade-cross-repo-event",
+            "memory_id": memory_id,
+            "event_type": "dismissed",
+            "repo_id": "repo-b",
+            "query_hash": None,
+            "task_id": None,
+            "outcome": None,
+            "metadata": {},
+            "created_at": "2024-01-01T00:00:00+00:00",
+        },
+        storage.RECALL_EVENT_FIELDS,
+        storage.RECORD_JSON_FIELDS["RecallFeedback"],
+    )
+
+    report = storage.inspect_recall_utility(memory_id=memory_id)
+    assert report["summary"]["total_events"] == 1
+    assert report["summary"]["by_event_type"] == {"used": 1}
+    assert [event["id"] for event in report["events"]] == [good_id]
+    assert report["verification"] == {
+        "valid": False,
+        "checked_events": 2,
+        "cross_repository_events": 1,
+        "violations": [
+            {
+                "event_id": "legacy-arcade-cross-repo-event",
+                "memory_id": memory_id,
+                "event_repo_id": "repo-b",
+                "memory_repo_id": "repo-a",
+            }
+        ],
+    }
+
+    assert storage.inspect_recall_utility(repo_id="repo-a")["summary"]["total_events"] == 1
+    assert storage.inspect_recall_utility(repo_id="repo-b")["summary"]["total_events"] == 0
+    assert storage.reset_recall_utility(repo_id="repo-b") == 0
+
+    assert storage.reset_recall_utility(memory_id=memory_id) == 1
+    assert "legacy-arcade-cross-repo-event" in fake_arcadedb.db.records["RecallFeedback"]
 
 
 def test_arcadedb_graph_recall_uses_public_memory_contract(fake_arcadedb, tmp_path):
