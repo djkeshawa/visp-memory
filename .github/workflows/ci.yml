@@ -57,7 +57,7 @@ jobs:
         if: ${{ matrix.coverage }}
         run: >-
           pytest -q --cov=visp_memory --cov-report=term-missing --cov-report=xml
-          --cov-fail-under=74
+          --cov-fail-under=85
 
       - name: Upload coverage report
         if: ${{ matrix.coverage }}
