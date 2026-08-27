@@ -3,14 +3,16 @@
 
 set -e
 
+PYTHON="${PYTHON:-python3}"
+
 echo "================================"
 echo "Visp Memory Standalone Builder"
 echo "================================"
 
 # Check if PyInstaller is installed
-if ! command -v pyinstaller &> /dev/null; then
+if ! "$PYTHON" -c "import PyInstaller" &> /dev/null; then
     echo "Installing PyInstaller..."
-    pip install pyinstaller
+    "$PYTHON" -m pip install pyinstaller
 fi
 
 # Everything the bundled binary must be able to do offline. PyInstaller can only
@@ -23,7 +25,7 @@ BUNDLE_EXTRAS="${BUNDLE_EXTRAS:-api,capture,analysis,chroma,neo4j}"
 
 echo ""
 echo "Step 1: Installing project and bundled dependencies (${BUNDLE_EXTRAS})..."
-pip install -e ".[${BUNDLE_EXTRAS}]"
+"$PYTHON" -m pip install -e ".[${BUNDLE_EXTRAS}]"
 
 # Fail here rather than shipping a hollow binary. PyInstaller downgrades an
 # unresolvable hidden import to a warning, so an environment missing these still
@@ -32,17 +34,17 @@ pip install -e ".[${BUNDLE_EXTRAS}]"
 # would be a stronger check, but it opens the caller's real memory database at
 # module scope, so it fails on any machine whose store predates the current
 # schema -- a build step must not depend on the developer's local data.
-python -c "import fastapi, uvicorn, typer, chromadb, neo4j, git, sklearn, visp_memory"
+"$PYTHON" -c "import fastapi, uvicorn, typer, chromadb, neo4j, git, sklearn, visp_memory"
 
 # Build frontend first
 echo ""
 echo "Step 2: Building frontend..."
-python build_frontend.py
+"$PYTHON" build_frontend.py
 
 # Build standalone executable
 echo ""
 echo "Step 3: Building standalone executable..."
-pyinstaller visp-memory.spec
+"$PYTHON" -m PyInstaller visp-memory.spec
 
 # Create distribution directory
 echo ""
@@ -62,7 +64,7 @@ cp standalone/README-STANDALONE.md "$DIST_DIR/"
 cp standalone/start-server.sh "$DIST_DIR/"
 cp standalone/start-server.ps1 "$DIST_DIR/"
 chmod +x "$DIST_DIR/start-server.sh"
-python scripts/verify_distribution_artifacts.py "$DIST_DIR"
+"$PYTHON" scripts/verify_distribution_artifacts.py "$DIST_DIR"
 
 # Smoke test the frozen binary, not just the build environment.
 #
@@ -118,7 +120,7 @@ echo "Step 6: Creating archive..."
 cd dist
 tar -czf visp-memory-standalone-$(uname -s)-$(uname -m).tar.gz visp-memory-standalone/
 cd ..
-python scripts/verify_distribution_artifacts.py "dist/visp-memory-standalone-$(uname -s)-$(uname -m).tar.gz"
+"$PYTHON" scripts/verify_distribution_artifacts.py "dist/visp-memory-standalone-$(uname -s)-$(uname -m).tar.gz"
 
 echo ""
 echo "================================"

@@ -64,6 +64,10 @@ def test_standalone_builds_use_shared_assets_and_omit_mcp():
     spec = (ROOT / "visp-memory.spec").read_text()
 
     assert "api,mcp" not in builder
+    assert 'PYTHON="${PYTHON:-python3}"' in builder
+    assert '"$PYTHON" -m pip install pyinstaller' in builder
+    assert '"$PYTHON" build_frontend.py' in builder
+    assert '"$PYTHON" -m PyInstaller visp-memory.spec' in builder
     assert "visp_memory.interfaces.mcp" not in spec
     assert "standalone/start-server.sh" in builder
     assert "standalone/start-server.ps1" in builder
