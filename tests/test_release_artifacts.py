@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import subprocess
 import sys
 import zipfile
@@ -62,13 +63,35 @@ def test_standalone_builds_use_shared_assets_and_omit_mcp():
     builder = (ROOT / "build_standalone.sh").read_text()
     workflow = (ROOT / ".github/workflows/build-release.yml").read_text()
     spec = (ROOT / "visp-memory.spec").read_text()
+    spec_tree = ast.parse(spec)
+    analysis = next(
+        node
+        for node in ast.walk(spec_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "Analysis"
+    )
+    analysis_options = {
+        keyword.arg: ast.literal_eval(keyword.value)
+        for keyword in analysis.keywords
+        if keyword.arg in {"hiddenimports", "excludes"}
+    }
 
     assert "api,mcp" not in builder
     assert 'PYTHON="${PYTHON:-python3}"' in builder
     assert '"$PYTHON" -m pip install pyinstaller' in builder
     assert '"$PYTHON" build_frontend.py' in builder
     assert '"$PYTHON" -m PyInstaller visp-memory.spec' in builder
-    assert "visp_memory.interfaces.mcp" not in spec
+    assert "visp_memory.interfaces.mcp" not in analysis_options["hiddenimports"]
+    assert "sentence_transformers" not in analysis_options["hiddenimports"]
+    assert {
+        "arcadedb_embedded",
+        "jpype",
+        "sentence_transformers",
+        "tensorflow",
+        "torch",
+        "transformers",
+    } <= set(analysis_options["excludes"])
     assert "standalone/start-server.sh" in builder
     assert "standalone/start-server.ps1" in builder
     assert "standalone/start-server.sh standalone/start-server.ps1" in workflow
