@@ -33,6 +33,13 @@ def test_release_script_fails_closed_before_mutating_version():
     assert "Continue anyway?" not in script[: script.index("# Get current version")]
 
 
+def test_release_wheel_smoke_uses_isolated_storage():
+    script = (ROOT / "scripts/release_check.py").read_text()
+
+    assert 'smoke_env["VISP_MEMORY_STORAGE_DATA_DIR"]' in script
+    assert "env=smoke_env" in script
+
+
 def test_make_defaults_to_python3_but_remains_overridable():
     makefile = (ROOT / "Makefile").read_text()
     assert "PYTHON ?= python3" in makefile

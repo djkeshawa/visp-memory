@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import tempfile
@@ -13,10 +14,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def run(command: list[str], *, cwd: Path = ROOT) -> None:
+def run(
+    command: list[str],
+    *,
+    cwd: Path = ROOT,
+    env: dict[str, str] | None = None,
+) -> None:
     """Run a command and stop on failure."""
     print(f"\n$ {' '.join(command)}")
-    subprocess.run(command, cwd=cwd, check=True)
+    subprocess.run(command, cwd=cwd, check=True, env=env)
 
 
 def has_module(module: str) -> bool:
@@ -127,6 +133,8 @@ def main() -> int:
             raise SystemExit("The package build did not produce a wheel.")
         with tempfile.TemporaryDirectory(prefix="visp-memory-wheel-smoke-") as temp_dir:
             environment = Path(temp_dir) / "venv"
+            smoke_env = os.environ.copy()
+            smoke_env["VISP_MEMORY_STORAGE_DATA_DIR"] = str(Path(temp_dir) / "data")
             venv.EnvBuilder(with_pip=True).create(environment)
             python = environment / (
                 "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
@@ -135,7 +143,7 @@ def main() -> int:
                 "Scripts/visp-memory.exe" if sys.platform == "win32" else "bin/visp-memory"
             )
             run([str(python), "-m", "pip", "install", f"{wheel}[api,mcp]"])
-            run([str(cli), "--help"])
+            run([str(cli), "--help"], env=smoke_env)
 
             # The dashboard is only in the wheel when build_frontend.py ran first, so
             # asserting it under --skip-frontend is self-contradictory: the flag says
@@ -156,7 +164,7 @@ def main() -> int:
                     "assert (static / 'index.html').is_file(), "
                     "'dashboard assets missing from the wheel'"
                 )
-            run([str(python), "-c", "".join(checks)])
+            run([str(python), "-c", "".join(checks)], env=smoke_env)
 
     if args.with_docker_build:
         run(["docker", "build", "-t", "visp-memory:release-check", "."])
