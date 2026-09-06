@@ -3,25 +3,8 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useEffect, useRef, useState } from "react"
-import {
-  Activity,
-  Brain,
-  Cable,
-  ClipboardCheck,
-  ClipboardList,
-  FolderGit2,
-  LayoutDashboard,
-  Library,
-  LogOut,
-  Menu,
-  Network,
-  Search,
-  Settings,
-  Target,
-  UserRound,
-  Users,
-  X,
-} from "lucide-react"
+import { Brain, LogOut, Menu, UserRound, X } from "lucide-react"
+import { Navigation } from "./navigation"
 import { ProjectSelector } from "@/components/projects/project-selector"
 import { ThemeToggle } from "@/components/ui/theme-toggle"
 import {
@@ -35,31 +18,18 @@ import type { AuthUser } from "@/lib/types"
 import { projectHref, useSelectedProjectId } from "@/lib/project-selection"
 import { cn } from "@/lib/utils"
 
-const navItems = [
-  { href: "/", label: "Overview", icon: LayoutDashboard },
-  { href: "/brief", label: "Task Brief", icon: ClipboardCheck },
-  { href: "/memories", label: "Memories", icon: Library },
-  { href: "/recall", label: "Recall", icon: Search },
-  { href: "/graph", label: "Memory Graph", icon: Network },
-  { href: "/intents", label: "Intents", icon: Target },
-  { href: "/projects", label: "Projects", icon: FolderGit2 },
-  { href: "/intelligence", label: "Intelligence", icon: ClipboardList },
-  { href: "/health", label: "Operations", icon: Activity },
-  { href: "/integrations", label: "Integrations", icon: Cable },
-  { href: "/users", label: "Users", icon: Users },
-  { href: "/settings", label: "Settings", icon: Settings },
-]
-
-type SystemHealth = "online" | "degraded" | "offline" | "auth_required"
+type SystemHealth = "checking" | "online" | "degraded" | "offline" | "auth_required"
 
 export function Sidebar() {
   const pathname = usePathname()
   const activePath = pathname === "/dashboard" ? "/" : pathname.replace(/^\/dashboard/, "")
   const selectedRepoId = useSelectedProjectId()
-  const [systemHealth, setSystemHealth] = useState<SystemHealth>("online")
+  const [systemHealth, setSystemHealth] = useState<SystemHealth>("checking")
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [authenticated, setAuthenticated] = useState(false)
   const [account, setAccount] = useState<AuthUser | null>(null)
+  const drawerRef = useRef<HTMLElement>(null)
+  const openButtonRef = useRef<HTMLButtonElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
@@ -104,43 +74,39 @@ export function Sidebar() {
     closeButtonRef.current?.focus()
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") setDrawerOpen(false)
+      if (event.key !== "Tab") return
+      const controls = drawerRef.current?.querySelectorAll<HTMLElement>(
+        'a[href], button:not(:disabled), select:not(:disabled), [tabindex="0"]',
+      )
+      if (!controls?.length) return
+      const first = controls[0]
+      const last = controls[controls.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
     }
     document.body.style.overflow = "hidden"
     window.addEventListener("keydown", handleKeyDown)
     return () => {
       document.body.style.overflow = ""
       window.removeEventListener("keydown", handleKeyDown)
+      openButtonRef.current?.focus()
     }
   }, [drawerOpen])
 
   useEffect(() => setDrawerOpen(false), [pathname])
 
   const systemIndicator = {
+    checking: { color: "bg-muted-foreground", label: "Checking connection" },
     online: { color: "bg-success", label: "System Online" },
     degraded: { color: "bg-intent", label: "System Degraded" },
     offline: { color: "bg-error", label: "System Offline" },
     auth_required: { color: "bg-intent", label: "Authentication Required" },
   }[systemHealth]
-
-  const renderNavigation = () =>
-    navItems.map((item) => {
-      const isActive = activePath === item.href
-      return (
-        <Link
-          key={item.href}
-          href={projectHref(item.href, selectedRepoId)}
-          className={cn(
-            "flex items-center gap-3 rounded-md px-4 py-2.5 text-sm font-medium transition-colors",
-            isActive
-              ? "bg-primary text-primary-foreground"
-              : "text-muted-foreground hover:bg-secondary hover:text-foreground",
-          )}
-        >
-          <item.icon className="h-5 w-5 shrink-0" />
-          <span>{item.label}</span>
-        </Link>
-      )
-    })
 
   const handleLogout = async () => {
     try {
@@ -162,11 +128,12 @@ export function Sidebar() {
           </div>
           <div>
             <p className="font-semibold text-foreground">Visp Memory</p>
-            <p className="text-xs text-muted-foreground">Dashboard</p>
+            <p className="text-xs text-muted-foreground">Project knowledge</p>
           </div>
         </div>
         <button
           type="button"
+          ref={openButtonRef}
           aria-label="Open navigation menu"
           aria-expanded={drawerOpen}
           onClick={() => setDrawerOpen(true)}
@@ -176,21 +143,21 @@ export function Sidebar() {
         </button>
       </header>
 
-      <aside className="fixed left-0 top-0 z-40 hidden h-screen w-60 flex-col border-r border-border bg-card md:flex">
+      <aside className="fixed left-0 top-0 z-40 hidden h-screen w-64 flex-col border-r border-border bg-card md:flex">
         <div className="flex items-center gap-3 border-b border-border px-6 py-5">
           <div className="flex h-10 w-10 items-center justify-center rounded-md bg-primary">
             <Brain className="h-5 w-5 text-primary-foreground" />
           </div>
           <div>
-            <h1 className="font-semibold text-foreground">Visp Memory</h1>
-            <p className="text-xs text-muted-foreground">Dashboard</p>
+            <p className="font-semibold text-foreground">Visp Memory</p>
+            <p className="text-xs text-muted-foreground">Project knowledge</p>
           </div>
         </div>
-        <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4" aria-label="Primary navigation">
-          {renderNavigation()}
+        <div className="pt-5 pb-1"><ProjectSelector /></div>
+        <nav className="flex-1 space-y-1 overflow-y-auto px-3 pb-4" aria-label="Primary navigation">
+          <Navigation activePath={activePath} repoId={selectedRepoId} />
         </nav>
         <div className="space-y-3 border-t border-border px-3 py-4">
-          <ProjectSelector />
           <div className="flex items-center justify-between px-4">
             <span className="text-sm text-muted-foreground">Theme</span>
             <ThemeToggle />
@@ -235,6 +202,7 @@ export function Sidebar() {
             onClick={() => setDrawerOpen(false)}
           />
           <section
+            ref={drawerRef}
             role="dialog"
             aria-modal="true"
             aria-label="Navigation menu"
@@ -252,8 +220,8 @@ export function Sidebar() {
                 <X className="h-5 w-5" />
               </button>
             </div>
-            <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4" aria-label="Mobile navigation">
-              {renderNavigation()}
+            <nav className="flex-1 space-y-1 overflow-y-auto px-3 pb-4" aria-label="Mobile navigation">
+              <Navigation activePath={activePath} repoId={selectedRepoId} />
             </nav>
             <div className="space-y-3 border-t border-border px-3 py-4">
               <ProjectSelector />

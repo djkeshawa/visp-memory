@@ -7,7 +7,6 @@ import "./globals.css"
 export const metadata: Metadata = {
   title: "Visp Memory Dashboard",
   description: "Visualize and manage your LLM memory system",
-  generator: "v0.app",
 }
 
 export default function RootLayout({

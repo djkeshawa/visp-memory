@@ -1,109 +1,57 @@
 "use client"
 
+import Link from "next/link"
 import { useEffect, useState } from "react"
-import type { SystemStatus as SystemStatusType } from "@/lib/types"
-import { cn } from "@/lib/utils"
+import { Activity, ArrowUpRight } from "lucide-react"
 import { getRuntimeStatus } from "@/lib/api"
+import { projectHref, useSelectedProjectId } from "@/lib/project-selection"
+import type { RuntimeStatus } from "@/lib/types"
 
-interface SystemStatusProps {
-  status: SystemStatusType // Keep this prop for initial/fallback
-}
-
-const statusConfig = {
-  online: { color: "bg-success", label: "Online" },
-  offline: { color: "bg-error", label: "Offline" },
-  ready: { color: "bg-success", label: "Ready" },
-  syncing: { color: "bg-intent", label: "Syncing" },
-  active: { color: "bg-success", label: "Active" },
-  inactive: { color: "bg-muted-foreground", label: "Inactive" },
-}
-
-export function SystemStatus({ status: initialStatus }: SystemStatusProps) {
-  const [status, setStatus] = useState<SystemStatusType>(initialStatus)
+export function SystemStatus() {
+  const repoId = useSelectedProjectId()
+  const [runtime, setRuntime] = useState<RuntimeStatus | null>(null)
+  const [failed, setFailed] = useState(false)
 
   useEffect(() => {
-    checkStatus()
-    const interval = setInterval(checkStatus, 30000)
-    return () => clearInterval(interval)
+    let active = true
+    const check = async () => {
+      try {
+        const result = await getRuntimeStatus()
+        if (active) { setRuntime(result); setFailed(false) }
+      } catch {
+        if (active) { setRuntime(null); setFailed(true) }
+      }
+    }
+    void check()
+    const interval = window.setInterval(check, 30000)
+    return () => { active = false; window.clearInterval(interval) }
   }, [])
 
-  const checkStatus = async () => {
-    try {
-      const runtime = await getRuntimeStatus()
-      setStatus({
-        apiServer: "online",
-        vectorDatabase: runtime.storageReady === false ? "offline" : "ready",
-        embeddings: embeddingHealthStatus(runtime),
-        runtime,
-      })
-    } catch (e) {
-      setStatus({
-        apiServer: "offline",
-        vectorDatabase: "offline",
-        embeddings: "inactive",
-      })
-    }
-  }
-
+  const storage = runtime?.storageReady
+  const embeddings = runtime?.embeddingDriverStatus
   const items = [
-    { label: "API Server", status: status.apiServer },
-    {
-      label: status.runtime?.storageBackend
-        ? `Storage (${status.runtime.storageBackend})`
-        : "Storage",
-      status: status.vectorDatabase,
-    },
-    { label: "Embeddings", status: status.embeddings },
+    { label: "API connection", value: failed ? "Unavailable" : runtime ? "Connected" : "Checking…", good: !!runtime },
+    { label: "Storage", value: storage === true ? "Ready" : storage === false ? "Not ready" : "Unknown", good: storage === true },
+    { label: "Embeddings", value: runtime?.embeddingDriverConnected ? "Connected" : embeddings === "failed" ? "Failed" : embeddings === "fallback" || embeddings === "disabled" ? "Keyword fallback" : "Not connected", good: !!runtime?.embeddingDriverConnected },
   ]
 
   return (
-    <div className="glass rounded-lg p-5">
-      <h3 className="text-sm font-semibold text-foreground mb-4">System Status</h3>
-      <div className="space-y-3">
-        {items.map((item) => {
-          const config = statusConfig[item.status]
-          return (
-            <div key={item.label} className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">{item.label}</span>
-              <div className="flex items-center gap-2">
-                <div className={cn("h-2 w-2 rounded-full", config.color)} />
-                <span className="text-sm font-medium text-foreground">{config.label}</span>
-              </div>
-            </div>
-          )
-        })}
+    <section className="rounded-xl border border-border bg-card p-6" aria-labelledby="connection-heading">
+      <div className="mb-5 flex items-center justify-between">
+        <h2 id="connection-heading" className="font-semibold">Connection status</h2>
+        <Activity className="h-4 w-4 text-muted-foreground" />
       </div>
-      {status.runtime ? (
-        <div className="mt-4 space-y-1 border-t border-border pt-3 text-xs text-muted-foreground">
-          <div>Mode: {status.runtime.storageMode || "local"}</div>
-          <div>
-            Embedding:{" "}
-            {status.runtime.embeddingEffectiveProvider ||
-              status.runtime.embeddingProvider ||
-              "unknown"}
-          </div>
-          {status.runtime.embeddingStatusMessage ? (
-            <div>Embedding status: {status.runtime.embeddingStatusMessage}</div>
-          ) : null}
-          {status.runtime.embeddingConnectionError ? (
-            <div>Embedding error: {status.runtime.embeddingConnectionError}</div>
-          ) : null}
-          <div>Repo: {status.runtime.repoId || "unscoped"}</div>
-        </div>
-      ) : null}
-    </div>
+      <dl className="space-y-4">
+        {items.map((item) => <div key={item.label} className="flex items-center justify-between gap-3 text-xs">
+          <dt className="text-muted-foreground">{item.label}</dt>
+          <dd className="flex items-center gap-2 text-right">
+            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${item.good ? "bg-success" : "bg-muted-foreground"}`} />{!runtime && !failed ? "Checking…" : item.value}</dd>
+        </div>)}
+      </dl>
+      {failed && <p className="mt-4 text-xs leading-5 text-muted-foreground">Check your server and sign-in settings in Operations.</p>}
+      {runtime?.embeddingStatusMessage && <p className="mt-4 break-words text-xs leading-5 text-muted-foreground">{runtime.embeddingStatusMessage}</p>}
+      <Link href={projectHref("/health", repoId)} className="mt-5 flex items-center justify-between border-t border-border pt-4 text-sm font-medium text-primary hover:underline">Open operations<ArrowUpRight className="h-4 w-4" />
+      </Link>
+    </section>
   )
-}
-
-function embeddingHealthStatus(runtime: NonNullable<SystemStatusType["runtime"]>) {
-  if (runtime.embeddingDriverConnected === true) return "active"
-
-  if (
-    runtime.embeddingDriverStatus === "failed" ||
-    runtime.embeddingDriverStatus === "fallback"
-  ) {
-    return "offline"
-  }
-
-  return "inactive"
 }

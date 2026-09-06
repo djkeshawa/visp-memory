@@ -5,26 +5,26 @@
 
 :root {
   /* Visp Memory Dashboard - Light Mode */
-  --background: #f5f7f8;
-  --foreground: #182026;
+  --background: #f3f5f9;
+  --foreground: #24334a;
   --card: #ffffff;
-  --card-foreground: #182026;
+  --card-foreground: #24334a;
   --popover: #ffffff;
-  --popover-foreground: #182026;
-  --primary: #0f766e;
+  --popover-foreground: #24334a;
+  --primary: #3458c5;
   --primary-foreground: #ffffff;
-  --secondary: #edf1f2;
-  --secondary-foreground: #182026;
-  --muted: #edf1f2;
-  --muted-foreground: #66737c;
-  --accent: #e7f3f1;
-  --accent-foreground: #0f766e;
+  --secondary: #eaf0f7;
+  --secondary-foreground: #24334a;
+  --muted: #eaf0f7;
+  --muted-foreground: #64738a;
+  --accent: #e9eefc;
+  --accent-foreground: #3458c5;
   --destructive: #dc2626;
   --destructive-foreground: #ffffff;
-  --border: #dbe1e4;
-  --input: #cfd7db;
-  --ring: #0f766e;
-  --radius: 0.5rem;
+  --border: #dde4ee;
+  --input: #cbd5e3;
+  --ring: #3458c5;
+  --radius: 0.75rem;
 
   /* Semantic Colors */
   --episodic: #2563eb;
@@ -35,51 +35,56 @@
 
   /* Sidebar */
   --sidebar: #ffffff;
-  --sidebar-foreground: #182026;
-  --sidebar-primary: #0f766e;
+  --sidebar-foreground: #24334a;
+  --sidebar-primary: #3458c5;
   --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: #f1f5f9;
-  --sidebar-accent-foreground: #182026;
-  --sidebar-border: #dbe1e4;
-  --sidebar-ring: #0f766e;
+  --sidebar-accent-foreground: #24334a;
+  --sidebar-border: #dde4ee;
+  --sidebar-ring: #3458c5;
 }
 
 .dark {
+  color-scheme: dark;
+  --episodic: #93b4ff;
+  --semantic: #c2a3ff;
+  --intent: #f0bc77;
+  --success: #72c99a;
   /* Visp Memory Dashboard - Dark Mode */
-  --background: #151718;
-  --foreground: #eef1f2;
-  --card: #202426;
-  --card-foreground: #eef1f2;
-  --popover: #202426;
-  --popover-foreground: #eef1f2;
-  --primary: #2dd4bf;
-  --primary-foreground: #ffffff;
-  --secondary: #2a3033;
-  --secondary-foreground: #eef1f2;
-  --muted: #2a3033;
-  --muted-foreground: #9ba6ab;
-  --accent: #183b38;
-  --accent-foreground: #5eead4;
+  --background: #141d2b;
+  --foreground: #e8edf6;
+  --card: #1b2738;
+  --card-foreground: #e8edf6;
+  --popover: #1b2738;
+  --popover-foreground: #e8edf6;
+  --primary: #9cb5ff;
+  --primary-foreground: #142443;
+  --secondary: #26344a;
+  --secondary-foreground: #e8edf6;
+  --muted: #26344a;
+  --muted-foreground: #a8b7cc;
+  --accent: #293c64;
+  --accent-foreground: #c1d1ff;
   --destructive: #f87171;
   --destructive-foreground: #ffffff;
-  --border: #394145;
-  --input: #465055;
-  --ring: #2dd4bf;
+  --border: #34445c;
+  --input: #455873;
+  --ring: #9cb5ff;
 
   /* Sidebar */
-  --sidebar: #202426;
-  --sidebar-foreground: #eef1f2;
-  --sidebar-primary: #2dd4bf;
+  --sidebar: #1b2738;
+  --sidebar-foreground: #e8edf6;
+  --sidebar-primary: #9cb5ff;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #2a3033;
-  --sidebar-accent-foreground: #eef1f2;
-  --sidebar-border: #394145;
-  --sidebar-ring: #2dd4bf;
+  --sidebar-accent: #26344a;
+  --sidebar-accent-foreground: #e8edf6;
+  --sidebar-border: #34445c;
+  --sidebar-ring: #9cb5ff;
 }
 
 @theme inline {
-  --font-sans: "Geist", "Geist Fallback";
-  --font-mono: "Geist Mono", "Geist Mono Fallback";
+  --font-sans: "Avenir Next", "Segoe UI", sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, monospace;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -158,4 +163,14 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* Shared interaction affordances across the workspace. */
+@layer base {
+  :where(a, button, input, select, textarea, summary):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 4px;
+  }
+  button:not(:disabled), summary { cursor: pointer; }
+  ::selection { background: var(--accent); color: var(--accent-foreground); }
 }

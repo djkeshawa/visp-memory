@@ -84,6 +84,7 @@ const JWT_STORAGE_KEY = "visp-memory-jwt-token"
 const CSRF_STORAGE_KEY = "visp-memory-csrf-token"
 const AUTH_USER_STORAGE_KEY = "visp-memory-auth-user"
 export const AUTH_CHANGED_EVENT = "visp-memory-auth-changed"
+export const AUTH_REQUIRED_EVENT = "visp-memory-auth-required"
 
 export function getAuthCredentials(): { apiKey: string; jwtToken: string } {
     if (typeof window === "undefined") return { apiKey: "", jwtToken: "" }
@@ -142,6 +143,10 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
             },
         })
         if (!res.ok) {
+            if (
+                res.status === 401 && typeof window !== "undefined" &&
+                !["/auth/status", "/auth/me", "/auth/login", "/auth/logout"].includes(path)
+            ) window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT))
             throw await apiErrorFromResponse(res)
         }
         return res
@@ -181,10 +186,13 @@ function rememberAuthSession(data: Record<string, unknown>, notify = false): Aut
     }
 }
 
-export async function getAuthenticationStatus(): Promise<{ authEnabled: boolean; setupRequired: boolean }> {
-    const res = await request("/auth/status")
+export async function getAuthenticationStatus(signal?: AbortSignal): Promise<{ authEnabled: boolean; setupRequired: boolean }> {
+    const res = await request("/auth/status", { signal })
     const data = await res.json()
-    return { authEnabled: Boolean(data.auth_enabled), setupRequired: Boolean(data.setup_required) }
+    if (typeof data.auth_enabled !== "boolean") {
+        throw new ApiError("Invalid authentication status", 502, "Server returned invalid authentication settings")
+    }
+    return { authEnabled: data.auth_enabled, setupRequired: Boolean(data.setup_required) }
 }
 
 export async function login(username: string, password: string): Promise<AuthSession> {
@@ -196,8 +204,8 @@ export async function login(username: string, password: string): Promise<AuthSes
     return rememberAuthSession(await res.json(), true)
 }
 
-export async function getCurrentAccount(): Promise<AuthSession> {
-    const res = await request("/auth/me")
+export async function getCurrentAccount(signal?: AbortSignal): Promise<AuthSession> {
+    const res = await request("/auth/me", { signal })
     return rememberAuthSession(await res.json())
 }
 

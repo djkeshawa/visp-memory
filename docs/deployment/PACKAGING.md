@@ -106,96 +106,98 @@ visp_memory/
 
 ## Method 2: Docker Container
 
-Fully containerized deployment with multi-stage build.
+Use Docker Engine with the Compose plugin and BuildKit (Docker Desktop includes
+both). Copy `.env.example` to `.env` only if you do not already have a local `.env`,
+then set `VISP_MEMORY_BOOTSTRAP_ADMIN_PASSWORD` to a unique password. No cloud key is
+required: `auto` uses an available embedding provider or falls back to keyword
+search. See [AUTH.md](AUTH.md#dashboard-accounts) for account setup.
 
-### Building
+Choose one storage profile; both use the same host port:
 
 ```bash
-# Build the image
-make docker-build
-# or manually:
-docker build -t visp-memory:latest .
+docker compose --profile lite up -d --build --wait
+# Or the frozen embedded graph backend:
+docker compose --profile arcadedb up -d --build --wait
 ```
 
-The Dockerfile uses a multi-stage build:
-1. **Stage 1**: Build Next.js dashboard
-2. **Stage 2**: Build Python package
-3. **Stage 3**: Create minimal runtime image
+Open [the dashboard](http://127.0.0.1:8000/dashboard). `lite` persists SQLite in
+`visp-memory-lite-data`; `arcadedb` persists its embedded store in
+`visp-memory-arcadedb-data`. Existing `docker-compose.override.yml` volume mappings
+continue to apply to these commands. `/readyz` checks storage and dashboard assets;
+it does not certify that an embedding provider is connected.
 
-### Running
+Both profiles bind to `127.0.0.1:8000` by default. `VISP_MEMORY_PORT` changes the
+host port. Remote exposure through `VISP_MEMORY_BIND_HOST=0.0.0.0` requires deliberate
+authentication, TLS and network configuration.
+
+### Local Ollama embeddings
+
+The optional overlay configures the app's endpoint and model, starts Ollama, and
+waits for the model pull to succeed before starting the app:
 
 ```bash
-# Basic run
-docker run -p 8000:8000 visp-memory:latest
-
-# With persistent storage
-docker run -p 8000:8000 \
-  -v ~/.visp-memory:/data \
-  visp-memory:latest
-
-# With environment variables
-docker run -p 8000:8000 \
-  -e NEO4J_URI=bolt://neo4j:7687 \
-  -e NEO4J_PASSWORD=mypassword \
-  visp-memory:latest
-
-# With embedded ArcadeDB graph storage
-docker run -p 8000:8000 \
-  -e VISP_MEMORY_STORAGE_BACKEND=arcadedb \
-  -v ~/.visp-memory:/data \
-  visp-memory:latest
+docker compose -f docker-compose.yml -f docker-compose.ollama.yml \
+  --profile lite up -d --build --wait --wait-timeout 600
 ```
 
-### Docker Compose
+Replace `lite` with `arcadedb` for the embedded graph backend. Set
+`VISP_MEMORY_OLLAMA_EMBEDDING_MODEL` to choose a different model; the pull job and app
+use this same setting. The initial download needs network access and can take
+several minutes. Models persist in `ollama-data`; Ollama has no published host port.
+The overlay deliberately selects Ollama even if `.env` names a cloud provider.
 
-The repository includes `docker-compose.yml` with three deployment profiles:
+**Existing local overrides:** explicit `-f` arguments disable automatic loading of
+`docker-compose.override.yml`. If you already use an override (especially for a
+custom data volume), preserve it by inserting `-f docker-compose.override.yml`
+between the base file and Ollama overlay in every command. Omitting it can make the
+app appear empty because it opens a different volume.
+
+The base `ollama` profile remains available for operating the model service alone.
+For an app plus Ollama, use the overlay so startup follows Compose's
+[dependency conditions](https://docs.docker.com/compose/how-tos/startup-order/).
+There is no `full` or Neo4j serving profile: Neo4j governed writes fail closed
+pending schema-v3 Evidence support.
+
+### Operate and rebuild
+
+Use the same profiles and `-f` arguments for subsequent commands:
 
 ```bash
-# SQLite-backed local deployment; this remains the default lite profile
-docker compose --profile lite up --build
-
-# Embedded ArcadeDB graph storage; no separate database service
-docker compose --profile arcadedb up --build
-
-# Full graph deployment with Neo4j included
-docker compose --profile full up --build
+docker compose --profile lite ps
+docker compose --profile lite logs --tail=100 -f
+docker compose --profile lite stop
+# Start again after pulling source changes; rebuild includes the dashboard:
+docker compose --profile lite up -d --build --wait
 ```
 
-All app profiles expose the API/dashboard at `http://localhost:8000/dashboard`.
-The ArcadeDB profile runs the embedded graph backend inside the Visp Memory app
-container, stores data in the `visp-memory-arcadedb-data` volume, and does not
-start an external ArcadeDB service.
+`stop` and `down` preserve named volumes. `down --volumes` deletes the stored data;
+do not use it for routine restarts or upgrades. Back up the store before upgrading.
+For an Ollama download failure, inspect `logs ollama-pull`, resolve the connection or
+model error, and rerun `up`. Check embedding connection status in Operations after
+startup. Indexing existing memories after changing models is a separate operation.
 
-The full profile starts Neo4j 5 plus Ollama, pulls `nomic-embed-text`, and
-configures `VISP_MEMORY_STORAGE_BACKEND=neo4j`, `NEO4J_URI=bolt://neo4j:7687`,
-`OLLAMA_HOST=http://ollama:11434`, and persistent volumes automatically.
-Override `NEO4J_PASSWORD`, `VISP_MEMORY_PORT`, or `VISP_MEMORY_REPO_ID` in your
-shell or `.env` file.
+The [Dockerfile](../../Dockerfile) builds the dashboard and wheel in separate stages.
+Runtime dependencies come from `uv.lock`, with hashes checked and extras selected by
+`VISP_MEMORY_EXTRAS`. Source changes reuse the dependency layer; download caches stay
+in the builder. The final image runs as UID 1000 and contains no Node or uv build
+tooling. Bind-mounted `/data` directories must be writable by UID 1000; named volumes
+are initialized from the image automatically.
 
-The default image includes API, MCP, ArcadeDB Embedded, Neo4j driver, OpenAI
-embeddings, and Ollama embeddings. Override `VISP_MEMORY_EXTRAS` when you want a
-leaner image, for example to exclude ArcadeDB from sqlite-only deployments.
-`VISP_MEMORY_EMBEDDING_PROVIDER=auto` prefers OpenAI when
-`OPENAI_API_KEY` or `EMBEDDING_API_KEY` is set, then Ollama when `OLLAMA_HOST`
-is available. Local sentence-transformer embeddings are optional because they
-add large model/runtime dependencies:
+The default extras include API/MCP, ArcadeDB, the Neo4j driver and provider clients;
+Chroma and local transformer/Torch dependencies remain optional. An embedding
+provider alone does not enable a vector index on SQLite: include the `chroma` extra
+for that backend when deliberately building a vector-enabled image. Override
+`VISP_MEMORY_EXTRAS` only for a custom image and retain `api` for HTTP serving.
+`make docker-build` builds locally; registry publishing belongs to the release
+workflow.
 
-```bash
-VISP_MEMORY_EXTRAS=api,mcp,neo4j,local-embeddings \
-VISP_MEMORY_EMBEDDING_PROVIDER=sentence-transformers \
-docker compose --profile full up --build
-```
-
-### Registry Publishing
+To exercise the Docker configuration and build-context boundary:
 
 ```bash
-# Tag for registry
-docker tag visp-memory:latest djkeshawa/visp-memory:0.1.0
-docker tag visp-memory:latest djkeshawa/visp-memory:latest
-
-# Push to Docker Hub
-docker push djkeshawa/visp-memory:0.1.0
-docker push djkeshawa/visp-memory:latest
+VISP_TEST_DOCKER=1 python -m pytest tests/integration/deployment -q
+# Also test a built image using disposable containers and a temporary volume:
+VISP_TEST_DOCKER_IMAGE=visp-memory:local \
+  python -m pytest tests/integration/deployment/test_docker_runtime.py -q
 ```
 
 ## Method 3: Standalone Executable

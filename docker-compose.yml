@@ -12,6 +12,7 @@ x-visp-memory-env: &visp-memory-env
   VISP_MEMORY_BOOTSTRAP_ADMIN_PASSWORD: ${VISP_MEMORY_BOOTSTRAP_ADMIN_PASSWORD:-}
   VISP_MEMORY_SERVER_SESSION_COOKIE_SECURE: ${VISP_MEMORY_SERVER_SESSION_COOKIE_SECURE:-false}
   VISP_MEMORY_SERVER_API_KEYS: ${VISP_MEMORY_SERVER_API_KEYS:-}
+  VISP_MEMORY_JWT_SECRET: ${VISP_MEMORY_JWT_SECRET:-}
   VISP_MEMORY_STORAGE_ALLOW_FALLBACK: ${VISP_MEMORY_STORAGE_ALLOW_FALLBACK:-false}
   VISP_MEMORY_STORAGE_CONNECT_TIMEOUT_SECONDS: ${VISP_MEMORY_STORAGE_CONNECT_TIMEOUT_SECONDS:-30}
   VISP_MEMORY_REPO_ID: ${VISP_MEMORY_REPO_ID:-visp-memory}
@@ -27,6 +28,13 @@ x-visp-memory-env: &visp-memory-env
   VISP_MEMORY_LLM_API_KEY: ${VISP_MEMORY_LLM_API_KEY:-}
   OLLAMA_HOST: ${OLLAMA_HOST:-}
 
+x-visp-memory-healthcheck: &visp-memory-healthcheck
+  test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/readyz', timeout=3).close()"]
+  interval: 10s
+  timeout: 5s
+  start_period: 30s
+  retries: 12
+
 services:
   visp-memory-lite:
     profiles: ["lite"]
@@ -40,11 +48,9 @@ services:
       <<: *visp-memory-env
       VISP_MEMORY_STORAGE_BACKEND: sqlite
       VISP_MEMORY_STORAGE_DATA_DIR: /data
-    healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/readyz').raise_for_status()"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
+    healthcheck: *visp-memory-healthcheck
+    init: true
+    stop_grace_period: 30s
     restart: unless-stopped
 
   visp-memory-arcadedb:
@@ -59,11 +65,9 @@ services:
       <<: *visp-memory-env
       VISP_MEMORY_STORAGE_BACKEND: arcadedb
       VISP_MEMORY_STORAGE_DATA_DIR: /data
-    healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/readyz').raise_for_status()"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
+    healthcheck: *visp-memory-healthcheck
+    init: true
+    stop_grace_period: 30s
     restart: unless-stopped
 
   # There is deliberately no Neo4j-backed serving profile here. The Neo4j backend

@@ -5,6 +5,7 @@ import { KeyRound, LockKeyhole, LogIn, ShieldCheck, UserRound } from "lucide-rea
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { dashboardReturnPath } from "@/lib/auth-navigation"
 import {
   describeApiError,
   getAuthenticationStatus,
@@ -19,6 +20,7 @@ export default function AuthenticationPage() {
   const [setupRequired, setSetupRequired] = useState(false)
   const [authDisabled, setAuthDisabled] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isInitializing, setIsInitializing] = useState(true)
 
   useEffect(() => {
     const initialize = async () => {
@@ -32,12 +34,14 @@ export default function AuthenticationPage() {
         }
         try {
           await getCurrentAccount()
-          window.location.assign("/dashboard")
+          window.location.replace(dashboardReturnPath())
         } catch {
           // The visitor is not signed in yet.
         }
       } catch (error) {
         setMessage(describeApiError(error))
+      } finally {
+        setIsInitializing(false)
       }
     }
     void initialize()
@@ -46,7 +50,7 @@ export default function AuthenticationPage() {
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault()
     if (authDisabled) {
-      window.location.assign("/dashboard")
+      window.location.replace(dashboardReturnPath())
       return
     }
     if (!username.trim() || !password) {
@@ -57,7 +61,7 @@ export default function AuthenticationPage() {
     setMessage(null)
     try {
       await login(username, password)
-      window.location.assign("/dashboard")
+      window.location.replace(dashboardReturnPath())
     } catch (error) {
       setMessage(describeApiError(error))
     } finally {
@@ -91,7 +95,7 @@ export default function AuthenticationPage() {
                 className="pl-9"
                 value={username}
                 onChange={(event) => setUsername(event.target.value)}
-                disabled={authDisabled}
+                disabled={authDisabled || isInitializing}
                 autoFocus
               />
             </div>
@@ -107,7 +111,7 @@ export default function AuthenticationPage() {
                 className="pl-9"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
-                disabled={authDisabled}
+                disabled={authDisabled || isInitializing}
               />
             </div>
           </div>
@@ -121,9 +125,9 @@ export default function AuthenticationPage() {
 
           {message ? <p className="text-sm text-destructive" role="alert">{message}</p> : null}
 
-          <Button type="submit" className="w-full" disabled={isSubmitting || setupRequired}>
+          <Button type="submit" className="w-full" disabled={isInitializing || isSubmitting || setupRequired}>
             <LogIn className="h-4 w-4" aria-hidden="true" />
-            <span>{authDisabled ? "Open dashboard" : isSubmitting ? "Signing in..." : "Sign in"}</span>
+            <span>{isInitializing ? "Checking session…" : authDisabled ? "Open dashboard" : isSubmitting ? "Signing in..." : "Sign in"}</span>
           </Button>
         </form>
       </section>

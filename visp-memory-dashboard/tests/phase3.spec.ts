@@ -61,6 +61,7 @@ async function installApiMocks(
     const handled = await options.onRequest?.(url, route)
     if (handled) return
 
+    if (url.pathname === "/auth/status") return json(route, { auth_enabled: false, setup_required: false })
     if (url.pathname === "/repos/scopes") return json(route, scopes)
     if (url.pathname === "/auth/me") return json(route, { detail: "Authentication required" }, 401)
     if (url.pathname === "/") {

@@ -107,7 +107,7 @@ const { chromium } = require('@playwright/test');
   ];
   for (const path of pages) {
     await page.goto(process.env.VISP_MEMORY_SMOKE_URL + path, { waitUntil: 'networkidle' });
-    await page.waitForFunction(() => document.body.innerText.trim().length >= 20);
+    await page.getByRole('heading', { level: 1 }).first().waitFor({ state: 'visible' });
     const text = await page.locator('body').innerText();
     if (!text || text.length < 20) throw new Error(`${path} rendered an empty page`);
     const title = await page.title();
@@ -158,7 +158,7 @@ const { chromium } = require('@playwright/test');
   await page.setViewportSize({ width: 390, height: 844 });
   for (const path of pages) {
     await page.goto(process.env.VISP_MEMORY_SMOKE_URL + path, { waitUntil: 'networkidle' });
-    await page.waitForFunction(() => document.body.innerText.trim().length >= 20);
+    await page.getByRole('heading', { level: 1 }).first().waitFor({ state: 'visible' });
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - window.innerWidth
     );

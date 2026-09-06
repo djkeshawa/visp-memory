@@ -1,21 +1,23 @@
 "use client"
 
+import { useId } from "react"
 import { FolderGit2 } from "lucide-react"
 import { useProjectScopes, useSelectProject, useSelectedProjectId } from "@/lib/project-selection"
 
 export function ProjectSelector() {
+  const labelId = useId()
   const selectedRepoId = useSelectedProjectId()
   const selectProject = useSelectProject()
   const { projects, loadError } = useProjectScopes()
 
   return (
     <div className="space-y-2 px-4">
-      <div id="project-selector-label" className="flex items-center gap-2 text-sm font-medium text-foreground">
+      <div id={labelId} className="flex items-center gap-2 text-sm font-medium text-foreground">
         <FolderGit2 className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
         Project
       </div>
       <select
-        aria-labelledby="project-selector-label"
+        aria-labelledby={labelId}
         value={selectedRepoId ?? ""}
         onChange={(event) => selectProject(event.target.value)}
         disabled={projects.length === 0}
