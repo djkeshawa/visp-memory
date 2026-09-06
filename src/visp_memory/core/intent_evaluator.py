@@ -80,7 +80,14 @@ class IntentEvaluator:
         test_passed = "test" in evidence_terms and bool(
             {"pass", "passed", "passing", "green"} & evidence_terms
         )
-        completion_signal = bool(evidence_memories) and completion_language
+        negative_signal = bool(re.search(
+            r"\b(not|never|incomplete|unfinished|pending|failed|blocked|remaining)\b",
+            evidence_text.casefold(),
+        ))
+        completion_signal = (
+            bool(evidence_memories) and completion_language and overlap >= 0.5
+            and not negative_signal
+        )
 
         deterministic_confidence = 0.0
         if completion_signal:
@@ -92,10 +99,10 @@ class IntentEvaluator:
             deterministic_confidence += 0.1
         deterministic_confidence = round(min(1.0, deterministic_confidence), 4)
 
-        confidence = deterministic_confidence
+        confidence = 0.0 if negative_signal else deterministic_confidence
 
         suggestion_threshold = self.config.intent_suggestion_threshold
-        if confidence >= suggestion_threshold:
+        if completion_signal and confidence >= suggestion_threshold:
             decision = "suggested"
         else:
             decision = "incomplete"
@@ -111,7 +118,13 @@ class IntentEvaluator:
             "completion_signal": completion_signal,
             "evidence_memory_ids": [memory["id"] for memory in evidence_memories],
             "summary": summary[:2000],
-            "reason": None,
+            "reason": (
+                "The report includes failed, pending, or unfinished work."
+                if negative_signal else
+                "Related completion language found; the owning workflow must confirm the outcome."
+                if completion_signal else
+                "No sufficiently related completion evidence was supplied."
+            ),
             "provider": None,
             "model": None,
             "evaluator_version": EVALUATOR_VERSION,

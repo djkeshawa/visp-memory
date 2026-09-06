@@ -1,7 +1,7 @@
 import Link from "next/link"
 import {
   Activity, Cable, ClipboardCheck, ClipboardList, FolderGit2, LayoutDashboard,
-  Library, Network, Search, Settings, Target, Users,
+  Library, Moon, Network, Search, Settings, Target, Users,
 } from "lucide-react"
 import { projectHref } from "@/lib/project-selection"
 import { cn } from "@/lib/utils"
@@ -23,6 +23,7 @@ const groups = [
     items: [
       { href: "/projects", label: "Projects", icon: FolderGit2 },
       { href: "/intelligence", label: "Intelligence", icon: ClipboardList },
+      { href: "/dreaming", label: "Dreaming", icon: Moon },
     ],
   },
   {

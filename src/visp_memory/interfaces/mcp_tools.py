@@ -11,6 +11,7 @@ profile's documented byte saving, so edits here are measured, not free.
 """
 
 import copy
+import json
 import logging
 import os
 
@@ -22,6 +23,15 @@ except ImportError:
     MCP_TYPES_AVAILABLE = False
 
 logger = logging.getLogger("visp-memory-mcp")
+
+def _workflow_report_schema() -> dict:
+    from visp_memory.core.intent_workflow import IntentWorkflowReport
+
+    # Nested JSON Schema references must resolve from the enclosing tool root.
+    return json.loads(json.dumps(IntentWorkflowReport.model_json_schema()).replace(
+        "#/$defs/", "#/properties/workflow_report/$defs/"
+    ))
+
 
 RUNTIME_SCOPE_SCHEMA = {
     "oneOf": [
@@ -863,11 +873,14 @@ def build_tool_definitions() -> list["Tool"]:
             name="memory_update_intent",
             description=(
                 "Update goal content by ID. Status inputs are recorded as "
-                "non-authoritative outcome history and do not change status."
+                "non-authoritative outcome history and do not change status. "
+                "Send workflow_report separately to mirror an explicit external task status, "
+                "with ordered revisions and completion evidence (SQLite storage)."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "workflow_report": _workflow_report_schema(),
                     "intent_id": {"type": "string", "description": "Intent ID to update"},
                     "description": {"type": "string", "description": "Updated description"},
                     "priority": {

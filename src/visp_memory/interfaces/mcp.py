@@ -1529,6 +1529,23 @@ def _handle_intent(name: str, args: dict[str, Any], memory: Memory) -> str:
         return f"Recorded {recorded} task outcome(s); intent status unchanged"
 
     elif name == "memory_update_intent":
+        if args.get("workflow_report") is not None:
+            if any(args.get(key) is not None for key in ("description", "priority", "status")):
+                raise ValueError("Send a workflow report separately from ordinary intent edits")
+            principal = current_mcp_request_context().principal
+            if principal is not None and not principal.is_admin:
+                intent = next((item for item in memory._storage.get_active_intents(status="all")
+                               if item["id"] == args["intent_id"]), None)
+                if (
+                    not intent
+                    or (intent.get("context") or {}).get("author_id") != principal.user_id
+                ):
+                    raise _http_refusal("Only the intent owner can connect a workflow reporter")
+            result = memory._storage.report_intent_workflow(
+                args["intent_id"], args["workflow_report"],
+                actor_id=principal.user_id if principal else "local-workflow", channel="mcp",
+            )
+            return json.dumps(result)
         status = args.get("status")
         if status is not None and status not in VALID_INTENT_STATUSES:
             return (

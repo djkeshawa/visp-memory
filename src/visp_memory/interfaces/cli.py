@@ -64,6 +64,7 @@ from visp_memory.core.reporting import MemoryIntelligenceReporter
 from visp_memory.core.storage import LocalStorage
 from visp_memory.core.trust import WriteChannel
 from visp_memory.hooks.reachability import ReachabilityReport, check_reachability
+from visp_memory.interfaces.maintenance import app as maintenance_app
 
 console = Console()
 
@@ -123,6 +124,8 @@ app = typer.Typer(
     no_args_is_help=True,
     cls=_RefusalBoundary,
 )
+
+app.add_typer(maintenance_app, name="storage")
 
 # Global memory instance (lazy loaded)
 _memory: Optional[Memory] = None
@@ -1319,6 +1322,23 @@ def intent_update(
         )
     else:
         console.print(f"[green]Intent updated:[/green] {intent_id}")
+
+
+@intent_app.command("report")
+def intent_report(
+    intent_id: str = typer.Argument(..., help="Intent whose workflow reported an update"),
+    report_file: Path = typer.Option(..., "--file", exists=True, dir_okay=False),
+):
+    """Sync an explicit workflow report from a JSON file; never infer completion."""
+    import json
+
+    from visp_memory.core.intent_workflow import IntentWorkflowReport
+
+    report = IntentWorkflowReport.model_validate_json(report_file.read_text())
+    result = get_memory()._storage.report_intent_workflow(
+        intent_id, report.model_dump(mode="json"), actor_id="local-workflow", channel="cli"
+    )
+    console.print(json.dumps(result))
 
 
 @intent_app.command("complete")

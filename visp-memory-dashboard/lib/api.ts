@@ -195,6 +195,13 @@ export async function getAuthenticationStatus(signal?: AbortSignal): Promise<{ a
     return { authEnabled: data.auth_enabled, setupRequired: Boolean(data.setup_required) }
 }
 
+export async function createInitialAccount(username: string, password: string, setupToken: string): Promise<void> {
+    await request("/auth/setup", {
+        method: "POST", headers: jsonHeaders(),
+        body: JSON.stringify({ username, password, setup_token: setupToken }),
+    })
+}
+
 export async function login(username: string, password: string): Promise<AuthSession> {
     const res = await request("/auth/login", {
         method: "POST",
@@ -590,6 +597,13 @@ function normalizeMemory(item: any): Memory {
         accessCount: item.access_count,
         tags: item.tags,
         metadata: item.metadata,
+        qualityFlags: Array.isArray(item.quality_flags) ? item.quality_flags : [],
+        evidenceIds: Array.isArray(item.evidence_ids) ? item.evidence_ids : [],
+        source: item.source,
+        files: Array.isArray(item.files) ? item.files : [],
+        epistemicStatus: item.epistemic_status,
+        validTo: item.valid_to,
+        approvedAt: item.approved_at,
     }
 }
 
@@ -745,14 +759,11 @@ export async function searchMemories(query: string, limit: number = 10, repoId?:
 
     return data
         .map((item: any) => ({
-            id: item.id,
-            content: item.content,
-            layer: normalizeMemoryLayer(item.layer),
-            category: item.category,
-            status: item.status,
-            createdAt: item.created_at,
-            similarity: item.similarity,
-            importance: item.importance,
+            ...normalizeMemory(item),
+            similarity: readNumber(item.similarity) ?? undefined,
+            relevanceScore: readNumber(item.relevance_score) ?? undefined,
+            retrievalMethod: ["keyword", "semantic"].includes(item.retrieval_method) ? item.retrieval_method : null,
+            matchExplanation: typeof item.match_explanation === "string" ? item.match_explanation : null,
         }))
         .filter((item: SearchResult) => isRecallableLayer(item.layer))
 }
@@ -1332,4 +1343,15 @@ function toApiPriority(priority: number): number {
     if (priority >= 8) return 3
     if (priority >= 4) return 2
     return 1
+}
+
+export async function dreamingRequest<T>(
+    repoId: string, action = "", method = "GET", body?: unknown,
+): Promise<T> {
+    const res = await request(`/dreaming/${encodeURIComponent(repoId)}${action}`, {
+        method,
+        headers: jsonHeaders(),
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    })
+    return res.json()
 }

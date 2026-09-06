@@ -885,6 +885,10 @@ class BaseStorage(ABC):
         """Atomically append one non-authoritative outcome history entry."""
         raise NotImplementedError
 
+    def report_intent_workflow(self, intent_id: str, report, *, actor_id: str, channel: str):
+        """Mirror an explicit external report when supported by the backend."""
+        raise NotImplementedError("External workflow reports currently require SQLite storage")
+
     # Relationship Operations
     @abstractmethod
     def add_relationship(
@@ -3867,6 +3871,7 @@ class LocalStorage(BaseStorage):
                         if status_matches:
                             seen_ids.add(mem_id)
                             memory["similarity"] = similarity
+                            memory["retrieval_method"] = "semantic"
                             results.append(memory)
 
             except Exception as exc:
@@ -3948,6 +3953,7 @@ class LocalStorage(BaseStorage):
             if row["id"] in exclude_ids:
                 continue
             row["similarity"] = text_similarity(query, row["content"])
+            row["retrieval_method"] = "keyword"
             results.append(row)
             if len(results) >= limit:
                 break
@@ -4232,8 +4238,11 @@ class LocalStorage(BaseStorage):
         repo_id: str = None,
     ) -> str:
         """Set a new intent (goal/direction)."""
+        from visp_memory.core.intent_workflow import WORKFLOW_CONTEXT_KEYS
+
         intent_id = self._generate_id(description)
-        context = context or {}
+        context = {key: value for key, value in (context or {}).items()
+                   if key not in WORKFLOW_CONTEXT_KEYS}
         # Intents must obey the same scope invariant as memories: never NULL.
         #
         # `store_memory` has applied this default since the column existed, and
@@ -4278,6 +4287,13 @@ class LocalStorage(BaseStorage):
             cursor = conn.execute(query, params)
             return [self._row_to_dict(row) for row in cursor.fetchall()]
 
+    def report_intent_workflow(self, intent_id: str, report, *, actor_id: str, channel: str):
+        from visp_memory.core.intent_workflow import IntentWorkflowReport, apply_workflow_report
+
+        parsed = IntentWorkflowReport.model_validate(report)
+        with self._get_db() as connection:
+            return apply_workflow_report(connection, intent_id, parsed, actor_id, channel)
+
     def complete_intent(self, intent_id: str) -> bool:
         """Keep the legacy surface without changing externally owned status."""
         return False
@@ -4300,9 +4316,8 @@ class LocalStorage(BaseStorage):
         if priority is not None:
             updates.append("priority = ?")
             params.append(priority)
-        # Historical status rows remain readable, but Memory never creates a
-        # workflow-state transition. ``status`` stays accepted for one
-        # compatibility cycle and is deliberately ignored.
+        # Status changes require the dedicated external workflow report path.
+        # Generic edits retain this argument for compatibility.
         if context is not None:
             updates.append("context = ?")
             params.append(self._json_serialize(context))
@@ -4314,6 +4329,22 @@ class LocalStorage(BaseStorage):
         params.append(intent_id)
 
         with self._get_db() as conn:
+            if context is not None:
+                from visp_memory.core.intent_workflow import WORKFLOW_CONTEXT_KEYS
+
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT context, status FROM intents WHERE id = ?", (intent_id,)
+                ).fetchone()
+                existing = self._json_deserialize(row["context"]) if row else {}
+                merged = dict(context)
+                if row and row["status"] != "active":
+                    merged.pop("completion_evaluation", None)
+                for key in WORKFLOW_CONTEXT_KEYS:
+                    merged.pop(key, None)
+                    if key in (existing or {}):
+                        merged[key] = existing[key]
+                params[updates.index("context = ?")] = self._json_serialize(merged)
             cursor = conn.execute(
                 f"""
                 UPDATE intents

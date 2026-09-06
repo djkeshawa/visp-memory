@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { Suspense, useEffect, useRef, useState } from "react"
 import { motion } from "framer-motion"
 import { AlertTriangle, BrainCircuit, Database, RefreshCw, Settings, Wrench } from "lucide-react"
@@ -191,6 +192,7 @@ function SettingsContent() {
         <div>
           <h1 className="text-2xl font-semibold text-foreground">Settings</h1>
           <p className="text-muted-foreground mt-1">Provider diagnostics and connectivity checks</p>
+          <Link href="/setup" className="mt-2 inline-block text-sm text-primary underline">Open search setup guide</Link>
         </div>
       </div>
 

@@ -289,12 +289,23 @@ async def evaluate_intent(
         scope_field="context",
         not_found_detail="Intent not found",
     )
+    for memory_id in payload.memory_ids:
+        memory = storage.get_memory(memory_id)
+        if (
+            not memory
+            or memory.get("repo_id") != intent.get("repo_id")
+            or not can_access_scoped_record(storage, memory, user, scope_field="metadata")
+        ):
+            raise HTTPException(404, "Memory not found")
     result = request.app.state.intent_evaluator.evaluate(
         intent,
         summary=payload.summary,
         memory_ids=payload.memory_ids,
         actor_id=user.user_id,
         allow_auto_complete=payload.model_dump()["allow_auto_complete"],
+    )
+    storage.update_intent(
+        intent_id, context={**(intent.get("context") or {}), "completion_evaluation": result}
     )
     append_audit_event(
         storage,

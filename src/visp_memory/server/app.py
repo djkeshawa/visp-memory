@@ -2,6 +2,7 @@
 FastAPI Server Entry Point
 """
 
+import asyncio
 import logging
 import os
 import time
@@ -23,6 +24,8 @@ except ImportError:
 from visp_memory import __version__
 from visp_memory.config import load_config
 from visp_memory.core.arcadedb_storage import ArcadeDbStorage
+from visp_memory.core.dreaming import Dreaming
+from visp_memory.core.dreaming.scheduler import dreaming_loop
 from visp_memory.core.embedding_status import (
     DISABLED_STATUS_MESSAGE,
     FALLBACK_STATUS_MESSAGE,
@@ -46,6 +49,8 @@ from visp_memory.server.routers import (
     authentication,
     context,
     diagnostics,
+    dreaming,
+    intent_workflow,
     intents,
     memories,
     platform,
@@ -311,13 +316,26 @@ async def lifespan(app: FastAPI):
     The Neo4j driver (and other backends) hold connection pools that must be
     closed to avoid leaking connections when the server stops.
     """
-    yield
-    storage = getattr(app.state, "storage", None)
-    if storage is not None:
+    stop = asyncio.Event()
+    task = None
+    app.state.dream_last_activity = time.monotonic()
+    if isinstance(app.state.storage, LocalStorage):
+        app.state.dreaming = Dreaming(app.state.storage)
+        task = asyncio.create_task(dreaming_loop(app, stop))
+    try:
+        yield
+    finally:
+        stop.set()
         try:
-            storage.close()
-        except Exception as e:  # pragma: no cover - defensive: shutdown must not raise
-            logger.error(f"Error closing storage on shutdown: {e}")
+            if task:
+                await task
+        finally:
+            storage = getattr(app.state, "storage", None)
+            if storage is not None:
+                try:
+                    storage.close()
+                except Exception as e:  # pragma: no cover - shutdown must not raise
+                    logger.error(f"Error closing storage on shutdown: {e}")
 
 
 # Initialize App
@@ -335,6 +353,8 @@ async def request_context_middleware(request: Request, call_next):
     supplied_request_id = request.headers.get("X-Request-ID", "")
     request_id = supplied_request_id if 0 < len(supplied_request_id) <= 128 else uuid.uuid4().hex
     started_at = time.perf_counter()
+    if request.method != "GET" and not request.url.path.startswith("/dreaming"):
+        app.state.dream_last_activity = time.monotonic()
     try:
         response = await call_next(request)
     except Exception:
@@ -392,9 +412,15 @@ bootstrapped_account = app.state.auth_store.bootstrap_admin(
 )
 if bootstrapped_account:
     logger.info("Bootstrapped the initial administrator account")
+elif config.server.auth_enabled and not app.state.auth_store.has_accounts():
+    setup_code = app.state.auth_store.get_setup_token()
+    logger.warning("First-time setup: open /dashboard/auth#setup=%s on this server", setup_code)
+
 
 # Include Routers
 app.include_router(authentication.router)
+app.include_router(dreaming.router)
+app.include_router(intent_workflow.router)
 app.include_router(context.router)
 app.include_router(memories.router)
 app.include_router(intents.router)

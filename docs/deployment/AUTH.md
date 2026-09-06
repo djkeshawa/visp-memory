@@ -142,3 +142,21 @@ export NEO4J_PASSWORD=replace-me
 - Treat memory content as potentially sensitive project data.
 - Avoid broad CORS origins on shared deployments.
 - Back up the storage directory or Neo4j database before upgrades.
+
+## First-time browser setup
+
+When authentication is enabled and no accounts exist, server startup logs contain a
+one-use `/dashboard/auth#setup=...` link. Open it on that server to create the first
+administrator with a username and a password of at least 12 characters. The code is
+kept in the URL fragment, removed from the browser address bar after loading, and is
+never returned by the public authentication status endpoint. Only someone with local
+operator access to the startup logs should receive the link.
+
+The code stops working after the first account is created, including an account created
+through the existing bootstrap/CLI route. Existing installations retain their accounts
+and login flow. Public images do not contain a default administrator password.
+
+After creating the account, the dashboard opens a search setup guide. It distinguishes
+keyword fallback from an available semantic index and explains provider configuration.
+The guide is also available from Settings. Provider changes are applied through server
+environment settings and a restart; the browser does not store provider credentials.

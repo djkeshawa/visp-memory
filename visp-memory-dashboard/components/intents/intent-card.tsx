@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
 import { staggerItem } from "@/lib/animations"
+import { WorkflowDetails } from "@/components/intents/workflow-details"
 import type { Intent } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -68,6 +69,7 @@ export function IntentCard({ intent, onComplete, onClose, onUpdate, onReopen }: 
             {isClosed ? <p className="text-xs text-muted-foreground">closed</p> : null}
             {intent.context?.completed_automatically ? <span className="inline-flex items-center gap-1 text-xs text-primary"><Sparkles className="h-3 w-3" />Completed automatically · {Math.round(Number(intent.context?.completion_evaluation?.confidence || 0) * 100)}%</span> : null}
           </div>
+          <WorkflowDetails intent={intent} />
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {onUpdate ? (

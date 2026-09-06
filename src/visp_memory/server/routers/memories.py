@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 from typing import Any, Dict, List
 
@@ -120,6 +121,8 @@ def _memory_response_payload(memory: dict):
         "accessed_at": _as_datetime(memory.get("accessed_at")),
         "similarity": memory.get("similarity"),
         "relevance_score": memory.get("relevance_score"),
+        "retrieval_method": memory.get("retrieval_method"),
+        "match_explanation": memory.get("match_explanation"),
         "title": metadata.get("title"),
         "summary": metadata.get("summary"),
         "observed_at": _as_optional_datetime(
@@ -986,6 +989,18 @@ async def recall(
     results = rank_memory_results(
         results, query=query.query, limit=query.limit, min_score=query.min_score
     )
+    terms = set(re.findall(r"[\w]+", query.query.casefold()))
+    for result in results:
+        words = set(re.findall(r"[\w]+", result["content"].casefold()))
+        matched = sorted(word for word in terms & words if len(word) > 2)[:8]
+        reason = (
+            "Matched words: " + ", ".join(matched) if matched else "No exact query words matched."
+        )
+        if result.get("retrieval_method") == "semantic":
+            reason = "Retrieved using the vector index. " + reason
+        elif result.get("retrieval_method") == "keyword":
+            reason = "Retrieved using keyword search. " + reason
+        result["match_explanation"] = reason
     return [_memory_response_payload(r) for r in results]
 
 

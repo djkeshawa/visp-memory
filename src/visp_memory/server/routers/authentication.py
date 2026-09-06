@@ -39,6 +39,12 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=1024)
 
 
+class InitialAccountRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=64)
+    password: str = Field(min_length=12, max_length=1024)
+    setup_token: str = Field(min_length=20, max_length=200)
+
+
 class AccountCreateRequest(BaseModel):
     username: str = Field(min_length=3, max_length=64)
     password: str = Field(min_length=12, max_length=1024)
@@ -81,6 +87,27 @@ async def authentication_status(request: Request):
             config.server.auth_enabled and not request.app.state.auth_store.has_accounts()
         ),
     }
+
+
+@router.post("/setup", status_code=status.HTTP_201_CREATED)
+async def setup_account(request: Request, payload: InitialAccountRequest):
+    """Create exactly one administrator using the code printed to the server console."""
+    origin = request.headers.get("origin")
+    if origin and origin != str(request.base_url).rstrip("/"):
+        raise HTTPException(403, "Setup must be submitted from this server's dashboard")
+    store = request.app.state.auth_store
+    if store.has_accounts():
+        raise HTTPException(409, "Administrator setup has already been completed")
+    try:
+        account = store.create_account(
+            username=payload.username, password=payload.password, role="admin",
+            _setup_token=payload.setup_token,
+        )
+    except ValueError as error:
+        raise HTTPException(409 if store.has_accounts() else 403, str(error)) from error
+    append_audit_event(request.app.state.storage, event_type="auth.setup_completed",
+                       actor_id=account["id"], target_type="user", target_id=account["id"])
+    return _public_account(account)
 
 
 @router.post("/login")

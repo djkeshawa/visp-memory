@@ -13,9 +13,19 @@ export interface Memory {
   accessCount?: number
   tags?: string[]
   metadata?: Record<string, unknown>
+  qualityFlags?: string[]
+  evidenceIds?: string[]
+  source?: string | null
+  files?: string[]
+  epistemicStatus?: string | null
+  validTo?: string | null
+  approvedAt?: string | null
 }
 
 export interface SearchResult extends Memory {
+  retrievalMethod?: "keyword" | "semantic" | null
+  matchExplanation?: string | null
+  relevanceScore?: number
   similarity?: number
 }
 

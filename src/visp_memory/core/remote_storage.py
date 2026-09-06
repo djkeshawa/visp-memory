@@ -542,6 +542,16 @@ class RemoteStorage(BaseStorage):
         except requests.RequestException as e:
             raise self._write_error("update intent", e) from e
 
+    def report_intent_workflow(self, intent_id: str, report, *, actor_id: str, channel: str):
+        try:
+            response = self.session.post(
+                f"{self.server_url}/intents/{intent_id}/workflow-status", json=report
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as error:
+            raise self._write_error("report intent workflow status", error) from error
+
     def append_intent_outcome(
         self, intent_id: str, outcome: Dict[str, Any]
     ) -> bool:

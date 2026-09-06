@@ -153,3 +153,29 @@ visp-memory audit --json          # machine-readable
 
 Post-hoc auditability is an [active research need](https://arxiv.org/pdf/2605.23723);
 being able to answer "what is in there, and where did it come from?" is the minimum.
+
+## Workflow Authority And Compatibility
+
+Visp Memory records intent descriptions and cited, non-authoritative outcome
+history. It does not decide intent completion, closure, reopening,
+permission, scope, or readiness. The dedicated
+[external workflow report](development/WORKFLOW_REPORTS.md) path mirrors status explicitly
+reported by the owning workflow, preserving its source and ordered history.
+Completion-language evaluation is deterministic,
+advisory, non-mutating, and returns `authoritative: false` and
+`status_changed: false`; it never returns `decision="completed"`.
+
+For one compatibility cycle, these legacy inputs remain accepted but have no
+effect:
+
+- `llm.intent_auto_complete` in configuration;
+- `VISP_MEMORY_LLM_INTENT_AUTO_COMPLETE` in the environment; and
+- `allow_auto_complete` in the intent-evaluation REST request.
+
+The evaluator response exposes both deprecated input names under
+`deprecated_inputs`. Existing historical `active`, `completed`, and `closed`
+rows remain readable. Legacy REST, CLI, MCP, and library completion surfaces
+append provenance-bearing outcome history where an actor/channel is available,
+but the stored intent status is unchanged. Direct backend status updates and
+`complete_intent` calls are ineffective; mixed backend updates still apply only
+non-status fields.

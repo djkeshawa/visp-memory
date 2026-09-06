@@ -30,6 +30,7 @@ that path. Anything outside it is honestly labelled rather than quietly implied.
 | Structural code anchoring | Experimental | Anchors memories to files/symbols; staleness detection. |
 | Cursor / Aider / Codex / generic hooks | Experimental | Less exercised than the Claude Code path. |
 | REST API + dashboard | Experimental | Works; secondary to the CLI/MCP path. |
+| [Dreaming cycles](development/DREAMING.md) | Beta | Scheduled SQLite cleanup, recoverable exact merges, and review suggestions. No model or vector index required. |
 | ArcadeDB backend | Frozen | Embedded graph storage. Use SQLite unless you need it. |
 | Neo4j backend | Frozen | For shared deployments; requires an external service. |
 | Teams, users, JWT auth | Frozen | Multi-user server features. |

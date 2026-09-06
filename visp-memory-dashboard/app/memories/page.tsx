@@ -1,5 +1,6 @@
 "use client"
 
+import { MemoryDetails } from "@/components/recall/memory-details"
 import { useEffect, useRef, useState } from "react"
 import { Archive, GitMerge, RefreshCw, RotateCcw, Trash2, Undo2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -217,7 +218,7 @@ export default function MemoriesPage() {
               return (
                 <tr key={memory.id} className={selected.includes(memory.id) ? "bg-primary/5" : undefined}>
                   <td className="px-4 py-3"><input type="checkbox" checked={selected.includes(memory.id)} onChange={() => toggle(memory.id)} disabled={status !== "active"} aria-label={`Select memory ${memory.id}`} /></td>
-                  <td className="max-w-xl px-4 py-3"><p className="line-clamp-2 text-foreground">{memory.content}</p><div className="mt-1 flex flex-wrap gap-1">{memory.tags?.slice(0, 4).map((tag) => <span key={tag} className="rounded-sm bg-secondary px-1.5 py-0.5 text-[11px] text-muted-foreground">{tag}</span>)}</div><code className="mt-1 block text-[11px] text-muted-foreground">{memory.id}</code></td>
+                  <td className="max-w-xl px-4 py-3"><p className="line-clamp-2 text-foreground">{memory.content}</p><MemoryDetails memory={memory} /><div className="mt-1 flex flex-wrap gap-1">{memory.tags?.slice(0, 4).map((tag) => <span key={tag} className="rounded-sm bg-secondary px-1.5 py-0.5 text-[11px] text-muted-foreground">{tag}</span>)}</div><code className="mt-1 block text-[11px] text-muted-foreground">{memory.id}</code></td>
                   <td className="px-4 py-3"><span className={cn("inline-flex rounded-full px-2 py-0.5 text-xs font-medium", layerConfig.bgColor, layerConfig.color)}>{layerConfig.label}</span></td><td className="px-4 py-3 text-muted-foreground">{memory.category}</td><td className="px-4 py-3 text-muted-foreground">{new Date(memory.createdAt).toLocaleDateString()}</td>
                   <td className="px-4 py-3"><div className="flex justify-end gap-1">{status === "deleted" ? <Button size="sm" variant="ghost" title="Restore" onClick={() => void restore(memory)}><RotateCcw className="h-4 w-4" /></Button> : status === "active" || status === "archived" ? <Button size="sm" variant="ghost" title="Move to trash" onClick={() => void remove(memory)}><Archive className="h-4 w-4" /></Button> : null}{status !== "active" ? <Button size="sm" variant="ghost" title="Permanently purge" onClick={() => void purge(memory)}><Trash2 className="h-4 w-4 text-destructive" /></Button> : null}</div></td>
                 </tr>

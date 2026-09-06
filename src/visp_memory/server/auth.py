@@ -82,7 +82,7 @@ def _authorize_pat_request(request: Request, user: UserContext) -> UserContext:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Dashboard session authentication is required for account and token management",
         )
-    if path.startswith(("/platform", "/teams", "/diagnostics")):
+    if path.startswith(("/platform", "/teams", "/diagnostics", "/dreaming")):
         required_scope = "admin"
     elif path.startswith("/intents"):
         required_scope = "intent:read" if request.method == "GET" else "intent:write"

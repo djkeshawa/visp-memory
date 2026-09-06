@@ -813,3 +813,29 @@ NEO4J_URI=neo4j+s://hostname:7687
 - [ ] Backup/restore utilities
 - [ ] Sharding support for large datasets
 - [ ] Read replicas for scaling
+
+## Offline maintenance commands
+
+For SQLite, stop the server and all other writers, then run:
+
+```bash
+visp-memory storage backup /backups/memory-before-upgrade --data-dir /data --offline
+visp-memory storage upgrade --data-dir /data --backup-dir /backups/memory-schema-upgrade --offline
+```
+
+Each destination must be new and outside the data directory. `--offline` confirms that
+writers are stopped; the command does not stop them. Backups include the memory,
+authentication, and lifecycle databases and local index files. SQLite databases are
+copied through SQLite's backup API, including committed WAL contents. Nested `backups`
+directories and SQLite sidecar files are excluded. Symbolic links are refused.
+A manifest records file hashes. Keep the matching configuration separately.
+
+Upgrade first takes a full backup, then applies the supported schema 2/3/4 migration.
+An already-current store is unchanged and needs no new backup. A failed migration keeps
+the backup. For Docker, run these commands in a one-off container using the intended
+volume while the application container is stopped, with a separate backup mount.
+
+To restore, keep writers stopped and copy the backed-up files into a **new, empty** data
+root. Verify the manifest hashes and test the restored store with the matching application
+version before switching the server to it. Do not overlay an old backup onto an active
+store. Shared databases require their backend's native backup tools.

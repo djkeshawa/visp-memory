@@ -41,6 +41,10 @@ function IntentsContent() {
     setErrorMessage(null)
     setOutcomeMessage(null)
     void fetchIntents()
+    const refresh = () => { if (document.visibilityState === "visible") void fetchIntents() }
+    const timer = window.setInterval(refresh, 15000)
+    window.addEventListener("focus", refresh)
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", refresh) }
   }, [selectedRepoId])
 
   const fetchIntents = () => {
@@ -146,7 +150,7 @@ function IntentsContent() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-foreground">Intents</h1>
-          <p className="text-muted-foreground mt-1">Track your goals and objectives</p>
+          <p className="text-muted-foreground mt-1">Track goals and follow status reported by your assistant or workflow</p>
         </div>
 
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>

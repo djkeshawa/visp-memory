@@ -122,6 +122,8 @@ class MemoryResponse(BaseModel):
     accessed_at: datetime
     similarity: Optional[float] = None
     relevance_score: Optional[float] = None
+    retrieval_method: Optional[str] = None
+    match_explanation: Optional[str] = None
     title: Optional[str] = None
     summary: Optional[str] = None
     observed_at: Optional[datetime] = None

@@ -9,12 +9,12 @@ import { SearchResults } from "@/components/recall/search-results"
 import { describeApiError, searchMemories } from "@/lib/api"
 import { pageTransition } from "@/lib/animations"
 import { useSelectedProjectId } from "@/lib/project-selection"
-import type { Memory } from "@/lib/types"
+import type { SearchResult } from "@/lib/types"
 
 function RecallContent() {
   const selectedRepoId = useSelectedProjectId()
   const [query, setQuery] = useState("")
-  const [results, setResults] = useState<Memory[] | null>(null)
+  const [results, setResults] = useState<SearchResult[] | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const selectedRepoIdRef = useRef(selectedRepoId)
