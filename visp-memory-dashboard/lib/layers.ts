@@ -19,8 +19,8 @@ export const MEMORY_LAYER_CONFIG: Record<MemoryLayer, MemoryLayerConfig> = {
   raw: {
     label: "Raw",
     icon: FileText,
-    color: "text-slate-600 dark:text-slate-300",
-    bgColor: "bg-slate-100 dark:bg-slate-800/60",
+    color: "text-muted-foreground",
+    bgColor: "bg-secondary",
     fill: "#94a3b8",
     glow: "rgba(148, 163, 184, 0.55)",
     bg: "rgba(148, 163, 184, 0.12)",
@@ -30,8 +30,8 @@ export const MEMORY_LAYER_CONFIG: Record<MemoryLayer, MemoryLayerConfig> = {
   episodic: {
     label: "Episodic",
     icon: Database,
-    color: "text-blue-600 dark:text-blue-400",
-    bgColor: "bg-blue-50 dark:bg-blue-900/30",
+    color: "text-episodic",
+    bgColor: "bg-episodic/10",
     fill: "#a78bfa",
     glow: "rgba(167, 139, 250, 0.6)",
     bg: "rgba(167, 139, 250, 0.1)",
@@ -41,8 +41,8 @@ export const MEMORY_LAYER_CONFIG: Record<MemoryLayer, MemoryLayerConfig> = {
   semantic: {
     label: "Semantic",
     icon: Brain,
-    color: "text-purple-600 dark:text-purple-400",
-    bgColor: "bg-purple-50 dark:bg-purple-900/30",
+    color: "text-semantic",
+    bgColor: "bg-semantic/10",
     fill: "#22d3ee",
     glow: "rgba(34, 211, 238, 0.6)",
     bg: "rgba(34, 211, 238, 0.1)",
@@ -52,8 +52,8 @@ export const MEMORY_LAYER_CONFIG: Record<MemoryLayer, MemoryLayerConfig> = {
   intent: {
     label: "Intent",
     icon: Target,
-    color: "text-amber-600 dark:text-amber-400",
-    bgColor: "bg-amber-50 dark:bg-amber-900/30",
+    color: "text-intent",
+    bgColor: "bg-intent/10",
     fill: "#fbbf24",
     glow: "rgba(251, 191, 36, 0.6)",
     bg: "rgba(251, 191, 36, 0.1)",

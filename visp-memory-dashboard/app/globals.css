@@ -11,24 +11,25 @@
   --card-foreground: #202124;
   --popover: #ffffff;
   --popover-foreground: #202124;
-  --primary: #1967d2;
+  --primary: #252525;
   --primary-foreground: #ffffff;
   --secondary: #f0f1f3;
   --secondary-foreground: #202124;
   --muted: #f0f1f3;
   --muted-foreground: #62666d;
-  --accent: #e8f0fe;
-  --accent-foreground: #1967d2;
+  --accent: #eaf0fa;
+  --highlight: #3267b2;
+  --accent-foreground: #315f9e;
   --destructive: #dc2626;
   --destructive-foreground: #ffffff;
   --border: #e3e5e8;
   --input: #d2d5da;
-  --ring: #1967d2;
+  --ring: #3267b2;
   --radius: 0.875rem;
 
   /* Semantic Colors */
-  --episodic: #2563eb;
-  --semantic: #7c3aed;
+  --episodic: #525b69;
+  --semantic: #476552;
   --intent: #b45309;
   --success: #15803d;
   --error: #dc2626;
@@ -36,50 +37,51 @@
   /* Sidebar */
   --sidebar: #f5f5f7;
   --sidebar-foreground: #202124;
-  --sidebar-primary: #1967d2;
+  --sidebar-primary: #252525;
   --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: #eaecf0;
   --sidebar-accent-foreground: #202124;
   --sidebar-border: #e3e5e8;
-  --sidebar-ring: #1967d2;
+  --sidebar-ring: #3267b2;
 }
 
 .dark {
   color-scheme: dark;
-  --episodic: #93b4ff;
-  --semantic: #c2a3ff;
-  --intent: #f0bc77;
+  --episodic: #c2c5cd;
+  --semantic: #b7c7bc;
+  --intent: #d0bc99;
   --success: #72c99a;
   /* Visp Memory Dashboard - Dark Mode */
-  --background: #141416;
+  --background: #171719;
   --foreground: #f1f1f3;
-  --card: #1e1e21;
+  --card: #212123;
   --card-foreground: #f1f1f3;
-  --popover: #1e1e21;
+  --popover: #212123;
   --popover-foreground: #f1f1f3;
-  --primary: #a8c7fa;
-  --primary-foreground: #152d50;
+  --primary: #eeeeef;
+  --primary-foreground: #202022;
   --secondary: #2a2a2e;
   --secondary-foreground: #f1f1f3;
   --muted: #2a2a2e;
   --muted-foreground: #abaeb6;
-  --accent: #26374f;
-  --accent-foreground: #c2d9ff;
+  --accent: #252e3b;
+  --highlight: #9ebef0;
+  --accent-foreground: #bed2f2;
   --destructive: #f87171;
   --destructive-foreground: #ffffff;
-  --border: #343438;
+  --border: #323235;
   --input: #49494f;
-  --ring: #a8c7fa;
+  --ring: #9ebef0;
 
   /* Sidebar */
-  --sidebar: #19191c;
+  --sidebar: #131315;
   --sidebar-foreground: #f1f1f3;
-  --sidebar-primary: #a8c7fa;
-  --sidebar-primary-foreground: #ffffff;
+  --sidebar-primary: #eeeeef;
+  --sidebar-primary-foreground: #202022;
   --sidebar-accent: #2a2a2e;
   --sidebar-accent-foreground: #f1f1f3;
-  --sidebar-border: #343438;
-  --sidebar-ring: #a8c7fa;
+  --sidebar-border: #323235;
+  --sidebar-ring: #9ebef0;
 }
 
 @theme inline {
@@ -98,6 +100,7 @@
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
+  --color-highlight: var(--highlight);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
@@ -183,7 +186,15 @@
 }
 
 .workspace-main h1 { font-size: clamp(1.75rem, 2.6vw, 2.125rem); line-height: 1.2; }
-.surface { background: var(--card); border: 1px solid var(--border); box-shadow: 0 2px 8px #00000003; }
+.surface { background: var(--card); border: 1px solid var(--border); box-shadow: 0 1px 2px #00000004; }
 .recall-entry { box-shadow: 0 2px 5px #00000004, 0 8px 24px #00000004; }
 .recall-entry:hover { box-shadow: 0 3px 8px #00000006, 0 10px 28px #00000008; }
 .workspace-nav { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+
+/* A single quiet surface for related metrics, with touch-friendly separators. */
+.overview-metrics > a:nth-child(odd) { border-right: 1px solid var(--border); }
+.overview-metrics > a:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
+@media (min-width: 1024px) {
+  .overview-metrics > a:nth-child(-n+2) { border-bottom: 0; }
+  .overview-metrics > a:not(:last-child) { border-right: 1px solid var(--border); }
+}

@@ -123,8 +123,8 @@ export function Sidebar() {
     <>
       <header className="sticky top-0 z-40 flex h-16 items-center justify-between border-b border-border bg-sidebar/95 px-4 backdrop-blur-xl md:hidden">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary">
-            <Brain className="h-5 w-5 text-primary-foreground" />
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-card">
+            <Brain className="h-5 w-5 text-foreground" />
           </div>
           <div>
             <p className="font-semibold text-foreground">Visp Memory</p>
@@ -145,8 +145,8 @@ export function Sidebar() {
 
       <aside className="fixed left-0 top-0 z-40 hidden h-screen w-60 flex-col border-r border-border/70 bg-sidebar md:flex">
         <div className="flex items-center gap-3 px-6 pb-4 pt-7">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary">
-            <Brain className="h-5 w-5 text-primary-foreground" />
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-card">
+            <Brain className="h-5 w-5 text-foreground" />
           </div>
           <div>
             <p className="font-semibold text-foreground">Visp Memory</p>

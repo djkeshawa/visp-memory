@@ -225,7 +225,7 @@ function HealthRow({ item }: { item: DecayPreviewItem }) {
         </div>
         <div className="h-2 rounded-full bg-secondary">
           <div
-            className="h-2 rounded-full bg-blue-500"
+            className="h-2 rounded-full bg-primary"
             style={{ width: `${Math.max(4, Math.min(100, item.currentImportance * 100))}%` }}
           />
         </div>

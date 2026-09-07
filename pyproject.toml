@@ -3,7 +3,7 @@
 # The import package is visp_memory; the console scripts are `visp-memory` (CLI) and
 # `visp-memory-mcp` (MCP server).
 name = "visp-memory"
-version = "0.7.1"
+version = "0.7.2"
 description = "Curated, auditable memory for coding agents - mines your git history, injects sparingly, quarantines untrusted memory"
 readme = "README.md"
 requires-python = ">=3.10"

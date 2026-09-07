@@ -102,6 +102,7 @@ for (const view of [
   test(`keeps populated content within the ${view.name} viewport`, async ({ page }, testInfo) => {
     await mockOverview(page)
     await page.setViewportSize(view)
+    await page.addInitScript((theme) => localStorage.setItem("theme", theme), view.theme)
     await page.emulateMedia({ colorScheme: view.theme, reducedMotion: "reduce" })
     await page.goto("/dashboard?repo_id=visp-memory")
     await expect(page.locator("details")).toHaveCount(4)
@@ -130,6 +131,7 @@ test("does not report ready services before the connection check finishes", asyn
 
 test("switches away from the resolved system theme on the first click", async ({ page }) => {
   await mockOverview(page)
+  await page.addInitScript(() => localStorage.setItem("theme", "system"))
   await page.emulateMedia({ colorScheme: "dark" })
   await page.goto("/dashboard?repo_id=visp-memory")
   await expect(page.locator("html")).toHaveClass(/dark/)
@@ -152,4 +154,16 @@ test("keeps recall usable on a narrow phone", async ({ page }) => {
   await page.getByRole("button", { name: "Search", exact: true }).click()
   await expect(page.getByRole("button", { name: "Search", exact: true })).toBeEnabled()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+})
+
+
+test("starts in dark mode and preserves an explicit light preference", async ({ page }) => {
+  await mockOverview(page)
+  await page.emulateMedia({ colorScheme: "light" })
+  await page.goto("/dashboard?repo_id=visp-memory")
+  await expect(page.locator("html")).toHaveClass(/dark/)
+  await page.getByRole("button", { name: "Switch to light mode" }).click()
+  await page.reload()
+  await expect(page.locator("html")).toHaveClass(/light/)
+  await expect(page.getByRole("button", { name: "Switch to dark mode" })).toBeVisible()
 })

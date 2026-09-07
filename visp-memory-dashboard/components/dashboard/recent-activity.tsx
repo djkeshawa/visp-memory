@@ -20,18 +20,18 @@ export function RecentActivity({ memories, isLoading, unavailable }: RecentActiv
   const visible = memories.filter((memory) => layer === "all" || memory.layer === layer)
 
   return (
-    <section className="surface overflow-hidden rounded-3xl" aria-labelledby="recent-heading" aria-busy={isLoading}>
+    <section className="surface overflow-hidden rounded-2xl" aria-labelledby="recent-heading" aria-busy={isLoading}>
       <div className="flex flex-wrap items-center justify-between gap-3 px-6 pt-6 pb-4">
         <div>
           <h2 id="recent-heading" className="text-base font-semibold">Recently remembered</h2>
           <p className="mt-1 text-sm text-muted-foreground">Decisions and discoveries, ready to revisit.</p>
         </div>
-        <Link href={projectHref("/memories", selectedRepoId)} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">View library<ArrowUpRight className="h-3.5 w-3.5" /></Link>
+        <Link href={projectHref("/memories", selectedRepoId)} className="inline-flex items-center gap-1 text-xs font-medium text-highlight hover:underline">View library<ArrowUpRight className="h-3.5 w-3.5" /></Link>
       </div>
       <div className="flex items-center gap-1 overflow-x-auto border-b border-border/70 px-6 pb-4" role="group" aria-label="Filter recent memories by layer">
         {(["all", ...MEMORY_LAYERS] as const).map((value) => (
           <button key={value} type="button" aria-pressed={layer === value} onClick={() => setLayer(value)}
-            className={cn("shrink-0 whitespace-nowrap rounded-full px-3 py-2 text-xs font-medium transition-colors", layer === value ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-secondary")}>
+            className={cn("shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-xs font-medium transition-colors", layer === value ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-secondary")}>
             {value === "all" ? "All layers" : MEMORY_LAYER_CONFIG[value].label}
           </button>
         ))}
