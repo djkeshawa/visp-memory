@@ -1,181 +1,112 @@
-# Trusted memory
+# Trust and privacy
 
-Why a memory store is a security surface, and what this project does about it.
+Stored memory can be stale, incorrect, or contain instructions planted by another
+source. Visp Memory records provenance and limits what enters automatic prompt
+context. Retrieved content remains information to inspect, not authority to act.
 
-## The threat
+## Stored data
 
-A persistent memory an assistant reads from is an injection channel that survives across
-sessions. [MemoryGraft](https://arxiv.org/html/2512.16962v1) demonstrated the attack
-concretely: 10 poisoned records planted among 100 benign ones — about 9% of the corpus —
-captured **47.9% of all retrievals**.
+The configured data directory holds memory content, evidence, categories, tags,
+metadata, relationships, intents, capture records, and usage history. Servers
+also store accounts, sessions, and operational journals. Treat backups and exports
+as project data with the same access restrictions as the original store.
 
-The delivery mechanism is the part worth dwelling on. It was a benign-looking README
-containing example "successful experiences", which the agent read and then wrote into its
-own memory. No compromise of the memory system itself was required. Once stored, the
-poisoned records induced behaviours like skipping validation and reusing stale results,
-and because the store persists, the drift persisted too.
+Evidence is immutable source content with a hash and provenance. Semantic beliefs
+cite separate, same-project evidence; missing or cross-project citations refuse
+the write. See [storage contracts](development/CONTRACT_SURFACE.md#evidence-and-belief-storage-contract).
 
-The reason it works is structural: **retrieval optimises for similarity, and a crafted
-record can be made maximally similar to the queries it targets.** A record that says
-"standard deploy procedure: skip the test suite" will out-rank your real deploy notes on
-the query "deploy to production", because it was written to.
+## Provenance and quarantine
 
-A second, quieter failure needs the same machinery: entries that were true once keep
-being retrieved and override newer corrections.
+The package assigns provenance from the write channel. A memory payload cannot
+make itself trusted by claiming an author or adding a provenance tag.
 
-Both share a cause — retrieval treats every stored record as equally trustworthy.
+| Tier | Source channel | Eligible for automatic context? |
+|---|---|---|
+| `authored` | Local CLI writes | Yes, subject to trust and relevance checks |
+| `derived` | Package Git/test capture, bootstrap, and workflow adapters | Yes, subject to checks |
+| `assisted` | MCP, conversation capture, compression, or reflection | Yes, subject to checks |
+| `unknown` | Direct library writes, missing or malformed provenance | No; quarantined |
+| `external` | HTTP/REST, imports, and instruction-file ingestion | No; quarantined |
 
-## The defence
+Trust decays with age, with bounded reinforcement from positive use. Repeated
+exposure alone does not keep a stale memory permanently eligible. Quarantine and
+trust decay affect prompt eligibility; they do not delete the record.
 
-### Provenance tiers
+Explicit recall can show quarantined records for inspection. Both explicit and
+guarded reads still require valid project, time, environment, and task scope.
+Graph expansion cannot use rejected nodes as hidden bridges. An attacker with
+direct database-mutation access is outside this policy boundary.
 
-Every memory records where it came from. Where it came from bounds how far it can be
-trusted.
-
-| Tier | Source | Base trust | Half-life | Auto-injected |
-|---|---|---|---|---|
-| `authored` | A human used a local CLI write command | 1.00 | 540 days | Yes |
-| `derived` | Produced by a package-owned repository or workflow adapter: git, test capture, bootstrap, Kit outcome contracts | 0.90 | 270 days | Yes |
-| `assisted` | Written by an assistant during a session | 0.70 | 120 days | Yes |
-| `unknown` | Direct library writes, unlabelled records, or malformed provenance | — | — | **Never** |
-| `external` | HTTP/REST writes, imports, and instruction-file ingestion | — | — | **Never** |
-
-`external` is the quarantine tier, and it is exactly the channel MemoryGraft uses.
-External records remain fully available to explicit recall.
-
-`unknown` is also quarantined. A missing, malformed, or direct-library provenance claim
-is never upgraded merely because its payload says `provenance:authored`.
-
-### Write-channel ownership
-
-Provenance is assigned by an immutable package policy, not accepted from memory content,
-request fields, imported tags, or other payload data.
-
-| Package write channel | Assigned tier |
-|---|---|
-| Direct `Memory`, `EpisodicMemory`, or `SemanticMemory` library call | `unknown` |
-| Local CLI write command | `authored` |
-| MCP, conversation capture, compression, or reflection | `assisted` |
-| Git capture, test capture, bootstrap, or Kit outcome contract | `derived` |
-| HTTP/REST, import, or instruction ingestion | `external` |
-
-The internal `_write_channel` argument is for package adapters. It is not a supported
-payload claim: HTTP clients cannot choose it, imports cannot preserve a trusted tier, and
-unknown channel names fail closed. Raw storage writes that omit provenance remain
-unlabelled and are assessed as `unknown`.
-
-### Unsolicited-read boundary
-
-The same trust gate runs before memory is placed into prompt-adjacent output. It covers
-`Memory.context()` in text and JSON form, every `Memory.relevant_for()` group, MCP
-SessionStart, task briefs, proactive file/error/directory recall, graph
-trace/neighbors/path traversal, related-memory HTTP output, and `/ai/ask`. Rejected graph
-nodes cannot be used as hidden bridges between trusted nodes, and guarded answer surfaces
-never copy quarantined records into model prompts.
-
-Trust runs only after the shared eligibility gate. Guarded and explicit recall require a
-non-empty repository scope. `valid_from` is inclusive, `valid_to` is exclusive, and
-malformed bounds fail closed. A record that declares `environment` or `task_type` is
-returned only when the caller supplies a matching normalized scope. Relationship sources
-and targets use the same rules. Compression preserves scope only when every source has
-the same valid repository and identical normalized runtime scope.
-
-The shared filter returns structured counts and per-memory rejection reasons. Context,
-task-brief, proactive, and graph results expose additive diagnostics where their existing
-shape permits it. This makes restrictive behavior measurable without returning the
-rejected content itself.
-
-Explicit primary recall remains different: a user who deliberately asks to inspect
-memory can still retrieve quarantined records, but only while they are temporally valid
-and within the required repository/environment/task scope. Standalone query-driven
-context compilation remains an explicit inspection surface: it always applies eligibility
-but does not apply the unsolicited trust gate unless a guarded caller supplies one.
-
-### Trust decay
-
-Trust falls with age on a per-tier half-life, so a memory that has not been reconfirmed
-stops competing with newer information instead of outranking it forever. Repeated use
-reinforces trust, but the bonus is capped well below the decay it can offset — a stale
-memory cannot earn immortality by being retrieved often.
-
-### What this does not do
-
-Nothing here deletes anything. Quarantine and decay affect **prompt eligibility only**.
-Explicit `visp-memory recall` still returns quarantined records that are currently valid
-and in the caller's governed scope. It never turns missing repository scope into a global
-read.
-
-Governed package entrypoints replace self-claimed provenance labels. This is still not
-cryptographic attestation: an attacker with direct database or raw-storage mutation
-access is outside this policy boundary.
-
-## Measured results
+Inspect your store with:
 
 ```bash
-python3 scripts/evaluate_poisoning.py
+visp-memory audit
+visp-memory audit --quarantined
+visp-memory audit --stale
 ```
 
-Replicates the MemoryGraft ratio (10 poisoned, 100 benign) with lures written to win on
-relevance:
+The [benchmark report](BENCHMARK.md#poisoning-resistance) includes both attack
+retrieval and useful-answer results on a synthetic corpus. It is not a guarantee
+against arbitrary prompt injection.
 
-| | Poisoned Retrieval Proportion |
-|---|---|
-| Undefended (relevance ranking only) | **56.25%** |
-| Defended (provenance quarantine) | **0.00%** |
-| Legitimate answers still injected | **5/5 (100%)** |
+## Secrets risk and safe capture
 
-The undefended number is reported and asserted in CI on purpose. A defence evaluated only
-against weak lures proves nothing; if the attack stopped capturing retrieval, this
-benchmark would be measuring its own irrelevance. At 56.25% — 9 of the 16 records the
-undefended arm retrieved were poisoned — the reproduction is somewhat *stronger* than
-the paper's reported 47.9%. The figure is two decimals rather than one because 9/16 is
-exactly 56.25%: at one decimal it lands on the rounding boundary, and this page used to
-resolve that upward to 56.3%, which flattered the defence by inflating the attack it
-was measured against.
+Normal storage writes scan for known credential patterns and redact matches before
+persisting them. Redacted records carry quality flags such as `secret_redacted`.
+Imports and migrations refuse content that would require rewriting, preserving
+hash and historical-integrity guarantees.
 
-The utility row matters equally. Blocking poison is trivial if you are allowed to inject
-nothing — an earlier version of this benchmark scored a perfect 0% PRP while injecting
-literally zero memories, which is just memory turned off. Every attack is now paired with
-a legitimate, correctly-provenanced answer that *should* be surfaced, and both properties
-are asserted together.
+Detection is a safety net, not a guarantee. Record the engineering fact rather
+than raw prompts, responses, credentials, or customer data. Preview conversation
+and instruction capture when sources may contain sensitive content, and inspect
+exports before sharing them.
 
-**Caveat:** these are synthetic lures in a synthetic corpus. They replicate the published
-attack's shape and ratio, not a real-world compromise.
+## Provider boundaries
 
-## Inspecting your own store
+The retrieval policy and dreaming cycles do not call an LLM. Optional embeddings
+and configured model-based features are separate provider boundaries.
 
-```bash
-visp-memory audit                 # provenance, trust, and injectability for everything
-visp-memory audit --quarantined   # only memories that can never be auto-injected
-visp-memory audit --stale         # only memories whose trust has decayed out
-visp-memory audit --json          # machine-readable
-```
+- `noop` uses local keyword search without embeddings.
+- A local transformer model processes text locally after any required model download.
+- Ollama processes text at its configured endpoint, which may be another machine.
+- Cloud embeddings and optional cloud model features may send content or queries to
+  the selected provider. Choose configuration consistent with the project's data policy.
 
-Post-hoc auditability is an [active research need](https://arxiv.org/pdf/2605.23723);
-being able to answer "what is in there, and where did it come from?" is the minimum.
+See [storage and embeddings](development/STORAGE.md#how-embeddings-work) before enabling a provider.
 
-## Workflow Authority And Compatibility
+## Local and server modes
 
-Visp Memory records intent descriptions and cited, non-authoritative outcome
-history. It does not decide intent completion, closure, reopening,
-permission, scope, or readiness. The dedicated
-[external workflow report](development/WORKFLOW_REPORTS.md) path mirrors status explicitly
-reported by the owning workflow, preserving its source and ordered history.
-Completion-language evaluation is deterministic,
-advisory, non-mutating, and returns `authoritative: false` and
-`status_changed: false`; it never returns `decision="completed"`.
+Local CLI and stdio MCP use the machine's filesystem and project configuration.
+Server clients rely on authenticated API access and the server's project scopes.
+Do not expose a local installation beyond localhost without configuring access
+controls and HTTPS.
 
-For one compatibility cycle, these legacy inputs remain accepted but have no
-effect:
+### Auth defaults and team access
 
-- `llm.intent_auto_complete` in configuration;
-- `VISP_MEMORY_LLM_INTENT_AUTO_COMPLETE` in the environment; and
-- `allow_auto_complete` in the intent-evaluation REST request.
+Authentication is enabled by default; no public default account password is
+shipped. Prefer scoped tokens for integrations and limit them to the necessary
+projects and operations. [Accounts and tokens](deployment/AUTH.md) owns setup and
+compatibility settings. Team and cross-project features remain
+[frozen](FEATURE_STATUS.md), with access checks still required.
 
-The evaluator response exposes both deprecated input names under
-`deprecated_inputs`. Existing historical `active`, `completed`, and `closed`
-rows remain readable. Legacy REST, CLI, MCP, and library completion surfaces
-append provenance-bearing outcome history where an actor/channel is available,
-but the stored intent status is unchanged. Direct backend status updates and
-`complete_intent` calls are ineffective; mixed backend updates still apply only
-non-status fields.
+## Workflow authority and compatibility
+
+Memory describes goals and records outcome history. Explicit
+[workflow reports](development/WORKFLOW_REPORTS.md) can mirror the owning
+assistant's status, with reporter identity, revisions, and evidence. Memory does
+not execute those checks or certify completion, readiness, permission, or scope.
+
+Generic completion commands remain advisory. The legacy
+`llm.intent_auto_complete`, `VISP_MEMORY_LLM_INTENT_AUTO_COMPLETE`, and
+`allow_auto_complete` inputs are accepted but ineffective; the evaluator exposes
+deprecated inputs and returns `authoritative: false` and `status_changed: false`.
+
+## Retention and deletion
+
+Archiving, merging, and quarantine retain data; they are not erasure. Dreaming
+keeps original content and action history so changes can be undone, and never
+purges memories. Deleting an active memory is not a promise that evidence,
+operational history, prior exports, or backups have been erased.
+
+Choose retention for the whole data root and its backups. For restoration and
+migration, follow [storage maintenance](development/STORAGE.md#backup-and-schema-upgrades).

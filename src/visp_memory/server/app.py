@@ -319,7 +319,7 @@ async def lifespan(app: FastAPI):
     stop = asyncio.Event()
     task = None
     app.state.dream_last_activity = time.monotonic()
-    if isinstance(app.state.storage, LocalStorage):
+    if isinstance(app.state.storage, (LocalStorage, Neo4jStorage)):
         app.state.dreaming = Dreaming(app.state.storage)
         task = asyncio.create_task(dreaming_loop(app, stop))
     try:

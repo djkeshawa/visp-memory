@@ -2,7 +2,6 @@ import sqlite3
 
 import pytest
 
-from visp_memory.core.neo4j_storage import Neo4jStorage
 from visp_memory.core.trust import Provenance, assess, provenance_of, provenance_tag
 from visp_memory.server import app as server_app
 from visp_memory.server.app import app
@@ -531,11 +530,15 @@ async def test_http_attach_evidence_is_atomic_and_same_repo(client):
 
 
 @pytest.mark.asyncio
-async def test_http_neo_governed_write_returns_explicit_unsupported(client):
-    storage = Neo4jStorage.__new__(Neo4jStorage)
-    storage.get_repository = lambda _repo_id: None
-    storage._embedding_fn = None
-    storage._uses_noop_embeddings = False
+async def test_http_backend_evidence_refusal_returns_explicit_unsupported(client):
+    from types import SimpleNamespace
+
+    from visp_memory.core.storage import EvidenceUnsupportedError
+
+    def unsupported(**kwargs):
+        raise EvidenceUnsupportedError("Backend does not implement the Evidence graph")
+
+    storage = SimpleNamespace(get_repository=lambda _repo_id: None, store_memory=unsupported)
     original_storage = app.state.storage
     app.state.storage = storage
     try:

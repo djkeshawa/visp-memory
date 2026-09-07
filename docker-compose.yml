@@ -70,13 +70,7 @@ services:
     stop_grace_period: 30s
     restart: unless-stopped
 
-  # There is deliberately no Neo4j-backed serving profile here. The Neo4j backend
-  # fails closed on raw/episodic/semantic writes until it carries the schema-v3
-  # Evidence graph (Neo4jStorage.store_memory), so a Neo4j "deployment" cannot
-  # store memories -- the profiles that offered one ("full", "dashboard") were
-  # removed after a live migration tripped over them. The backend's contract is
-  # still exercised in CI via docker-compose.ci-neo4j.yml; whichever change lifts
-  # the guard should reintroduce an operator profile in the same PR.
+  # Optional Neo4j deployment: docker-compose.neo4j.yml
 
   ollama:
     profiles: ["ollama"]

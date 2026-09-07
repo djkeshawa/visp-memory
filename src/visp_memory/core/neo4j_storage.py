@@ -14,6 +14,7 @@ except ImportError:  # pragma: no cover - exercised only when optional extra is 
 
 from visp_memory.config import load_config
 from visp_memory.core.indexing import EmbeddingIndexReport, ReindexResult, ReindexScope
+from visp_memory.core.neo4j_governance import Neo4jGovernance
 from visp_memory.core.ranking import (
     clamp_score,
     rank_memory_results,
@@ -23,16 +24,13 @@ from visp_memory.core.ranking import (
 from visp_memory.core.storage import (
     STORAGE_SCHEMA_VERSION,
     BaseStorage,
-    EvidenceUnsupportedError,
     LocalStorage,
-    MemoryLayer,
     SessionCompletionStatus,
     StorageCapabilities,
     StorageMigrationRequired,
-    repository_memory_write,
     repository_registration,
 )
-from visp_memory.quality.secrets import SecretBearingContentError, redact_for_storage
+from visp_memory.quality.secrets import redact_for_storage
 
 logger = logging.getLogger(__name__)
 _RELATIONSHIP_TYPE_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
@@ -53,7 +51,7 @@ def _normalize_relationship_type(relationship: str) -> str:
     return rel_type
 
 
-class Neo4jStorage(BaseStorage):
+class Neo4jStorage(Neo4jGovernance, BaseStorage):
     """
     Storage implementation using Neo4j for both structured data and vector embeddings.
     """
@@ -66,33 +64,93 @@ class Neo4jStorage(BaseStorage):
     LEGACY_RELATIONSHIP_EVIDENCE_REASON = "Legacy relationship without evidence metadata."
     UNSPECIFIED_RELATIONSHIP_EVIDENCE_REASON = "Relationship created without evidence metadata."
     MEMORY_NODE_FIELDS = {
-        "id", "content", "layer", "repo_id", "category", "importance", "tags", "metadata",
-        "source_ids", "status", "source", "quality_flags", "created_at", "accessed_at",
-        "access_count", "approved_by", "approved_at", "archived_at", "compressed_at",
+        "id",
+        "content",
+        "layer",
+        "repo_id",
+        "category",
+        "importance",
+        "tags",
+        "metadata",
+        "source_ids",
+        "status",
+        "source",
+        "quality_flags",
+        "created_at",
+        "accessed_at",
+        "access_count",
+        "approved_by",
+        "approved_at",
+        "archived_at",
+        "compressed_at",
         "last_quality_checked_at",
+        "evidence_ids",
+        "belief_type",
+        "epistemic_status",
+        "authority_attestation",
     }
     INTENT_NODE_FIELDS = {
-        "id", "description", "priority", "repo_id", "context", "status", "created_at",
+        "id",
+        "description",
+        "priority",
+        "repo_id",
+        "context",
+        "status",
+        "created_at",
         "updated_at",
     }
     REPOSITORY_NODE_FIELDS = {
-        "id", "name", "url", "description", "tech_stack", "team_id", "metadata", "created_at",
+        "id",
+        "name",
+        "url",
+        "description",
+        "tech_stack",
+        "team_id",
+        "metadata",
+        "created_at",
+        "status",
+        "archived_at",
     }
     USER_NODE_FIELDS = {
-        "id", "username", "email", "display_name", "metadata", "created_at", "last_active",
+        "id",
+        "username",
+        "email",
+        "display_name",
+        "metadata",
+        "created_at",
+        "last_active",
     }
     TEAM_NODE_FIELDS = {"id", "name", "description", "metadata", "created_at"}
     SESSION_NODE_FIELDS = {
-        "id", "owner_id", "team_id", "repo_id", "summary", "memory_ids",
-        "started_at", "ended_at",
+        "id",
+        "owner_id",
+        "team_id",
+        "repo_id",
+        "summary",
+        "memory_ids",
+        "started_at",
+        "ended_at",
     }
     AUDIT_NODE_FIELDS = {
-        "id", "event_type", "actor_id", "repo_id", "target_type", "target_id", "metadata",
+        "id",
+        "event_type",
+        "actor_id",
+        "repo_id",
+        "target_type",
+        "target_id",
+        "metadata",
         "created_at",
     }
     FEEDBACK_NODE_FIELDS = {
-        "id", "memory_id", "event_type", "repo_id", "query_hash", "task_id", "outcome",
-        "metadata", "created_at",
+        "id",
+        "memory_id",
+        "event_type",
+        "repo_id",
+        "query_hash",
+        "task_id",
+        "outcome",
+        "metadata",
+        "created_at",
     }
 
     def __init__(
@@ -131,6 +189,7 @@ class Neo4jStorage(BaseStorage):
             elif self._upgrade_session_schema_marker:
                 self._upgrade_v4_session_schema()
             self._ensure_indexes()
+            self._ensure_governance_schema()
         except Exception as e:
             logger.error(f"Failed to initialize Neo4j driver: {e}")
             driver = getattr(self, "driver", None)
@@ -173,12 +232,8 @@ class Neo4jStorage(BaseStorage):
                 "CREATE CONSTRAINT session_id_unique IF NOT EXISTS "
                 "FOR (s:Session) REQUIRE s.id IS UNIQUE"
             )
-            session.run(
-                "CREATE INDEX session_owner IF NOT EXISTS FOR (s:Session) ON (s.owner_id)"
-            )
-            session.run(
-                "CREATE INDEX session_repo IF NOT EXISTS FOR (s:Session) ON (s.repo_id)"
-            )
+            session.run("CREATE INDEX session_owner IF NOT EXISTS FOR (s:Session) ON (s.owner_id)")
+            session.run("CREATE INDEX session_repo IF NOT EXISTS FOR (s:Session) ON (s.repo_id)")
             session.run(
                 "CREATE CONSTRAINT repo_id_unique IF NOT EXISTS "
                 "FOR (r:Repository) REQUIRE r.id IS UNIQUE"
@@ -195,9 +250,7 @@ class Neo4jStorage(BaseStorage):
             session.run(
                 "CREATE INDEX audit_log_actor IF NOT EXISTS FOR (a:AuditLog) ON (a.actor_id)"
             )
-            session.run(
-                "CREATE INDEX audit_log_repo IF NOT EXISTS FOR (a:AuditLog) ON (a.repo_id)"
-            )
+            session.run("CREATE INDEX audit_log_repo IF NOT EXISTS FOR (a:AuditLog) ON (a.repo_id)")
             session.run(
                 "CREATE INDEX memory_repo_status_created IF NOT EXISTS "
                 "FOR (m:Memory) ON (m.repo_id, m.status, m.created_at)"
@@ -275,7 +328,7 @@ class Neo4jStorage(BaseStorage):
             markers = list(
                 session.run(
                     "MATCH (v:SchemaVersion {component: 'storage'}) "
-                    "RETURN v.version AS version LIMIT 2"
+                    "RETURN v.version AS version, v.evidence_version AS evidence_version LIMIT 2"
                 )
             )
             if markers:
@@ -294,15 +347,15 @@ class Neo4jStorage(BaseStorage):
                         "Neo4j schema migration is not implemented; export the older store "
                         f"with its original build before using schema v{STORAGE_SCHEMA_VERSION}"
                     )
-                if list(
-                    session.run(
-                        "MATCH (m:Memory) RETURN m.id AS id LIMIT 1"
-                    )
+                if markers[0].get("evidence_version") != 1 and list(
+                    session.run("MATCH (m:Memory) RETURN m.id AS id LIMIT 1")
                 ):
                     raise StorageMigrationRequired(
-                        "Neo4j storage cannot serve existing Memory nodes because "
-                        "the governed Evidence graph is unsupported"
+                        "Legacy Neo4j memories require an explicit migration. Back up the "
+                        "database and export with the original build before upgrading."
                     )
+                if markers[0].get("evidence_version") == 1:
+                    self._validate_governed_graph(session)
                 if stored_version == STORAGE_SCHEMA_VERSION - 1:
                     self._upgrade_session_schema_marker = True
                 return True
@@ -362,8 +415,16 @@ class Neo4jStorage(BaseStorage):
                 data[field] = cls._json_deserialize(data[field])
 
         for field in (
-            "created_at", "updated_at", "accessed_at", "last_active", "started_at", "ended_at",
-            "approved_at", "archived_at", "compressed_at", "last_quality_checked_at",
+            "created_at",
+            "updated_at",
+            "accessed_at",
+            "last_active",
+            "started_at",
+            "ended_at",
+            "approved_at",
+            "archived_at",
+            "compressed_at",
+            "last_quality_checked_at",
         ):
             value = data.get(field)
             if hasattr(value, "iso_format"):
@@ -380,11 +441,18 @@ class Neo4jStorage(BaseStorage):
         return cls._normalize_node(
             node,
             fields=cls.MEMORY_NODE_FIELDS,
-            json_fields={"metadata", "tags", "source_ids", "quality_flags"},
+            json_fields={
+                "metadata",
+                "tags",
+                "source_ids",
+                "quality_flags",
+                "authority_attestation",
+            },
             defaults={
                 "tags": [],
                 "metadata": {},
                 "source_ids": [],
+                "evidence_ids": [],
                 "status": "active",
                 "quality_flags": [],
             },
@@ -396,33 +464,46 @@ class Neo4jStorage(BaseStorage):
     @classmethod
     def _intent_node_to_dict(cls, node: Dict[str, Any]) -> Dict[str, Any]:
         return cls._normalize_node(
-            node, fields=cls.INTENT_NODE_FIELDS, json_fields={"context"},
+            node,
+            fields=cls.INTENT_NODE_FIELDS,
+            json_fields={"context"},
             defaults={"context": {}, "status": "active"},
         )
 
     @classmethod
     def _repository_node_to_dict(cls, node: Dict[str, Any]) -> Dict[str, Any]:
         return cls._normalize_node(
-            node, fields=cls.REPOSITORY_NODE_FIELDS, json_fields={"metadata", "tech_stack"},
+            node,
+            fields=cls.REPOSITORY_NODE_FIELDS,
+            json_fields={"metadata", "tech_stack"},
             defaults={"metadata": {}, "tech_stack": []},
         )
 
     @classmethod
     def _user_node_to_dict(cls, node: Dict[str, Any]) -> Dict[str, Any]:
         return cls._normalize_node(
-            node, fields=cls.USER_NODE_FIELDS, json_fields={"metadata"}, defaults={"metadata": {}},
+            node,
+            fields=cls.USER_NODE_FIELDS,
+            json_fields={"metadata"},
+            defaults={"metadata": {}},
         )
 
     @classmethod
     def _team_node_to_dict(cls, node: Dict[str, Any]) -> Dict[str, Any]:
         return cls._normalize_node(
-            node, fields=cls.TEAM_NODE_FIELDS, json_fields={"metadata"}, defaults={"metadata": {}},
+            node,
+            fields=cls.TEAM_NODE_FIELDS,
+            json_fields={"metadata"},
+            defaults={"metadata": {}},
         )
 
     @classmethod
     def _audit_node_to_dict(cls, node: Dict[str, Any]) -> Dict[str, Any]:
         return cls._normalize_node(
-            node, fields=cls.AUDIT_NODE_FIELDS, json_fields={"metadata"}, defaults={"metadata": {}},
+            node,
+            fields=cls.AUDIT_NODE_FIELDS,
+            json_fields={"metadata"},
+            defaults={"metadata": {}},
         )
 
     def get_capabilities(self) -> StorageCapabilities:
@@ -489,139 +570,6 @@ class Neo4jStorage(BaseStorage):
             "created_by": evidence.get("created_by"),
             "created_at": cls._format_temporal(evidence_created_at),
         }
-
-    @repository_memory_write
-    def store_memory(
-        self,
-        content: str,
-        layer: MemoryLayer = "episodic",
-        repo_id: str = None,
-        category: str = "general",
-        importance: float = 0.5,
-        tags: List[str] = None,
-        metadata: Dict[str, Any] = None,
-        source_ids: List[str] = None,
-        evidence_ids: List[str] = None,
-        status: str = "active",
-        source: str = None,
-        quality_flags: List[str] = None,
-        embedding: List[float] = None,
-        auto_link: bool = True,
-        auto_link_limit: int = DEFAULT_AUTO_LINK_LIMIT,
-        auto_link_min_score: float = DEFAULT_AUTO_LINK_MIN_SCORE,
-        # Accepted and unused. The governed belief fields exist on the local
-        # backend; this one fails closed for every layer that carries them, a few
-        # lines below. Omitting them from the signature did not prevent the write —
-        # it turned an intended, explicit refusal into a TypeError raised before the
-        # check could run, which the server surfaced as a 500 rather than a 501.
-        epistemic_status: str = None,
-        authority_attestation: str = None,
-        replaces_belief_id: str = None,
-    ) -> str:
-        """Store a memory node."""
-        # Enforce the secrets policy at the single choke point every write path funnels
-        # through, so a new caller cannot opt out. See visp_memory.quality.secrets.
-        try:
-            content, quality_flags = redact_for_storage(
-                content,
-                quality_flags,
-                reject_if_redacted=authority_attestation is not None,
-            )
-        except SecretBearingContentError as exc:
-            from visp_memory.core.authority import ProhibitionAuthorityError
-
-            raise ProhibitionAuthorityError(str(exc)) from exc
-        if layer not in _VALID_LAYERS:
-            raise ValueError(
-                "Memory layer must be one of: " + ", ".join(sorted(_VALID_LAYERS))
-            )
-        if layer in {"raw", "episodic", "semantic"}:
-            raise EvidenceUnsupportedError(
-                "Neo4j does not yet support the schema-v3 Evidence graph; governed "
-                f"{layer} writes fail closed"
-            )
-
-        # Generate embedding if not provided and embedding function is available
-        if embedding is None and self._embedding_fn is not None:
-            try:
-                embedding = self._embedding_fn(content)
-            except Exception as e:
-                logger.warning(f"Failed to generate embedding: {e}")
-                embedding = None
-        memory_id = self._generate_id(content)
-        tags = tags or []
-        metadata = metadata or {}
-        source_ids = source_ids or []
-        quality_flags = quality_flags or []
-
-        # Determine labels based on layer
-        # Always add :Memory, and specific layer label (e.g. :Episodic)
-        labels = ["Memory", layer.capitalize()]
-
-        with self.driver.session() as session:
-            # 1. Create/Update Node & Properties
-            query = """
-                MERGE (m:Memory {id: $id})
-                SET m += {
-                    content: $content,
-                    layer: $layer,
-                    repo_id: $repo_id,
-                    category: $category,
-                    importance: $importance,
-                    tags: $tags,
-                    metadata: $metadata,
-                    source_ids: $source_ids,
-                    status: $status,
-                    source: $source,
-                    quality_flags: $quality_flags,
-                    created_at: coalesce(m.created_at, datetime()),
-                    updated_at: datetime(),
-                    accessed_at: coalesce(m.accessed_at, datetime()),
-                    access_count: coalesce(m.access_count, 0)
-                }
-            """
-
-            # Conditionally add vector property
-            if embedding:
-                query += """
-                 WITH m
-                 CALL db.create.setNodeVectorProperty(m, $vector_property, $embedding)
-                 """
-
-            session.run(
-                query,
-                id=memory_id,
-                content=content,
-                layer=layer,
-                repo_id=repo_id,
-                category=category,
-                importance=importance,
-                tags=tags,
-                metadata=self._json_serialize(metadata),
-                source_ids=source_ids,
-                status=status,
-                source=source,
-                quality_flags=quality_flags,
-                embedding=embedding,
-                vector_property=self._vector_property,
-            )
-
-            # 2. Add extra labels
-            for label in labels:
-                if label != "Memory":
-                    session.run(f"MATCH (m:Memory {{id: $id}}) SET m:{label}", id=memory_id)
-
-        self._auto_link_memory(
-            memory_id=memory_id,
-            content=content,
-            repo_id=repo_id,
-            source_ids=source_ids,
-            enabled=auto_link,
-            limit=auto_link_limit,
-            min_score=auto_link_min_score,
-        )
-
-        return memory_id
 
     def _auto_link_memory(
         self,
@@ -761,8 +709,10 @@ class Neo4jStorage(BaseStorage):
             AND ($category IS NULL OR m.category = $category)
             AND ($status = 'all' OR m.status = $status OR ($status = 'active' AND m.status IS NULL))
             AND m.importance >= $min_importance
-            AND toLower(m.content) CONTAINS toLower($query)
-            RETURN m, 0.0 as score
+            AND any(term IN $terms WHERE toLower(m.content) CONTAINS term)
+            WITH m, toFloat(size([term IN $terms WHERE toLower(m.content) CONTAINS term]))
+                / size($terms) AS score
+            RETURN m, score ORDER BY score DESC, m.importance DESC, m.id
             LIMIT $limit
         """
 
@@ -829,6 +779,9 @@ class Neo4jStorage(BaseStorage):
             )
 
     def _run_memory_search(self, cypher: str, **params) -> List[Dict[str, Any]]:
+        params["terms"] = list(dict.fromkeys(re.findall(r"\w+", params["query"].lower())))
+        if not params["terms"]:
+            return []
         with self.driver.session() as session:
             result = session.run(cypher, params)
 
@@ -836,6 +789,7 @@ class Neo4jStorage(BaseStorage):
             for record in result:
                 mem = self._memory_node_to_dict(dict(record["m"]))
                 mem["similarity"] = record["score"]
+                mem["retrieval_method"] = "vector" if params.get("embedding") else "keyword"
                 memories.append(mem)
             return memories
 
@@ -896,7 +850,7 @@ class Neo4jStorage(BaseStorage):
             "tags",
             "metadata",
             "status",
-            "category",
+            "epistemic_status",
             "approved_by",
             "approved_at",
             "archived_at",
@@ -908,6 +862,16 @@ class Neo4jStorage(BaseStorage):
 
     def update_memory(self, memory_id: str, **kwargs) -> bool:
         """Update properties."""
+        from visp_memory.core.beliefs import normalize_epistemic_status
+
+        if kwargs.get("epistemic_status") is not None:
+            kwargs["epistemic_status"] = normalize_epistemic_status(kwargs["epistemic_status"])
+        if kwargs.get("status") == "archived":
+            from visp_memory.core.clock import utc_now_iso
+
+            kwargs.setdefault("archived_at", utc_now_iso())
+        elif kwargs.get("status") == "active":
+            kwargs["archived_at"] = None
         clauses = []
         params = {"id": memory_id}
         content = kwargs.get("content")
@@ -936,14 +900,19 @@ class Neo4jStorage(BaseStorage):
             return False
 
         guard = "WHERE coalesce(m.layer, '') <> 'semantic'\n" if content is not None else ""
-        query = (
-            "MATCH (m:Memory {id: $id}) "
-            + guard
-            + "\n".join(clauses)
-            + " RETURN count(m) as c"
-        )
+        query = "MATCH (m:Memory {id: $id}) " + guard + "\n".join(clauses) + " RETURN count(m) as c"
 
-        with self.driver.session() as session:
+        with self._write_session() as session:
+            if content is not None:
+                current = session.run(
+                    "MATCH (m:Memory {id: $id}) RETURN m.layer AS layer", id=memory_id
+                ).single()
+                if current and current["layer"] == "semantic":
+                    from visp_memory.core.storage import SemanticMemoryImmutableError
+
+                    raise SemanticMemoryImmutableError(
+                        "Semantic belief content is immutable; create an evidence-backed successor"
+                    )
             result = session.run(query, **params)
             updated = result.single()["c"] > 0
             if updated and content is not None and self._embedding_fn is not None:
@@ -1123,7 +1092,12 @@ class Neo4jStorage(BaseStorage):
 
     def delete_memory(self, memory_id: str) -> bool:
         """Delete node and relationships."""
-        with self.driver.session() as session:
+        with self._write_session() as session:
+            session.run(
+                "MATCH (m:Memory) WHERE $id IN m.source_ids "
+                "SET m.source_ids = [x IN m.source_ids WHERE x <> $id]",
+                id=memory_id,
+            ).consume()
             result = session.run(
                 """
                 MATCH (m:Memory {id: $id})
@@ -1148,7 +1122,11 @@ class Neo4jStorage(BaseStorage):
         context: Dict[str, Any] = None,
     ) -> str:
         intent_id = self._generate_id(description)
-        context = context or {}
+        from visp_memory.core.eligibility import UNSCOPED_REPO_ID
+        from visp_memory.core.intent_workflow import WORKFLOW_CONTEXT_KEYS
+
+        context = {k: v for k, v in (context or {}).items() if k not in WORKFLOW_CONTEXT_KEYS}
+        repo_id = repo_id or UNSCOPED_REPO_ID
 
         with self.driver.session() as session:
             session.run(
@@ -1188,65 +1166,82 @@ class Neo4jStorage(BaseStorage):
     def complete_intent(self, intent_id: str) -> bool:
         return False
 
-    def update_intent(self, intent_id: str, **kwargs) -> bool:
-        allowed_fields = {"description", "priority", "context"}
-        params = {"id": intent_id}
-        clauses = []
+    def _change_intent(self, intent_id, change):
+        from visp_memory.core.neo4j_governance import lock_graph
 
-        for field, value in kwargs.items():
-            if field not in allowed_fields or value is None:
-                continue
-            if field == "context":
-                value = self._json_serialize(value)
-            clauses.append(f"i.{field} = ${field}")
-            params[field] = value
-
-        if not clauses:
-            return False
+        def write(tx):
+            lock_graph(tx)
+            row = tx.run("MATCH (i:Intent {id: $id}) RETURN i", id=intent_id).single()
+            if not row:
+                return None
+            intent = self._intent_node_to_dict(dict(row["i"]))
+            updates, result = change(intent)
+            if "context" in updates:
+                updates["context"] = self._json_serialize(updates["context"])
+            if updates:
+                tx.run(
+                    "MATCH (i:Intent {id: $id}) SET i += $updates, i.updated_at = datetime()",
+                    id=intent_id,
+                    updates=updates,
+                ).consume()
+            return result
 
         with self.driver.session() as session:
-            result = session.run(
-                f"""
-                MATCH (i:Intent {{id: $id}})
-                SET {", ".join(clauses)}, i.updated_at = datetime()
-                RETURN count(i) as c
-                """,
-                params,
-            )
-            return result.single()["c"] > 0
+            return session.execute_write(write)
 
-    def append_intent_outcome(
-        self, intent_id: str, outcome: Dict[str, Any]
-    ) -> bool:
-        """Append with an optimistic compare-and-swap over the serialized context."""
-        for _attempt in range(20):
-            with self.driver.session() as session:
-                current = session.run(
-                    "MATCH (i:Intent {id: $id}) RETURN i.context AS context",
-                    id=intent_id,
-                ).single()
-                if current is None:
-                    return False
-                serialized = current["context"]
-                context = self._json_deserialize(serialized) or {}
-                history = context.get("outcome_history")
-                history = list(history) if isinstance(history, list) else []
-                history.append(dict(outcome))
-                context["outcome_history"] = history
-                result = session.run(
-                    """
-                    MATCH (i:Intent {id: $id})
-                    WHERE i.context = $expected
-                    SET i.context = $context, i.updated_at = datetime()
-                    RETURN count(i) AS c
-                    """,
-                    id=intent_id,
-                    expected=serialized,
-                    context=self._json_serialize(context),
+    def update_intent(self, intent_id: str, **kwargs) -> bool:
+        from visp_memory.core.intent_workflow import WORKFLOW_CONTEXT_KEYS
+
+        updates = {
+            k: v
+            for k, v in kwargs.items()
+            if k in {"description", "priority", "context"} and v is not None
+        }
+        if not updates:
+            return False
+
+        def change(intent):
+            values = dict(updates)
+            if "context" in values:
+                context = {
+                    k: v for k, v in values["context"].items() if k not in WORKFLOW_CONTEXT_KEYS
+                }
+                context.update(
+                    {
+                        k: intent["context"][k]
+                        for k in WORKFLOW_CONTEXT_KEYS
+                        if k in intent["context"]
+                    }
                 )
-                if result.single()["c"] > 0:
-                    return True
-        raise RuntimeError("Concurrent intent outcome append did not converge")
+                if intent["status"] != "active":
+                    context.pop("completion_evaluation", None)
+                values["context"] = context
+            return values, True
+
+        return bool(self._change_intent(intent_id, change))
+
+    def append_intent_outcome(self, intent_id: str, outcome: Dict[str, Any]) -> bool:
+        def change(intent):
+            context = dict(intent["context"])
+            context["outcome_history"] = [*context.get("outcome_history", []), dict(outcome)]
+            return {"context": context}, True
+
+        return bool(self._change_intent(intent_id, change))
+
+    def report_intent_workflow(self, intent_id, report, *, actor_id, channel):
+        from visp_memory.core.intent_workflow import reduce_workflow_report
+
+        def change(intent):
+            context, result = reduce_workflow_report(
+                intent["context"], intent["status"], report, actor_id, channel
+            )
+            updates = {"context": context, "status": result["status"]} if result["applied"] else {}
+            return updates, result
+
+        result = self._change_intent(intent_id, change)
+        if result is None:
+            raise LookupError("Intent not found")
+        return result
 
     # Relationship Operations
     def _get_memory_repo_id(self, memory_id: str) -> Optional[Dict[str, Any]]:
@@ -1295,7 +1290,7 @@ class Neo4jStorage(BaseStorage):
 
         rel_id = self._generate_id(f"{source_id}-{target_id}-{rel_type}")
 
-        with self.driver.session() as session:
+        with self._write_session() as session:
             if rel_type != auto_rel_type:
                 session.run(
                     f"""
@@ -1691,9 +1686,7 @@ class Neo4jStorage(BaseStorage):
     def update_repository(self, repo_id: str, **kwargs) -> bool:
         allowed = {"name", "url", "description", "tech_stack", "metadata", "status"}
         updates = {
-            key: value
-            for key, value in kwargs.items()
-            if key in allowed and value is not None
+            key: value for key, value in kwargs.items() if key in allowed and value is not None
         }
         if not updates:
             return False
@@ -1717,7 +1710,16 @@ class Neo4jStorage(BaseStorage):
     def _purge_repository_children(self, repo_id: str) -> list[Dict[str, Any]]:
         """Delete repository-owned child nodes and dependency relationships."""
         try:
-            with self.driver.session() as session:
+            with self._write_session() as session:
+                if not session.run(
+                    "MATCH (m:Memory {repo_id: $id}) RETURN m LIMIT 1", id=repo_id
+                ).single():
+                    session.run(
+                        "MATCH (n) WHERE n.repo_id = $id AND "
+                        "(n:Evidence OR n:DreamProject OR n:DreamRun OR n:DreamAction "
+                        "OR n:DreamDismissal) DETACH DELETE n",
+                        id=repo_id,
+                    ).consume()
                 session.run("MATCH (i:Intent {repo_id: $id}) DETACH DELETE i", id=repo_id)
                 session.run("MATCH (s:Session {repo_id: $id}) DETACH DELETE s", id=repo_id)
                 session.run(

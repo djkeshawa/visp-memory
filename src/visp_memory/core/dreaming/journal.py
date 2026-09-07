@@ -33,14 +33,9 @@ def signature(item):
     return json.dumps(item["fingerprints"], sort_keys=True)
 
 
-def load_memory(storage, conn, memory_id):
-    row = conn.execute("SELECT * FROM memories WHERE id = ?", (memory_id,)).fetchone()
-    return storage._row_to_dict(row) if row else None
-
-
-def apply(storage, conn, run_id, repo_id, item, actor_id):
-    """Caller holds BEGIN IMMEDIATE and has checked the proposal policy."""
-    memories = [load_memory(storage, conn, mid) for mid in item["memory_ids"]]
+def apply(unit, run_id, repo_id, item, actor_id):
+    """Caller holds a storage transaction and has checked the proposal policy."""
+    memories = [unit.memory(mid) for mid in item["memory_ids"]]
     if any(
         not m
         or m["repo_id"] != repo_id
@@ -64,54 +59,52 @@ def apply(storage, conn, run_id, repo_id, item, actor_id):
             "metadata": metadata,
             "archived_at": utc_now_iso() if state == "archived" else memory.get("archived_at"),
         }
-        conn.execute(
-            "UPDATE memories SET status = ?, metadata = ?, archived_at = ? WHERE id = ?",
-            (state, json.dumps(metadata), after["archived_at"], memory["id"]),
-        )
+        unit.change_memory(memory["id"], after)
         snapshot[memory["id"]] = {
             "before": before,
             "after": after,
-            "fingerprint": fingerprint(load_memory(storage, conn, memory["id"])),
+            "fingerprint": fingerprint(unit.memory(memory["id"])),
         }
-    conn.execute(
-        "INSERT INTO dream_actions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
-        (
-            action_id,
-            run_id,
-            repo_id,
-            item["id"],
-            signature(item),
-            item["kind"],
-            actor_id,
-            utc_now_iso(),
-            "applied",
-            json.dumps(snapshot),
+    unit.put(
+        "actions",
+        dict(
+            id=action_id,
+            run_id=run_id,
+            repo_id=repo_id,
+            proposal_id=item["id"],
+            signature=signature(item),
+            kind=item["kind"],
+            actor_id=actor_id,
+            created_at=utc_now_iso(),
+            status="applied",
+            snapshot=json.dumps(snapshot),
+            undone_at=None,
         ),
     )
     return action_id
 
 
-def undo(storage, conn, action, actor_id):
+def undo(unit, action, actor_id):
     if action["status"] != "applied":
         raise ValueError("This change has already been undone")
     snapshot = json.loads(action["snapshot"])
     for memory_id, saved in snapshot.items():
-        current = load_memory(storage, conn, memory_id)
+        current = unit.memory(memory_id)
         if not current or fingerprint(current) != saved["fingerprint"]:
             raise ValueError("A changed or deleted source prevents undo; review it in Memories.")
     for memory_id, saved in snapshot.items():
         before = saved["before"]
-        conn.execute(
-            "UPDATE memories SET status = ?, metadata = ?, archived_at = ? WHERE id = ?",
-            (before["status"], json.dumps(before["metadata"]), before["archived_at"], memory_id),
-        )
-    conn.execute(
-        "UPDATE dream_actions SET status = ?, undone_at = ?, actor_id = ? WHERE id = ?",
-        ("undone", utc_now_iso(), actor_id, action["id"]),
+        unit.change_memory(memory_id, before)
+    unit.put(
+        "actions", {**action, "status": "undone", "undone_at": utc_now_iso(), "actor_id": actor_id}
     )
-    conn.execute(
-        "INSERT OR IGNORE INTO dream_dismissals VALUES (?, ?, ?)",
-        (action["repo_id"], action["proposal_id"], action["signature"]),
+    unit.put(
+        "dismissals",
+        dict(
+            repo_id=action["repo_id"],
+            proposal_id=action["proposal_id"],
+            signature=action["signature"],
+        ),
     )
 
 

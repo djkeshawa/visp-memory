@@ -1,551 +1,106 @@
-# Visp Memory - Testing Guide
+# Testing
 
-This document covers testing practices, patterns, and procedures for Visp Memory.
+Use [CONTRIBUTING.md](../../CONTRIBUTING.md) for environment setup and contribution
+rules. Tests should exercise observable behavior with isolated storage, not the
+user's project database or paid providers.
 
----
+## Required checks
 
-## Quick Start
-
-### Running Tests
-
-```bash
-# Run all tests
-pytest
-
-# Run specific test file
-pytest tests/core/test_memory.py
-
-# Run with verbose output
-pytest -v
-
-# Run with asyncio support (for async tests)
-pytest --asyncio-mode=auto
-
-# Run with coverage
-pytest --cov=visp_memory --cov-report=html
-```
-
----
-
-## Test Structure
-
-### Test Organization
-
-```
-tests/
-├── capture/                 # Conversation and source capture tests
-├── cli/                     # CLI integration tests
-├── core/                    # Memory, storage, conflict, and LLM core tests
-├── interfaces/              # MCP and other protocol interface tests
-├── scripts/                 # Utility script smoke tests
-├── server/                  # API, auth, config, collaboration tests
-└── conftest.py              # Shared fixtures
-```
-
----
-
-## Testing Practices
-
-### Test Isolation
-
-Each test creates an isolated environment using temporary directories:
-
-```python
-import tempfile
-from pathlib import Path
-
-@pytest.fixture
-def temp_memory():
-    """Create isolated memory instance for testing."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        config = MemoryConfig(
-            storage=StorageConfig(
-                data_dir=tmpdir,
-                backend="local"
-            )
-        )
-        memory = Memory(config)
-        yield memory
-```
-
-**Key Principles:**
-- Use `tempfile.TemporaryDirectory()` for isolated test storage
-- Each test creates fresh `MemoryConfig` with temporary `data_dir`
-- No shared state between tests
-- Cleanup happens automatically
-
----
-
-### Fixtures
-
-Shared fixtures are defined in `conftest.py`:
-
-```python
-@pytest.fixture
-def memory():
-    """Reusable memory instance."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        config = MemoryConfig(storage=StorageConfig(data_dir=tmpdir))
-        yield Memory(config)
-
-@pytest.fixture
-def sample_memory_data():
-    """Sample memory for testing."""
-    return {
-        "content": "Test memory",
-        "importance": 0.5,
-        "metadata": {"source": "test"}
-    }
-```
-
-**Common Fixtures:**
-- `memory` - Basic memory instance
-- `neo4j_memory` - Memory with Neo4j backend (requires Neo4j running)
-- `sample_memory_data` - Test data
-- `mock_embeddings` - Mock embedding function
-
----
-
-### Async Tests
-
-For async code, use `pytest-asyncio`:
-
-```python
-import pytest
-
-@pytest.mark.asyncio
-async def test_async_operation(memory):
-    result = await memory.async_recall("query")
-    assert result is not None
-```
-
-Run with:
-```bash
-pytest --asyncio-mode=auto
-```
-
----
-
-## Test Patterns
-
-### Testing Memory Operations
-
-```python
-def test_record_and_recall(memory):
-    # Record a memory
-    memory_id = memory.record("Test event")
-
-    # Verify it was stored
-    assert memory_id is not None
-
-    # Recall it
-    results = memory.recall("test")
-
-    # Verify results
-    assert len(results) > 0
-    assert "test" in results[0]["content"].lower()
-```
-
-### Testing Storage Backends
-
-```python
-def test_storage_backend(storage):
-    # Store
-    memory_data = {
-        "content": "Test",
-        "importance": 0.5,
-        "embedding": [0.1, 0.2, 0.3]
-    }
-    memory_id = storage.store_memory("episodic", memory_data)
-
-    # Retrieve
-    retrieved = storage.get_memory("episodic", memory_id)
-
-    # Verify
-    assert retrieved["content"] == "Test"
-    assert retrieved["importance"] == 0.5
-```
-
-### Testing Search
-
-```python
-def test_semantic_search(memory):
-    # Seed with memories
-    memory.record("Python is a programming language")
-    memory.record("JavaScript is used for web development")
-    memory.record("Rust is a systems language")
-
-    # Search
-    results = memory.recall("programming languages")
-
-    # Verify ranking
-    assert len(results) > 0
-    # Python should rank higher than JavaScript for this query
-    contents = [r["content"] for r in results]
-    assert contents[0].startswith("Python") or contents[0].startswith("Rust")
-```
-
-### Testing Compression
-
-```python
-def test_compression(memory):
-    # Create multiple similar episodes
-    for i in range(5):
-        memory.record(f"Fixed authentication bug variant {i}")
-
-    # Run compression
-    compressed = memory.compress()
-
-    # Verify semantic memory created
-    assert len(compressed) > 0
-    semantic = compressed[0]
-    assert "authentication" in semantic["content"].lower()
-    assert len(semantic.get("source_ids", [])) >= 2
-```
-
----
-
-## Manual CLI Testing
-
-Test the system with real commands to verify end-to-end functionality:
-
-### Basic Operations
+Run focused tests for the change, then the repository checks before completion:
 
 ```bash
-# Initialize
-visp-memory init --type code
-
-# Record memories
-visp-memory record "Implemented feature X"
-visp-memory decision "Use PostgreSQL" "Need ACID guarantees"
-visp-memory warn "src/auth.py" "Watch out for race conditions"
-
-# Search and retrieve
-visp-memory recall "feature"
-visp-memory recall "PostgreSQL"
-
-# Proactive context
-visp-memory inject --file "src/auth.py"
-visp-memory inject --task "Working on authentication"
-
-# Error matching
-visp-memory find-error "AttributeError"
+python3 -m pytest -q tests/core/test_memory.py
+make test
+make lint
 ```
 
-### Maintenance Commands
+`make test` runs the full pytest suite; `make lint` runs Ruff. Python dependencies
+come from the project's existing extras. For debugging, add `-x -vv`, use `--lf`
+to rerun failures or `--pdb` to inspect one. Counts and timings belong in run
+receipts, not a permanently stale test-count claim in this guide.
+
+## Test map
+
+| Directory/file | Coverage |
+|---|---|
+| [tests/core/](../../tests/core) | Storage, Evidence, eligibility, ranking, briefs, intent and atomicity |
+| [tests/capture/](../../tests/capture) | Git, test and conversation capture |
+| [tests/cli/](../../tests/cli) | CLI workflows, output, exit codes and isolation |
+| [tests/interfaces/](../../tests/interfaces) | MCP, profiles and protocol behavior |
+| [tests/server/](../../tests/server) | API, authentication and repository access |
+| [tests/recall/](../../tests/recall) | Proactive recall and guarded context |
+| [tests/scripts/](../../tests/scripts) | Evaluators, benchmark preparation and verification |
+| [tests/docs/](../../tests/docs) | Published benchmark figures compared with measured output |
+| [tests/test_release_artifacts.py](../../tests/test_release_artifacts.py) | Distribution capabilities and required artifact contents |
+
+Read [tests/conftest.py](../../tests/conftest.py) and the nearest existing fixture
+before creating another one. Keep stores, configuration and working directories
+in temporary locations; use noop/mock embeddings for deterministic local tests.
+Scope records to a test repository and exercise actual capture/recall IDs.
+Use async fixtures and awaited calls for async paths. Do not invent methods or
+assert success merely because a result is nonempty.
+
+## Regression expectations
+
+Cover the failure trigger and the preserved behavior. For storage changes,
+verify transaction rollback, Evidence integrity and capability refusals. For
+recall changes, include ineligible records ahead of valid candidates, repository
+boundaries, time/runtime scopes, quarantined content and abstention. For auth
+changes, exercise read/write/admin permissions and inaccessible repositories.
+Missing dependencies, collection errors and skipped integration checks must not
+be reported as successful execution of the affected path.
+
+Focused security and Evidence checks include:
 
 ```bash
-# View status
-visp-memory status
-visp-memory stats
-
-# List memories
-visp-memory list --limit 10
-visp-memory list --layer episodic
-
-# Compression
-visp-memory compress
-
-# Memory decay
-visp-memory decay
-
-# Deduplication
-visp-memory dedup --layer episodic
+python3 -m pytest -q tests/core/test_evidence_contract.py tests/core/test_memory_import_export_evidence.py
+python3 -m pytest tests/server/test_auth.py tests/server/test_collaboration.py
 ```
 
-### Context Generation
+Backend unit tests may mock a driver; they do not prove that a real service works.
+Use the existing [CI workflow](../../.github/workflows/ci.yml) and
+[Neo4j test Compose file](../../docker-compose.ci-neo4j.yml) for actual backend
+contract configuration. Real tests cover capture, Evidence scope, rollback, corrections,
+workflow ordering, dreaming undo, restart, and backup/migration recovery:
 
 ```bash
-# Full context for LLM
-visp-memory context
-
-# Context for specific file
-visp-memory inject --file "src/module.py"
-
-# Context for task
-visp-memory inject --task "Refactoring database layer"
+# Point only at disposable test databases; ADMIN_URI is erased by the admin fixture.
+VISP_TEST_NEO4J_URI=bolt://127.0.0.1:17687 \
+VISP_TEST_NEO4J_ADMIN_URI=bolt://127.0.0.1:27687 \
+VISP_TEST_NEO4J_PASSWORD="$NEO4J_PASSWORD" \
+python -m pytest tests/core/test_neo4j_integration.py -q
 ```
 
----
+Without these environment variables, the relevant integration cases are skipped.
+SQLite remains covered by the default full suite.
 
-## Testing Different Backends
+## Manual and packaged checks
 
-### Local Storage (SQLite + ChromaDB)
+Initialize a disposable project and test `decision`, `warn`, `recall`, `brief`, `preview` and `audit` with
+known inputs. Maintenance commands should run only against disposable data.
+
+For assistant integration, follow [MCP.md](MCP.md): install the integration,
+check `doctor`, capture a known decision and retrieve it in a fresh session.
+A hook subprocess passing is different from the host actually dispatching it.
+
+For dashboard and release artifacts, use the
+[release checklist](../deployment/RELEASING.md#before-tagging). It owns frontend,
+packaged HTTP/browser smoke, metadata and license/NOTICE checks. Keep auth-enabled
+access tests in the gate even if a local visual smoke disables auth on loopback.
+
+## Evaluations and coverage
 
 ```bash
-export VISP_MEMORY_STORAGE_BACKEND=local
-pytest tests/core
+python3 scripts/evaluate_oracle_gap.py --json
+python3 scripts/evaluate_poisoning.py --json
+python3 scripts/evaluate_agent_ab.py --json
+python3 scripts/evaluate_hallucination.py --json
+python3 scripts/evaluate_memory_intelligence.py --json
+python3 scripts/benchmark_memory.py --items 100 --json
+python3 -m pytest --cov=visp_memory --cov-report=term-missing
 ```
 
-### Neo4j Storage
-
-```bash
-# Requires Neo4j running
-docker run -p 7687:7687 -e NEO4J_AUTH=neo4j/testpass neo4j:5.15
-
-export VISP_MEMORY_STORAGE_BACKEND=neo4j
-export NEO4J_PASSWORD=testpass
-pytest tests/core
-```
-
-### Remote Storage
-
-```bash
-# Start server
-visp-memory serve --port 8000 &
-
-export VISP_MEMORY_STORAGE_BACKEND=remote
-export VISP_MEMORY_SERVER_URL=http://localhost:8000
-pytest tests/server
-```
-
----
-
-## Integration Tests
-
-### Server and Dashboard
-
-```bash
-# Start server
-uvicorn visp_memory.server.app:app --port 8000
-
-# Test API endpoints
-curl http://localhost:8000/memories
-curl http://localhost:8000/stats
-
-# Test dashboard
-curl http://localhost:8000/dashboard
-# Should return HTML
-
-# Visit in browser
-open http://localhost:8000/dashboard
-```
-
-### MCP Server
-
-```bash
-# Test MCP server
-visp-memory-mcp --help
-
-# Test with Claude Desktop
-# 1. Configure in claude_desktop_config.json
-# 2. Restart Claude Desktop
-# 3. Use memory tools in conversation
-```
-
----
-
-## Test Data
-
-### Sample Memories
-
-```python
-SAMPLE_EPISODIC = [
-    {
-        "content": "Fixed authentication bug in login handler",
-        "importance": 0.7,
-        "category": "bug"
-    },
-    {
-        "content": "Decided to use JWT tokens for stateless auth",
-        "importance": 0.8,
-        "category": "decision"
-    }
-]
-
-SAMPLE_SEMANTIC = [
-    {
-        "content": "Auth module has race condition - use mutex",
-        "importance": 0.9,
-        "category": "warning"
-    },
-    {
-        "content": "Always validate JWT signatures",
-        "importance": 0.8,
-        "category": "invariant"
-    }
-]
-```
-
----
-
-## Debugging Tests
-
-### Verbose Output
-
-```bash
-pytest -v -s tests/core/test_memory.py
-```
-
-### Specific Test
-
-```bash
-pytest tests/core/test_memory.py::TestSearch::test_recall_finds_memories -v
-```
-
-### Failed Tests Only
-
-```bash
-pytest --lf  # Last failed
-pytest --ff  # Failed first
-```
-
-### Debug with pdb
-
-```bash
-pytest --pdb  # Drop into debugger on failure
-```
-
----
-
-## Coverage
-
-### Generate Coverage Report
-
-```bash
-# HTML report
-pytest --cov=visp_memory --cov-report=html
-open htmlcov/index.html
-
-# Terminal report
-pytest --cov=visp_memory --cov-report=term
-
-# XML report (for CI)
-pytest --cov=visp_memory --cov-report=xml
-```
-
-### Coverage Goals
-
-- **Core modules**: >90% coverage
-- **Layers**: >85% coverage
-- **Interfaces**: >80% coverage
-- **Overall**: >85% coverage
-
----
-
-## Continuous Integration
-
-### GitHub Actions
-
-```yaml
-name: Tests
-
-on: [push, pull_request]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-
-    services:
-      neo4j:
-        image: neo4j:5.15
-        env:
-          NEO4J_AUTH: neo4j/testpass
-        ports:
-          - 7687:7687
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: |
-          pip install -e ".[dev]"
-
-      - name: Run tests
-        run: |
-          pytest --cov=visp_memory --cov-report=xml
-        env:
-          NEO4J_PASSWORD: testpass
-
-      - name: Upload coverage
-        uses: codecov/codecov-action@v3
-```
-
----
-
-## Performance Testing
-
-Use the supported benchmark script for performance checks instead of embedding
-timing assertions in unit tests:
-
-```bash
-python scripts/benchmark_memory.py --items 100 --json
-python scripts/benchmark_memory.py --items 1000
-```
-
-The benchmark defaults to SQLite storage and noop embeddings so it runs without
-network downloads or model initialization. To benchmark Neo4j, start Neo4j first
-and provide credentials:
-
-```bash
-export NEO4J_URI=bolt://localhost:7687
-export NEO4J_USER=neo4j
-export NEO4J_PASSWORD=testpass
-python scripts/benchmark_memory.py --backend neo4j --items 1000
-```
-
----
-
-## Common Issues
-
-### Neo4j Connection Errors
-
-```python
-# Mock Neo4j for tests that don't need real database
-@pytest.fixture
-def mock_neo4j():
-    with patch('neo4j.GraphDatabase.driver') as mock:
-        yield mock
-```
-
-### Embedding Generation Slow
-
-```python
-# Use mock embeddings for faster tests
-@pytest.fixture
-def mock_embeddings():
-    def fake_embed(texts):
-        return [[0.1] * 384 for _ in texts]
-    return fake_embed
-```
-
-### Temporary Directory Cleanup
-
-```python
-# Always use context manager
-with tempfile.TemporaryDirectory() as tmpdir:
-    # Test code here
-    pass
-# Cleanup happens automatically
-```
-
----
-
-## Test Checklist
-
-Before submitting changes:
-
-- [ ] All tests pass: `pytest`
-- [ ] Code is linted: `ruff check .`
-- [ ] Code is formatted: `ruff format .`
-- [ ] Coverage >85%: `pytest --cov=visp_memory`
-- [ ] Manual CLI testing completed
-- [ ] New features have tests
-- [ ] Edge cases covered
-- [ ] Documentation updated
-
----
-
-## Future Testing Improvements
-
-- [ ] Property-based testing with Hypothesis
-- [ ] Mutation testing with mutmut
-- [ ] End-to-end browser tests for dashboard
-- [ ] Load testing with locust
-- [ ] Security testing with bandit
-- [ ] Fuzz testing for input validation
+Selection and poisoning results are documented in [BENCHMARK.md](../BENCHMARK.md). `evaluate_agent_ab.py` uses scripted responses, not a
+live coding agent; its fixture success gap cannot establish coding benefit.
+Performance timings depend on the machine. Use the benchmark script instead of
+brittle elapsed-time assertions in unit tests.

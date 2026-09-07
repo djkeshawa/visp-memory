@@ -4,7 +4,7 @@ import pytest
 
 from visp_memory.core.neo4j_storage import Neo4jStorage
 from visp_memory.core.storage import (
-    EvidenceUnsupportedError,
+    EvidenceReferenceError,
     SessionCompletionStatus,
     StorageMigrationRequired,
 )
@@ -15,6 +15,9 @@ class FakeResult:
     def __init__(self, single_value=None, records=None):
         self._single = single_value
         self.records = records or []
+
+    def consume(self):
+        return None
 
     def single(self):
         return self._single
@@ -33,6 +36,15 @@ class FakeSession:
         # (e.g. memory existence lookups for add_relationship validation).
         self.query_results = {}
 
+    def execute_write(self, callback, *args):
+        return callback(self, *args)
+
+    def begin_transaction(self):
+        return self
+
+    def commit(self):
+        pass
+
     def run(self, query, parameters=None, **params):
         merged_params = dict(parameters or {})
         merged_params.update(params)
@@ -42,6 +54,12 @@ class FakeSession:
             if needle in query:
                 return factory(merged_params)
 
+        if "RETURN m.layer AS layer" in query:
+            return FakeResult({"layer": "episodic"})
+        if query.strip() == "MATCH (m:Memory {id: $id}) RETURN m" or "RETURN e" in query:
+            return FakeResult()
+        if query.strip() == "MATCH (i:Intent {id: $id}) RETURN i":
+            return FakeResult({"i": {"id": merged_params["id"], "context": "{}"}})
         return FakeResult({"c": self.result_count}, self.records)
 
     def __enter__(self):
@@ -103,7 +121,7 @@ def relationship_write_calls(storage):
     return [
         (query, params)
         for query, params in storage.driver.session_obj.calls
-        if "RETURN m.repo_id AS repo_id" not in query
+        if "RETURN m.repo_id AS repo_id" not in query and "StorageLock" not in query
     ]
 
 
@@ -117,7 +135,7 @@ def test_neo4j_delete_memory_returns_true_when_deleted():
     storage = neo4j_storage_with_delete_count(1)
 
     assert storage.delete_memory("memory-id") is True
-    query, params = storage.driver.session_obj.calls[0]
+    query, params = storage.driver.session_obj.calls[-1]
     assert "DETACH DELETE" in query
     assert params == {"id": "memory-id"}
 
@@ -125,38 +143,33 @@ def test_neo4j_delete_memory_returns_true_when_deleted():
 def test_neo4j_session_scope_and_completion_contract():
     storage = neo4j_storage_with_delete_count(1)
 
-    session_id = storage.start_session(
-        owner_id="alice", team_id="team-a", repo_id="repo-a"
-    )
+    session_id = storage.start_session(owner_id="alice", team_id="team-a", repo_id="repo-a")
     create_query, create_params = storage.driver.session_obj.calls[-1]
     assert "owner_id" in create_query
     assert create_params["owner_id"] == "alice"
     assert create_params["repo_id"] == "repo-a"
 
-    storage.driver.session_obj.query_results["WHERE s.ended_at IS NULL"] = (
-        lambda _params: FakeResult(single_value={"id": session_id})
+    storage.driver.session_obj.query_results["WHERE s.ended_at IS NULL"] = lambda _params: (
+        FakeResult(single_value={"id": session_id})
     )
     assert (
-        storage.end_session(session_id, "Done", ["memory-1"])
-        is SessionCompletionStatus.COMPLETED
+        storage.end_session(session_id, "Done", ["memory-1"]) is SessionCompletionStatus.COMPLETED
     )
 
 
 def test_neo4j_get_session_normalizes_temporal_values():
     storage = neo4j_storage_with_delete_count(1)
-    storage.driver.session_obj.query_results["RETURN s.id AS id"] = (
-        lambda _params: FakeResult(
-            single_value={
-                "id": "session-1",
-                "owner_id": "alice",
-                "team_id": "team-a",
-                "repo_id": "repo-a",
-                "summary": None,
-                "memory_ids": [],
-                "started_at": FakeNeo4jDateTime(),
-                "ended_at": None,
-            }
-        )
+    storage.driver.session_obj.query_results["RETURN s.id AS id"] = lambda _params: FakeResult(
+        single_value={
+            "id": "session-1",
+            "owner_id": "alice",
+            "team_id": "team-a",
+            "repo_id": "repo-a",
+            "summary": None,
+            "memory_ids": [],
+            "started_at": FakeNeo4jDateTime(),
+            "ended_at": None,
+        }
     )
 
     session = storage.get_session("session-1")
@@ -377,14 +390,12 @@ def test_neo4j_uses_dimension_specific_vector_property_for_memories():
     storage._vector_property = Neo4jStorage._vector_property_name(3)
     storage._vector_index = Neo4jStorage._vector_index_name(3)
 
-    storage.store_memory(
-        "vector dimension test", layer="intent", repo_id="repo", auto_link=False
-    )
+    storage.store_memory("vector dimension test", layer="intent", repo_id="repo", auto_link=False)
 
-    query, params = storage.driver.session_obj.calls[0]
-    assert "setNodeVectorProperty(m, $vector_property, $embedding)" in query
-    assert params["vector_property"] == "embedding_3"
-    assert params["embedding"] == [0.1, 0.2, 0.3]
+    query, params = next(
+        (q, p) for q, p in storage.driver.session_obj.calls if "CREATE (m:Memory:Intent)" in q
+    )
+    assert params["record"]["embedding_3"] == [0.1, 0.2, 0.3]
 
 
 def test_neo4j_dimension_specific_vector_index_names():
@@ -414,11 +425,11 @@ def test_neo4j_update_memory_refreshes_dimension_specific_vector():
 
     assert storage.update_memory("memory-id", content="updated content") is True
 
-    update_query, update_params = storage.driver.session_obj.calls[0]
+    update_query, update_params = storage.driver.session_obj.calls[-2]
     assert "SET m.content = $content" in update_query
     assert update_params["content"] == "updated content"
 
-    vector_query, vector_params = storage.driver.session_obj.calls[1]
+    vector_query, vector_params = storage.driver.session_obj.calls[-1]
     assert "setNodeVectorProperty(m, $vector_property, $embedding)" in vector_query
     assert vector_params["vector_property"] == "embedding_2"
     assert vector_params["embedding"] == [15.0, 0.0]
@@ -446,7 +457,7 @@ def test_neo4j_memory_reads_normalize_contract_fields_and_search_scores():
     session.query_results["SET m.access_count"] = lambda _params: FakeResult(
         single_value={"m": node}
     )
-    session.query_results["RETURN m, 0.0 as score"] = lambda _params: FakeResult(
+    session.query_results["RETURN m, score"] = lambda _params: FakeResult(
         records=[{"m": node, "score": 0.87}]
     )
 
@@ -473,7 +484,7 @@ def test_neo4j_semantic_content_updates_are_filtered_by_storage_contract():
 
     assert storage.update_memory("semantic-id", content="replacement") is False
 
-    query, _params = storage.driver.session_obj.calls[0]
+    query, _params = storage.driver.session_obj.calls[-1]
     assert "coalesce(m.layer, '') <> 'semantic'" in query
 
 
@@ -486,37 +497,30 @@ def test_neo4j_store_memory_rejects_invalid_layer():
     assert storage.driver.session_obj.calls == []
 
 
-def test_neo4j_governed_memory_layers_fail_closed_until_evidence_is_supported():
-    for layer in ("raw", "episodic", "semantic"):
-        storage = neo4j_storage_with_delete_count(1)
-        with pytest.raises(EvidenceUnsupportedError, match="Evidence graph"):
-            storage.store_memory(
-                "governed layer", layer=layer, repo_id="repo-a", auto_link=False
-            )
-        assert storage.driver.session_obj.calls == []
-
-
-def test_neo4j_governed_write_accepts_evidence_keyword_before_explicit_refusal():
+def test_neo4j_semantic_write_requires_evidence():
     storage = neo4j_storage_with_delete_count(1)
+    with pytest.raises(EvidenceReferenceError, match="at least one evidence"):
+        storage.store_memory("Uncited belief", layer="semantic", repo_id="repo-a", auto_link=False)
+    assert not any("CREATE (m:Memory" in q for q, _ in storage.driver.session_obj.calls)
 
-    with pytest.raises(EvidenceUnsupportedError, match="Evidence graph"):
+
+def test_neo4j_missing_evidence_refuses_memory_creation():
+    storage = neo4j_storage_with_delete_count(1)
+    with pytest.raises(EvidenceReferenceError, match="same repository"):
         storage.store_memory(
-            "Evidence-backed Neo belief",
+            "Missing citation",
             layer="semantic",
             repo_id="repo-a",
-            evidence_ids=["ev-1"],
+            evidence_ids=["missing"],
             auto_link=False,
         )
+    assert not any("CREATE (m:Memory" in q for q, _ in storage.driver.session_obj.calls)
 
-    assert storage.driver.session_obj.calls == []
 
-
-def test_neo4j_markerless_nonempty_constructor_refuses_before_index_or_marker_mutation(
-    monkeypatch
-):
+def test_neo4j_markerless_nonempty_constructor_refuses_before_index_or_marker_mutation(monkeypatch):
     driver = FakeDriver(0)
-    driver.session_obj.query_results["MATCH (v:SchemaVersion"] = lambda _params: (
-        FakeResult(records=[])
+    driver.session_obj.query_results["MATCH (v:SchemaVersion"] = lambda _params: FakeResult(
+        records=[]
     )
     driver.session_obj.query_results["MATCH (n)"] = lambda _params: FakeResult(
         records=[{"present": True}]
@@ -541,8 +545,8 @@ def test_neo4j_current_marker_memory_node_refuses_before_indexes_and_closes_driv
     monkeypatch,
 ):
     driver = FakeDriver(0)
-    driver.session_obj.query_results["MATCH (v:SchemaVersion"] = lambda _params: (
-        FakeResult(records=[{"version": 4}])
+    driver.session_obj.query_results["MATCH (v:SchemaVersion"] = lambda _params: FakeResult(
+        records=[{"version": 4}]
     )
     driver.session_obj.query_results["MATCH (m:Memory)"] = lambda _params: FakeResult(
         records=[{"id": "legacy-memory"}]
@@ -552,7 +556,7 @@ def test_neo4j_current_marker_memory_node_refuses_before_indexes_and_closes_driv
         SimpleNamespace(driver=lambda *_args, **_kwargs: driver),
     )
 
-    with pytest.raises(StorageMigrationRequired, match="Memory nodes"):
+    with pytest.raises(StorageMigrationRequired, match="explicit migration"):
         Neo4jStorage(uri="bolt://example", user="neo4j", password="secret")
 
     mutating = [
@@ -566,15 +570,14 @@ def test_neo4j_current_marker_memory_node_refuses_before_indexes_and_closes_driv
 
 def test_neo4j_current_marker_empty_memory_graph_proceeds_to_indexes(monkeypatch):
     driver = FakeDriver(0)
+
     def schema_marker(params):
         if "to_version" in params:
             return FakeResult(single_value={"version": params["to_version"]})
         return FakeResult(records=[{"version": 4}])
 
     driver.session_obj.query_results["MATCH (v:SchemaVersion"] = schema_marker
-    driver.session_obj.query_results["MATCH (m:Memory)"] = lambda _params: FakeResult(
-        records=[]
-    )
+    driver.session_obj.query_results["MATCH (m:Memory)"] = lambda _params: FakeResult(records=[])
     monkeypatch.setattr(
         "visp_memory.core.neo4j_storage.GraphDatabase",
         SimpleNamespace(driver=lambda *_args, **_kwargs: driver),
@@ -590,8 +593,8 @@ def test_neo4j_current_marker_empty_memory_graph_proceeds_to_indexes(monkeypatch
 
 def test_neo4j_v3_marker_refuses_before_indexes(monkeypatch):
     driver = FakeDriver(0)
-    driver.session_obj.query_results["MATCH (v:SchemaVersion"] = lambda _params: (
-        FakeResult(records=[{"version": 3}])
+    driver.session_obj.query_results["MATCH (v:SchemaVersion"] = lambda _params: FakeResult(
+        records=[{"version": 3}]
     )
     monkeypatch.setattr(
         "visp_memory.core.neo4j_storage.GraphDatabase",
@@ -613,7 +616,7 @@ def test_neo4j_store_memory_accepts_intent_layer():
         "valid intent", layer="intent", repo_id="repo-a", auto_link=False
     )
     assert memory_id
-    assert any("SET m:Intent" in query for query, _ in storage.driver.session_obj.calls)
+    assert any("CREATE (m:Memory:Intent)" in query for query, _ in storage.driver.session_obj.calls)
 
 
 def test_neo4j_add_relationship_rejects_missing_memory():
@@ -765,13 +768,14 @@ def test_neo4j_intent_status_mutations_are_ineffective():
 def test_neo4j_mixed_intent_update_omits_status():
     storage = neo4j_storage_with_delete_count(1)
 
-    assert storage.update_intent(
-        "intent-1", description="Updated description", status="completed"
-    ) is True
+    assert (
+        storage.update_intent("intent-1", description="Updated description", status="completed")
+        is True
+    )
 
-    query, params = storage.driver.session_obj.calls[0]
-    assert "i.description = $description" in query
-    assert "status" not in params
+    query, params = storage.driver.session_obj.calls[-1]
+    assert params["updates"] == {"description": "Updated description"}
+    assert "status" not in params["updates"]
 
 
 def test_neo4j_search_includes_raw_when_layer_requested():
@@ -793,9 +797,10 @@ def test_neo4j_search_includes_raw_when_layer_requested():
 def test_neo4j_memory_listing_forwards_offset_and_ordering():
     storage = neo4j_storage_with_delete_count(0, records=[])
 
-    assert storage.list_memories(
-        repo_id="repo-a", limit=25, offset=50, order_by="created_at ASC"
-    ) == []
+    assert (
+        storage.list_memories(repo_id="repo-a", limit=25, offset=50, order_by="created_at ASC")
+        == []
+    )
 
     query, params = storage.driver.session_obj.calls[-1]
     assert "ORDER BY m.created_at ASC, m.id ASC" in query

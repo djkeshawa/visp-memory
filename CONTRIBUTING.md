@@ -1,15 +1,14 @@
 # Contributing
 
-Thanks for considering a contribution. This project is early, so the most valuable
-contributions right now are bug reports from real repositories and evidence that the
-injection policy is wrong.
+Bug reports, reproducible fixes, and documentation improvements are welcome.
+Use a small pull request with a clear description and relevant verification.
 
 ## Before you start
 
 - **Small fixes**: open a pull request directly.
 - **Anything that changes behaviour**: open an issue first. The injection thresholds in
   particular are calibrated against measurements, not preference — see
-  [docs/development/INJECTION_POLICY.md](docs/development/INJECTION_POLICY.md).
+  [injection policy](docs/development/ARCHITECTURE.md#injection-policy).
 - **A feature that would widen scope**: check
   [docs/FEATURE_STATUS.md](docs/FEATURE_STATUS.md) first. Several areas are deliberately
   frozen, and a PR reviving one is likely to be declined on maintenance grounds rather
@@ -42,8 +41,7 @@ I have read the CLA document and I hereby sign the CLA.
 
 The [Contributor License Agreement](CLA.md) does **not** take your copyright — you keep
 it. It grants the rights needed to distribute your work and keeps future relicensing
-possible. Projects that skipped this step found the option closed permanently, because
-every past contributor would have had to individually agree.
+possible.
 
 If you are contributing as part of your job, read §4.3 of the CLA carefully: employment
 agreements commonly assign IP created during employment, including work done on personal
@@ -54,26 +52,31 @@ time.
 ```bash
 git clone https://github.com/djkeshawa/visp-memory.git
 cd visp-memory
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[api,mcp,capture,dev]"
 ```
+
+On Windows, activate with `.venv\Scripts\Activate.ps1` in PowerShell. For the
+dashboard, install its locked dependencies with `npm ci --prefix visp-memory-dashboard`.
 
 ## Before you open a pull request
 
 ```bash
-pytest                                    # 637 tests, ~50s
-ruff check .
+make test
+make lint
 python3 scripts/evaluate_oracle_gap.py    # must match docs/BENCHMARK.md
 python3 scripts/evaluate_poisoning.py     # must match docs/TRUST.md
 ```
 
 Both evaluation scripts run in CI. If your change moves those numbers, that is not
-automatically a failure — but **update the published numbers in the docs in the same
-pull request.** A stale benchmark claim is the one bug this project cannot afford, since
-its whole position rests on numbers that hold up under checking.
+automatically a failure — but **update the published numbers and their limitations in the same pull request.**
 
-If a change lowers injection precision to raise recall, say so explicitly in the PR
-description and explain why the trade is worth it. On the current evidence it usually
-is not.
+If a change lowers injection precision to raise recall, describe the measured tradeoff.
+
+Testing conventions and integration checks are in the [testing guide](docs/development/TESTING.md).
+Update the existing guide when documentation changes; keep the [documentation index](docs/README.md) as
+the route to each topic instead of adding phase notes or duplicate checklists.
 
 ## Style
 

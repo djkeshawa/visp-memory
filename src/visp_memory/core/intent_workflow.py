@@ -49,15 +49,11 @@ class IntentWorkflowReport(BaseModel):
         return self
 
 
-def apply_workflow_report(
-    connection, intent_id: str, report: IntentWorkflowReport, actor_id: str, channel: str
-) -> dict:
-    """Apply one ordered report atomically, bound to its original reporter/task."""
-    connection.execute("BEGIN IMMEDIATE")
-    row = connection.execute("SELECT * FROM intents WHERE id = ?", (intent_id,)).fetchone()
-    if row is None:
-        raise LookupError("Intent not found")
-    context = json.loads(row["context"] or "{}")
+def reduce_workflow_report(
+    context: dict, status: str, report: IntentWorkflowReport, actor_id: str, channel: str
+) -> tuple[dict, dict]:
+    """Validate a report and return its new context and result without persistence."""
+    context = dict(context)
     previous = context.get("external_workflow") or {}
     payload = report.model_dump(mode="json")
     if previous:
@@ -67,8 +63,7 @@ def apply_workflow_report(
         if report.revision <= previous["revision"]:
             same = all(previous.get(key) == value for key, value in payload.items())
             if same:
-                connection.rollback()
-                return {"status": row["status"], "applied": False, "report": previous}
+                return context, {"status": status, "applied": False, "report": previous}
             raise ValueError("Report is stale or conflicts with an already recorded revision")
         if any(
             item.get("event_id") == report.event_id for item in context.get("workflow_history", [])
@@ -85,9 +80,25 @@ def apply_workflow_report(
     context["workflow_history"] = [*history, stored]
     context["external_workflow"] = stored
     context.pop("completion_evaluation", None)
-    connection.execute(
-        "UPDATE intents SET status = ?, context = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        (report.status, json.dumps(context), intent_id),
+    return context, {"status": report.status, "applied": True, "report": stored}
+
+
+def apply_workflow_report(connection, intent_id, report, actor_id, channel):
+    """Apply the shared transition inside a SQLite write transaction."""
+    connection.execute("BEGIN IMMEDIATE")
+    row = connection.execute("SELECT * FROM intents WHERE id = ?", (intent_id,)).fetchone()
+    if row is None:
+        raise LookupError("Intent not found")
+    context, result = reduce_workflow_report(
+        json.loads(row["context"] or "{}"), row["status"], report, actor_id, channel
     )
-    connection.commit()
-    return {"status": report.status, "applied": True, "report": stored}
+    if result["applied"]:
+        connection.execute(
+            "UPDATE intents SET status = ?, context = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = ?",
+            (report.status, json.dumps(context), intent_id),
+        )
+        connection.commit()
+    else:
+        connection.rollback()
+    return result

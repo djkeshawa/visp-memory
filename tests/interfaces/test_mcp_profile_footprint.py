@@ -1,6 +1,6 @@
 """The advertised tool-schema footprint is measured, not asserted.
 
-README and ARCHITECTURE both quote a saving for the `core` profile. That number
+The assistant integration guide quotes a saving for the `core` profile. That number
 was written by hand and nothing checked it: the README said "roughly 40%
 (~1,250 fewer tokens)" while ARCHITECTURE said "roughly halving", and neither
 figure came from the tool definitions the server actually advertises. Two
@@ -26,8 +26,8 @@ import pytest
 from visp_memory.config import MemoryConfig
 from visp_memory.core.memory import Memory
 
-# Documented in README.md ("Tool Profiles") and
-# docs/development/ARCHITECTURE.md. Keep the three in agreement.
+# Documented in docs/development/MCP.md ("Tool profiles").
+# Keep that guide and these assertions in agreement.
 #
 # The measured figure at the time of writing is 39.5%, which the docs round to
 # "about 39%" -- deliberately down, not up: 39.5 presented as "roughly 40%" was

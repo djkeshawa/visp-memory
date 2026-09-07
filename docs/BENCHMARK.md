@@ -1,53 +1,31 @@
-# Benchmark: selection quality
+# Benchmarks and limitations
 
-Reproduce everything here with:
+These deterministic, authored fixtures measure memory selection and filtering.
+They do not establish improved coding outcomes, production-scale performance,
+or superiority over another product. No controlled live coding comparison is
+reported here; integration probes and scripted agent responses are not substitutes.
+
+## Reproduce the measurements
+
+From a development checkout:
 
 ```bash
-python3 scripts/evaluate_oracle_gap.py
+python3 scripts/evaluate_oracle_gap.py --json
+python3 scripts/evaluate_poisoning.py --json
+python3 scripts/evaluate_structural_recall.py --json
+python3 -m pytest tests/docs tests/scripts/test_evaluate_structural_recall.py -q
 ```
 
-No network, no API key, deterministic. It runs in CI on every push, so the numbers below
-cannot silently rot.
+These checks use local fixtures without a provider key or live model.
+[Published-figure tests](../tests/docs/test_published_figures.py) compare the
+selection and poisoning figures below with measured output.
 
-## What is being measured, and what is not
+## Selection setup and results
 
-This measures **selection quality**: given a task, were the memories handed to the
-assistant the right ones? It does **not** measure how many issues an agent then resolved.
-Anyone claiming the latter needs a live model and a real task suite; this is the
-cheap, honest part that can run on every commit.
-
-The motivation comes from [SWE-ContextBench](https://arxiv.org/abs/2602.08316) (1,100
-tasks, 51 repositories):
-
-| Condition | Resolution |
-|---|---|
-| No context | 26.26% |
-| Curated ("oracle") summaries | 34.34% |
-| Freely self-retrieved context | 12.12 points below oracle, and more expensive than no context |
-
-Curation is worth roughly 8 points; naive retrieval gives most of it back. This benchmark
-asks how much of that gap a selection policy can close.
-
-## Setup
-
-10 memories from a plausible small service (auth, billing, migrations, uploads,
-webhooks, feature flags). 10 tasks:
-
-- **5 answerable** — a human labelled which memories are genuinely relevant.
-- **3 unanswerable** — nothing stored can help (marketing CSS, i18n, iOS push).
-- **2 vague** — `continue`, `fix it`. Real prompts are often this thin.
-
-Including unanswerable and vague cases is the point. A benchmark made only of answerable
-tasks cannot detect over-injection, which is the failure mode that matters.
-
-Three strategies are compared over identical fixtures:
-
-- `oracle` — exactly the labelled memories. Upper bound.
-- `unfiltered_top8` — top 8 by score, no floor, no abstention. What "retrieve what looks
-  related" actually does.
-- `policy` — this project's precision-gated injection.
-
-## Results
+Ten authored memories cover a small service. Ten tasks include five answerable,
+three unanswerable, and two vague requests. Human labels define relevant memories.
+The oracle selects exactly those labels; unfiltered retrieval returns its top
+eight candidates; the policy applies relevance, abstention, and output budgets.
 
 | Strategy | Precision | Recall | F1 | Mean tokens | Correct silence |
 |---|---|---|---|---|---|
@@ -57,69 +35,35 @@ Three strategies are compared over identical fixtures:
 
 **Oracle gap closed: 72%.**
 
-- The policy never injected on a task no memory could help with (0 false alarms out of 5
-  opportunities). Naive retrieval fired on 4 of 5.
-- The policy spent **12.8× fewer tokens** than naive retrieval (14.9 vs 190.2 per case) and
-  slightly fewer than the oracle itself, because it trims and budgets.
+The policy spent **12.8× fewer tokens** than naive retrieval (14.9 versus 190.2
+per case). This estimate describes injected text in the fixture.
 
-## What this costs — the negative result
+**Policy recall is 0.625, not 1.00.** The policy retrieved 5 of the 8 genuinely relevant
+memories and left 3 on the floor — 37.5% of them. High precision has a measured
+recall cost; the small corpus and keyword-only setup limit generalization.
 
-**Policy recall is 0.625, not 1.00.** Precision bought by abstaining is paid for in
-recall: across the answerable cases the policy retrieved 5 of the 8 genuinely relevant
-memories and left 3 on the floor — 37.5% of them — mostly to the 4-memory budget and the
-redundancy filter.
+## Poisoning resistance
 
-That trade is deliberate. On the evidence, a wrong injection costs more than a missing
-one: unfiltered retrieval has *higher* recall (0.75) than the policy and is still far
-worse overall, because its precision collapses to 0.09. But it is a real cost and should
-not be hidden behind a precision number.
+The authored corpus contains 10 poisoned records and 100 benign records. Five
+attack queries also have legitimate answers that should remain available.
 
-Two further honest caveats:
+| | Poisoned Retrieval Proportion |
+|---|---|
+| Undefended (relevance ranking only) | **56.25%** |
+| Defended (provenance quarantine) | **0.00%** |
+| Legitimate answers still injected | **5/5 (100%)** |
 
-- **The fixtures are synthetic.** They are written to be separable by a human, which
-  makes them easier than a real repository's history. Treat 72% as an upper-ish estimate
-  of gap closure on clean data, not a field result.
-- **Keyword mode only.** The benchmark runs with embeddings disabled for determinism,
-  which is the default install but not the best configuration. Semantic recall should
-  raise recall; that has not been measured here.
+The undefended arm retrieves 9 poisoned records out of 16. The defended arm blocks
+those records while retaining useful answers. Both properties are checked; simply
+returning nothing is not considered a successful defense. These synthetic lures
+do not establish resistance to every attack. See [trust boundaries](TRUST.md).
 
-## What would make this stronger
+## Structurally conditioned recall
 
-Running the same policy against a live model on
-[SWE-Bench-CL](https://arxiv.org/pdf/2507.00014)-style chronological task streams, where
-memory accumulates across a repository's real issue history, and scoring turns, tokens,
-and resolution rather than selection. The fixtures here are deliberately shaped to port
-to that harness.
-
-Until that exists, this page says what it can support and nothing more. Given that the
-field's most-cited memory benchmark was
-[audited and found to have 6.4% of its answer key wrong](https://penfieldlabs.substack.com/p/we-audited-locomo-64-of-the-answer),
-and that a major vendor's headline score was
-[publicly corrected downward by 26 points](https://github.com/getzep/zep-papers/issues/5),
-under-claiming seems like the better long-term strategy.
-
----
-
-# Benchmark: structurally conditioned recall
-
-```bash
-python3 scripts/evaluate_structural_recall.py
-```
-
-Same rules as above: no network, no API key, deterministic, run in CI on every push.
-
-## The gap it addresses
-
-Memory recalls by text, so it finds memories that *sound like* the task. Both of its
-file-aware signals — `HybridRetriever._matches_entities` and `Memory._file_factor` — are
-identity tests, and identity is zero at one structural hop. A memory recorded against
-`core/ranking.py` scores exactly nothing for a task editing `core/hybrid_retrieval.py`,
-which imports it, unless the words happen to overlap.
-
-Memory now reads intel's consumer projection read-only, collapses it to the file grain
-by the shared contract, and admits **at most three** memories per retrieval that are
-attached to files within two import/test hops of the task's files, ranked strictly below
-every identity match.
+The structural experiment adds up to three memories attached to files within two
+import/test hops, below direct identity matches. It compares a true graph with
+both no graph and deliberately incorrect adjacency, so extra result volume can
+be distinguished from useful structure.
 
 ## Setup
 
@@ -133,7 +77,7 @@ Every count in this paragraph is emitted by the script itself under `fixture` in
 
 Three arms over identical fixtures:
 
-- **A — no graph.** Today's behaviour.
+- **A — no graph.** Text and identity matches only.
 - **B — the true graph.**
 - **C — a misleading graph.** Same queries, same seeds, every adjacency rotated to a
   file that is genuinely not adjacent.
@@ -180,10 +124,11 @@ With a fully wrong adjacency, precision@5 falls to 0.4875 and fourteen of eighte
 admissions are wasted — but recall never falls below arm A in any arm or on any single
 task, because admissions are added to the result rather than swapped into it.
 
-## Claim ceiling
 
-This is a **synthetic authored corpus**. It shows the mechanism does what it was built to
-do where the right answer is known. It is not a field result, it says nothing about any
-real repository, and it is not comparable to `visp-kit`'s context-pack measurements —
-different system, different corpus, different metric. Memory's claim this round is
-conformance against intel's vectors plus this benchmark, and nothing beyond it.
+## Scope of the results
+
+The structural corpus is synthetic and has known labels. The correct graph
+improves recall while reducing precision; the misleading graph demonstrates the
+cost of poor structure. These are mechanism checks, not field results. Results
+from other products or broader context-pack systems are not interchangeable with
+this package's measurements.

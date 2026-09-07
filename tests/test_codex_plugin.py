@@ -69,9 +69,9 @@ def test_codex_generated_guidance_is_scoped_and_current(tmp_path):
 
 
 def test_memory_governance_docs_cover_required_topics():
-    guidance = (DOCS_ROOT / "development" / "ASSISTANT_GUIDANCE.md").read_text()
-    governance = (DOCS_ROOT / "development" / "MEMORY_GOVERNANCE.md").read_text()
-    release = (DOCS_ROOT / "deployment" / "RELEASE_CHECKLIST.md").read_text()
+    guidance = (DOCS_ROOT / "development" / "MCP.md").read_text()
+    governance = (DOCS_ROOT / "TRUST.md").read_text()
+    release = (DOCS_ROOT / "deployment" / "RELEASING.md").read_text()
     combined = f"{guidance}\n{governance}".lower()
 
     for phrase in [
@@ -171,7 +171,7 @@ def test_codex_installed_agents_md_carries_the_intent_verbs(tmp_path):
 
 
 def test_assistant_guidance_doc_describes_the_intent_lifecycle():
-    guidance = (DOCS_ROOT / "development" / "ASSISTANT_GUIDANCE.md").read_text()
+    guidance = (DOCS_ROOT / "development" / "MCP.md").read_text()
 
     for verb in INTENT_VERBS:
         assert f"visp-memory {verb.name}" in guidance, verb.name

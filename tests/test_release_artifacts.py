@@ -61,9 +61,10 @@ def test_shared_standalone_assets_describe_supported_capabilities():
 
     assert (standalone / "start-server.sh").read_text().strip()
     assert (standalone / "start-server.ps1").read_text().strip()
-    assert "| Standalone archive | Yes | Yes | Yes | No |" in readme
+    assert "CLI, API server, and embedded" in readme
+    assert "dashboard. It does not contain the MCP server." in readme
     assert "Python package" in readme
-    assert "Container image" in readme
+    assert "container image" in readme
 
 
 def test_standalone_builds_use_shared_assets_and_omit_mcp():

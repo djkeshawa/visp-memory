@@ -214,66 +214,29 @@ jobs:
           curl --fail http://127.0.0.1:8000/repos/scopes
           curl --fail -X POST -H 'Content-Type: application/json' \
             -d '{"id":"ci-repo","name":"CI Repository"}' http://127.0.0.1:8000/repos
-          curl --fail -X POST http://127.0.0.1:8000/sessions
+          curl --fail -X POST -H 'Content-Type: application/json' \
+            -d '{"repo_id":"ci-repo"}' http://127.0.0.1:8000/sessions
           curl --fail 'http://127.0.0.1:8000/?repo_id=ci-repo'
 
-      # This backend supports one memory layer and refuses the other three. Both
-      # halves are asserted, because a smoke test that only exercises what happens
-      # to work cannot tell a correct refusal from an outage.
-      #
-      # The write this step used to make named no layer, so it took MemoryCreate's
-      # `episodic` default and hit the schema-v3 guard in Neo4jStorage.store_memory
-      # every single run -- 501, `curl --fail`, red job. That refusal is the
-      # documented, intended behaviour; the assertion was what was wrong.
-      - name: Verify the Neo4j memory-write contract
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install backend test dependencies
+        run: python -m pip install -e '.[dev,api,neo4j]'
+      - name: Verify governed Neo4j storage against the real database
+        env:
+          VISP_TEST_NEO4J_URI: bolt://127.0.0.1:17687
+          VISP_TEST_NEO4J_ADMIN_URI: bolt://127.0.0.1:27687
+          VISP_TEST_NEO4J_PASSWORD: ci-only-neo4j-password
+        run: python -m pytest tests/core/test_neo4j_integration.py -q
+      - name: Verify HTTP capture and reopen the application
         run: |
-          set -euo pipefail
-
-          # --fail-with-body, not --fail: on a refusal the body carries which
-          # contract broke, and a bare `exit 22` is the ambiguity this step exists
-          # to remove.
-          #
-          # `intent` is the only layer this backend accepts, so this is the write
-          # that proves routing, scope check and storage actually work.
-          curl --fail-with-body --silent --show-error \
-            -X POST -H 'Content-Type: application/json' \
-            -d '{"content":"CI memory","repo_id":"ci-repo","layer":"intent"}' \
+          curl --fail-with-body -X POST -H 'Content-Type: application/json' \
+            -d '{"content":"CI memory","repo_id":"ci-repo","layer":"episodic"}' \
             http://127.0.0.1:8000/memories
-
-          # Read it back. A POST returning 2xx while the node never lands is a
-          # failure the write alone cannot see. Captured rather than piped into
-          # grep: `grep -q` exits at the first match and SIGPIPEs curl, which
-          # under `pipefail` would fail the check precisely when it succeeded.
-          body=$(curl --fail-with-body --silent --show-error \
-            'http://127.0.0.1:8000/memories?repo_id=ci-repo&layer=intent') \
-            || { echo "::error::reading back the intent write failed"; exit 1; }
-          case "$body" in
-            *"CI memory"*) ;;
-            *) echo "::error::the intent write did not read back"; exit 1 ;;
-          esac
-
-          # The governed layers fail closed until Neo4j carries the schema-v3
-          # Evidence graph; 501 is the contract, and anything else is the
-          # regression worth catching. Whichever change lifts the guard in
-          # Neo4jStorage.store_memory must update this loop in the same PR --
-          # otherwise the feature landing reads here as a broken smoke test.
-          #
-          # `semantic` is deliberately absent: the router rejects a semantic write
-          # with no evidence id at 422 before storage is reached, so it would prove
-          # the schema check rather than the backend guard.
-          for layer in raw episodic; do
-            # `|| true`: without --fail curl still exits non-zero on a transport
-            # error, and under `set -e` that would kill the step before the
-            # ::error:: below could say what happened. `000` means "never answered".
-            code=$(curl --silent --output /dev/null --write-out '%{http_code}' \
-              -X POST -H 'Content-Type: application/json' \
-              -d "{\"content\":\"CI memory\",\"repo_id\":\"ci-repo\",\"layer\":\"$layer\"}" \
-              http://127.0.0.1:8000/memories || true)
-            if [ "$code" != "501" ]; then
-              echo "::error::$layer write returned ${code:-000}; the fail-closed guard expects 501"
-              exit 1
-            fi
-          done
+          docker compose -f docker-compose.ci-neo4j.yml restart visp-memory-neo4j-smoke
+          docker compose -f docker-compose.ci-neo4j.yml up -d --wait
+          curl --fail 'http://127.0.0.1:8000/memories?repo_id=ci-repo&layer=episodic'
 
       - name: Show service logs on failure
         if: failure()

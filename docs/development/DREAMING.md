@@ -1,10 +1,28 @@
 # Dreaming cycles
 
-Dreaming is a periodic memory-care feature for SQLite-backed servers. Open **Dreaming**
+Dreaming is a periodic memory-care feature for SQLite- or Neo4j-backed servers. Open **Dreaming**
 in the dashboard, select an active project, and use **Preview cycle** to inspect the next
 batch. **Run dreaming now** applies eligible exact-duplicate merges and records review
 suggestions. Schedule controls support every 6 hours, 12 hours, daily, or weekly.
 Schedules are paused by default and are saved per project in its local memory database.
+
+```mermaid
+flowchart TD
+    Start["Preview, manual run, or due schedule"] --> Scan["Scan a bounded project batch"]
+    Scan --> Plan["Build deterministic proposals"]
+    Plan --> Preview["Preview: inspect without changes"]
+    Plan --> Run["Run: apply and journal atomically"]
+    Run --> Exact["Eligible exact duplicates
+Merge with originals retained"]
+    Run --> Review["Related, conflicting, or expired notes
+Review suggestions"]
+    Review --> Choice["Copy draft, archive eligible note, or dismiss"]
+    Exact --> History["Run history and undo"]
+    Choice --> History
+```
+
+Preview never applies changes. A scheduled run uses the same proposal rules as a
+manual run. Broader semantic merging is a review task, not an automatic rewrite.
 
 ## What a cycle does
 
@@ -38,7 +56,7 @@ not a global lock across hosts or CLI processes. Explicit runs execute immediate
 The server must be running for schedules to execute; overdue work resumes after startup.
 Archived projects are skipped.
 
-SQLite write transactions serialize concurrent runs and record changes with their
+Storage write transactions serialize concurrent runs and record changes with their
 history atomically. A crash or failed cycle leaves no partial cleanup committed. A failed
 background cycle shows an error in its schedule and is retried after ten minutes.
 No second scheduler service or Docker container is required.
@@ -49,7 +67,7 @@ batches. Cross-batch duplicates and relationships may need manual review. A limi
 is labeled in the dashboard; an empty batch does not certify the whole store as clean.
 
 The dashboard shows the most recent 20 runs. History and action journals stay in
-`memories.db` and are included in full storage backups. **Undo change** restores affected
+the selected database and are included in its backups. **Undo change** restores affected
 statuses and metadata. If a source was subsequently edited or purged, undo refuses to
 overwrite that work. Undo and dismissal suppress the unchanged proposal in future cycles;
 a material source change allows it to be reconsidered. Stored source excerpts are project

@@ -2,8 +2,26 @@
 
 Visp Memory mirrors status explicitly reported by an assistant or external workflow.
 It does not decide that work is complete from memory text, certify the supplied evidence,
-or grant permission to release. This integration supports SQLite stores, including
-remote clients connected to a SQLite server. Other backends refuse reports explicitly.
+or grant permission to release. This integration supports SQLite and Neo4j stores, including
+remote clients connected to those servers. Other backends refuse reports explicitly.
+
+```mermaid
+sequenceDiagram
+    participant A as Assistant or workflow
+    participant M as Visp Memory
+    participant D as Dashboard
+    A->>A: Determine task status using its own checks
+    A->>M: Report task ID, revision, status, and evidence
+    M->>M: Validate reporter, ordering, and report consistency
+    alt Report accepted
+        M->>M: Save mirrored status and history atomically
+        M-->>A: Applied, or unchanged for an exact retry
+        D->>M: Refresh visible intents
+        M-->>D: Reported status, source, and evidence
+    else Invalid or conflicting report
+        M-->>A: Refuse update and keep previous status
+    end
+```
 
 ## Connect your assistant or workflow
 

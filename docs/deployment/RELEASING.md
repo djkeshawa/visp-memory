@@ -1,336 +1,127 @@
-# How to Create a Release
+# Releasing
+
+This is the single release procedure and checklist. Build details live in
+[PACKAGING.md](PACKAGING.md); the executable source of the pipeline is
+[build-release.yml](../../.github/workflows/build-release.yml).
+Publication is an owner-authorized action. Preparing and testing artifacts does
+not authorize tagging, pushing or publishing.
+
+## Version and artifacts
+
+Published versions are immutable. Check PyPI and GitHub for used versions before
+choosing a new one. Update `pyproject.toml`, the fallback version in
+`src/visp_memory/__init__.py`, and the project entry in `uv.lock`; use a matching
+`vX.Y.Z` tag. Record the source commit and
+artifact hashes; a version string alone is insufficient identity.
+
+Release outputs include:
+
+- `visp_memory-X.Y.Z-py3-none-any.whl` with the embedded dashboard.
+- `visp_memory-X.Y.Z.tar.gz` source distribution.
+- Platform standalone archives, with CLI/API/dashboard and no MCP.
+- A GHCR container image.
+
+## Before tagging
+
+1. Inspect `git status --short`; the release commit must contain only intended
+   changes. Check the version and migration implications.
+2. Run `make release-check`. The
+   [checker](../../scripts/release_check.py) runs Ruff, workflow validation,
+   pytest, package/MCP import smoke, frontend and Python distribution builds,
+   license/NOTICE verification, Twine metadata checks and a fresh-wheel smoke.
+   `build` and `twine` must be installed; Twine is required unless explicitly
+   skipped. A skipped check is not a complete release gate.
+3. Keep security and repository-access checks in that gate:
 
-This guide explains how to create and publish new releases of Visp Memory.
-
-## Overview
-
-When you create a release:
-1. A GitHub Release is automatically created
-2. The wheel file (`.whl`) is built with the embedded dashboard
-3. Users can download and install directly from the release page
-
-## Quick Release (Recommended)
-
-Use the automated script:
-
-```bash
-./create-release.sh
-```
-
-This will:
-1. Ask for the new version number
-2. Update `pyproject.toml`
-3. Create a git tag
-4. Push to GitHub
-5. Trigger automatic build and release
-
-Then wait ~3-5 minutes for GitHub Actions to:
-- Build the frontend
-- Create the Python wheel
-- Publish the GitHub Release
-- Attach the wheel file
-
-## Manual Release Process
-
-If you prefer manual control:
-
-### 1. Update Version
-
-Edit `pyproject.toml`:
-
-```toml
-[project]
-name = "visp-memory"
-version = "X.Y.Z"  # Update this
-```
-
-### 2. Commit Changes
-
-```bash
-git add pyproject.toml
-git commit -m "chore: bump version to 0.2.0"
-git push
-```
-
-### 3. Create and Push Tag
-
-```bash
-# Create annotated tag
-git tag -a v0.2.0 -m "Release 0.2.0"
-
-# Push tag to trigger release workflow
-git push origin v0.2.0
-```
-
-### 4. Wait for GitHub Actions
-
-The tag push triggers `.github/workflows/build-release.yml`, which will:
-- Build the frontend (Next.js)
-- Create the Python wheel with embedded frontend
-- Create a GitHub Release
-- Upload the wheel file as an asset
-
-This tag-triggered workflow is the repository's sole publishing path.
-
-Check progress at: `https://github.com/djkeshawa/visp-memory/actions`
-
-### 5. Review the Release
-
-Once complete, the release appears at:
-`https://github.com/djkeshawa/visp-memory/releases`
-
-It includes:
-- Download link for the wheel file
-- Auto-generated release notes
-- Installation instructions
-- Changelog since last version
-
-## What Gets Built
-
-Each release includes a wheel and source archive:
-- **Wheel**: `visp_memory-X.Y.Z-py3-none-any.whl`
-- **Source**: `visp_memory-X.Y.Z.tar.gz`
-- **Size**: ~600 KB
-- **Contains**:
-  - All Python code
-  - Embedded web dashboard (Next.js build)
-  - Configuration files
-  - Entry points for CLI and MCP server
-
-## Version Numbering
-
-Follow [Semantic Versioning](https://semver.org/):
-
-- **X.0.0** - Major version (breaking changes)
-- **0.X.0** - Minor version (new features, backwards compatible)
-- **0.0.X** - Patch version (bug fixes)
-
-Examples:
-- `v0.1.0` - Initial release
-- `v0.1.1` - Bug fix
-- `v0.2.0` - New features added
-- `v1.0.0` - First stable release
-- `v0.2.0-beta` - Pre-release version
-
-## Pre-release Versions
-
-For beta/alpha releases:
-
-```bash
-# Create pre-release tag
-git tag -a v0.2.0-beta -m "Beta release 0.2.0"
-git push origin v0.2.0-beta
-```
-
-GitHub will automatically mark it as "Pre-release" if the tag contains:
-- `alpha`
-- `beta`
-- `rc` (release candidate)
-
-## Testing Before Release
-
-Always test the build locally first:
-
-```bash
-# Clean previous builds
-make clean
-
-# Run the local release gate
-make release-check
-
-# Start server and check dashboard manually
-VISP_MEMORY_EMBEDDING_PROVIDER=noop \
-VISP_MEMORY_SERVER_AUTH_ENABLED=false \
-visp-memory serve
-# Visit http://127.0.0.1:8000/dashboard
-```
-
-For the full manual checklist, see [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
-
-## GitHub Actions Workflow
-
-The tag-triggered release workflow is `.github/workflows/build-release.yml`. It runs when:
-- A tag starting with `v` is pushed (e.g., `v0.1.0`)
-
-Manual `workflow_dispatch` runs use the same workflow and quality gates without
-creating a second publisher.
-
-**What it does:**
-
-1. **Setup** (1 min)
-   - Checkout code
-   - Setup Python 3.11
-   - Setup Node.js 20
-
-2. **Build Frontend** (2 min)
-   - Run `python build_frontend.py`
-   - Install npm dependencies
-   - Build the static dashboard
-   - Copy static files to the package directory
-
-3. **Build Python Package** (1 min)
-   - Install build tools
-   - Create wheel with embedded frontend
-   - Verify package imports correctly
-
-4. **Create Release** (1 min)
-   - Generate release notes
-   - Create GitHub Release
-   - Upload wheel file
-
-**Total time:** ~5 minutes
-
-## Troubleshooting
-
-### Workflow fails on "Build Frontend"
-
-**Problem:** npm dependencies failed to install
-
-**Solution:**
-```bash
-# Test locally
-python3 build_frontend.py
-```
-
-Fix any errors, commit, and push again.
-
-### Workflow fails on "Build Python Package"
-
-**Problem:** Package build failed
-
-**Solution:**
-```bash
-# Test locally
-python3 -m build --wheel
-```
-
-Check `pyproject.toml` for syntax errors.
-
-### Release created but wheel file is missing
-
-**Problem:** Upload artifact step failed
-
-**Solution:** Check the workflow logs. The build may have succeeded but upload failed. You can manually upload the wheel from the artifacts.
-
-### Tag already exists
-
-**Problem:** You're trying to re-release the same version
-
-**Solution:**
-```bash
-# Delete local tag
-git tag -d v0.1.0
-
-# Delete remote tag
-git push origin :refs/tags/v0.1.0
-
-# Create new tag
-git tag -a v0.1.0 -m "Release 0.1.0"
-git push origin v0.1.0
-```
-
-**Warning:** Only do this if the release hasn't been published yet!
-
-## Publishing to PyPI (automated)
-
-PyPI publishing is wired into `.github/workflows/build-release.yml` via the
-`publish-pypi` job. On every `v*` tag push it **automatically** builds and
-uploads the wheel + sdist to PyPI using **Trusted Publishing (OIDC)** — no API
-token is stored in GitHub. After a release completes, anyone can:
-
-```bash
-pip install visp-memory
-pip install "visp-memory[all]"
-```
-
-### One-time setup (do this once, before the first tagged release)
-
-**1. Register the Trusted Publisher on PyPI.**
-The distribution name is `visp-memory`. Because it does not exist on PyPI yet, add it
-as a *pending* publisher: go to <https://pypi.org/manage/account/publishing/> → "Add a new
-pending publisher" and enter exactly:
-
-| Field | Value |
-|-------|-------|
-| PyPI Project Name | `visp-memory` |
-| Owner | `djkeshawa` |
-| Repository name | `visp-memory` |
-| Workflow name | `build-release.yml` |
-| Environment name | `pypi` |
-
-**2. Create the `pypi` GitHub environment.**
-In the repo: Settings → Environments → New environment → name it `pypi`. This
-matches the `environment: pypi` block in the workflow and lets you optionally
-require a manual approval before any publish.
-
-That's it — no secrets. The `id-token: write` permission in the job lets GitHub
-mint a short-lived OIDC token that PyPI trusts.
-
-### Releasing after setup
-
-Nothing extra to do: bump the version and push a `v*` tag (see the flows above).
-The pipeline runs the quality gate, `twine check` (verifies the metadata/README
-render), then publishes to PyPI, GHCR (Docker), and the GitHub Release together.
-
-### Important: versions are immutable
-
-PyPI **rejects re-uploading an existing version**. Always bump the version in
-`pyproject.toml` (the `create-release.sh` script does this) so the tag and the
-package version match and are new. If a publish fails *before* upload (e.g. an
-OIDC/config error), no version is consumed and you can fix and re-tag safely.
-
-### Optional: dry-run on TestPyPI first
-
-To rehearse the whole flow without touching real PyPI, register the same project
-as a pending publisher on <https://test.pypi.org/manage/account/publishing/>
-(environment `testpypi`) and run a one-off upload with
-`repository-url: https://test.pypi.org/legacy/`. This is optional — the `twine
-check` step already validates metadata in CI, and a failed real publish never
-consumes a version.
-
-## Release Checklist
-
-Use [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) as the source of truth.
-
-## Alternative: Manual GitHub Release
-
-If the workflow isn't set up or you prefer manual control:
-
-1. **Build locally:**
    ```bash
-   make build
+   python3 -m pytest tests/server/test_auth.py tests/server/test_collaboration.py
    ```
 
-2. **Go to GitHub Releases:**
-   `https://github.com/djkeshawa/visp-memory/releases/new`
+4. Run dashboard checks with its existing lockfile:
 
-3. **Fill in details:**
-   - Tag: `v0.1.0`
-   - Title: `Visp Memory v0.1.0`
-   - Description: (copy from the workflow's changelog template)
+   ```bash
+   npm ci --prefix visp-memory-dashboard
+   npm run lint --prefix visp-memory-dashboard
+   npm run build --prefix visp-memory-dashboard
+   npm audit --omit=dev --prefix visp-memory-dashboard
+   ```
 
-4. **Upload wheel:**
-   - Drag `dist/visp_memory-<version>-py3-none-any.whl` and
-     `dist/visp_memory-<version>.tar.gz` to the assets section
+   Resolve production advisories or document the remaining risk and rationale.
+   The release workflow's audit step must still pass.
+5. Smoke CLI capture/recall in a disposable project. Exercise initialization and
+   maintenance only against disposable data.
+6. Smoke API/dashboard using the built distribution and disposable storage.
+   Configure [authentication](AUTH.md); auth-disabled tests must stay on loopback.
+   Verify server status at `/`, and dashboard pages `/dashboard`,
+   `/dashboard/graph`, `/dashboard/recall` and `/dashboard/intents`.
+7. Review [feature status](../FEATURE_STATUS.md), migration notes and benchmark
+   limits. Do not relabel beta/frozen features or claim coding benefit from
+   selection or integration tests.
 
-5. **Publish release**
+For a packaged HTTP smoke, use
+`python3 scripts/release_check.py --with-packaged-smoke`; add
+`--with-browser-smoke` for the Chromium check or `--with-docker-build` for a
+container build. These options require their respective local tooling.
 
-This gives you full control but takes more time.
+## Publish after authorization
 
-## Automated PyPI Publishing
+Commit only the intended changes, then create and push the matching tag after
+authorization. Keep unrelated work and local configuration out of the release.
 
-Already configured — see [Publishing to PyPI (automated)](#publishing-to-pypi-automated)
-above. It uses Trusted Publishing (OIDC), so there are no secrets to manage; the
-only one-time step is registering the pending publisher on PyPI and creating the
-`pypi` GitHub environment.
+```bash
+git tag -a vX.Y.Z -m "Release X.Y.Z"
+git push origin vX.Y.Z
+```
 
-## Getting Help
+A `v*` tag push starts the single release workflow. Quality gates precede builds;
+Python artifacts are checked for metadata, license/NOTICE and dashboard assets.
+PyPI publishing uses the built wheel/sdist and Trusted Publishing (OIDC).
+The container and standalone jobs produce their own artifacts; GitHub Release
+creation waits for those build jobs. Publication across services is not atomic.
+A manual `workflow_dispatch` does not satisfy the PyPI tag-push publish condition.
 
-- **Workflow not running?** Check `.github/workflows/` permissions
-- **Build failing?** Check GitHub Actions logs for detailed errors
-- **Need to rollback?** Delete the release and tag, fix issues, re-release
+### Trusted Publisher configuration
 
----
+Verify these settings on the existing PyPI project and GitHub environment:
 
-**Next:** See [PACKAGING.md](PACKAGING.md) for distribution details and the
-[README installation section](../../README.md#-installation) for user instructions.
+| Field | Value |
+|---|---|
+| PyPI project | `visp-memory` |
+| GitHub owner | `djkeshawa` |
+| Repository | `visp-memory` |
+| Workflow | `build-release.yml` |
+| Environment | `pypi` |
+
+The workflow uses `id-token: write`; no persistent PyPI API token is required.
+Environment approval rules, if configured, still apply. TestPyPI requires its
+own publisher/environment configuration; it is not a second production path.
+
+## After publication
+
+1. Inspect every relevant Actions job and destination separately. A GitHub
+   Release does not prove PyPI publication succeeded, or vice versa.
+2. Download the released wheel and install it in a fresh virtual environment:
+
+   ```bash
+   python3 -m venv /tmp/visp-memory-release-smoke
+   /tmp/visp-memory-release-smoke/bin/pip install "./visp_memory-X.Y.Z-py3-none-any.whl[api,mcp]"
+   /tmp/visp-memory-release-smoke/bin/visp-memory --version
+   ```
+
+3. Verify dashboard assets and intended entry points from the installed artifact.
+   Smoke standalone archives on their target platforms.
+4. Ensure release notes include installation, feature status, known advisories,
+   migration/data-safety notes and the exact artifact identity.
+
+## Failure recovery
+
+Inspect the failing job before retrying. Reproduce frontend errors with
+`python3 build_frontend.py`, Python packaging errors with `python3 -m build`,
+and artifact errors with the distribution verifier. Check OIDC settings for
+publishing failures.
+
+Do not delete or move a published tag, replace an existing version or describe a
+partial publish as a rollback. The workflow's `skip-existing` allows already
+uploaded PyPI files to be skipped on retry; it does not replace them. Changed
+code or artifacts require a new version. Record partial destination failures and
+recover through the authorized release procedure.

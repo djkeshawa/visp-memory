@@ -15,16 +15,16 @@ documentation at <http://localhost:8000/docs>.
 Run `visp-memory --help` (`./visp-memory` on Linux/macOS and
 `./visp-memory.exe` on Windows) for CLI commands.
 
-Data is stored in `.visp-memory` under the current project unless configuration
-selects another storage directory.
+On first start, use the one-use setup link in the server output to create your
+administrator account. Existing installations keep their accounts. There is no
+shared default password.
 
-## Capability matrix
+Data defaults to `.visp-memory/data` under the current project unless configuration
+selects another storage directory. Keep this directory when replacing the executable.
 
-| Distribution | CLI | API | Dashboard | MCP |
-| --- | --- | --- | --- | --- |
-| Standalone archive | Yes | Yes | Yes | No |
-| Python package with `[api,mcp]` | Yes | Yes | Release wheel | Yes |
-| Container image | Yes | Yes | Yes | Yes |
+## Configuration and updates
 
-See the project README and `docs/deployment/PACKAGING.md` for configuration and
-backend details.
+The [installation guide](https://github.com/djkeshawa/visp-memory/blob/develop/docs/deployment/PACKAGING.md)
+explains other distributions. Before upgrading, stop all writers and follow the
+[backup procedure](https://github.com/djkeshawa/visp-memory/blob/develop/docs/development/STORAGE.md#backup-and-schema-upgrades).
+The standalone bundle excludes local transformer models and the ArcadeDB/JVM runtime.
