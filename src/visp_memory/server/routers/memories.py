@@ -13,6 +13,7 @@ from visp_memory.core.eligibility import (
 )
 from visp_memory.core.lifecycle import LifecycleError
 from visp_memory.core.ranking import rank_memory_results
+from visp_memory.core.recall_candidates import recall_candidates
 from visp_memory.core.storage import (
     EvidenceImmutableError,
     EvidenceReferenceError,
@@ -29,6 +30,7 @@ from visp_memory.quality.secrets import SecretBearingContentError, redact_for_st
 from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import (
     can_access_scoped_record,
+    has_admin_privileges,
     require_admin,
     require_repo_scope_access,
     require_repo_writable,
@@ -832,7 +834,7 @@ async def revise_memory(
         )
 
     metadata = dict(revision.metadata or {})
-    if not user.is_admin:
+    if not has_admin_privileges(user):
         existing_metadata = existing.get("metadata") or {}
         for reserved_key in ("author_id", "team_id", "environment", "task_type"):
             if reserved_key in existing_metadata:
@@ -920,7 +922,7 @@ async def update_memory(
         update_data["content"] = sanitized_content
         if sanitized_content != original_content:
             update_data["quality_flags"] = redaction_flags
-    if "metadata" in update_data and not user.is_admin:
+    if "metadata" in update_data and not has_admin_privileges(user):
         metadata = dict(update_data["metadata"] or {})
         existing_metadata = mem.get("metadata") or {}
         # Non-admins may never set ownership/scope fields. Pin them to the record's
@@ -964,31 +966,28 @@ async def recall(
     config = load_config()
     recall_repo_id = query.repo_id or config.repo_id
     require_repo_scope_access(storage, recall_repo_id, user)
-    layers = query.layers or [None]
-    results = []
-    for layer in layers:
-        layer_results = storage.search_memories(
-            query=query.query,
-            layer=layer,
-            limit=query.limit,
-            repo_id=recall_repo_id,
-            status=query.status,
+
+    def rank_candidates(candidates):
+        return rank_memory_results(
+            candidates, query=query.query, limit=query.limit, min_score=query.min_score
         )
-        results.extend(
-            r
-            for r in layer_results
-            if can_access_scoped_record(storage, r, user, scope_field="metadata")
-        )
-    results = filter_recall_eligible(
-        results,
+
+    results = recall_candidates(
+        storage,
+        query.query,
         repo_id=recall_repo_id,
+        layers=query.layers or [None],
+        limit=query.limit,
+        status=query.status,
         environment=query.environment,
         task_type=query.task_type,
         as_of=query.as_of,
+        memory_filter=lambda memory: can_access_scoped_record(
+            storage, memory, user, scope_field="metadata"
+        ),
+        rank_results=rank_candidates,
     ).allowed
-    results = rank_memory_results(
-        results, query=query.query, limit=query.limit, min_score=query.min_score
-    )
+    results = rank_candidates(results)
     terms = set(re.findall(r"[\w]+", query.query.casefold()))
     for result in results:
         words = set(re.findall(r"[\w]+", result["content"].casefold()))

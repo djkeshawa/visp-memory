@@ -605,3 +605,25 @@ class TestMainGuards:
         assert main() == 1
         out = capsys.readouterr().out
         assert "VISP_MEMORY_MCP_HTTP_TOKEN" in out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["user", "admin"])
+async def test_read_only_pat_cannot_write_even_when_account_is_admin(tmp_path, role):
+    store = AuthStore(tmp_path / "auth.db")
+    account = store.create_account(
+        username="read-only-user", password="a-secure-password-123", role=role, team_id="alpha",
+    )
+    _, token = store.create_token(
+        user_id=account["id"], name="read-only", scopes=["memory:read"], repo_ids=["allowed"],
+    )
+    app = _build_app(tmp_path, auth_store=store)
+    memory = app._manager.app._visp_memory
+    memory._storage.store_repository({"id": "allowed", "name": "Allowed", "team_id": "alpha"})
+    async with _Client(app) as client:
+        response = await client.post(
+            "/mcp", json=_tool_call("memory_record", {"event": "denied", "repo_id": "allowed"}),
+            headers={**HEADERS, "authorization": f"Bearer {token}"},
+        )
+    assert "authorization_denied" in _result_text(response)
+    assert memory._storage.list_memories(repo_id="allowed", status="all") == []

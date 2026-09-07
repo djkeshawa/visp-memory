@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from visp_memory.core.api_limits import MAX_QUERY_LIMIT
 from visp_memory.core.beliefs import (
     BeliefType,
     EpistemicStatus,
@@ -19,7 +20,6 @@ MemoryLayer = Literal["raw", "episodic", "semantic", "intent"]
 MemoryStatus = Literal["active", "pending", "archived", "superseded", "merged", "deleted"]
 IntentStatus = Literal["active", "completed", "closed"]
 RelationshipConfidence = Literal["observed", "inferred", "ambiguous", "manual"]
-MAX_QUERY_LIMIT = 200
 
 
 class ScopedRequest(BaseModel):

@@ -7,8 +7,10 @@ Enables surfacing relevant context from dependent repositories:
 - Related knowledge across projects
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
+from visp_memory.core.clock import utc_now
+from visp_memory.core.eligibility import filter_recall_eligible
 from visp_memory.core.repository import RepositoryManager
 from visp_memory.core.storage import BaseStorage
 from visp_memory.layers.semantic import KnowledgeCategory
@@ -30,7 +32,9 @@ class CrossRepoContext:
         self.repo_mgr = repo_mgr or RepositoryManager(storage)
 
     def get_context_for_repo(
-        self, repo_id: str, include_dependencies: bool = True, max_depth: int = 2
+        self, repo_id: str, include_dependencies: bool = True, max_depth: int = 2,
+        memory_filter: Callable[[dict], bool] | None = None,
+        *, environment: Any = None, task_type: Any = None, as_of: Any = None,
     ) -> Dict[str, Any]:
         """
         Get aggregated context for a repository.
@@ -39,6 +43,12 @@ class CrossRepoContext:
         repo = self.repo_mgr.get(repo_id)
         if not repo:
             return {"error": "Repository not found"}
+        scope = {
+            "environment": environment,
+            "task_type": task_type,
+            "as_of": utc_now() if as_of is None else as_of,
+        }
+        filter_recall_eligible([], repo_id=repo_id, **scope)
 
         relevant_repos = self._resolve_relevant_repos(
             repo_id=repo_id,
@@ -51,7 +61,11 @@ class CrossRepoContext:
         all_memories = []
         for rid in relevant_repos:
             mems = self.storage.list_memories(repo_id=rid, limit=50)
-            all_memories.extend(mems)
+            visible = [
+                memory for memory in mems
+                if memory_filter is None or memory_filter(memory)
+            ]
+            all_memories.extend(filter_recall_eligible(visible, repo_id=rid, **scope).allowed)
 
         # Filter by category. Warnings are stored under the semantic warning
         # categories (and tagged "warning"), not under the literal "warning"/"error"

@@ -32,6 +32,7 @@ from visp_memory.core.memory_context import build_context, format_context_text
 from visp_memory.core.memory_import_export import export_memory, import_memories
 from visp_memory.core.neo4j_storage import Neo4jStorage
 from visp_memory.core.ranking import DEFAULT_RECALL_MIN_SCORE, rank_memory_results, text_similarity
+from visp_memory.core.recall_candidates import recall_candidates
 from visp_memory.core.remote_storage import RemoteStorage
 from visp_memory.core.repository import RepositoryManager
 from visp_memory.core.storage import UNSCOPED_REPO_ID, LocalStorage
@@ -874,45 +875,37 @@ class Memory:
         """
         query, _ = redact_for_storage(query, None)
         layers = layers or ["episodic", "semantic", "intent"]
-        results = []
-
         search_repo_id = require_repo_id(repo_id or self.config.repo_id)
-
-        for layer in layers:
-            layer_results = self._storage.search_memories(
-                query=query,
-                layer=layer,
-                repo_id=search_repo_id,
-                limit=limit,
-                status=status,
-                environment=environment,
-                task_type=task_type,
-                as_of=as_of,
-            )
-            results.extend(layer_results)
-
-        eligibility = filter_recall_eligible(
-            results,
-            repo_id=search_repo_id,
-            environment=environment,
-            task_type=task_type,
-            as_of=as_of,
-        )
-        self.last_recall_eligibility_result = eligibility
-        self.last_recall_eligibility = eligibility.diagnostics()
-
-        ranked = self.rank_with_context(
-            eligibility.allowed,
-            query=query,
+        ranking_context = self._build_recall_factor_context(
             repo_id=search_repo_id,
             task=task,
             files=files,
             session_id=session_id,
             constraints=constraints,
             dependencies=dependencies,
-            limit=limit,
-            min_score=min_score,
         )
+
+        def rank_candidates(candidates):
+            return self._rank_recall_candidates(
+                candidates, ranking_context, query=query, limit=limit, min_score=min_score
+            )
+
+        eligibility = recall_candidates(
+            self._storage,
+            query,
+            repo_id=search_repo_id,
+            layers=layers,
+            limit=limit,
+            status=status,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
+            rank_results=rank_candidates,
+        )
+        self.last_recall_eligibility_result = eligibility
+        self.last_recall_eligibility = eligibility.diagnostics()
+
+        ranked = rank_candidates(eligibility.allowed)
         if log_utility:
             for result in ranked:
                 memory_id = result.get("id")
@@ -951,6 +944,13 @@ class Memory:
             dependencies=dependencies,
             include_active_intents=include_active_intents,
         )
+        return self._rank_recall_candidates(
+            memories, context, query=query, limit=limit, min_score=min_score
+        )
+
+    def _rank_recall_candidates(
+        self, memories, context, *, query=None, limit=None, min_score=None
+    ):
         annotated = []
         for memory in memories:
             item = dict(memory)

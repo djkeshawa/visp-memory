@@ -6,6 +6,7 @@ import requests
 
 from visp_memory import Memory, MemoryConfig
 from visp_memory.core.hybrid_retrieval import HybridRetriever
+from visp_memory.core.recall_candidates import recall_candidates
 from visp_memory.core.remote_storage import RemoteStorage, RemoteStorageError
 from visp_memory.core.storage import EvidenceImmutableError, SessionCompletionStatus
 from visp_memory.layers.episodic import EpisodicMemory
@@ -74,6 +75,45 @@ def remote_storage_with(response):
     storage.server_url = "http://memory.example"
     storage.session = FakeSession(response)
     return storage
+
+
+@pytest.mark.parametrize("has_partial_match", [False, True])
+def test_recall_refill_respects_http_query_cap_and_returns_partial_results(has_partial_match):
+    from pydantic import ValidationError
+
+    from visp_memory.server.schemas import MAX_QUERY_LIMIT, SearchQuery
+
+    class BoundedSession(FakeSession):
+        def post(self, url, json=None):
+            self.post_calls.append((url, json))
+            try:
+                query = SearchQuery(**json)
+            except ValidationError:
+                return FakeResponse(422, {"detail": "Query limit exceeded"})
+            return FakeResponse(payload=[
+                {"id": f"match-{index}", "repo_id": "repo-a", "content": "weak migration"}
+                for index in range(query.limit)
+            ])
+
+    storage = remote_storage_with(FakeResponse())
+    storage.session = BoundedSession(FakeResponse())
+    accepted_id = f"match-{MAX_QUERY_LIMIT - 1}" if has_partial_match else None
+
+    def rank_results(rows):
+        return [row for row in rows if row["id"] == accepted_id]
+
+    result = recall_candidates(
+        storage, "migration", repo_id="repo-a", layers=["episodic"], limit=10,
+        rank_results=rank_results,
+    )
+
+    assert [row["id"] for row in rank_results(result.allowed)] == (
+        [accepted_id] if has_partial_match else []
+    )
+    limits = [payload["limit"] for _, payload in storage.session.post_calls]
+    assert limits[-1] == MAX_QUERY_LIMIT
+    assert all(limit <= MAX_QUERY_LIMIT for limit in limits)
+    assert len(limits) < 10, "A capped remote query must terminate without endless refill"
 
 
 def test_remote_revision_uses_plural_public_endpoint():

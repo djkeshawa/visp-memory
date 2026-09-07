@@ -46,7 +46,7 @@ install: build
 
 install-dev:
 	@echo "Installing visp-memory with dev dependencies..."
-	$(PIP) install -e ".[all]"
+	$(PIP) install -e ".[api,mcp,capture,dev]"
 
 test:
 	@echo "Running tests..."

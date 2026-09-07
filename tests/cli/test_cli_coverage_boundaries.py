@@ -312,7 +312,7 @@ def test_hooks_install_cli_reports_preview_and_os_error(monkeypatch, cli_env):
         config_path = Path("codex.toml")
 
         def install(self):
-            return {"instructions": True, "config": False}
+            return {"instructions": True, "config": True}
 
         def get_context_file_path(self):
             return Path("AGENTS.md")
@@ -394,7 +394,7 @@ def test_hooks_list_and_uninstall_cli_are_user_visible(monkeypatch, cli_env):
     assert listed.exit_code == 0
     assert "Available LLM Tool Integrations" in listed.output
     assert "claude-code" in listed.output
-    assert removed.exit_code == 0
+    assert removed.exit_code == 1
     assert "Previewing removal of codex integration" in removed.output
 
 

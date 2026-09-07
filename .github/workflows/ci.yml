@@ -117,7 +117,7 @@ jobs:
         run: python scripts/benchmark_memory.py --items 50 --json
 
   dashboard:
-    name: Dashboard (lint + build)
+    name: Dashboard (lint + browser tests + build)
     runs-on: ubuntu-latest
 
     steps:
@@ -138,6 +138,14 @@ jobs:
       - name: Lint
         working-directory: visp-memory-dashboard
         run: npm run lint
+
+      - name: Install browser for dashboard tests
+        working-directory: visp-memory-dashboard
+        run: npx playwright install --with-deps chromium
+
+      - name: Test dashboard workflows
+        working-directory: visp-memory-dashboard
+        run: npm run test:e2e
 
       - name: Build (type-check + bundle)
         working-directory: visp-memory-dashboard

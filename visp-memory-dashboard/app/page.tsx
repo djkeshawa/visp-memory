@@ -23,6 +23,7 @@ function DashboardContent() {
 
   const fetchData = useCallback(async () => {
     const requestedRepoId = selectedRepoId
+    if (selectedRepoIdRef.current !== requestedRepoId) return
     const generation = ++requestGenerationRef.current
     setIsLoading(true)
     try {

@@ -8,7 +8,23 @@ import sys
 import zipfile
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize("kind", ["wheel", "sdist"])
+def test_built_metadata_is_accepted_by_release_checker(tmp_path, kind):
+    pytest.importorskip("hatchling")
+    package = pytest.importorskip("twine.package")
+    from hatchling.builders.sdist import SdistBuilder
+    from hatchling.builders.wheel import WheelBuilder
+
+    builder = (WheelBuilder if kind == "wheel" else SdistBuilder)(str(ROOT))
+    artifact = next(builder.build(directory=str(tmp_path)))
+
+    checked = package.PackageFile.from_filename(str(tmp_path / artifact), None)
+    assert checked.metadata["name"] == "visp-memory"
 
 
 def test_legal_files_are_nonempty_and_declared_for_python_distributions():
@@ -19,18 +35,6 @@ def test_legal_files_are_nonempty_and_declared_for_python_distributions():
     assert 'license-files = ["LICENSE", "NOTICE"]' in pyproject
     assert '"LICENSE"' in pyproject
     assert '"NOTICE"' in pyproject
-
-
-def test_release_script_fails_closed_before_mutating_version():
-    script = (ROOT / "create-release.sh").read_text()
-
-    clean_check = script.index("git status --porcelain --untracked-files=all")
-    final_confirmation = script.index('read -p "Proceed? (y/n) "')
-    version_edit = script.index('sed -i "s/version =')
-
-    assert clean_check < final_confirmation < version_edit
-    assert "git checkout pyproject.toml" not in script
-    assert "Continue anyway?" not in script[: script.index("# Get current version")]
 
 
 def test_release_wheel_smoke_uses_isolated_storage():

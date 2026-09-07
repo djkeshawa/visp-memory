@@ -57,6 +57,9 @@ source .venv/bin/activate
 pip install -e ".[api,mcp,capture,dev]"
 ```
 
+`make install-dev` installs the same profile, including pytest, Ruff and release
+tools. Add optional provider or storage extras when working on those integrations.
+
 On Windows, activate with `.venv\Scripts\Activate.ps1` in PowerShell. For the
 dashboard, install its locked dependencies with `npm ci --prefix visp-memory-dashboard`.
 

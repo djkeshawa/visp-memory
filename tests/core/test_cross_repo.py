@@ -97,3 +97,26 @@ def test_cross_repo_context_deduplicates_dependencies_and_stops_cycles():
     assert context["monitored_repos"] == ["app", "lib"]
     assert [warning["id"] for warning in context["warnings"]] == ["lib-warning"]
     assert storage.listed_repo_ids == ["app", "lib"]
+
+
+def test_context_applies_eligibility_in_each_dependency_scope():
+    repos = {name: Repository(id=name, name=name) for name in ("app", "lib")}
+    repo_mgr = FakeRepoManager(repos, {"app": [dependency("app", "lib")]})
+    scoped = {"environment": "prod", "task_type": "deploy"}
+    rows = [
+        {"id": "expired", "metadata": {"valid_to": "2020-01-01T00:00:00Z"}},
+        {"id": "future", "metadata": {"valid_from": "2099-01-01T00:00:00Z"}},
+        {"id": "invalid", "metadata": {"valid_to": "invalid"}},
+        {"id": "dev", "metadata": {"environment": "dev"}},
+        {"id": "scoped", "metadata": scoped},
+        {"id": "general", "metadata": {}},
+    ]
+    storage = FakeStorage({"lib": [
+        {**row, "repo_id": "lib", "tags": ["warning"]} for row in rows
+    ]})
+    context = CrossRepoContext(storage, repo_mgr)
+    assert [row["id"] for row in context.get_context_for_repo("app")["warnings"]] == ["general"]
+    selected = context.get_context_for_repo(
+        "app", environment="prod", task_type="deploy", as_of="2026-01-01T00:00:00Z",
+    )
+    assert [row["id"] for row in selected["warnings"]] == ["scoped", "general"]

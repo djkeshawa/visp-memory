@@ -4,7 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from visp_memory.core.intent_workflow import IntentWorkflowReport
 from visp_memory.server.auth import UserContext, get_current_user
-from visp_memory.server.authorization import require_repo_writable, require_scoped_record_access
+from visp_memory.server.authorization import (
+    has_admin_privileges,
+    require_repo_writable,
+    require_scoped_record_access,
+)
 from visp_memory.server.routers.intents import _find_intent
 from visp_memory.server.routers.platform import append_audit_event
 
@@ -30,7 +34,7 @@ async def report_workflow_status(
     )
     require_repo_writable(storage, intent["repo_id"], user)
     author = (intent.get("context") or {}).get("author_id")
-    if not user.is_admin and author != user.user_id:
+    if not has_admin_privileges(user) and author != user.user_id:
         raise HTTPException(403, "Only the intent owner can connect a workflow reporter")
     try:
         result = storage.report_intent_workflow(

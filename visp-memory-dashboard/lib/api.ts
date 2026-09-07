@@ -356,8 +356,8 @@ export async function getStats(repoId?: string | null): Promise<Stats> {
     }
 }
 
-export async function getProjectScopes(): Promise<ProjectScope[]> {
-    const res = await request("/repos/scopes", { headers: authHeaders() })
+export async function getProjectScopes(signal?: AbortSignal): Promise<ProjectScope[]> {
+    const res = await request("/repos/scopes", { headers: authHeaders(), signal })
     const data = await res.json()
 
     return data.map((item: any) => ({
@@ -427,8 +427,8 @@ export async function purgeProject(repoId: string): Promise<{ backup: string }> 
     return res.json()
 }
 
-export async function getRuntimeStatus(): Promise<RuntimeStatus> {
-    const res = await request("/", { headers: authHeaders() })
+export async function getRuntimeStatus(signal?: AbortSignal): Promise<RuntimeStatus> {
+    const res = await request("/", { headers: authHeaders(), signal })
     const data = await res.json()
 
     return {
@@ -532,8 +532,9 @@ export async function getMemories(
     repoId?: string | null,
     status = "active",
     limit = 200,
+    offset = 0,
 ): Promise<Memory[]> {
-    const res = await request(withQuery("/memories", { repo_id: repoId, status, limit }))
+    const res = await request(withQuery("/memories", { repo_id: repoId, status, limit, offset }))
     return (await res.json()).map(normalizeMemory)
 }
 

@@ -36,6 +36,7 @@ from visp_memory.core.ranking import (
     normalize_distance_score,
     rank_memory_results,
     relationship_score,
+    score_memory_result,
     text_similarity,
     utility_rank_adjustment,
 )
@@ -3891,10 +3892,29 @@ class LocalStorage(BaseStorage):
             sql += ")"
             params.extend(f"%{term}%" for term in terms)
 
-        sql += " ORDER BY importance DESC, created_at DESC LIMIT ?"
+        sql += (
+            " ORDER BY recall_keyword_score(content, importance, created_at, accessed_at,"
+            " access_count) DESC, importance DESC, created_at DESC, id LIMIT ?"
+        )
         params.append(limit + len(exclude_ids))
 
+        def keyword_score(content, importance, created_at, accessed_at, access_count):
+            return score_memory_result(
+                {
+                    "content": content,
+                    "similarity": text_similarity(query, content),
+                    "importance": importance,
+                    "created_at": created_at,
+                    "accessed_at": accessed_at,
+                    "access_count": access_count,
+                },
+                query=query,
+            )
+
         with self._get_db() as conn:
+            # Let SQLite select the best lexical candidates before LIMIT; only
+            # that window is materialized and has evidence/utility attached.
+            conn.create_function("recall_keyword_score", 5, keyword_score)
             cursor = conn.execute(sql, params)
             rows = []
             for row in cursor.fetchall():

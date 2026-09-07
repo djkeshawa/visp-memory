@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Dict
 
 from visp_memory.core.clock import utc_now
+from visp_memory.core.instruction_markers import CLAUDE_CONTEXT_MARKER
 from visp_memory.core.verbs import (
     CAPTURE_VERBS,
     INTENT_LIFECYCLE_HEADLINE,
@@ -31,7 +32,7 @@ class ClaudeCodeAdapter(GenericAdapter):
     convention.
     """
 
-    def __init__(self, memory, project_root: Path = None):
+    def __init__(self, memory, project_root: Path = None, dry_run: bool = False):
         """
         Initialize Claude Code adapter.
 
@@ -43,8 +44,9 @@ class ClaudeCodeAdapter(GenericAdapter):
             memory=memory,
             project_root=project_root,
             context_file="CLAUDE.md",
-            injection_marker="<!-- LLM-MEMORY -->",
+            injection_marker=CLAUDE_CONTEXT_MARKER,
             append_mode=True,  # Append to existing CLAUDE.md
+            dry_run=dry_run,
         )
 
     def install(self) -> Dict[str, bool]:
@@ -61,7 +63,7 @@ class ClaudeCodeAdapter(GenericAdapter):
         # "if not exists" branch that used to follow it could never run: every
         # fresh install produced a CLAUDE.md that named no memory verbs at all.
         results = {}
-        if not self.context_file.exists():
+        if not self.dry_run and not self.context_file.exists():
             self._ensure_directory(self.context_file)
             self.context_file.write_text(self._initial_instructions(), encoding="utf-8")
             results["claude_md_created"] = True
@@ -99,9 +101,9 @@ outcome against one.
 
 ---
 
-<!-- LLM-MEMORY --> START
+{CLAUDE_CONTEXT_MARKER} START
 
-<!-- LLM-MEMORY --> END
+{CLAUDE_CONTEXT_MARKER} END
 """
 
     def update_context(self, files: list[str] = None, task: str = None) -> bool:
@@ -115,6 +117,8 @@ outcome against one.
         Returns:
             True if successful
         """
+        if self.dry_run:
+            return True
         # Get memory context with special formatting for Claude
         context = self.get_memory_context(files=files, task=task)
 
@@ -134,8 +138,8 @@ outcome against one.
         # Use parent's injection logic
         content = self.context_file.read_text(encoding="utf-8")
 
-        start_marker = "<!-- LLM-MEMORY --> START"
-        end_marker = "<!-- LLM-MEMORY --> END"
+        start_marker = f"{CLAUDE_CONTEXT_MARKER} START"
+        end_marker = f"{CLAUDE_CONTEXT_MARKER} END"
 
         # Only rewrite when the markers are well-formed (present once each,
         # start before end). Malformed/duplicated/reordered markers => refuse.

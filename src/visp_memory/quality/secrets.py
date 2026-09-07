@@ -7,7 +7,7 @@ tokens someone pasted once. Unlike a log file, memory is *designed* to be retrie
 replayed into a model's context later, so a secret stored here is a secret that will be
 read aloud repeatedly.
 
-The project already documented this risk in ``docs/development/MEMORY_GOVERNANCE.md``
+The project already documented this risk in ``docs/TRUST.md``
 ("Do not record API keys, credentials, tokens..."), but documentation is advice, not
 enforcement. This module is the enforcement.
 

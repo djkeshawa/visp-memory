@@ -451,7 +451,9 @@ def _get_scoped_stats(repo_id: str | None, user: UserContext) -> dict:
     did produce were right.
     """
     storage = app.state.storage
-    if user.is_admin or user.is_local_owner:
+    if (has_admin_privileges(user) or user.is_local_owner) and not (
+        user.auth_type == "pat" and user.repo_ids and repo_id is None
+    ):
         # Every row is visible to this principal, so the aggregate is exact and
         # nothing has to be read into memory to count it.
         return storage.get_stats(repo_id=repo_id)

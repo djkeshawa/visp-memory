@@ -12,6 +12,7 @@ From a development checkout:
 ```bash
 python3 scripts/evaluate_oracle_gap.py --json
 python3 scripts/evaluate_poisoning.py --json
+python3 scripts/evaluate_memory_intelligence.py --json
 python3 scripts/evaluate_structural_recall.py --json
 python3 -m pytest tests/docs tests/scripts/test_evaluate_structural_recall.py -q
 ```
@@ -30,13 +31,20 @@ eight candidates; the policy applies relevance, abstention, and output budgets.
 | Strategy | Precision | Recall | F1 | Mean tokens | Correct silence |
 |---|---|---|---|---|---|
 | oracle | 1.00 | 1.00 | 1.00 | 23.4 | 1.00 |
-| unfiltered_top8 | 0.09 | 0.75 | 0.17 | 190.2 | 0.20 |
+| unfiltered_top8 | 0.12 | 1.00 | 0.22 | 190.0 | 0.20 |
 | **policy** | **1.00** | **0.625** | **0.77** | **14.9** | **1.00** |
 
-**Oracle gap closed: 72%.**
+**Oracle gap closed: 70%.**
 
-The policy spent **12.8× fewer tokens** than naive retrieval (14.9 versus 190.2
+The policy spent **12.8× fewer tokens** than naive retrieval (14.9 versus 190.0
 per case). This estimate describes injected text in the fixture.
+
+Lexical candidates are ranked for relevance before the result limit is applied.
+The unfiltered baseline finds all eight labelled memories across its 64 selections,
+including the authentication and billing records that importance-first truncation
+previously missed. It still injects on four of the five tasks where silence is correct.
+The stronger baseline reduces the measured oracle gap closed from 72% to 70%; the
+policy's own precision and recall are unchanged.
 
 **Policy recall is 0.625, not 1.00.** The policy retrieved 5 of the 8 genuinely relevant
 memories and left 3 on the floor — 37.5% of them. High precision has a measured
@@ -57,6 +65,21 @@ The undefended arm retrieves 9 poisoned records out of 16. The defended arm bloc
 those records while retaining useful answers. Both properties are checked; simply
 returning nothing is not considered a successful defense. These synthetic lures
 do not establish resistance to every attack. See [trust boundaries](TRUST.md).
+
+## Local intelligence fixture
+
+The local intelligence evaluator checks labelled recall hits, relationship evidence,
+capture deduplication, a graph token budget, and stale-intent reporting. Its stable
+measurements are recorded in
+[the baseline](development/MEMORY_INTELLIGENCE_BASELINE.json).
+
+Relevance-first candidate selection admits the matching capture-replay record as a
+graph seed. The freshness record remains reachable through its evidence path, so
+the trace contains four nodes and uses 108 of 120 estimated tokens (90%), compared
+with three nodes and 91 tokens before the candidate-selection fix. No graph items
+are omitted; the recall hit rate, evidence-path coverage, duplicate rate, and
+stale-intent surfacing result are unchanged. The extra context has a measured token
+cost; this fixture does not establish better coding outcomes.
 
 ## Structurally conditioned recall
 

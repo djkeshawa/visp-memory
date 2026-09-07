@@ -853,6 +853,14 @@ def providers_test(
 
 
 @app.command()
+def demo():
+    """Try capture and recall in a temporary store without changing this project."""
+    from visp_memory.interfaces.onboarding import run_demo
+
+    run_demo(console)
+
+
+@app.command()
 def init(
     project_type: str = typer.Option(
         "code", "--type", "-t", help="Project type: code, writing, research, general"
@@ -901,6 +909,9 @@ def init(
 
     console.print(f"[green]Initialized Visp Memory in {config_path}[/green]")
     console.print(f"Data directory: {config.storage.data_dir}")
+    console.print(
+        "[dim]First time? Run visp-memory demo for an isolated capture/recall walkthrough.[/dim]"
+    )
 
     ignored = ensure_gitignored(Path("."), config.storage.data_dir)
     if ignored:
@@ -1821,7 +1832,8 @@ def preview(
     selected memories, or the reason nothing was selected, along with how many candidates
     were considered and how they were filtered.
     """
-    from visp_memory.core.injection import InjectionPolicy, format_injection, inject_for_task
+    from visp_memory.core.injection import InjectionPolicy, inject_for_task
+    from visp_memory.interfaces.injection_preview import print_preview
 
     memory = get_memory()
     policy = InjectionPolicy.relaxed() if relaxed else InjectionPolicy()
@@ -1831,24 +1843,7 @@ def preview(
         console.print_json(json.dumps(result.as_dict(), default=str))
         return
 
-    if result.abstained:
-        console.print(f"[yellow]Nothing would be injected[/yellow] — {result.reason}")
-        console.print(f"[dim]{result.considered} candidates considered.[/dim]")
-        return
-
-    console.print(Markdown(format_injection(result)))
-    console.print()
-    console.print(f"[dim]{result.summary()}[/dim]")
-    dropped = [
-        (result.dropped_quarantined, "quarantined (originated outside this repository)"),
-        (result.dropped_untrusted, "below the trust threshold (stale or unverified)"),
-        (result.dropped_below_floor, "below the relevance floor"),
-        (result.dropped_redundant, "redundant with a selected memory"),
-        (result.dropped_over_budget, "over budget"),
-    ]
-    for count, why in dropped:
-        if count:
-            console.print(f"[dim]  • {count} {why}[/dim]")
+    print_preview(console, result)
 
 
 @app.command()
@@ -2763,13 +2758,18 @@ def add_dependency(
 def repo_context(
     repo: str = typer.Argument(..., help="Repository ID"),
     format: str = typer.Option("text", "--format", "-f", help="Output format (text/json)"),
+    environment: str = typer.Option(None, "--environment", help="Runtime environment scope"),
+    task_type: str = typer.Option(None, "--task-type", help="Task type scope"),
+    as_of: str = typer.Option(None, "--as-of", help="Evaluate memory validity at this timestamp"),
 ):
     """Get cross-repository context (warnings from dependencies)."""
     memory = get_memory()
     from visp_memory.core.cross_repo import CrossRepoContext
 
     ctx_manager = CrossRepoContext(memory.repos.storage, memory.repos)
-    context = ctx_manager.get_context_for_repo(repo)
+    context = ctx_manager.get_context_for_repo(
+        repo, environment=environment, task_type=task_type, as_of=as_of
+    )
 
     if "error" in context:
         console.print(f"[red]{context['error']}[/red]")
@@ -3017,13 +3017,20 @@ def hook_pre_tool_use():
 
 def _get_hook_adapter(
     tool: str,
-    memory: Memory,
+    memory: Optional[Memory],
     server_url: str = "http://127.0.0.1:8000",
     repo_id: str = None,
     config_path: Path = None,
     dry_run: bool = False,
 ):
+    from types import SimpleNamespace
+
     from visp_memory.hooks import get_adapter
+
+    if dry_run:
+        # Installing hooks only needs configuration. Opening Memory would create
+        # storage and may connect to providers even when the user asked for a preview.
+        memory = SimpleNamespace(config=load_config())
 
     if tool.lower() == "codex":
         return get_adapter(
@@ -3035,7 +3042,7 @@ def _get_hook_adapter(
             dry_run=dry_run,
         )
 
-    return get_adapter(tool, memory=memory)
+    return get_adapter(tool, memory=memory, dry_run=dry_run)
 
 
 @hooks_app.command("install")
@@ -3065,7 +3072,7 @@ def hooks_install(
 
     Installs context injection for the specified tool.
     """
-    memory = get_memory()
+    memory = None if dry_run else get_memory()
 
     try:
         adapter = _get_hook_adapter(tool, memory, server_url, repo_id, config_path, dry_run)
@@ -3087,19 +3094,26 @@ def hooks_install(
         else:
             console.print(f"[yellow]✗[/yellow] {component}")
 
-    if tool.lower() == "claude-code" and auto_inject and not dry_run:
+    if tool.lower() == "claude-code" and auto_inject:
         from visp_memory.hooks.claude_code_auto import install_auto_inject_hooks
 
         try:
-            settings_path = install_auto_inject_hooks(Path.cwd())
+            settings_path = install_auto_inject_hooks(Path.cwd(), dry_run=dry_run)
             console.print(f"[green]✓[/green] auto-inject hooks ({settings_path})")
             console.print(
                 "[dim]SessionStart injects project memory; PreToolUse injects "
                 "file-relevant warnings before Read/Edit/Write. Requires `visp-memory` "
                 "on PATH for Claude Code to invoke.[/dim]"
             )
-        except ValueError as e:
+        except (ValueError, OSError, UnicodeError) as e:
+            results["auto_inject_hooks"] = False
             console.print(f"[yellow]✗ auto-inject hooks skipped:[/yellow] {e}")
+
+    if not all(results.values()):
+        console.print(
+            f"[red]{tool} integration setup failed; see the failed components above.[/red]"
+        )
+        raise typer.Exit(1)
 
     console.print(f"\n[green]{tool} integration {'validated' if dry_run else 'installed'}![/green]")
     console.print(f"Context file: {adapter.get_context_file_path()}")
@@ -3122,7 +3136,7 @@ def hooks_uninstall(
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview removal without writing"),
 ):
     """Remove hooks for an LLM tool."""
-    memory = get_memory()
+    memory = None if dry_run else get_memory()
 
     try:
         adapter = _get_hook_adapter(tool, memory, config_path=config_path, dry_run=dry_run)
@@ -3150,7 +3164,11 @@ def hooks_uninstall(
         if uninstall_auto_inject_hooks(Path.cwd()):
             console.print("[green]✓[/green] auto-inject hooks removed")
 
-    console.print(f"\n[green]{tool} integration removed.[/green]")
+    if not all(results.values()):
+        console.print(f"[red]{tool} removal failed; see the failed components above.[/red]")
+        raise typer.Exit(1)
+    outcome = "removal preview complete" if dry_run else "integration removed"
+    console.print(f"\n[green]{tool} {outcome}.[/green]")
 
 
 @hooks_app.command("update")

@@ -1,9 +1,9 @@
 import json
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from visp_memory.core.clock import utc_now
 from visp_memory.core.cross_repo import CrossRepoContext
@@ -11,14 +11,15 @@ from visp_memory.core.repository import (
     DependencyType,
     Repository,
     RepositoryDependency,
-    RepositoryManager,
 )
-from visp_memory.core.storage import (
-    is_implicitly_registered,
-    iter_repository_memories,
-)
+from visp_memory.core.storage import iter_repository_memories
 from visp_memory.server.auth import UserContext, get_current_user
-from visp_memory.server.authorization import require_admin
+from visp_memory.server.authorization import (
+    can_access_scoped_record,
+    require_admin,
+    require_repo_scope_access,
+)
+from visp_memory.server.repository_access import AuthorizedRepositoryManager
 from visp_memory.server.routers.platform import append_audit_event
 from visp_memory.server.schemas import (
     DependencyCreate,
@@ -30,43 +31,6 @@ from visp_memory.server.schemas import (
 router = APIRouter(prefix="/repos", tags=["repositories"])
 
 
-def _can_access_repo(repo: Repository | None, user: UserContext) -> bool:
-    """Return whether the current user may access repository-scoped data."""
-    if repo is None:
-        return False
-    if user.is_admin:
-        return True
-    return bool(user.team_id) and repo.team_id == user.team_id
-
-
-def _require_repo_access(repo: Repository | None, user: UserContext) -> Repository:
-    if not _can_access_repo(repo, user):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
-    return repo
-
-
-class AuthorizedRepositoryManager(RepositoryManager):
-    """Repository manager that hides repositories outside a non-admin user's team."""
-
-    def __init__(self, storage, user: UserContext):
-        super().__init__(storage)
-        self.user = user
-
-    def get(self, repo_id: str) -> Optional[Repository]:
-        repo = super().get(repo_id)
-        return repo if _can_access_repo(repo, self.user) else None
-
-    def get_dependencies(self, repo_id: str) -> List[RepositoryDependency]:
-        if self.user.is_admin:
-            return super().get_dependencies(repo_id)
-
-        return [
-            dep
-            for dep in super().get_dependencies(repo_id)
-            if self.get(dep.target_repo_id) is not None
-        ]
-
-
 @router.post("", response_model=RepositoryResponse)
 async def register_repository(
     request: Request,
@@ -74,7 +38,7 @@ async def register_repository(
     user: UserContext = Depends(get_current_user),
 ):
     """Register a new repository."""
-    repo_mgr = RepositoryManager(request.app.state.storage)
+    repo_mgr = AuthorizedRepositoryManager(request.app.state.storage, user)
 
     repo_obj = Repository(
         id=repo.id or repo.name.lower().replace(" ", "-"),
@@ -86,6 +50,7 @@ async def register_repository(
         metadata=repo.metadata or {},
     )
 
+    require_repo_scope_access(request.app.state.storage, repo_obj.id, user)
     try:
         repo_id = repo_mgr.register(repo_obj)
     except NotImplementedError as e:
@@ -108,20 +73,8 @@ async def list_repositories(
     user: UserContext = Depends(get_current_user),
 ):
     """List all repositories."""
-    repo_mgr = RepositoryManager(request.app.state.storage)
-    if user.is_admin:
-        repos = repo_mgr.list_all(team_id=team_id, include_archived=include_archived)
-    elif team_id and team_id != user.team_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Cannot list repositories for another team",
-        )
-    elif not user.team_id:
-        repos = []
-    else:
-        repos = repo_mgr.list_all(
-            team_id=user.team_id, include_archived=include_archived
-        )
+    repo_mgr = AuthorizedRepositoryManager(request.app.state.storage, user)
+    repos = repo_mgr.list_all(team_id=team_id, include_archived=include_archived)
 
     return [
         {
@@ -136,50 +89,8 @@ async def list_repositories(
 async def list_project_scopes(request: Request, user: UserContext = Depends(get_current_user)):
     """List repository/project scopes available for dashboard filtering."""
     storage = request.app.state.storage
-    repo_mgr = RepositoryManager(storage)
-    if user.is_admin:
-        repos = repo_mgr.list_all()
-    elif not user.team_id:
-        repos = []
-    else:
-        repos = repo_mgr.list_all(team_id=user.team_id)
-    repo_by_id = {repo.id: repo for repo in repos}
-    archived_ids = {
-        repo.id
-        for repo in repo_mgr.list_all(
-            team_id=None if user.is_admin else user.team_id,
-            include_archived=True,
-        )
-        if repo.status == "archived"
-    }
-
-    project_ids = set(repo_by_id)
-    if user.is_admin and hasattr(storage, "list_project_ids"):
-        project_ids.update(storage.list_project_ids())
-    project_ids.difference_update(archived_ids)
-
-    # "Registered" means somebody declared this project, not merely that a row
-    # exists: the store now creates a placeholder row for every scope a write
-    # names, so row-existence alone would report every scope as registered and the
-    # flag would stop distinguishing anything.
-    return [
-        {
-            "id": project_id,
-            "name": _scope_name(repo_by_id.get(project_id), project_id),
-            "registered": _is_declared(repo_by_id.get(project_id)),
-            "status": repo_by_id[project_id].status if project_id in repo_by_id else "active",
-        }
-        for project_id in sorted(project_ids)
-    ]
-
-
-def _is_declared(repo) -> bool:
-    return repo is not None and not is_implicitly_registered({"metadata": repo.metadata})
-
-
-def _scope_name(repo, project_id: str) -> str:
-    """The declared name, or the scope id for a project nobody has named."""
-    return repo.name if _is_declared(repo) else project_id
+    repo_mgr = AuthorizedRepositoryManager(storage, user)
+    return repo_mgr.project_scopes()
 
 
 @router.get("/{repo_id}", response_model=RepositoryResponse)
@@ -189,8 +100,8 @@ async def get_repository(
     user: UserContext = Depends(get_current_user),
 ):
     """Get repository details."""
-    repo_mgr = RepositoryManager(request.app.state.storage)
-    repo = _require_repo_access(repo_mgr.get(repo_id), user)
+    repo_mgr = AuthorizedRepositoryManager(request.app.state.storage, user)
+    repo = repo_mgr.require(repo_id)
 
     return {
         **repo.__dict__,
@@ -205,8 +116,8 @@ async def archive_repository(
     user: UserContext = Depends(get_current_user),
 ):
     require_admin(user)
-    manager = RepositoryManager(request.app.state.storage)
-    repository = _require_repo_access(manager.get(repo_id), user)
+    manager = AuthorizedRepositoryManager(request.app.state.storage, user)
+    repository = manager.require(repo_id)
     if repository.status != "archived" and not manager.archive(repo_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
     append_audit_event(
@@ -227,8 +138,8 @@ async def restore_repository(
     user: UserContext = Depends(get_current_user),
 ):
     require_admin(user)
-    manager = RepositoryManager(request.app.state.storage)
-    _require_repo_access(manager.get(repo_id), user)
+    manager = AuthorizedRepositoryManager(request.app.state.storage, user)
+    manager.require(repo_id)
     if not manager.restore(repo_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
     append_audit_event(
@@ -264,8 +175,7 @@ async def preview_repository_purge(
     user: UserContext = Depends(get_current_user),
 ):
     require_admin(user)
-    if not request.app.state.storage.get_repository(repo_id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
+    AuthorizedRepositoryManager(request.app.state.storage, user).require(repo_id)
     return _repository_purge_preview(request.app.state.storage, repo_id)
 
 
@@ -325,8 +235,8 @@ async def purge_repository(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Confirmation must exactly match the repository ID",
         )
-    manager = RepositoryManager(request.app.state.storage)
-    repository = _require_repo_access(manager.get(repo_id), user)
+    manager = AuthorizedRepositoryManager(request.app.state.storage, user)
+    repository = manager.require(repo_id)
     preview = _repository_purge_preview(request.app.state.storage, repo_id)
     backup_name = _export_repository_backup(
         request.app.state.storage,
@@ -361,7 +271,7 @@ async def add_dependency(
     user: UserContext = Depends(get_current_user),
 ):
     """Add a dependency to a repository."""
-    repo_mgr = RepositoryManager(request.app.state.storage)
+    repo_mgr = AuthorizedRepositoryManager(request.app.state.storage, user)
 
     try:
         dep_type = DependencyType(dep.dependency_type)
@@ -371,8 +281,8 @@ async def add_dependency(
             detail=f"Invalid dependency_type: {dep.dependency_type}",
         )
 
-    _require_repo_access(repo_mgr.get(repo_id), user)
-    _require_repo_access(repo_mgr.get(dep.target_repo_id), user)
+    repo_mgr.require(repo_id)
+    repo_mgr.require(dep.target_repo_id)
 
     dependency = RepositoryDependency(
         source_repo_id=repo_id,
@@ -399,11 +309,9 @@ async def get_dependencies(
     user: UserContext = Depends(get_current_user),
 ):
     """Get repository dependencies."""
-    repo_mgr = RepositoryManager(request.app.state.storage)
-    _require_repo_access(repo_mgr.get(repo_id), user)
+    repo_mgr = AuthorizedRepositoryManager(request.app.state.storage, user)
+    repo_mgr.require(repo_id)
     deps = repo_mgr.get_dependencies(repo_id)
-    if not user.is_admin:
-        deps = [dep for dep in deps if _can_access_repo(repo_mgr.get(dep.target_repo_id), user)]
 
     return [
         {
@@ -421,6 +329,9 @@ async def get_cross_repo_context(
     request: Request,
     repo_id: str,
     include_deps: bool = True,
+    environment: List[str] = Query(default=None),
+    task_type: List[str] = Query(default=None),
+    as_of: datetime = None,
     user: UserContext = Depends(get_current_user),
 ):
     """Get aggregated context from repo and dependencies."""
@@ -428,10 +339,19 @@ async def get_cross_repo_context(
     repo_mgr = AuthorizedRepositoryManager(storage, user)
     cross_mgr = CrossRepoContext(storage, repo_mgr=repo_mgr)
 
-    context = cross_mgr.get_context_for_repo(
-        repo_id=repo_id,
-        include_dependencies=include_deps,
-    )
+    try:
+        context = cross_mgr.get_context_for_repo(
+            repo_id=repo_id,
+            include_dependencies=include_deps,
+            environment=environment,
+            task_type=task_type,
+            as_of=as_of,
+            memory_filter=lambda memory: can_access_scoped_record(
+                storage, memory, user, scope_field="metadata"
+            ),
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
     if isinstance(context, dict) and "error" in context:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=context["error"])

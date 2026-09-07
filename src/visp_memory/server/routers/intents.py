@@ -10,6 +10,7 @@ from visp_memory.layers.intent import IntentMemory
 from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import (
     can_access_scoped_record,
+    has_admin_privileges,
     require_repo_scope_access,
     require_repo_writable,
     require_scoped_record_access,
@@ -133,7 +134,7 @@ async def update_intent(
     if "status" in update_data:
         raise HTTPException(status_code=409, detail=STATUS_AUTHORITY_DETAIL)
 
-    if "context" in update_data and not user.is_admin:
+    if "context" in update_data and not has_admin_privileges(user):
         context = dict(update_data["context"] or {})
         existing_context = intent.get("context") or {}
         for reserved_key in ("author_id", "team_id"):

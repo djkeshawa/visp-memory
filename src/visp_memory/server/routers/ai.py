@@ -9,6 +9,7 @@ from visp_memory.core.trust import filter_unsolicited
 from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import (
     can_access_scoped_record,
+    has_admin_privileges,
     require_admin,
     require_repo_scope_access,
     require_repo_writable,
@@ -170,7 +171,7 @@ async def preview_reflections(
     proposals = ReflectionEngine(
         request.app.state.storage, request.app.state.model_router
     ).preview(repo_id, min_evidence=max(2, min(min_evidence, 20)))
-    if user.is_admin:
+    if has_admin_privileges(user):
         return proposals
     return [
         proposal

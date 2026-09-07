@@ -42,7 +42,11 @@ class UserContext(BaseModel):
     is_local_owner: bool = False
 
     def allows(self, scope: str) -> bool:
-        return self.is_admin or "*" in self.scopes or scope in self.scopes
+        return (
+            (self.is_admin and self.auth_type != "pat")
+            or "*" in self.scopes
+            or scope in self.scopes
+        )
 
 
 def is_local_owner_request(request: Request, config) -> bool:
@@ -86,12 +90,12 @@ def _authorize_pat_request(request: Request, user: UserContext) -> UserContext:
         required_scope = "admin"
     elif path.startswith("/intents"):
         required_scope = "intent:read" if request.method == "GET" else "intent:write"
-    elif path.startswith("/repos"):
+    elif path.startswith(("/repos", "/sessions")):
         required_scope = "project:read" if request.method == "GET" else "project:write"
-    elif path.startswith("/context"):
+    elif path.startswith("/context") or path == "/recall":
         required_scope = "memory:read"
     elif path.startswith(
-        ("/memories", "/evidence", "/recall", "/graph", "/quality", "/ai")
+        ("/memories", "/evidence", "/recall", "/graph", "/relationships", "/quality", "/ai")
     ):
         required_scope = "memory:read" if request.method == "GET" else "memory:write"
     else:

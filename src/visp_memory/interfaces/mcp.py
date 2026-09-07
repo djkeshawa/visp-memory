@@ -1533,7 +1533,12 @@ def _handle_intent(name: str, args: dict[str, Any], memory: Memory) -> str:
             if any(args.get(key) is not None for key in ("description", "priority", "status")):
                 raise ValueError("Send a workflow report separately from ordinary intent edits")
             principal = current_mcp_request_context().principal
-            if principal is not None and not principal.is_admin:
+            may_manage_workflow = principal is None
+            if principal is not None:
+                from visp_memory.server.authorization import has_admin_privileges
+
+                may_manage_workflow = has_admin_privileges(principal)
+            if not may_manage_workflow:
                 intent = next((item for item in memory._storage.get_active_intents(status="all")
                                if item["id"] == args["intent_id"]), None)
                 if (

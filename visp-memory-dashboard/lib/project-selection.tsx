@@ -73,7 +73,6 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
   const [projects, setProjects] = useState<ProjectScope[]>([])
   const [loadError, setLoadError] = useState<string | null>(null)
   const [ready, setReady] = useState(false)
-  const initializedRef = useRef(false)
   const scopeRequestRef = useRef(0)
   // Mirror of selectedRepoId readable synchronously from event handlers (popstate) without
   // resubscribing an effect on every change.
@@ -119,12 +118,11 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
     }
   }, [applySelection])
 
-  // One-shot initialization. Guarded by a ref (not by any state/URL value) so it can never
-  // re-enter and fight itself, and StrictMode's double-invoke in dev can't wedge it (there is no
-  // cancel-cleanup that could suppress the final setReady).
+  // Cleanup cancels this effect's requests and timeout together. StrictMode can then restart
+  // initialization with its own live requests and failsafe.
   useEffect(() => {
-    if (initializedRef.current) return
-    initializedRef.current = true
+    let cancelled = false
+    const controller = new AbortController()
 
     const fromUrl = currentRepoIdFromUrl()
     const stored = readStoredRepoId()
@@ -149,13 +147,17 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
       if (settled) return
       setLoadError((prev) => prev ?? "The server did not respond. Confirm the Visp Memory server is running.")
       setReady(true)
+      controller.abort()
     }, LOAD_TIMEOUT_MS)
 
     const requestId = ++scopeRequestRef.current
     void (async () => {
       // allSettled, not Promise.all: a transient failure of one endpoint must not discard the
       // other's success (a runtime-status blip should not wipe out a loaded scope list).
-      const [scopeResult, runtimeResult] = await Promise.allSettled([getProjectScopes(), getRuntimeStatus()])
+      const [scopeResult, runtimeResult] = await Promise.allSettled([
+        getProjectScopes(controller.signal), getRuntimeStatus(controller.signal),
+      ])
+      if (cancelled) return
       if (requestId !== scopeRequestRef.current) {
         // A mutation may have refreshed scopes while the warm-load request was still pending.
         // The refresh owns the state now, but this superseded request still owns the readiness
@@ -227,7 +229,11 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
       setReady(true)
     })()
 
-    return () => clearTimeout(failsafe)
+    return () => {
+      cancelled = true
+      clearTimeout(failsafe)
+      controller.abort()
+    }
   }, [selectProject])
 
   // Keep React state in sync with browser Back/Forward, which change the URL without a router

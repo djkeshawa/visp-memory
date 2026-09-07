@@ -29,6 +29,8 @@ Release outputs include:
    [checker](../../scripts/release_check.py) runs Ruff, workflow validation,
    pytest, package/MCP import smoke, frontend and Python distribution builds,
    license/NOTICE verification, Twine metadata checks and a fresh-wheel smoke.
+   Python distributions are built in a temporary directory and removed after the
+   check; existing `dist/` artifacts are preserved and excluded from verification.
    `build` and `twine` must be installed; Twine is required unless explicitly
    skipped. A skipped check is not a complete release gate.
 3. Keep security and repository-access checks in that gate:
@@ -67,6 +69,8 @@ container build. These options require their respective local tooling.
 
 Commit only the intended changes, then create and push the matching tag after
 authorization. Keep unrelated work and local configuration out of the release.
+Use this procedure for version updates and publication; the former
+`create-release.sh` helper has been retired.
 
 ```bash
 git tag -a vX.Y.Z -m "Release X.Y.Z"

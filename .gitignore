@@ -55,6 +55,10 @@ htmlcov/
 chroma_db/
 # Local docker-compose secrets (use .env.example as the template)
 .env
+.env.*
+!.env.example
+# Exports contain local memory data, not project source.
+migration-export/
 
 # OS
 .DS_Store
@@ -66,10 +70,6 @@ node_modules/
 .next/
 out/
 build/
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
 
 # Agent Artifacts
 .gemini/

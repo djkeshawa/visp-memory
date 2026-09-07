@@ -15,6 +15,7 @@ try:
 except ImportError:
     REQUESTS_AVAILABLE = False
 
+from visp_memory.core.api_limits import MAX_QUERY_LIMIT
 from visp_memory.core.beliefs import normalize_belief_type
 from visp_memory.core.storage import (
     BaseStorage,
@@ -288,6 +289,10 @@ class RemoteStorage(BaseStorage):
                 for key, value in kwargs.items()
                 if value is not None
             }
+            # Recall refill may request a larger local window than the HTTP API
+            # allows. Returning the capped page lets refill stop on exhaustion.
+            if "limit" in filters:
+                filters["limit"] = min(filters["limit"], MAX_QUERY_LIMIT)
             layer = filters.pop("layer", None)
             if layer and "layers" not in filters:
                 filters["layers"] = [layer]

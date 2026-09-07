@@ -140,3 +140,22 @@ def test_empty_project_reports_no_files(memory, tmp_path):
     report = ingest_instructions(memory, root=tmp_path)
     assert report.files == []
     assert report.stored == 0
+
+
+@pytest.mark.parametrize("tool", ["claude-code", "codex", "cursor"])
+def test_ingest_never_captures_generated_adapter_context(memory, tmp_path, monkeypatch, tool):
+    from visp_memory.hooks import get_adapter
+
+    options = {"config_path": tmp_path / "codex.toml"} if tool == "codex" else {}
+    adapter = get_adapter(tool, memory=memory, project_root=tmp_path, **options)
+    adapter.install()
+    generated = "Generated context sentinel must never become a new imported instruction."
+    monkeypatch.setattr(adapter, "get_memory_context", lambda **kwargs: generated)
+    assert adapter.update_context()
+
+    report = ingest_instructions(memory, root=tmp_path)
+
+    assert not any(
+        generated in memory._storage.get_memory(memory_id)["content"]
+        for memory_id in report.memory_ids
+    )

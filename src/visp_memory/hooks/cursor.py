@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict
 
 from visp_memory.core.clock import utc_now
+from visp_memory.core.instruction_markers import CURSOR_CONTEXT_MARKER
 from visp_memory.core.verbs import (
     CAPTURE_VERBS,
     INTENT_LIFECYCLE_HEADLINE,
@@ -26,7 +27,7 @@ class CursorAdapter(GenericAdapter):
     Uses .cursorrules for context injection.
     """
 
-    def __init__(self, memory, project_root: Path = None):
+    def __init__(self, memory, project_root: Path = None, dry_run: bool = False):
         """
         Initialize Cursor adapter.
 
@@ -38,8 +39,9 @@ class CursorAdapter(GenericAdapter):
             memory=memory,
             project_root=project_root,
             context_file=".cursorrules",
-            injection_marker="# LLM-MEMORY",
+            injection_marker=CURSOR_CONTEXT_MARKER,
             append_mode=True,
+            dry_run=dry_run,
         )
 
     def install(self) -> Dict[str, bool]:
@@ -55,7 +57,7 @@ class CursorAdapter(GenericAdapter):
         # missing context file containing only the markers, which left this
         # branch unreachable and every fresh .cursorrules verb-free.
         results = {}
-        if not self.context_file.exists():
+        if not self.dry_run and not self.context_file.exists():
             self._ensure_directory(self.context_file)
             self.context_file.write_text(self._initial_rules(), encoding="utf-8")
             results["cursorrules_created"] = True
@@ -83,9 +85,9 @@ Record what happened:
 
 Memory context is automatically injected below:
 
-# LLM-MEMORY START
+{CURSOR_CONTEXT_MARKER} START
 
-# LLM-MEMORY END
+{CURSOR_CONTEXT_MARKER} END
 """
 
     def update_context(self, files: list[str] = None, task: str = None) -> bool:
@@ -99,6 +101,8 @@ Memory context is automatically injected below:
         Returns:
             True if successful
         """
+        if self.dry_run:
+            return True
         # Get memory context
         context = self.get_memory_context(files=files, task=task)
 
@@ -116,8 +120,8 @@ Last updated: {self._get_timestamp()}
 
         content = self.context_file.read_text(encoding="utf-8")
 
-        start_marker = "# LLM-MEMORY START"
-        end_marker = "# LLM-MEMORY END"
+        start_marker = f"{CURSOR_CONTEXT_MARKER} START"
+        end_marker = f"{CURSOR_CONTEXT_MARKER} END"
 
         # Only rewrite when the markers are well-formed (present once each,
         # start before end). Malformed/duplicated/reordered markers => refuse.

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { AlertTriangle, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -30,14 +30,30 @@ export function QuickActions({ onMemoryCreated }: QuickActionsProps = {}) {
   const [category, setCategory] = useState("note")
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const selectedRepoIdRef = useRef(selectedRepoId)
+  const saveGenerationRef = useRef(0)
+  selectedRepoIdRef.current = selectedRepoId
+
+  useEffect(() => {
+    ++saveGenerationRef.current
+    setIsDialogOpen(false)
+    setContent("")
+    setCategory("note")
+    setIsSubmitting(false)
+    setErrorMessage(null)
+  }, [selectedRepoId])
 
   const handleCreateMemory = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!content.trim()) return
 
+    const requestedRepoId = selectedRepoId
+    const generation = ++saveGenerationRef.current
+    const isCurrent = () => generation === saveGenerationRef.current && selectedRepoIdRef.current === requestedRepoId
     setIsSubmitting(true)
     try {
-      await createMemory(content, category, [], selectedRepoId)
+      await createMemory(content, category, [], requestedRepoId)
+      if (!isCurrent()) return
       setErrorMessage(null)
       setContent("")
       setCategory("note")
@@ -46,10 +62,11 @@ export function QuickActions({ onMemoryCreated }: QuickActionsProps = {}) {
       // refetch (router.refresh() would not re-run that client fetch).
       onMemoryCreated?.()
     } catch (error) {
+      if (!isCurrent()) return
       console.error("Failed to create memory", error)
       setErrorMessage(describeApiError(error))
     } finally {
-      setIsSubmitting(false)
+      if (isCurrent()) setIsSubmitting(false)
     }
   }
 

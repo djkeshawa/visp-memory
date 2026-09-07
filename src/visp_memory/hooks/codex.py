@@ -9,6 +9,7 @@ Integrates visp-memory with Codex by:
 from pathlib import Path
 from typing import Dict
 
+from visp_memory.core.instruction_markers import CODEX_CONTEXT_MARKER
 from visp_memory.core.verbs import (
     CAPTURE_VERBS,
     INTENT_NON_AUTHORITATIVE_NOTE,
@@ -20,7 +21,7 @@ from visp_memory.hooks.base import _replace_between_markers
 from visp_memory.hooks.generic import GenericAdapter
 
 CODEX_MARKER = "LLM-MEMORY CODEX MCP"
-AGENTS_MARKER = "<!-- LLM-MEMORY-CODEX -->"
+AGENTS_MARKER = CODEX_CONTEXT_MARKER
 
 
 class CodexAdapter(GenericAdapter):
@@ -41,11 +42,11 @@ class CodexAdapter(GenericAdapter):
             context_file="AGENTS.md",
             injection_marker=AGENTS_MARKER,
             append_mode=True,
+            dry_run=dry_run,
         )
         self.config_path = Path(config_path or Path.home() / ".codex" / "config.toml")
         self.server_url = server_url
         self.repo_id = repo_id or getattr(memory.config, "repo_id", None) or self.project_root.name
-        self.dry_run = dry_run
 
     def install(self) -> Dict[str, bool]:
         """Install project instructions and a Codex MCP config block."""
@@ -63,6 +64,8 @@ class CodexAdapter(GenericAdapter):
 
     def update_context(self, files: list[str] = None, task: str = None) -> bool:
         """Refresh the generated memory context inside AGENTS.md."""
+        if self.dry_run:
+            return True
         if not self.context_file.exists():
             self.install()
 
@@ -114,16 +117,16 @@ Run `visp-memory hooks update codex` to populate current memory context.
 
 {AGENTS_MARKER} END
 """
+        exists = self.context_file.exists()
+        content = self.context_file.read_text(encoding="utf-8") if exists else ""
+        if AGENTS_MARKER in content:
+            return self._valid_markers(content)
         if self.dry_run:
             return True
 
-        if not self.context_file.exists():
+        if not exists:
             self._ensure_directory(self.context_file)
             self.context_file.write_text(instructions, encoding="utf-8")
-            return True
-
-        content = self.context_file.read_text(encoding="utf-8")
-        if f"{AGENTS_MARKER} START" in content and f"{AGENTS_MARKER} END" in content:
             return True
 
         # About to modify an existing user file - back it up first.
@@ -166,15 +169,14 @@ Use visp-memory as the persistent project memory for this repository.
 
     def _install_codex_config(self) -> bool:
         block = self.config_block()
-        if self.dry_run:
-            return True
-
-        self._ensure_directory(self.config_path)
         content = self.config_path.read_text(encoding="utf-8") if self.config_path.exists() else ""
         new_content = self._replace_marked_block(content, block)
         if new_content is None:
             return False
+        if self.dry_run:
+            return True
 
+        self._ensure_directory(self.config_path)
         # Back up an existing config before the destructive rewrite.
         self._backup_file(self.config_path)
         self.config_path.write_text(new_content, encoding="utf-8")

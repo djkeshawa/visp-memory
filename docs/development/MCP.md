@@ -100,11 +100,18 @@ visp-memory hooks update codex --task "fix session expiry" --file src/auth.py
 visp-memory hooks uninstall codex
 ```
 
+Use `hooks install <tool> --dry-run` or `hooks uninstall <tool> --dry-run` to
+preview any adapter without changing instructions, settings, backups, or memory
+storage. Setup returns a nonzero exit code when a required component cannot be
+installed; review the reported component before retrying.
+
 To preview importing existing instruction files, run
 `visp-memory ingest-instructions --dry-run`, then omit `--dry-run` to import.
 These records have external provenance and remain quarantined from automatic
 prompt injection until reviewed; they are not trusted instructions merely because
 an instruction file supplied them.
+Generated Claude Code, Codex, and Cursor context blocks are excluded from this
+import so previously retrieved memory does not become a new source.
 
 For CLI inspection, use `visp-memory remember --repo my-project` or
 `visp-memory recall "session expiry" --repo my-project`.

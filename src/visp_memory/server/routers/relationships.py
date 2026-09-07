@@ -5,7 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import (
     can_access_scoped_record,
+    has_admin_privileges,
     require_repo_scope_access,
+    require_repo_writable,
     require_scoped_record_access,
 )
 from visp_memory.server.schemas import RelationshipCreate
@@ -28,7 +30,7 @@ async def list_relationships(
         )
     require_repo_scope_access(storage, repo_id, user)
     relationships = storage.get_all_relationships(repo_id=repo_id)
-    if user.is_admin:
+    if has_admin_privileges(user):
         return relationships
 
     visible_relationships = []
@@ -75,6 +77,7 @@ async def add_relationship(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Memory relationships cannot cross repository boundaries",
         )
+    require_repo_writable(storage, source.get("repo_id"), user)
     try:
         evidence = rel.evidence.model_dump(exclude_none=True) if rel.evidence else None
         rel_id = storage.add_relationship(
@@ -108,13 +111,14 @@ async def delete_relationship(
     if not relationship:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Relationship not found")
     for memory_id in (relationship.get("source_id"), relationship.get("target_id")):
-        require_scoped_record_access(
+        memory = require_scoped_record_access(
             storage,
             storage.get_memory(memory_id),
             user,
             scope_field="metadata",
             not_found_detail="Relationship not found",
         )
+        require_repo_writable(storage, memory.get("repo_id"), user)
     if not storage.delete_relationship(relationship_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Relationship not found")
     return {"status": "deleted", "id": relationship_id}
