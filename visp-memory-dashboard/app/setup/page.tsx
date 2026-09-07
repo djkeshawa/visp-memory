@@ -39,7 +39,7 @@ function SetupContent() {
   return (
     <div className="mx-auto max-w-2xl space-y-7">
       <header>
-        <p className="text-sm font-medium text-primary">Workspace setup</p>
+        <p className="text-sm font-medium text-highlight">Workspace setup</p>
         <h1 className="mt-2 text-3xl font-semibold">Choose how to find your memories</h1>
         <p className="mt-3 text-sm leading-6 text-muted-foreground">Start with keyword search, or connect a model for meaning-based matches. You can revisit this guide from Settings.</p>
       </header>
@@ -58,7 +58,7 @@ function SetupContent() {
       <fieldset>
         <legend className="mb-3 font-semibold">Explore search options</legend>
         <div className="grid gap-3 sm:grid-cols-2">
-          {Object.entries(choices).map(([key, item]) => <label key={key} className={`cursor-pointer rounded-xl border p-4 ${choice === key ? "border-primary bg-primary/5" : "border-border"}`}>
+          {Object.entries(choices).map(([key, item]) => <label key={key} className={`cursor-pointer rounded-xl border p-4 ${choice === key ? "border-highlight bg-accent" : "border-border"}`}>
             <span className="flex items-center gap-2 text-sm font-medium"><input type="radio" name="search-choice" checked={choice === key} onChange={() => setChoice(key as keyof typeof choices)} />{item.title}</span>
             <span className="mt-2 block text-xs leading-5 text-muted-foreground">{item.detail}</span>
           </label>)}
@@ -70,10 +70,10 @@ function SetupContent() {
         <pre className="overflow-x-auto rounded-lg bg-secondary p-3 text-xs">{choices[choice].config}</pre>
         {choice === "ollama" && <p className="text-sm text-muted-foreground">With the project Compose files, use docker-compose.ollama.yml to download the selected model and start Ollama before the app.</p>}
         <p className="text-sm text-muted-foreground">SQLite also requires the optional Chroma vector index. After configuration, use Settings to inspect the index and rebuild embeddings for existing memories.</p>
-        <Link className="inline-block text-sm font-medium text-primary underline" href="/settings">Open embedding diagnostics</Link>
+        <Link className="inline-block text-sm font-medium text-highlight underline" href="/settings">Open embedding diagnostics</Link>
       </section>}
       <div className="flex flex-wrap items-center justify-between gap-4 border-t border-border pt-5">
-        <Link href="/projects" className="text-sm text-primary underline">Add or select a project</Link>
+        <Link href="/projects" className="text-sm text-highlight underline">Add or select a project</Link>
         <Button onClick={() => window.location.replace(dashboardReturnPath())}>Continue to workspace</Button>
       </div>
     </div>

@@ -65,11 +65,11 @@ function DreamingContent() {
   return <div className="mx-auto max-w-5xl space-y-7">
     <header className="flex flex-wrap items-start justify-between gap-4">
       <div>
-        <p className="mb-2 flex items-center gap-2 text-sm font-medium text-primary"><Moon className="h-4 w-4" />Memory care</p>
+        <p className="mb-2 flex items-center gap-2 text-sm font-medium text-highlight"><Moon className="h-4 w-4" />Memory care</p>
         <h1 className="text-3xl font-semibold">Dreaming</h1>
         <p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground">Give your memories time to settle. Combine exact duplicate notes, discover connections, and review what may be outdated.</p>
       </div>
-      <Link className="text-sm text-primary underline" href={projectHref("/memories", repoId)}>Browse memories</Link>
+      <Link className="text-sm text-highlight underline" href={projectHref("/memories", repoId)}>Browse memories</Link>
     </header>
     {!repoId && <p>Select a project to configure its dreaming cycle.</p>}
     {loading && <p role="status">Loading dreaming…</p>}

@@ -67,7 +67,7 @@ export function IntentCard({ intent, onComplete, onClose, onUpdate, onReopen }: 
           <div className="mt-1 flex flex-wrap items-center gap-2">
             <p className="text-xs capitalize text-muted-foreground">{intent.priority} priority</p>
             {isClosed ? <p className="text-xs text-muted-foreground">closed</p> : null}
-            {intent.context?.completed_automatically ? <span className="inline-flex items-center gap-1 text-xs text-primary"><Sparkles className="h-3 w-3" />Completed automatically · {Math.round(Number(intent.context?.completion_evaluation?.confidence || 0) * 100)}%</span> : null}
+            {intent.context?.completed_automatically ? <span className="inline-flex items-center gap-1 text-xs text-highlight"><Sparkles className="h-3 w-3" />Completed automatically · {Math.round(Number(intent.context?.completion_evaluation?.confidence || 0) * 100)}%</span> : null}
           </div>
           <WorkflowDetails intent={intent} />
         </div>

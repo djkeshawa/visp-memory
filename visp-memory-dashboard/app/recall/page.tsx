@@ -58,7 +58,7 @@ function RecallContent() {
       <div className="text-center space-y-4">
         <motion.div
 
-          className="mx-auto inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-accent text-primary"
+          className="mx-auto inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-accent text-highlight"
         >
           <Search className="h-6 w-6" />
         </motion.div>

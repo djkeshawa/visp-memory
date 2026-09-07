@@ -16,7 +16,7 @@ export function WorkflowDetails({ intent }: { intent: Intent }) {
         </ul>}
         {Array.isArray(report?.evidence) && report.evidence.map((item: {description: string; url?: string}, index: number) => (
           <p key={index}>{item.url && /^https?:\/\//i.test(item.url)
-            ? <a className="text-primary underline" href={item.url} target="_blank" rel="noopener noreferrer">{item.description}</a>
+            ? <a className="text-highlight underline" href={item.url} target="_blank" rel="noopener noreferrer">{item.description}</a>
             : item.description}</p>
         ))}
         {Array.isArray(history) && history.length > 0 && <div className="space-y-1 border-t border-border pt-2">

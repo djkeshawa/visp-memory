@@ -216,7 +216,7 @@ export default function MemoriesPage() {
             {memories.map((memory) => {
               const layerConfig = MEMORY_LAYER_CONFIG[normalizeMemoryLayer(memory.layer)]
               return (
-                <tr key={memory.id} className={selected.includes(memory.id) ? "bg-primary/5" : undefined}>
+                <tr key={memory.id} className={selected.includes(memory.id) ? "bg-accent" : undefined}>
                   <td className="px-4 py-3"><input type="checkbox" checked={selected.includes(memory.id)} onChange={() => toggle(memory.id)} disabled={status !== "active"} aria-label={`Select memory ${memory.id}`} /></td>
                   <td className="max-w-xl px-4 py-3"><p className="line-clamp-2 text-foreground">{memory.content}</p><MemoryDetails memory={memory} /><div className="mt-1 flex flex-wrap gap-1">{memory.tags?.slice(0, 4).map((tag) => <span key={tag} className="rounded-sm bg-secondary px-1.5 py-0.5 text-[11px] text-muted-foreground">{tag}</span>)}</div><code className="mt-1 block text-[11px] text-muted-foreground">{memory.id}</code></td>
                   <td className="px-4 py-3"><span className={cn("inline-flex rounded-full px-2 py-0.5 text-xs font-medium", layerConfig.bgColor, layerConfig.color)}>{layerConfig.label}</span></td><td className="px-4 py-3 text-muted-foreground">{memory.category}</td><td className="px-4 py-3 text-muted-foreground">{new Date(memory.createdAt).toLocaleDateString()}</td>

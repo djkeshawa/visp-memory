@@ -77,7 +77,7 @@ export default function UsersPage() {
 
       <section className="border-b border-border pb-7">
         <div className="flex items-center gap-2">
-          <Plus className="h-5 w-5 text-primary" />
+          <Plus className="h-5 w-5 text-highlight" />
           <h2 className="text-lg font-semibold">Create account</h2>
         </div>
         <form onSubmit={create} className="mt-4 grid gap-4 md:grid-cols-[1fr_1fr_1fr_0.7fr_auto] md:items-end">
@@ -117,7 +117,7 @@ export default function UsersPage() {
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
                       <span className="flex h-8 w-8 items-center justify-center rounded-md bg-secondary">
-                        {user.role === "admin" ? <ShieldCheck className="h-4 w-4 text-primary" /> : <UserRound className="h-4 w-4" />}
+                        {user.role === "admin" ? <ShieldCheck className="h-4 w-4 text-highlight" /> : <UserRound className="h-4 w-4" />}
                       </span>
                       <div><p className="font-medium">{user.displayName || user.username}</p><p className="text-xs text-muted-foreground">@{user.username}</p></div>
                     </div>

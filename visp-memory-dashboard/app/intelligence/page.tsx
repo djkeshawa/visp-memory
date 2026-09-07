@@ -265,7 +265,7 @@ function FindingList({
         <div key={`${item.sectionKey ?? "section"}:${item.type}:${item.id}`} className="p-4">
           <div className="flex flex-wrap items-center gap-2">
             {item.sectionTitle ? (
-              <span className="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
+              <span className="rounded-full bg-accent px-2.5 py-0.5 text-xs font-medium text-highlight">
                 {item.sectionTitle}
               </span>
             ) : null}

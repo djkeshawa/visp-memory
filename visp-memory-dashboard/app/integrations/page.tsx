@@ -130,7 +130,7 @@ export default function IntegrationsPage() {
       <section className="grid gap-6 border-b border-border pb-7 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.7fr)]">
         <div>
           <div className="flex items-center gap-2">
-            <KeyRound className="h-5 w-5 text-primary" />
+            <KeyRound className="h-5 w-5 text-highlight" />
             <h2 className="text-lg font-semibold">Create access token</h2>
           </div>
           <div className="mt-4 space-y-5">

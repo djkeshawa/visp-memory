@@ -214,7 +214,7 @@ function IntentsContent() {
       ) : null}
 
       {outcomeMessage ? (
-        <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 text-sm text-muted-foreground" role="status">
+        <div className="rounded-lg border border-highlight/30 bg-accent p-4 text-sm text-muted-foreground" role="status">
           {outcomeMessage}
         </div>
       ) : null}

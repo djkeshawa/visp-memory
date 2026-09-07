@@ -182,7 +182,7 @@
 @layer base {
   h1 { letter-spacing: -0.035em; text-wrap: balance; }
   h2, h3 { letter-spacing: -0.022em; }
-  select, input, textarea { accent-color: var(--primary); }
+  select, input, textarea { accent-color: var(--highlight); }
 }
 
 .workspace-main h1 { font-size: clamp(1.75rem, 2.6vw, 2.125rem); line-height: 1.2; }

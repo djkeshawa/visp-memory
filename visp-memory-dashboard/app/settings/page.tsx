@@ -186,13 +186,13 @@ function SettingsContent() {
   return (
     <motion.div initial="initial" animate="animate" variants={pageTransition} className="space-y-8">
       <div className="flex items-center gap-3">
-        <div className="flex h-11 w-11 items-center justify-center rounded-md bg-primary text-primary-foreground">
+        <div className="flex h-11 w-11 items-center justify-center rounded-md bg-accent text-highlight">
           <Settings className="h-5 w-5" />
         </div>
         <div>
           <h1 className="text-2xl font-semibold text-foreground">Settings</h1>
           <p className="text-muted-foreground mt-1">Provider diagnostics and connectivity checks</p>
-          <Link href="/setup" className="mt-2 inline-block text-sm text-primary underline">Open search setup guide</Link>
+          <Link href="/setup" className="mt-2 inline-block text-sm text-highlight underline">Open search setup guide</Link>
         </div>
       </div>
 
@@ -216,7 +216,7 @@ function SettingsContent() {
           <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <BrainCircuit className="h-5 w-5 text-primary" />
+                <BrainCircuit className="h-5 w-5 text-highlight" />
                 <h2 id="task-model-heading" className="text-lg font-semibold">Task model</h2>
               </div>
               <p className="mt-2 text-sm text-muted-foreground">
@@ -247,8 +247,8 @@ function SettingsContent() {
           <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
             <div className="min-w-0 flex-1 space-y-4">
               <div className="flex flex-wrap items-center gap-2">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
-                  <Database className="h-5 w-5 text-primary" />
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-accent">
+                  <Database className="h-5 w-5 text-highlight" />
                 </div>
                 <div>
                   <h2 className="text-lg font-semibold text-foreground">Embedding Index</h2>
@@ -340,7 +340,7 @@ function SettingsContent() {
                 key={provider.provider}
                 className={cn(
                   "glass rounded-lg border p-4",
-                  testingProvider === provider.provider ? "border-primary/40" : config.border,
+                  testingProvider === provider.provider ? "border-highlight/40" : config.border,
                 )}
               >
                 <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">

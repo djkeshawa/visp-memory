@@ -17,6 +17,9 @@ async function mockOverview(page: Page, options: { failed?: boolean; empty?: boo
     if (path === "/repos/scopes") body = [{ id: "visp-memory", name: "Visp Memory", registered: true, status: "active" }]
     else if (path === "/auth/me") { body = { detail: "Authentication required" }; status = 401 }
     else if (path === "/") body = { status: "online", storage_ready: true, embedding_driver_status: "fallback", embedding_driver_connected: false }
+    else if (path === "/diagnostics/providers") body = []
+    else if (path === "/diagnostics/embedding-index") body = { status: "unavailable", message: "Keyword fallback is active" }
+    else if (path === "/ai/routing") body = { configured: false, tasks: [] }
     else if (path === "/status") {
       status = options.failed ? 503 : 200
       body = options.failed ? { detail: "Storage is unavailable" } : { stats: { total_memories: records.length, active_intents: 1, memories_by_layer: { semantic: 1 }, total_relationships: 12 } }
@@ -167,3 +170,40 @@ test("starts in dark mode and preserves an explicit light preference", async ({ 
   await expect(page.locator("html")).toHaveClass(/light/)
   await expect(page.getByRole("button", { name: "Switch to dark mode" })).toBeVisible()
 })
+
+for (const theme of ["dark", "light"] as const) {
+  test(`preserves ${theme} surfaces and blue accents across page navigation`, async ({ page }) => {
+    await mockOverview(page)
+    await page.addInitScript((value) => localStorage.setItem("theme", value), theme)
+    await page.goto("/dashboard?repo_id=visp-memory")
+    const library = page.getByRole("link", { name: "View library", exact: true })
+    await expect(library).toBeVisible()
+    const highlight = await library.evaluate((element) => getComputedStyle(element).color)
+    const background = await page.locator("body").evaluate((element) => getComputedStyle(element).backgroundColor)
+    const active = page.locator('a[aria-current="page"]')
+    const selection = await active.evaluate((element) => getComputedStyle(element).backgroundColor)
+
+    await page.getByRole("link", { name: "Recall", exact: true }).click()
+    await expect(page.getByRole("heading", { name: "Recall", exact: true })).toBeVisible()
+    await expect(page.locator("main .lucide-search").first()).toHaveCSS("color", highlight)
+    await expect(active).toHaveText("Recall")
+    await expect(active).toHaveCSS("background-color", selection)
+
+    await page.getByRole("link", { name: "Settings", exact: true }).click()
+    await expect(page.getByRole("link", { name: "Open search setup guide" })).toHaveCSS("color", highlight)
+    await expect(active).toHaveText("Settings")
+    await expect(active).toHaveCSS("background-color", selection)
+    await page.getByRole("link", { name: "Open search setup guide" }).click()
+    await expect(page.getByRole("link", { name: "Add or select a project" })).toHaveCSS("color", highlight)
+    await expect(page.getByRole("radio", { name: "Keyword search", exact: false })).toHaveCSS("accent-color", highlight)
+    await expect(page.locator("html")).toHaveClass(new RegExp(theme))
+    await expect(page.locator("body")).toHaveCSS("background-color", background)
+
+    await page.getByRole("link", { name: "Overview", exact: true }).click()
+    await expect(library).toHaveCSS("color", highlight)
+    await expect(active).toHaveCSS("background-color", selection)
+    await page.reload()
+    await expect(page.locator("html")).toHaveClass(new RegExp(theme))
+    await expect(library).toHaveCSS("color", highlight)
+  })
+}

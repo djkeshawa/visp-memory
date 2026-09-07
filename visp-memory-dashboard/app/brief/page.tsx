@@ -329,7 +329,7 @@ export default function TaskBriefPage() {
                     {evidenceItems.map((item) => (
                       <div key={item.citation} className="p-4">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="rounded bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
+                          <span className="rounded bg-accent px-2 py-0.5 text-xs font-semibold text-highlight">
                             {item.citation}
                           </span>
                           <span className="text-xs text-muted-foreground">
