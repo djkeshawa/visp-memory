@@ -29,7 +29,7 @@ docker run -d --name visp-memory \
   -p 127.0.0.1:8000:8000 \
   -v visp-memory-data:/data \
   -e VISP_MEMORY_EMBEDDING_PROVIDER=noop \
-  ghcr.io/djkeshawa/visp-memory:0.7.0
+  ghcr.io/djkeshawa/visp-memory:0.7.1
 docker logs visp-memory
 ```
 
@@ -37,6 +37,10 @@ Open [the dashboard](http://127.0.0.1:8000/dashboard). On a fresh store, use the
 one-use setup link in the logs to create your administrator account. There is no
 shared default password. See [installation](docs/deployment/PACKAGING.md) for
 Compose, upgrades, Python, and standalone downloads.
+
+![Visp Memory dashboard showing project totals, recent memories, and recall navigation](docs/dashboard-preview.png)
+
+*Dashboard overview with sample data. Light and dark appearances follow your system preference or the sidebar theme control.*
 
 ## Use it from your project
 

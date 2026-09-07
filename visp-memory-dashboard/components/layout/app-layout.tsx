@@ -25,8 +25,8 @@ export function AppLayout({ children }: AppLayoutProps) {
           <Suspense fallback={null}>
             <Sidebar />
           </Suspense>
-          <main id="main-content" className="min-h-screen min-w-0 p-5 md:ml-64 md:p-8 xl:px-12 xl:py-10">
-            <div className="mx-auto min-w-0 max-w-[1440px]">{children}</div>
+          <main id="main-content" className="workspace-main min-h-screen min-w-0 p-5 sm:p-8 md:ml-60 lg:px-10 xl:px-14 xl:py-12">
+            <div className="mx-auto min-w-0 max-w-[1320px]">{children}</div>
           </main>
         </div>
       </SelectedProjectProvider>

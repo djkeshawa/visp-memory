@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import Link from "next/link"
-import { ChevronDown, Library, SlidersHorizontal } from "lucide-react"
+import { ArrowUpRight, ChevronDown, Library } from "lucide-react"
 import { MEMORY_LAYERS, MEMORY_LAYER_CONFIG, normalizeMemoryLayer } from "@/lib/layers"
 import { projectHref, useSelectedProjectId } from "@/lib/project-selection"
 import type { Memory, MemoryLayer } from "@/lib/types"
@@ -20,19 +20,18 @@ export function RecentActivity({ memories, isLoading, unavailable }: RecentActiv
   const visible = memories.filter((memory) => layer === "all" || memory.layer === layer)
 
   return (
-    <section className="overflow-hidden rounded-xl border border-border bg-card" aria-labelledby="recent-heading" aria-busy={isLoading}>
+    <section className="surface overflow-hidden rounded-3xl" aria-labelledby="recent-heading" aria-busy={isLoading}>
       <div className="flex flex-wrap items-center justify-between gap-3 px-6 pt-6 pb-4">
         <div>
-          <h2 id="recent-heading" className="text-lg font-semibold">Recently remembered</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Open a memory to pick up the details.</p>
+          <h2 id="recent-heading" className="text-base font-semibold">Recently remembered</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Decisions and discoveries, ready to revisit.</p>
         </div>
-        <Link href={projectHref("/memories", selectedRepoId)} className="text-sm font-medium text-primary hover:underline">View library</Link>
+        <Link href={projectHref("/memories", selectedRepoId)} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">View library<ArrowUpRight className="h-3.5 w-3.5" /></Link>
       </div>
-      <div className="flex flex-wrap items-center gap-1 border-b border-border px-6 pb-4" role="group" aria-label="Filter recent memories by layer">
-        <SlidersHorizontal className="mr-2 h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+      <div className="flex items-center gap-1 overflow-x-auto border-b border-border/70 px-6 pb-4" role="group" aria-label="Filter recent memories by layer">
         {(["all", ...MEMORY_LAYERS] as const).map((value) => (
           <button key={value} type="button" aria-pressed={layer === value} onClick={() => setLayer(value)}
-            className={cn("rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors", layer === value ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-secondary")}>
+            className={cn("shrink-0 whitespace-nowrap rounded-full px-3 py-2 text-xs font-medium transition-colors", layer === value ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-secondary")}>
             {value === "all" ? "All layers" : MEMORY_LAYER_CONFIG[value].label}
           </button>
         ))}
@@ -52,7 +51,7 @@ export function RecentActivity({ memories, isLoading, unavailable }: RecentActiv
           <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-muted-foreground">{memories.length ? "Choose another layer or open the library to explore older memories." : "Add a decision, a useful fact, or a lesson learned with New memory."}</p>
         </div>
       ) : (
-        <div className="divide-y divide-border">
+        <div className="divide-y divide-border/60">
           {visible.map((memory) => {
             const config = MEMORY_LAYER_CONFIG[normalizeMemoryLayer(memory.layer)]
             const Icon = config.icon
@@ -60,12 +59,12 @@ export function RecentActivity({ memories, isLoading, unavailable }: RecentActiv
             const validDate = !Number.isNaN(date.getTime())
             return (
               <details key={memory.id} className="group open:bg-secondary/30">
-                <summary className="flex list-none items-start gap-3 px-6 py-5 hover:bg-secondary/40 [&::-webkit-details-marker]:hidden">
+                <summary className="flex list-none items-start gap-4 px-6 py-5 transition-colors hover:bg-secondary/50 [&::-webkit-details-marker]:hidden">
                   <span className={cn("mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg", config.bgColor)}>
                     <Icon className={cn("h-4 w-4", config.color)} />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="mb-2 line-clamp-2 text-sm leading-6 group-open:hidden">{memory.content}</span>
+                    <span className="mb-2 line-clamp-2 break-words text-sm leading-6 group-open:hidden">{memory.content}</span>
                     <span className="hidden text-sm font-medium group-open:block group-open:mb-2">Memory details</span>
                     <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                       <span className={cn("font-medium", config.color)}>{config.label}</span>
@@ -77,7 +76,7 @@ export function RecentActivity({ memories, isLoading, unavailable }: RecentActiv
                 </summary>
                 <div className="px-6 pb-6 sm:pl-[4.5rem]">
                   <p className="whitespace-pre-wrap break-words text-sm leading-7">{memory.content}</p>
-                  {!!memory.tags?.length && <div className="mt-4 flex flex-wrap gap-2">{memory.tags.map((tag) => <span key={tag} className="rounded-md bg-secondary px-2 py-1 text-xs text-muted-foreground">{tag}</span>)}</div>}
+                  {!!memory.tags?.length && <div className="mt-4 flex flex-wrap gap-2">{memory.tags.map((tag) => <span key={tag} className="rounded-full bg-secondary px-2 py-1 text-xs text-muted-foreground">{tag}</span>)}</div>}
                 </div>
               </details>
             )

@@ -12,9 +12,9 @@ const descriptions = {
 
 export function MemoryGuide({ repoId }: { repoId: string | null }) {
   return (
-    <section className="rounded-xl border border-border bg-card p-6" aria-labelledby="layers-heading">
+    <section className="surface rounded-3xl p-5 sm:p-6" aria-labelledby="layers-heading">
       <div className="mb-5 flex items-center justify-between">
-        <h2 id="layers-heading" className="font-semibold">How memory is organized</h2>
+        <h2 id="layers-heading" className="text-sm font-semibold">How memory is organized</h2>
         <Network className="h-4 w-4 text-muted-foreground" />
       </div>
       <div className="space-y-5">
@@ -31,7 +31,7 @@ export function MemoryGuide({ repoId }: { repoId: string | null }) {
           </div>
         })}
       </div>
-      <Link href={projectHref("/graph", repoId)} className="mt-6 flex items-center justify-between border-t border-border pt-4 text-sm font-medium text-primary hover:underline">Explore connections<ArrowUpRight className="h-4 w-4" />
+      <Link href={projectHref("/graph", repoId)} className="mt-6 flex items-center justify-between border-t border-border pt-4 text-xs font-medium text-primary hover:underline">Explore connections<ArrowUpRight className="h-4 w-4" />
       </Link>
     </section>
   )

@@ -121,9 +121,9 @@ export function Sidebar() {
 
   return (
     <>
-      <header className="sticky top-0 z-40 flex h-16 items-center justify-between border-b border-border bg-card px-4 md:hidden">
+      <header className="sticky top-0 z-40 flex h-16 items-center justify-between border-b border-border bg-sidebar/95 px-4 backdrop-blur-xl md:hidden">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary">
             <Brain className="h-5 w-5 text-primary-foreground" />
           </div>
           <div>
@@ -143,9 +143,9 @@ export function Sidebar() {
         </button>
       </header>
 
-      <aside className="fixed left-0 top-0 z-40 hidden h-screen w-64 flex-col border-r border-border bg-card md:flex">
-        <div className="flex items-center gap-3 border-b border-border px-6 py-5">
-          <div className="flex h-10 w-10 items-center justify-center rounded-md bg-primary">
+      <aside className="fixed left-0 top-0 z-40 hidden h-screen w-60 flex-col border-r border-border/70 bg-sidebar md:flex">
+        <div className="flex items-center gap-3 px-6 pb-4 pt-7">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary">
             <Brain className="h-5 w-5 text-primary-foreground" />
           </div>
           <div>
@@ -153,11 +153,11 @@ export function Sidebar() {
             <p className="text-xs text-muted-foreground">Project knowledge</p>
           </div>
         </div>
-        <div className="pt-5 pb-1"><ProjectSelector /></div>
-        <nav className="flex-1 space-y-1 overflow-y-auto px-3 pb-4" aria-label="Primary navigation">
+        <div className="pb-1 pt-2"><ProjectSelector /></div>
+        <nav className="workspace-nav flex-1 space-y-1 overflow-y-auto px-3 pb-4" aria-label="Primary navigation">
           <Navigation activePath={activePath} repoId={selectedRepoId} />
         </nav>
-        <div className="space-y-3 border-t border-border px-3 py-4">
+        <div className="space-y-2 border-t border-border/70 px-3 py-3">
           <div className="flex items-center justify-between px-4">
             <span className="text-sm text-muted-foreground">Theme</span>
             <ThemeToggle />
@@ -177,8 +177,8 @@ export function Sidebar() {
             </div>
           )}
           {authenticated && account ? (
-            <div className="flex items-center gap-3 border-t border-border px-4 pt-3">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-secondary text-foreground">
+            <div className="flex items-center gap-3 px-3 pt-2">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-secondary text-foreground">
                 <UserRound className="h-4 w-4" />
               </div>
               <div className="min-w-0 flex-1">
@@ -220,10 +220,10 @@ export function Sidebar() {
                 <X className="h-5 w-5" />
               </button>
             </div>
-            <nav className="flex-1 space-y-1 overflow-y-auto px-3 pb-4" aria-label="Mobile navigation">
+            <nav className="workspace-nav flex-1 space-y-1 overflow-y-auto px-3 pb-4" aria-label="Mobile navigation">
               <Navigation activePath={activePath} repoId={selectedRepoId} />
             </nav>
-            <div className="space-y-3 border-t border-border px-3 py-4">
+            <div className="space-y-2 border-t border-border/70 px-3 py-3">
               <ProjectSelector />
               <div className="flex items-center justify-between px-4">
                 <span className="text-sm text-muted-foreground">Theme</span>

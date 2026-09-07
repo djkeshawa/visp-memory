@@ -58,7 +58,7 @@ export function QuickActions({ onMemoryCreated }: QuickActionsProps = {}) {
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
         <DialogTrigger asChild>
           <Button className="h-10 px-4">
-            <Plus className="h-4 w-4 mr-2" />
+            <Plus className="h-4 w-4" />
             New memory
           </Button>
         </DialogTrigger>

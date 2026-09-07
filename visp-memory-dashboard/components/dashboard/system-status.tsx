@@ -36,9 +36,9 @@ export function SystemStatus() {
   ]
 
   return (
-    <section className="rounded-xl border border-border bg-card p-6" aria-labelledby="connection-heading">
+    <section className="surface rounded-3xl p-5 sm:p-6" aria-labelledby="connection-heading">
       <div className="mb-5 flex items-center justify-between">
-        <h2 id="connection-heading" className="font-semibold">Connection status</h2>
+        <h2 id="connection-heading" className="text-sm font-semibold">Connection status</h2>
         <Activity className="h-4 w-4 text-muted-foreground" />
       </div>
       <dl className="space-y-4">
@@ -50,7 +50,7 @@ export function SystemStatus() {
       </dl>
       {failed && <p className="mt-4 text-xs leading-5 text-muted-foreground">Check your server and sign-in settings in Operations.</p>}
       {runtime?.embeddingStatusMessage && <p className="mt-4 break-words text-xs leading-5 text-muted-foreground">{runtime.embeddingStatusMessage}</p>}
-      <Link href={projectHref("/health", repoId)} className="mt-5 flex items-center justify-between border-t border-border pt-4 text-sm font-medium text-primary hover:underline">Open operations<ArrowUpRight className="h-4 w-4" />
+      <Link href={projectHref("/health", repoId)} className="mt-5 flex items-center justify-between border-t border-border pt-4 text-xs font-medium text-primary hover:underline">Open operations<ArrowUpRight className="h-4 w-4" />
       </Link>
     </section>
   )

@@ -40,21 +40,21 @@ const groups = [
 export function Navigation({ activePath, repoId }: { activePath: string; repoId: string | null }) {
   return groups.map((group) => (
     <div key={group.label}>
-      <p className="px-4 pb-2 pt-5 text-xs font-medium text-muted-foreground">{group.label}</p>
-      <div className="space-y-1">
+      <p className="px-3 pb-2 pt-5 text-[11px] font-semibold tracking-wide text-muted-foreground">{group.label}</p>
+      <div className="space-y-0.5">
         {group.items.map((item) => (
           <Link
             key={item.href}
             aria-current={activePath === item.href ? "page" : undefined}
             href={projectHref(item.href, repoId)}
             className={cn(
-              "flex items-center gap-3 rounded-md px-4 py-2.5 text-sm font-medium transition-colors",
+              "flex items-center gap-3 rounded-xl px-3 py-2 text-[13px] font-medium transition-colors duration-150",
               activePath === item.href
-                ? "bg-accent text-accent-foreground shadow-[inset_3px_0_0_var(--primary)]"
+                ? "bg-accent text-accent-foreground"
                 : "text-muted-foreground hover:bg-secondary hover:text-foreground",
             )}
           >
-            <item.icon className="h-5 w-5 shrink-0" aria-hidden="true" />
+            <item.icon className="h-[18px] w-[18px] shrink-0" aria-hidden="true" />
             <span>{item.label}</span>
           </Link>
         ))}

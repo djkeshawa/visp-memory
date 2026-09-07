@@ -127,3 +127,29 @@ test("does not report ready services before the connection check finishes", asyn
   release?.()
   await expect(connection).toContainText("Ready")
 })
+
+test("switches away from the resolved system theme on the first click", async ({ page }) => {
+  await mockOverview(page)
+  await page.emulateMedia({ colorScheme: "dark" })
+  await page.goto("/dashboard?repo_id=visp-memory")
+  await expect(page.locator("html")).toHaveClass(/dark/)
+  await page.getByRole("button", { name: "Switch to light mode" }).click()
+  await expect(page.locator("html")).not.toHaveClass(/dark/)
+  await page.getByRole("button", { name: "Switch to dark mode" }).click()
+  await expect(page.locator("html")).toHaveClass(/dark/)
+})
+
+test("keeps recall usable on a narrow phone", async ({ page }) => {
+  await mockOverview(page)
+  await page.route("**/recall", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback()
+    expect(route.request().postDataJSON().query).toBe("project decisions")
+    await route.fulfill({ contentType: "application/json", body: "[]" })
+  })
+  await page.setViewportSize({ width: 320, height: 740 })
+  await page.goto("/dashboard/recall?repo_id=visp-memory")
+  await page.getByRole("searchbox", { name: "Search memories" }).fill("project decisions")
+  await page.getByRole("button", { name: "Search", exact: true }).click()
+  await expect(page.getByRole("button", { name: "Search", exact: true })).toBeEnabled()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+})
