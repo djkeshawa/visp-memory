@@ -57,8 +57,9 @@ docker compose -f docker-compose.yml -f docker-compose.ollama.yml \
   --profile lite up -d --build --wait --wait-timeout 600
 ```
 
-The overlay starts Ollama, downloads `nomic-embed-text` by default, and waits for
-the pull before starting the app. Set `VISP_MEMORY_OLLAMA_EMBEDDING_MODEL` to choose
+The overlay builds with both the Ollama provider and Chroma vector index, starts
+Ollama, downloads `nomic-embed-text` by default, and waits for the pull before
+starting the app. Already-cached model layers are reused. Set `VISP_MEMORY_OLLAMA_EMBEDDING_MODEL` to choose
 another model. Models persist in `ollama-data`; no Ollama host port is published.
 Initial downloads require network access. Inspect `logs ollama-pull` if they fail.
 
@@ -66,10 +67,19 @@ Explicit `-f` arguments disable automatic override loading. If you use a custom
 volume override, insert `-f docker-compose.override.yml` between the base file
 and Ollama overlay. Omitting it can open a different, empty data volume.
 
-A provider alone does not create a vector index. For SQLite semantic search,
-build with the `chroma` extra in `VISP_MEMORY_EXTRAS` as well as the provider and
-`api,mcp` extras. The published image excludes Chroma and local transformer models.
-Changing a model also requires compatible vectors for existing memories.
+A provider alone does not create a vector index. The Ollama overlay adds the
+`ollama,chroma` extras automatically when building from source. For other SQLite
+semantic-search deployments, include `chroma` and the provider alongside `api,mcp`
+in `VISP_MEMORY_EXTRAS`. The published image excludes Chroma and local transformer
+models; an overlay without `--build` does not add missing packages to that image.
+After enabling or changing a model, use Settings → embedding diagnostics to
+preview and rebuild embeddings for existing memories. Confirm the index is
+available and the scoped records are indexed before relying on paraphrase recall.
+
+SQLite uses Nomic's documented `search_document:` and `search_query:` prefixes
+when `nomic-embed-text` is selected. These vectors use separate versioned
+collections so they cannot be mixed with earlier unprefixed vectors. Existing
+SQLite notes are retained; rebuild the active index when upgrading this setup.
 
 The optional `arcadedb` profile is [frozen](../FEATURE_STATUS.md).
 

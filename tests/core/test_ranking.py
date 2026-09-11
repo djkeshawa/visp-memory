@@ -65,6 +65,16 @@ def test_rank_memory_results_filters_below_min_score():
     assert ranked == []
 
 
+def test_semantic_recall_does_not_require_paraphrase_to_share_words():
+    results = rank_memory_results([
+        {"id": "meaning", "content": "Do not infer permission from remembered knowledge",
+         "retrieval_method": "semantic", "similarity": 0.7, "importance": 0.5},
+        {"id": "noise", "content": "Database migration complete",
+         "retrieval_method": "semantic", "similarity": 0.3, "importance": 1.0},
+    ], query="Can context authorize deployment?", min_score=0.56)
+    assert [item["id"] for item in results] == ["meaning"]
+
+
 def test_utility_adjustment_is_bounded():
     assert utility_rank_adjustment(99) == UTILITY_RANKING_LIMIT
     assert utility_rank_adjustment(-99) == -UTILITY_RANKING_LIMIT

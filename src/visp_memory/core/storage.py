@@ -1066,6 +1066,12 @@ class LocalStorage(BaseStorage):
         embedding_owner_name = embedding_owner.__class__.__name__.lower() if embedding_owner else ""
         self._uses_noop_embeddings = embedding_owner_name == "noopprovider"
         self._embedding_dimension = getattr(embedding_owner, "dimension", None)
+        space = getattr(embedding_owner, "retrieval_space", None)
+        self._embedding_space = space if isinstance(space, str) else None
+        self._query_embedding_fn = embedding_fn
+        if self._embedding_space:
+            self._embedding_fn = embedding_owner.embed_document
+            self._query_embedding_fn = embedding_owner.embed_query
         self._chroma_client = None
         self._collections = {}
 
@@ -2816,10 +2822,12 @@ class LocalStorage(BaseStorage):
         return self._collections[layer]
 
     def _collection_name(self, layer: MemoryLayer) -> str:
-        """Use dimension-specific collections so old noop vectors do not poison search."""
+        """Keep dimensions and versioned retrieval instructions in separate spaces."""
         if self._embedding_dimension:
-            return f"memories_{layer}_{self._embedding_dimension}"
-        return f"memories_{layer}"
+            name = f"memories_{layer}_{self._embedding_dimension}"
+        else:
+            name = f"memories_{layer}"
+        return f"{name}_{self._embedding_space}" if self._embedding_space else name
 
     def _list_vector_collection_names(self) -> List[str]:
         """Return Chroma collection names without creating new collections."""
@@ -2885,7 +2893,9 @@ class LocalStorage(BaseStorage):
                 if name == f"memories_{layer}" and name != self._collection_name(layer):
                     legacy.append(name)
                     break
-                dimension_collection = re.fullmatch(rf"memories_{re.escape(layer)}_\d+", name)
+                dimension_collection = re.fullmatch(
+                    rf"memories_{re.escape(layer)}_\d+(?:_nomic_search_v1)?", name
+                )
                 if dimension_collection and name != self._collection_name(layer):
                     legacy.append(name)
                     break
@@ -2934,12 +2944,13 @@ class LocalStorage(BaseStorage):
         needs_reindex = bool(
             matched
             and status == "available"
-            and (legacy or indexed is None or indexed < matched)
+            and (indexed is None or indexed < matched)
         )
         if legacy:
-            message = (
-                "Legacy embedding collections were found for a different dimension; "
-                "run a dry-run and rebuild after provider changes."
+            message = "Legacy embedding collections are retained outside the active space. "
+            message += (
+                "Run a dry-run and rebuild the active index."
+                if needs_reindex else "The active index covers the matching memories."
             )
         elif indexed is not None and indexed < matched and status == "available":
             message = "The active embedding index has fewer vectors than matching memories."
@@ -3774,6 +3785,7 @@ class LocalStorage(BaseStorage):
 
         # Search each relevant layer's vector collection
         layers_to_search = [layer] if layer else ["episodic", "semantic", "intent"]
+        query_embedding = None
 
         for search_layer in layers_to_search:
             if self._uses_noop_embeddings:
@@ -3796,13 +3808,20 @@ class LocalStorage(BaseStorage):
             if status and status != "all":
                 where["status"] = status
 
+            # Chroma requires one operator per expression. Flat multi-field
+            # filters are rejected and would silently force keyword fallback.
+            if len(where) > 1:
+                where = {"$and": [{key: value} for key, value in where.items()]}
+
             try:
                 query_kwargs = {
                     "n_results": limit,
                     "where": where if where else None,
                 }
                 if self._embedding_fn is not None:
-                    query_kwargs["query_embeddings"] = [self._embedding_fn(query)]
+                    if query_embedding is None:
+                        query_embedding = self._query_embedding_fn(query)
+                    query_kwargs["query_embeddings"] = [query_embedding]
                 else:
                     query_kwargs["query_texts"] = [query]
 

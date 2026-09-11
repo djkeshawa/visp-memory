@@ -15,7 +15,13 @@ from visp_memory.core.code_graph import (
     FileGraph,
     normalize_path,
 )
-from visp_memory.core.ranking import clamp_score, graph_edge_score, rank_memory_results
+from visp_memory.core.ranking import (
+    DEFAULT_RECALL_MIN_SCORE,
+    clamp_score,
+    graph_edge_score,
+    rank_memory_results,
+    text_similarity,
+)
 
 PPR_DAMPING = 0.5
 PPR_ITERATIONS = 20
@@ -26,6 +32,7 @@ MAX_GRAPH_EDGES = 2000
 MAX_SEEDS = 8
 DIRECT_MIN_SCORE = 0.16
 DIRECT_WITH_ENTITY_SCOPE_MIN_SCORE = 0.30
+SEMANTIC_SEED_MIN_SIMILARITY = DEFAULT_RECALL_MIN_SCORE
 # The score an exact file/symbol match has always carried in the entity channel. A
 # memory admitted for structural proximity alone is capped strictly below it, so no
 # structural admission can ever outrank an identity match. See _structural_score.
@@ -70,6 +77,15 @@ def _terms(value: str) -> set[str]:
         for term in re.findall(r"[a-z0-9_./-]+", value.casefold())
         if len(term) > 1 and term not in _STOP_WORDS
     }
+
+
+def _has_query_evidence(memory: dict[str, Any], query: str) -> bool:
+    # Importance, recency and access boosts cannot turn a substring candidate
+    # into a relevant seed. Entity and structural matches have separate channels.
+    return text_similarity(query, str(memory.get("content") or "")) > 0 or (
+        memory.get("retrieval_method") == "semantic"
+        and clamp_score(memory.get("similarity")) >= SEMANTIC_SEED_MIN_SIMILARITY
+    )
 
 
 def personalized_pagerank(
@@ -349,6 +365,7 @@ class HybridRetriever:
             memory
             for memory in direct
             if float(memory.get("relevance_score") or 0.0) >= DIRECT_MIN_SCORE
+            and _has_query_evidence(memory, query)
             and (
                 not (files or symbols)
                 or self._matches_entities(memory, files=files, symbols=symbols)

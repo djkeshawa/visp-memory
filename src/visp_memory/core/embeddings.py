@@ -180,6 +180,21 @@ class OllamaProvider(EmbeddingProvider):
         response = self._client.embeddings(model=self.model, prompt=text)
         return response["embedding"]
 
+    @property
+    def retrieval_space(self) -> Optional[str]:
+        """Version the Nomic retrieval instructions separately from legacy vectors."""
+        if self.model.split(":", 1)[0] == "nomic-embed-text":
+            return "nomic_search_v1"
+        return None
+
+    def embed_document(self, text: str) -> List[float]:
+        # Nomic's model card requires distinct instructions for indexed passages
+        # and queries: https://huggingface.co/nomic-ai/nomic-embed-text-v1.5
+        return self.embed(f"search_document: {text}" if self.retrieval_space else text)
+
+    def embed_query(self, text: str) -> List[float]:
+        return self.embed(f"search_query: {text}" if self.retrieval_space else text)
+
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
         # Ollama doesn't have native batch, so we loop
         return [self.embed(text) for text in texts]

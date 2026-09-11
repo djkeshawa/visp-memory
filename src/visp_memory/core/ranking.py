@@ -318,6 +318,11 @@ def score_memory_result(memory: dict[str, Any], query: str | None = None) -> flo
 
     if query:
         score = similarity * 0.50 + lexical * 0.30 + importance * 0.15 + recency * 0.05
+        if memory.get("retrieval_method") == "semantic":
+            # A vector match may express the same idea without sharing words.
+            # Keep lexical boosts, but do not halve a real semantic match merely
+            # because a paraphrase has no token overlap. Keyword behavior is unchanged.
+            score = max(score, similarity)
     else:
         score = importance * 0.70 + recency * 0.30
 

@@ -20,7 +20,7 @@ from visp_memory.core.memory import Memory
 
 # Single source of truth is pyproject.toml; this is only reached when the package is
 # not installed (e.g. running straight from a source checkout).
-_FALLBACK_VERSION = "0.7.4"
+_FALLBACK_VERSION = "0.7.5"
 
 try:
     # Must match the distribution name in pyproject.toml. Querying a name that is not
