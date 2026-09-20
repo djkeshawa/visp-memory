@@ -17,6 +17,7 @@ def recall_candidates(
     environment: Any = None,
     task_type: Any = None,
     as_of: Any = None,
+    retrieval_channel: str = None,
     memory_filter: Callable[[dict], bool] | None = None,
     rank_results: Callable[[list[dict]], list[dict]] | None = None,
 ) -> EligibilityFilterResult:
@@ -37,6 +38,7 @@ def recall_candidates(
             limit=limit,
             status=status,
             scope=scope,
+            retrieval_channel=retrieval_channel,
             memory_filter=memory_filter,
             rank_results=rank_results,
         )
@@ -52,6 +54,7 @@ def _layer_candidates(
     limit,
     status,
     scope,
+    retrieval_channel,
     memory_filter,
     rank_results,
 ) -> EligibilityFilterResult:
@@ -64,6 +67,7 @@ def _layer_candidates(
             limit=candidate_limit,
             status=status,
             min_score=0,
+            retrieval_channel=retrieval_channel,
             **scope,
         )
         visible = [

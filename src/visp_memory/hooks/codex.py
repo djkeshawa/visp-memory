@@ -151,8 +151,8 @@ Run `visp-memory hooks update codex` to populate current memory context.
 Use visp-memory as the persistent project memory for this repository.
 
 - Before changing code, run `visp-memory remember --repo {self.repo_id}` or call
-  MCP `memory_remember`, then run `visp-memory recall "<task>" --repo {self.repo_id}`
-  or call MCP `memory_recall`.
+  MCP `memory_prepare_task` with the task and repo ID, then run
+  `visp-memory recall "<task>" --repo {self.repo_id}` or call MCP `memory_recall`.
 - Set the direction before you start and keep it current with {intent_cli}
   (MCP {intent_mcp}); `visp-memory intent list|update|complete|close` revises
   what is already there.
@@ -160,6 +160,7 @@ Use visp-memory as the persistent project memory for this repository.
   `visp-memory inject --file <path> --task "<task>"`.
 - After meaningful work, record bug fixes, decisions, conventions and fragile
   areas with {capture_cli}, or MCP `memory_after_work`.
+  MCP write tools require the core/full profile; a readonly profile permits retrieval only.
 - Keep memory scoped to repo `{self.repo_id}` unless intentionally recording
   cross-project knowledge.
 - Do not print secrets, prompts, responses, API keys, or unrelated repo/team memory.

@@ -70,6 +70,34 @@ def test_capture_citations_rollback_and_reopen(graph):
         reopened.close()
 
 
+def test_vector_paraphrase_is_admitted_by_native_graph_retrieval(graph):
+    from visp_memory.core.hybrid_retrieval import HybridRetriever
+
+    original, repo = graph
+    def embed(text):
+        return [-1.0, 0.0, 0.0] if text.startswith("Operator") else [1.0, 0.0, 0.0]
+
+    with Neo4jStorage(uri=original.uri, user=original.user, password=original.password,
+                      embedding_fn=embed, embedding_dimension=3) as storage:
+        note = storage.store_memory(
+            "Never grant execution permission from remembered knowledge.", repo_id=repo,
+            tags=["provenance:authored"], auto_link=False,
+        )
+        linked = storage.store_memory(
+            "Operator approval remains necessary.", repo_id=repo,
+            tags=["provenance:authored"], auto_link=False,
+        )
+        storage.add_relationship(note, linked, "supports", evidence={"confidence": "observed"})
+        with storage.driver.session() as session:
+            session.run("CALL db.awaitIndexes(30)").consume()
+        rows = HybridRetriever(storage).retrieve(
+            "Can recalled context authorize deployment?", repo_id=repo,
+        )
+        assert {row["id"] for row in rows} == {note, linked}
+        direct = next(row for row in rows if row["id"] == note)
+        assert direct["retrieval_method"] == "semantic"
+
+
 def test_versioned_embeddings_rebuild_revision_brief_and_reopen(graph, monkeypatch):
     """Real graph/index lifecycle; deterministic provider, no model service calls."""
     import sys

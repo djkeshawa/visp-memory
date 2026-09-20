@@ -129,6 +129,12 @@ scope, eligibility and the relevance floor still apply. Displayed match scores
 retain their original meaning; the fusion changes result order. The extra
 candidate work can increase latency.
 
+On SQLite and Neo4j, `ranking_strategy: "hybrid_union"` additionally discovers
+keyword candidates independently of vector candidates before fusion. Use the same
+value with `--ranking-strategy` on CLI recall or brief, or on the context tools and
+HTTP endpoints below. This experimental mode has separate bounded candidate pools;
+it preserves scope, trust and relevance gates. Unsupported backends reject it.
+
 For a native graph-backed brief, pass `ranking_strategy: "hybrid"` to
 `memory_prepare_task`, or use
 `visp-memory brief "session expiry" --repo my-project --ranking-strategy hybrid`.
@@ -139,7 +145,7 @@ and context budgets remain active. It does not replace the native compiler with
 the experimental benchmark packer. Omitted options retain the existing policies.
 
 Both MCP context tools accept an ISO 8601 `as_of` timestamp; CLI brief exposes
-`--as-of`. `memory_context` requires a query when selecting hybrid ranking or an
+`--as-of`. `memory_context` requires a query when selecting either hybrid mode or an
 `as_of` time, rather than silently applying those options to its legacy project
 summary. Automatic injection and contract recall retain their own policies.
 See [the architecture](ARCHITECTURE.md#search-and-task-context) for stage ordering

@@ -6,12 +6,14 @@ from collections import Counter
 
 HYBRID_CANDIDATE_LIMIT = 100
 RRF_K = 60
+RANKING_STRATEGIES = ("default", "hybrid", "hybrid_union")
 
 
 def validate_ranking_strategy(strategy: str) -> None:
     """Use the same explicit ranking choices across recall and native context."""
-    if strategy not in ("default", "hybrid"):
-        raise ValueError("ranking_strategy must be 'default' or 'hybrid'")
+    if strategy not in RANKING_STRATEGIES:
+        choices = "', '".join(RANKING_STRATEGIES)
+        raise ValueError(f"ranking_strategy must be one of '{choices}'")
 
 
 def bm25_scores(memories: list[dict], query: str) -> list[float]:

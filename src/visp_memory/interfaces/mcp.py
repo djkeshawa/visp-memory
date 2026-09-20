@@ -858,8 +858,8 @@ def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
     """Handle search tools."""
     if name == "memory_recall":
         ranking_strategy = args.get("ranking_strategy", "default")
-        if ranking_strategy not in ("default", "hybrid"):
-            return "Error: 'ranking_strategy' must be 'default' or 'hybrid'."
+        if ranking_strategy not in ("default", "hybrid", "hybrid_union"):
+            return "Error: 'ranking_strategy' must be 'default', 'hybrid', or 'hybrid_union'."
         layers = args.get("layers")
         if layers is not None:
             if not isinstance(layers, list):
@@ -902,7 +902,7 @@ def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
 
         score_label = LEXICAL_SCORE_LABEL if lexical else DEFAULT_SCORE_LABEL
         output = [f"Found {len(results)} memories:\n"]
-        if ranking_strategy == "hybrid":
+        if ranking_strategy in ("hybrid", "hybrid_union"):
             output.append("Hybrid ranking; scores describe the underlying retrieval match.\n")
         for r in results:
             sim = f" ({score_label}: {r.get('similarity', 0):.2f})" if r.get("similarity") else ""

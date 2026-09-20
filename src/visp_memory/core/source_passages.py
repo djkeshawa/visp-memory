@@ -9,6 +9,79 @@ ROLE = re.compile(r"(?m)^(user|assistant|system):[ \t]*")
 MAX_TURN_CHARS = 1600
 
 
+def _line_ranges(text: str, start: int, end: int) -> list[tuple[int, int, str]]:
+    """Return complete line coordinates intersecting ``start:end``."""
+    ranges = []
+    cursor = 0
+    for line in text.splitlines(keepends=True):
+        line_end = cursor + len(line)
+        if line_end > start and cursor < end:
+            ranges.append((cursor, line_end, line))
+        cursor = line_end
+    if cursor < len(text) and cursor < end and cursor + len(text[cursor:]) > start:
+        ranges.append((cursor, len(text), text[cursor:]))
+    return ranges
+
+
+def _heading_info(line: str) -> tuple[int, str] | None:
+    """Recognize headings that establish list/section attribution.
+
+    The line itself is evidence, so only include unambiguous structural lines.
+    Ordinary prose is deliberately excluded to avoid borrowing an earlier
+    section's subject when a later section happens to use the same vocabulary.
+    """
+    value = re.sub(r"^(?:user|assistant|system):[ \t]*", "", line.strip())
+    if not value:
+        return None
+    indent = len(line) - len(line.lstrip())
+    markdown = re.match(r"^(#{1,6})\s+", value)
+    if markdown:
+        return len(markdown.group(1)), "markdown"
+    if re.match(r"^\d+[.)]\s+[^\n]*:\s*$", value):
+        return indent + 1, "ordered"
+    if re.match(r"^[-*+]\s+[^\n]*:\s*$", value):
+        return indent + 1, "bullet"
+    if re.match(r"^[^.!?\n]{1,120}:\s*$", value):
+        return indent, "plain"
+    return None
+
+
+def _enclosing_heading_ranges(
+    text: str, turn: tuple[int, int], start: int
+) -> list[tuple[int, int]]:
+    """Find structural headings directly enclosing a selected source span."""
+    turn_start, turn_end = turn
+    lines = [line for line in _line_ranges(text, turn_start, turn_end)
+             if line[0] >= turn_start and line[1] <= turn_end]
+    target_index = next(
+        (index for index, (line_start, line_end, _) in enumerate(lines)
+         if line_start <= start < line_end),
+        None,
+    )
+    if target_index is None:
+        return []
+
+    # Build the heading stack in source order. This retains a top-level
+    # Markdown heading across explanatory prose while replacing same-depth
+    # siblings, so a selected item cannot borrow a neighboring section.
+    stack: list[tuple[int, str, int, int]] = []
+    for index, (line_start, line_end, line) in enumerate(lines[:target_index + 1]):
+        info = _heading_info(line)
+        if info is None:
+            continue
+        depth, kind = info
+        # List indentation and Markdown heading depth are separate hierarchies:
+        # an unindented list may still belong inside a Markdown section.
+        while stack and (
+            (kind == "markdown" and (stack[-1][1] != "markdown" or stack[-1][0] >= depth))
+            or (kind != "markdown" and stack[-1][1] != "markdown" and stack[-1][0] >= depth)
+        ):
+            stack.pop()
+        if index < target_index:
+            stack.append((depth, kind, line_start, line_end))
+    return [(line_start, line_end) for _depth, _kind, line_start, line_end in stack]
+
+
 def turn_ranges(text: str) -> list[tuple[int, int]]:
     header = HEADER.match(text)
     start = header.end() if header else 0
@@ -19,6 +92,8 @@ def turn_ranges(text: str) -> list[tuple[int, int]]:
 def attributed_passage(row: dict, start: int, end: int) -> dict:
     """Keep source coordinates, its clock, speaker and a bounded preceding turn."""
     text = row.get("content", "")
+    start = max(0, min(len(text), start))
+    end = max(start, min(len(text), end))
     ranges = [(start, end)]
     header = HEADER.match(text)
     if header and header.end() <= start:
@@ -30,6 +105,7 @@ def attributed_passage(row: dict, start: int, end: int) -> dict:
         role = ROLE.match(text, a)
         if role and a < start:
             ranges.append((a, min(role.end(), start)))
+        ranges.extend(_enclosing_heading_ranges(text, (a, b), start))
         # Short preceding turns carry questions, antecedents and qualifications.
         # They remain separate verbatim source spans, never a synthesized claim.
         if index and turns[index - 1][1] - turns[index - 1][0] <= MAX_TURN_CHARS:

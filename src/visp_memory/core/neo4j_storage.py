@@ -502,6 +502,9 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, BaseStorage):
     def get_capabilities(self) -> StorageCapabilities:
         return StorageCapabilities(vector_search=True, audit_log=True, reindex=True)
 
+    def supports_retrieval_channel(self, channel: str) -> bool:
+        return channel in {"vector", "lexical"}
+
     def get_schema_status(self) -> Dict[str, Any]:
         with self.driver.session() as session:
             record = session.run(
@@ -676,11 +679,14 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, BaseStorage):
 
         query, _ = redact_for_storage(query, None)
         embedding = kwargs.get("embedding")
+        retrieval_channel = kwargs.get("retrieval_channel")
+        if retrieval_channel not in (None, "vector", "lexical"):
+            raise ValueError("retrieval_channel must be 'vector' or 'lexical'")
         status = kwargs.get("status", "active")
 
         # Noop means keyword-only, matching local storage and index diagnostics.
         # Constant vectors must not make every memory appear semantically relevant.
-        if self._uses_noop_embeddings:
+        if retrieval_channel == "lexical" or self._uses_noop_embeddings:
             embedding = None
         elif not embedding and self._embedding_fn is not None:
             try:
@@ -712,11 +718,13 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, BaseStorage):
             LIMIT $limit
         """
 
+        if retrieval_channel == "vector" and not embedding:
+            return []
         if not embedding:
-            # Fallback to simple text search or property filter if no embedding available
-            logger.warning(
-                "No embedding available for vector search. Falling back to property filter."
-            )
+            if retrieval_channel != "lexical":
+                logger.warning(
+                    "No embedding available for vector search. Falling back to property filter."
+                )
             cypher = fallback_cypher
         else:
             # Vector Search. queryNodes returns the k nearest nodes and the post-hoc
@@ -743,7 +751,7 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, BaseStorage):
             """
 
         try:
-            return self._run_memory_search(
+            results = self._run_memory_search(
                 cypher,
                 query=query,
                 embedding=embedding,
@@ -756,8 +764,9 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, BaseStorage):
                 status=status,
                 min_importance=min_importance,
             )
+            return results
         except Exception as e:
-            if not embedding:
+            if not embedding or retrieval_channel == "vector":
                 raise
             logger.warning(f"Vector search failed; falling back to text search: {e}")
             return self._run_memory_search(

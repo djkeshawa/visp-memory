@@ -303,6 +303,11 @@ def _age_score(memory: dict[str, Any]) -> float:
     return 1.0 / (1.0 + age_days / 30.0)
 
 
+def is_semantic_result(memory: dict[str, Any]) -> bool:
+    """Accept the legacy Neo4j label at the shared ranking boundary."""
+    return memory.get("retrieval_method") in ("semantic", "vector")
+
+
 def score_memory_result(memory: dict[str, Any], query: str | None = None) -> float:
     """
     Calculate one canonical relevance score for memory search results.
@@ -318,7 +323,7 @@ def score_memory_result(memory: dict[str, Any], query: str | None = None) -> flo
 
     if query:
         score = similarity * 0.50 + lexical * 0.30 + importance * 0.15 + recency * 0.05
-        if memory.get("retrieval_method") == "semantic":
+        if is_semantic_result(memory):
             # A vector match may express the same idea without sharing words.
             # Keep lexical boosts, but do not halve a real semantic match merely
             # because a paraphrase has no token overlap. Keyword behavior is unchanged.
@@ -374,6 +379,8 @@ def rank_memory_results(
             seen.add(memory_id)
 
         scored = dict(memory)
+        if is_semantic_result(scored):
+            scored["retrieval_method"] = "semantic"
         scored["relevance_score"] = score_memory_result(scored, query=query)
         explanation = explain_ranking_factors(scored)
         if explanation:

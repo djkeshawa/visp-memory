@@ -614,6 +614,10 @@ class BaseStorage(ABC):
         """Return the backend's supported optional feature set."""
         return StorageCapabilities()
 
+    def supports_retrieval_channel(self, channel: str) -> bool:
+        """Whether search can expose an independent vector or lexical pool."""
+        return False
+
     def get_schema_status(self) -> Dict[str, Any]:
         """Return non-secret schema compatibility information."""
         return {
@@ -2732,6 +2736,9 @@ class LocalStorage(BaseStorage):
             atomic_graph_import=True,
         )
 
+    def supports_retrieval_channel(self, channel: str) -> bool:
+        return channel in {"vector", "lexical"}
+
     def get_schema_status(self) -> Dict[str, Any]:
         with self._get_db() as conn:
             row = conn.execute("SELECT MAX(version) AS version FROM schema_migrations").fetchone()
@@ -3759,6 +3766,7 @@ class LocalStorage(BaseStorage):
         limit: int = 10,
         min_importance: float = 0.0,
         status: str = "active",
+        retrieval_channel: str = None,
         **_kwargs,
     ) -> List[Dict[str, Any]]:
         """
@@ -3775,6 +3783,8 @@ class LocalStorage(BaseStorage):
         Returns:
             List of matching memories with similarity scores
         """
+        if retrieval_channel not in (None, "vector", "lexical"):
+            raise ValueError("retrieval_channel must be 'vector' or 'lexical'")
         query, _ = redact_for_storage(query, None)
         results = []
         seen_ids = set()
@@ -3784,7 +3794,7 @@ class LocalStorage(BaseStorage):
         query_embedding = None
 
         for search_layer in layers_to_search:
-            if self._uses_noop_embeddings:
+            if retrieval_channel == "lexical" or self._uses_noop_embeddings:
                 continue
 
             collection = self._get_collection(search_layer)
@@ -3849,7 +3859,7 @@ class LocalStorage(BaseStorage):
                 # text search below. Logged at debug to avoid noise.
                 logger.debug("Vector search failed on layer %s: %s", search_layer, exc)
 
-        if len(results) < limit:
+        if retrieval_channel != "vector" and len(results) < limit:
             results.extend(
                 self._text_search_memories(
                     query=query,
@@ -3880,7 +3890,7 @@ class LocalStorage(BaseStorage):
         """Fallback SQLite search used when vector search is unavailable or incomplete."""
         query, _ = redact_for_storage(query, None)
         exclude_ids = exclude_ids or set()
-        terms = [term.lower() for term in query.split() if term.strip()]
+        terms = list(dict.fromkeys(term.lower() for term in query.split() if term.strip()))
         sql = "SELECT * FROM memories WHERE importance >= ?"
         params: list[Any] = [min_importance]
 
@@ -3902,10 +3912,14 @@ class LocalStorage(BaseStorage):
             params.append(status)
 
         if terms:
-            sql += " AND ("
-            sql += " OR ".join("lower(content) LIKE ?" for _ in terms)
-            sql += ")"
-            params.extend(f"%{term}%" for term in terms)
+            # A source episode can contain thousands of terms during auto-linking.
+            # A table-valued parameter avoids SQLite's expression/variable limits
+            # without dropping the tail of the query or changing LIKE semantics.
+            sql += (
+                " AND EXISTS (SELECT 1 FROM json_each(?) AS query_term"
+                " WHERE lower(memories.content) LIKE '%' || query_term.value || '%')"
+            )
+            params.append(json.dumps(terms))
 
         sql += (
             " ORDER BY recall_keyword_score(content, importance, created_at, accessed_at,"

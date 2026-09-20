@@ -47,7 +47,7 @@ def test_codex_plugin_skills_cover_required_workflows():
     }
     assert "local direct mode" in skills["visp-memory-recall"]
     assert "visp-memory remember" in skills["visp-memory-recall"]
-    assert "memory_remember" in skills["visp-memory-recall"]
+    assert "memory_prepare_task" in skills["visp-memory-recall"]
     assert "Do not require cloud AI credentials" in skills["visp-memory-recall"]
     assert "Never print API keys" in skills["visp-memory-diagnostics"]
 
@@ -59,7 +59,7 @@ def test_codex_generated_guidance_is_scoped_and_current(tmp_path):
     assert "visp-memory remember --repo repo-a" in guidance
     assert 'visp-memory recall "<task>" --repo repo-a' in guidance
     assert "visp-memory inject --file <path> --task" in guidance
-    assert "memory_remember" in guidance
+    assert "memory_prepare_task" in guidance
     assert "memory_recall" in guidance
     assert "memory_file_context" in guidance
     assert "memory_after_work" in guidance

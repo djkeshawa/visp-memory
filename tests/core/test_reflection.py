@@ -13,7 +13,7 @@ def test_reflection_proposals_preserve_evidence_lineage(tmp_path):
         storage.store_memory(
             f"Deployment observation {index}",
             repo_id="repo-a",
-            tags=["deploy"],
+            tags=["deploy", "provenance:authored"],
             metadata={"confidence": 0.8},
             auto_link=False,
         )

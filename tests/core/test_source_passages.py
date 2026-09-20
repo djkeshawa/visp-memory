@@ -72,3 +72,54 @@ def test_speaker_is_not_inferred_from_unstructured_body_text():
     source = "A note mentions preceding speaker: assistant. Keep the receipt."
     result = validate_source_quote(source, "Keep the receipt.")
     assert result["speaker"] == "as recorded in source"
+
+
+def test_attributed_passage_keeps_nested_section_headings_with_exact_offsets():
+    from visp_memory.core.source_passages import attributed_passage
+
+    source = (
+        "Session date: 2024/05/10\n"
+        "assistant: Offices:\n"
+        "2. South office:\n"
+        "  - Rent:\n"
+        "    * $900.\n"
+        "  - Contact: south@example.test\n"
+    )
+    start = source.index("    * $900.")
+    passage = attributed_passage({"content": source}, start, len(source))
+
+    assert "Offices:" in passage["content"]
+    assert "2. South office:" in passage["content"]
+    assert "  - Rent:" in passage["content"]
+    assert all(source[span["start"] : span["end"]] == span["text"]
+               for span in passage["passage_spans"])
+
+
+def test_attributed_passage_keeps_markdown_ancestors_without_sibling_sections():
+    from visp_memory.core.source_passages import attributed_passage
+
+    source = (
+        "assistant: # Project A\n"
+        "Introductory prose for the project.\n"
+        "## Costs\n"
+        "* Deposit: $25.\n"
+        "## Schedule\n"
+        "* Monday.\n"
+    )
+    start = source.index("* Monday.")
+    passage = attributed_passage({"content": source}, start, len(source))
+
+    assert "# Project A" in passage["content"]
+    assert "## Schedule" in passage["content"]
+    assert "## Costs" not in passage["content"]
+
+
+def test_passage_starting_at_heading_does_not_borrow_previous_sibling():
+    from visp_memory.core.source_passages import attributed_passage
+
+    source = "assistant: # Offices\n1. North:\nRent $500.\n2. South:\nRent $900."
+    start = source.index("2. South:")
+    selected = attributed_passage({"content": source}, start, len(source))
+    assert "# Offices" in selected["content"]
+    assert "1. North:" not in selected["content"]
+    assert "2. South:" in selected["content"]

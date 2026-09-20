@@ -874,7 +874,8 @@ class Memory:
             limit: Maximum results per layer
             min_score: Minimum canonical relevance score to return
             ranking_strategy: "hybrid" reranks at least 100 eligible candidates using
-                lexical evidence; "default" preserves canonical relevance ordering.
+                lexical evidence; "hybrid_union" fuses independent vector and lexical
+                pools before truncation; "default" preserves canonical ordering.
 
         Returns:
             List of matching memories with similarity scores
@@ -886,10 +887,21 @@ class Memory:
         )
 
         validate_ranking_strategy(ranking_strategy)
+        if limit <= 0:
+            return []
+
+        if ranking_strategy == "hybrid_union":
+            supports_channel = getattr(
+                self._storage, "supports_retrieval_channel", lambda _channel: False
+            )
+            if not all(supports_channel(channel) for channel in ("vector", "lexical")):
+                raise ValueError(
+                    "ranking_strategy 'hybrid_union' requires independent vector and lexical search"
+                )
 
         candidate_limit = (
             max(limit, HYBRID_CANDIDATE_LIMIT)
-            if ranking_strategy == "hybrid" and limit > 0
+            if ranking_strategy in ("hybrid", "hybrid_union") and limit > 0
             else limit
         )
         query, _ = redact_for_storage(query, None)
@@ -909,23 +921,62 @@ class Memory:
                 candidates, ranking_context, query=query, limit=candidate_limit, min_score=min_score
             )
 
-        eligibility = recall_candidates(
-            self._storage,
-            query,
-            repo_id=search_repo_id,
-            layers=layers,
-            limit=candidate_limit,
-            status=status,
-            environment=environment,
-            task_type=task_type,
-            as_of=as_of,
-            rank_results=rank_candidates,
-        )
+        if ranking_strategy == "hybrid_union":
+            channel_results = [
+                recall_candidates(
+                    self._storage,
+                    query,
+                    repo_id=search_repo_id,
+                    layers=layers,
+                    limit=candidate_limit,
+                    status=status,
+                    environment=environment,
+                    task_type=task_type,
+                    as_of=as_of,
+                    retrieval_channel=channel,
+                    rank_results=rank_candidates,
+                )
+                for channel in ("vector", "lexical")
+            ]
+            combined = EligibilityFilterResult.combine(channel_results)
+            allowed_by_id = {}
+            for memory in [*channel_results[0].allowed, *channel_results[1].allowed]:
+                allowed_by_id.setdefault(str(memory.get("id")), memory)
+            eligibility = EligibilityFilterResult(
+                allowed=list(allowed_by_id.values()),
+                rejected=combined.rejected,
+                considered_count=combined.considered_count,
+            )
+        else:
+            eligibility = recall_candidates(
+                self._storage,
+                query,
+                repo_id=search_repo_id,
+                layers=layers,
+                limit=candidate_limit,
+                status=status,
+                environment=environment,
+                task_type=task_type,
+                as_of=as_of,
+                rank_results=rank_candidates,
+            )
         self.last_recall_eligibility_result = eligibility
         self.last_recall_eligibility = eligibility.diagnostics()
 
-        ranked = rank_candidates(eligibility.allowed)
-        if ranking_strategy == "hybrid":
+        if ranking_strategy == "hybrid_union":
+            # Each channel is bounded per layer, but the union must reach BM25
+            # before the requested limit is applied. Otherwise an exact lexical
+            # hit ranked 101 canonically would be discarded before fusion.
+            ranked = self._rank_recall_candidates(
+                eligibility.allowed,
+                ranking_context,
+                query=query,
+                limit=candidate_limit * max(1, len(layers) * 2),
+                min_score=min_score,
+            )
+        else:
+            ranked = rank_candidates(eligibility.allowed)
+        if ranking_strategy in ("hybrid", "hybrid_union"):
             ranked = rerank_lexical(ranked, query)[: max(0, limit)]
         if log_utility:
             for result in ranked:

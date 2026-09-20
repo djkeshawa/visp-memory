@@ -40,13 +40,14 @@ def ranked_memory(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_mcp_hybrid_changes_top_result_and_keeps_output_limit(ranked_memory):
+@pytest.mark.parametrize("strategy", ["hybrid", "hybrid_union"])
+async def test_mcp_hybrid_changes_top_result_and_keeps_output_limit(ranked_memory, strategy):
     from visp_memory.interfaces.mcp import handle_tool
 
     args = {"query": "Seattle International Film Festival", "limit": 1}
     default = await handle_tool("memory_recall", args, ranked_memory)
     hybrid = await handle_tool(
-        "memory_recall", {**args, "ranking_strategy": "hybrid"}, ranked_memory
+        "memory_recall", {**args, "ranking_strategy": strategy}, ranked_memory
     )
     assert "[generic]" in default and "[specific]" not in default
     assert "[specific]" in hybrid and "[generic]" not in hybrid
@@ -58,14 +59,17 @@ async def test_mcp_hybrid_changes_top_result_and_keeps_output_limit(ranked_memor
     assert invalid.startswith("Error:") and "ranking_strategy" in invalid
 
 
-def test_cli_hybrid_changes_top_result_and_rejects_invalid_choice(ranked_memory, monkeypatch):
+@pytest.mark.parametrize("strategy", ["hybrid", "hybrid_union"])
+def test_cli_hybrid_changes_top_result_and_rejects_invalid_choice(
+    ranked_memory, monkeypatch, strategy
+):
     from visp_memory.interfaces import cli
 
     monkeypatch.setattr(cli, "get_memory", lambda: ranked_memory)
     runner = CliRunner()
     args = ["recall", "Seattle International Film Festival", "--limit", "1"]
     default = runner.invoke(cli.app, args)
-    hybrid = runner.invoke(cli.app, args + ["--ranking-strategy", "hybrid"])
+    hybrid = runner.invoke(cli.app, args + ["--ranking-strategy", strategy])
     assert default.exit_code == 0 and "generic" in default.output
     assert hybrid.exit_code == 0, hybrid.output
     assert "specific" in hybrid.output and "generic" not in hybrid.output
@@ -79,5 +83,5 @@ def test_mcp_schema_advertises_default_and_hybrid():
 
     tool = next(t for t in build_tool_definitions() if t.name == "memory_recall")
     option = tool.inputSchema["properties"]["ranking_strategy"]
-    assert option["enum"] == ["default", "hybrid"]
+    assert option["enum"] == ["default", "hybrid", "hybrid_union"]
     assert option["default"] == "default"

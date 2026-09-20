@@ -157,8 +157,8 @@ def test_a_constraint_is_never_rendered_as_the_current_direction(memory):
     assert "Current direction" not in injected
 
 
-def test_a_long_goal_is_cut_on_a_word_boundary_and_marked(memory):
-    """A mid-word cut of an instruction an LLM reads can invert its meaning."""
+def test_a_long_goal_is_omitted_instead_of_losing_its_qualification(memory):
+    """Even a word-boundary cut can remove a decisive condition."""
     memory.goal(
         "Do not delete the legacy aider adapter until the served pair check "
         "passes on the published Kit build and the owner has confirmed it"
@@ -167,10 +167,8 @@ def test_a_long_goal_is_cut_on_a_word_boundary_and_marked(memory):
     injected = _injected(memory, task="anything")
 
     direction = [line for line in injected.splitlines() if "Current direction" in line][0]
-    assert direction.endswith("...")
-    # Cut between words, not through one.
-    assert "  " not in direction
-    assert direction.replace("...", "").rstrip()[-1] != " "
+    assert "omitted" in direction
+    assert "Do not delete" not in direction
 
 
 def test_the_intent_layer_is_read_once_however_many_files_are_injected(memory):

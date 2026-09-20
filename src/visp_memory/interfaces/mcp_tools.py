@@ -42,9 +42,9 @@ RUNTIME_SCOPE_SCHEMA = {
 
 CONTEXT_RANKING_SCHEMA = {
     "type": "string",
-    "enum": ["default", "hybrid"],
+    "enum": ["default", "hybrid", "hybrid_union"],
     "default": "default",
-    "description": "Optional canonical/BM25 direct ranking before native graph expansion",
+    "description": "Canonical/BM25 ranking; hybrid_union also discovers keyword candidates",
 }
 
 # Every MCP tool definition (name + description + input schema) is loaded into the
@@ -53,8 +53,8 @@ CONTEXT_RANKING_SCHEMA = {
 # token-efficiency goal. The "core" profile exposes only the tools an assistant
 # needs for the everyday recall-before-work / record-after-work loop, roughly
 # halving that overhead, while "full" keeps every advanced and maintenance tool.
-# Hidden tools remain fully functional if a client calls them by name; the profile
-# only controls what is advertised.
+# Profiles govern both advertisement and dispatch; clients must not call tools
+# outside the configured profile.
 #
 # Default is "core". A memory server that costs several thousand context tokens before
 # the assistant does any work is arguing against its own premise, and an advertised
@@ -350,9 +350,11 @@ def build_tool_definitions() -> list["Tool"]:
                 "properties": {
                     "ranking_strategy": {
                         "type": "string",
-                        "enum": ["default", "hybrid"],
+                        "enum": ["default", "hybrid", "hybrid_union"],
                         "default": "default",
-                        "description": "Hybrid reranks at least 100 candidates before the limit.",
+                        "description": (
+                            "Hybrid reranks candidates; hybrid_union adds keyword discovery."
+                        ),
                     },
                     "query": {
                         "type": "string",

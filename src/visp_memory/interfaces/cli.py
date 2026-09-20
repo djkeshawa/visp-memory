@@ -1408,8 +1408,8 @@ def recall(
     ),
     ranking_strategy: str = typer.Option(
         "default", "--ranking-strategy",
-        click_type=click.Choice(["default", "hybrid"]),
-        help="Hybrid reranks at least 100 candidates before applying the result limit",
+        click_type=click.Choice(["default", "hybrid", "hybrid_union"]),
+        help="Hybrid reranks candidates; hybrid_union also discovers independent keyword matches",
     ),
 ):
     """Search across all memories."""
@@ -1465,7 +1465,7 @@ def recall(
 
     from rich.box import ROUNDED
 
-    if ranking_strategy == "hybrid":
+    if ranking_strategy in ("hybrid", "hybrid_union"):
         console.print("[dim]Hybrid ranking; scores describe the underlying retrieval match.[/dim]")
 
     table = Table(title=f"Search Results for '{query}'", box=ROUNDED)
@@ -1875,8 +1875,9 @@ def brief(
         0.0, "--min-confidence", min=0.0, max=1.0
     ),
     ranking_strategy: str = typer.Option(
-        "default", "--ranking-strategy", click_type=click.Choice(["default", "hybrid"]),
-        help="Optional canonical/BM25 direct ranking before native graph expansion",
+        "default", "--ranking-strategy",
+        click_type=click.Choice(["default", "hybrid", "hybrid_union"]),
+        help="Optional canonical/BM25 ranking; hybrid_union adds keyword candidate discovery",
     ),
     context_selection: str = typer.Option(
         "default", "--context-selection", click_type=click.Choice(["default", "coverage"]),

@@ -306,27 +306,51 @@ class HybridRetriever:
     ) -> list[dict[str, Any]]:
         """Return explainable hybrid results without relying on backend-specific queries."""
         validate_ranking_strategy(ranking_strategy)
+        supports_channel = getattr(
+            self.storage, "supports_retrieval_channel", lambda _channel: False
+        )
+        if ranking_strategy == "hybrid_union" and not all(
+            supports_channel(channel)
+            for channel in ("vector", "lexical")
+        ):
+            raise ValueError(
+                "ranking_strategy 'hybrid_union' requires independent vector and lexical search"
+            )
         files = files or []
         symbols = symbols or []
         candidates: dict[str, dict[str, Any]] = {}
         direct_candidates: dict[str, dict[str, Any]] = {}
-        for layer in ("intent", "semantic", "episodic", "raw"):
-            for memory in self.storage.search_memories(
-                query=query,
-                repo_id=repo_id,
-                layer=layer,
-                status="active",
-                limit=HYBRID_CANDIDATE_LIMIT if ranking_strategy == "hybrid" else 40,
-                environment=environment,
-                task_type=task_type,
-                as_of=as_of,
-            ):
-                if candidate_filter and not candidate_filter(memory):
-                    continue
-                memory_id = str(memory.get("id") or "")
-                if not memory_id:
-                    continue
-                direct_candidates[memory_id] = memory
+        direct_limit = (
+            HYBRID_CANDIDATE_LIMIT
+            if ranking_strategy in ("hybrid", "hybrid_union")
+            else 40
+        )
+        channels = ("vector", "lexical") if ranking_strategy == "hybrid_union" else (None,)
+        for channel in channels:
+            for layer in ("intent", "semantic", "episodic", "raw"):
+                search_kwargs = {
+                    "query": query,
+                    "repo_id": repo_id,
+                    "layer": layer,
+                    "status": "active",
+                    "limit": direct_limit,
+                    "environment": environment,
+                    "task_type": task_type,
+                    "as_of": as_of,
+                }
+                if channel is not None:
+                    search_kwargs["retrieval_channel"] = channel
+                for memory in self.storage.search_memories(**search_kwargs):
+                    if candidate_filter and not candidate_filter(memory):
+                        continue
+                    memory_id = str(memory.get("id") or "")
+                    if not memory_id:
+                        continue
+                    prior = direct_candidates.get(memory_id)
+                    # A duplicate lexical hit must never overwrite its semantic
+                    # score or retrieval method.
+                    if prior is None or channel == "vector":
+                        direct_candidates[memory_id] = memory
 
         corpus = []
         for memory in self.storage.list_memories(
@@ -367,9 +391,13 @@ class HybridRetriever:
                 if score >= PROXIMITY_MIN_ADMISSION:
                     nearby[memory_id] = (score, memory)
 
+        canonical_limit = (
+            HYBRID_CANDIDATE_LIMIT * 8
+            if ranking_strategy == "hybrid_union"
+            else HYBRID_CANDIDATE_LIMIT if ranking_strategy == "hybrid" else 60
+        )
         direct = rank_memory_results(
-            list(direct_candidates.values()), query=query,
-            limit=HYBRID_CANDIDATE_LIMIT if ranking_strategy == "hybrid" else 60,
+            list(direct_candidates.values()), query=query, limit=canonical_limit,
         )
         direct = [
             memory
@@ -385,7 +413,7 @@ class HybridRetriever:
         ]
         # Lexical fusion refines eligible direct evidence before choosing graph seeds.
         # It never reranks structural-only admissions or bypasses their separate budget.
-        if ranking_strategy == "hybrid":
+        if ranking_strategy in ("hybrid", "hybrid_union"):
             direct = rerank_lexical(direct, query)
         lexical_ranks = {
             str(memory["id"]): memory["hybrid_ranks"]

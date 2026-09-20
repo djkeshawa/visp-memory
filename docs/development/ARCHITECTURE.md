@@ -65,6 +65,16 @@ a trusted tier. Known secret patterns are redacted on normal capture. Imports
 that would need rewriting are refused to preserve their content hashes.
 [Trust and privacy](../TRUST.md) explains the boundary and its limits.
 
+Explicit conversation capture records the redacted original source before learning
+from bounded chunks. Model output must identify a source, speaker and complete
+verbatim quotation; claim fields must occur in that quotation. This conservative
+extractive check may reject useful paraphrases. Rejected output records a failure
+and leaves the original source available. Attributed facts cite their source
+episodes, including surrounding context; an assistant suggestion does not become
+an active user goal. Checkpoints resume completed source writes and validated items
+by content identity. A dry run runs extraction but writes no memories or manifest.
+Capture requires an explicitly configured host model and does not run in retrieval.
+
 ## Search and task context
 
 Explicit search and automatic prompt injection have different purposes. Search
@@ -105,6 +115,14 @@ using equal-weight reciprocal-rank fusion. BM25 statistics come from the eligibl
 candidate pool; this is not a full-corpus lexical index. It cannot recover a
 record absent from that pool. The default strategy remains canonical ranking.
 
+`ranking_strategy="hybrid_union"` is a separate experimental option on SQLite and
+Neo4j. It requests bounded vector and keyword candidate pools independently,
+deduplicates them without overwriting semantic scores, applies the same eligibility
+and relevance gates, and fuses ranks before limiting the combined results. Keyword
+discovery does not request embeddings. Backends without independent search channels
+reject this option explicitly. The existing `default` and `hybrid` strategies remain
+available as controls; improved answer accuracy has not yet been established.
+
 Hybrid results retain their canonical `relevance_score` and expose
 `hybrid_rank_score` and `hybrid_ranks` separately. Fusion scores only order eligible
 results; they do not grant authority or replace the relevance floor. Corpus size
@@ -129,6 +147,7 @@ brief's additional trust checks.
 Use `visp-memory brief "task" --ranking-strategy hybrid`, the `ranking_strategy`
 field on `memory_prepare_task` or query-based `memory_context`, or the same field
 on `POST /context/brief` and `POST /context/compile`. Defaults are unchanged.
+These surfaces also accept `hybrid_union` for independent candidate discovery.
 Hybrid context reports `retrieval.direct_ranking_strategy`; direct items carry
 original/lexical ranks in `retrieval_factors.lexical_ranks`. This makes the recent
 lexical implementation usable within native graph context without installing the

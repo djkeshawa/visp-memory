@@ -488,7 +488,7 @@ class AskMemoryResponse(BaseModel):
 
 
 class ContextCompileRequest(ScopedRequest):
-    ranking_strategy: Literal["default", "hybrid"] = "default"
+    ranking_strategy: Literal["default", "hybrid", "hybrid_union"] = "default"
     context_selection: Literal["default", "coverage"] = "default"
     query: str = Field(min_length=1, max_length=20000)
     repo_id: Optional[str] = None
@@ -501,7 +501,7 @@ class ContextCompileRequest(ScopedRequest):
 
 
 class TaskMemoryBriefRequest(ScopedRequest):
-    ranking_strategy: Literal["default", "hybrid"] = "default"
+    ranking_strategy: Literal["default", "hybrid", "hybrid_union"] = "default"
     context_selection: Literal["default", "coverage"] = "default"
     task: str = Field(min_length=1, max_length=20000)
     repo_id: Optional[str] = None

@@ -9,7 +9,8 @@ from typing import Any
 from visp_memory.core.clock import utc_now_iso
 from visp_memory.core.model_router import ModelRouter
 from visp_memory.core.numeric import bounded_float
-from visp_memory.core.trust import WriteChannel, channel_policy, with_channel_provenance
+from visp_memory.core.source_support import source_support
+from visp_memory.core.trust import WriteChannel, channel_policy, with_provenance
 from visp_memory.quality.secrets import redact_for_storage
 
 
@@ -70,8 +71,13 @@ class ReflectionEngine:
         evidence_ids: list[str],
         actor_id: str,
     ) -> dict[str, Any]:
+        write_channel = WriteChannel.REFLECTION
+        source_ids = list(dict.fromkeys(evidence_ids))
+        source_evidence, source_scope, source_provenance = source_support(
+            self.storage, source_ids, repo_id, write_channel
+        )
         evidence = []
-        for memory_id in dict.fromkeys(evidence_ids):
+        for memory_id in source_ids:
             memory = self.storage.get_memory(memory_id)
             if (
                 not memory
@@ -113,7 +119,6 @@ class ReflectionEngine:
             )
             for memory in evidence
         ]
-        write_channel = WriteChannel.REFLECTION
         policy = channel_policy(write_channel)
         metadata = {
             "title": safe_title,
@@ -128,17 +133,17 @@ class ReflectionEngine:
             "derived_by": actor_id,
             "write_channel": write_channel.value,
             "legacy_category": "runbook",
+            **source_scope,
         }
         memory_id = self.storage.store_memory(
             content,
             layer="semantic",
             category="procedure",
             repo_id=repo_id,
-            source_ids=[memory["id"] for memory in evidence],
+            source_ids=source_ids,
+            evidence_ids=source_evidence,
             metadata=metadata,
-            tags=with_channel_provenance(
-                ["runbook", "reflection"], write_channel
-            ),
+            tags=with_provenance(["runbook", "reflection"], source_provenance),
             source=policy.source,
             auto_link=False,
         )
