@@ -151,6 +151,12 @@ summary. Automatic injection and contract recall retain their own policies.
 See [the architecture](ARCHITECTURE.md#search-and-task-context) for stage ordering
 and [benchmarks](../BENCHMARK.md) for the limits of measured quality claims.
 
+For context supplied automatically to an assistant, prefer `memory_prepare_task`:
+it filters quarantined records. Query-based `memory_context` is a lower-level
+inspection surface and can return them with provenance tags in JSON. Ranking and
+coverage selection do not add trust filtering to that surface. See
+[trust policies](../TRUST.md#provenance-and-quarantine) for the distinction.
+
 ## Verify the connection
 
 1. Run `visp-memory doctor` in the project.

@@ -79,7 +79,9 @@ Capture requires an explicitly configured host model and does not run in retriev
 
 Explicit search and automatic prompt injection have different purposes. Search
 lets a user inspect candidates, including quarantined records within their scope.
-Prompt context applies additional trust and budget checks.
+Task briefs and automatic prompt context apply additional trust and budget checks.
+The lower-level query context compiler remains an inspection surface unless its
+caller supplies a trust filter; see [the trust boundary](../TRUST.md).
 
 ```mermaid
 flowchart TD

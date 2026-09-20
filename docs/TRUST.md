@@ -37,6 +37,13 @@ guarded reads still require valid project, time, environment, and task scope.
 Graph expansion cannot use rejected nodes as hidden bridges. An attacker with
 direct database-mutation access is outside this policy boundary.
 
+Use `memory_prepare_task` or HTTP `/context/brief` for a trust-filtered task brief.
+Query-based `memory_context` and HTTP `/context/compile` expose the lower-level
+context compiler: they enforce scope, time and budget, but can include quarantined
+records for inspection. Their JSON items retain provenance tags. They are not
+interchangeable with a task brief for automatic prompt injection. The legacy
+`memory_context` call without a query uses the guarded project-summary policy.
+
 ### Notes saved in the dashboard or API
 
 Dashboard writes use HTTP, including writes by signed-in administrators. They
