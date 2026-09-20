@@ -98,10 +98,8 @@ def _ratio(strategy: str, metric: str) -> Callable[[dict], float]:
 TWO_DP = "{:.2f}".format
 THREE_DP = "{:.3f}".format
 ONE_DP = "{:.1f}".format
-# The poisoning proportions are exact sixteenths. 9/16 is 56.25%, which sits exactly
-# on the rounding boundary at one decimal — and the docs had resolved it upward to
-# 56.3%, in the direction that made the attack, and so the defence, look stronger.
-# Two decimals is exact for this benchmark, so there is no boundary to resolve.
+# Keep the documented percentage aligned with the evaluator's rounded proportion.
+# The retrieved population can change when reconciliation preserves more records.
 PERCENT_2 = lambda value: f"{value * 100:.2f}%"  # noqa: E731
 
 

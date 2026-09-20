@@ -97,6 +97,43 @@ and relationship signals; the machine recall contract can add structurally
 related memories without displacing direct matches. Scores rank results; they
 are not probabilities of correctness. The retrieval policy never calls an LLM.
 
+Python callers can opt into lexical reranking with
+`memory.recall(query, ranking_strategy="hybrid", limit=10)`. This requests a
+candidate pool of 100 (or the requested limit, if larger), applies the existing
+scope, eligibility and relevance checks, then combines canonical and BM25 ranks
+using equal-weight reciprocal-rank fusion. BM25 statistics come from the eligible
+candidate pool; this is not a full-corpus lexical index. It cannot recover a
+record absent from that pool. The default strategy remains canonical ranking.
+
+Hybrid results retain their canonical `relevance_score` and expose
+`hybrid_rank_score` and `hybrid_ranks` separately. Fusion scores only order eligible
+results; they do not grant authority or replace the relevance floor. Corpus size
+does not determine reranking cost: the work is proportional to candidate text,
+plus sorting. Backend candidate discovery and eligibility refill have their own
+costs. The option is available through the Python recall API, the
+`visp-memory recall --ranking-strategy hybrid` CLI flag, and `ranking_strategy`
+on the `memory_recall` MCP tool.
+
+The same opt-in `ranking_strategy="hybrid"` is available on
+`HybridRetriever.retrieve`, `ContextCompiler.compile`, and
+`TaskMemoryBriefCompiler.prepare`. In the native graph path it gathers up to 100
+direct candidates per layer, retains up to 100 canonically ranked candidates,
+applies the existing eligibility and seed relevance gates, and uses the shared
+canonical/BM25 fusion to order direct evidence before choosing graph seeds.
+Graph and code-entity channels still contribute; structural-only admissions keep
+their separate limits and cannot become graph seeds. Final graph ranking retains
+its native scoring policy rather than treating BM25 fusion as a confidence score.
+Context time, scope, redundancy and budget policies still apply, as do the task
+brief's additional trust checks.
+
+Use `visp-memory brief "task" --ranking-strategy hybrid`, the `ranking_strategy`
+field on `memory_prepare_task` or query-based `memory_context`, or the same field
+on `POST /context/brief` and `POST /context/compile`. Defaults are unchanged.
+Hybrid context reports `retrieval.direct_ranking_strategy`; direct items carry
+original/lexical ranks in `retrieval_factors.lexical_ranks`. This makes the recent
+lexical implementation usable within native graph context without installing the
+benchmark's custom answer packers or making model calls in retrieval policy.
+
 ### Injection policy
 
 Automatic injection can return nothing when there is no useful signal. Defaults

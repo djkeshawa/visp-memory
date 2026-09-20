@@ -116,6 +116,35 @@ import so previously retrieved memory does not become a new source.
 For CLI inspection, use `visp-memory remember --repo my-project` or
 `visp-memory recall "session expiry" --repo my-project`.
 
+To opt into hybrid ranking, pass `ranking_strategy: "hybrid"` to `memory_recall`,
+or use the CLI flag:
+
+```bash
+visp-memory recall "session expiry" --repo my-project --ranking-strategy hybrid --limit 10
+```
+
+The default is `default`. Hybrid combines canonical and lexical ranks over at
+least 100 eligible candidates, then applies the requested result limit. Repository
+scope, eligibility and the relevance floor still apply. Displayed match scores
+retain their original meaning; the fusion changes result order. The extra
+candidate work can increase latency.
+
+For a native graph-backed brief, pass `ranking_strategy: "hybrid"` to
+`memory_prepare_task`, or use
+`visp-memory brief "session expiry" --repo my-project --ranking-strategy hybrid`.
+Query-based `memory_context` and HTTP `/context/compile` and `/context/brief`
+accept the same field. Here lexical fusion orders eligible direct evidence before
+graph seed selection; graph expansion, file/symbol channels, trust, time filters
+and context budgets remain active. It does not replace the native compiler with
+the experimental benchmark packer. Omitted options retain the existing policies.
+
+Both MCP context tools accept an ISO 8601 `as_of` timestamp; CLI brief exposes
+`--as-of`. `memory_context` requires a query when selecting hybrid ranking or an
+`as_of` time, rather than silently applying those options to its legacy project
+summary. Automatic injection and contract recall retain their own policies.
+See [the architecture](ARCHITECTURE.md#search-and-task-context) for stage ordering
+and [benchmarks](../BENCHMARK.md) for the limits of measured quality claims.
+
 ## Verify the connection
 
 1. Run `visp-memory doctor` in the project.

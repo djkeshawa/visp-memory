@@ -28,6 +28,8 @@ async def compile_context(
     compiler = ContextCompiler(storage, code_graph=graph_for_repo(config, repo_id))
     return compiler.compile(
         payload.query,
+        ranking_strategy=payload.ranking_strategy,
+        context_selection=payload.context_selection,
         repo_id=repo_id,
         token_budget=payload.token_budget,
         as_of=payload.as_of,
@@ -55,6 +57,8 @@ async def prepare_task_brief(
     compiler = TaskMemoryBriefCompiler(storage, code_graph=graph_for_repo(config, repo_id))
     return compiler.prepare(
         payload.task,
+        ranking_strategy=payload.ranking_strategy,
+        context_selection=payload.context_selection,
         repo_id=repo_id,
         token_budget=payload.token_budget,
         as_of=payload.as_of,

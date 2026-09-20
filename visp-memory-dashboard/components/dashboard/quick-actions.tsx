@@ -84,7 +84,8 @@ export function QuickActions({ onMemoryCreated }: QuickActionsProps = {}) {
             <DialogHeader>
               <DialogTitle>New memory</DialogTitle>
               <DialogDescription>
-                Save a decision, a useful fact, or a lesson for later.
+                Save a decision, a useful fact, or a lesson for later search.
+                Dashboard notes are excluded from task briefs and automatic context because they enter through the API.
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">

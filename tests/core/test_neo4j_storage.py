@@ -403,6 +403,104 @@ def test_neo4j_dimension_specific_vector_index_names():
     assert Neo4jStorage._vector_index_name(1536) == "memory_embedding_index_1536"
 
 
+@pytest.fixture
+def nomic_graph(monkeypatch):
+    import sys
+
+    from visp_memory.core.embeddings import OllamaProvider
+
+    prompts = []
+
+    def embed(*, model, prompt):
+        prompts.append(prompt)
+        return {"embedding": [1.0, 0.0, 0.0]}
+
+    monkeypatch.setitem(sys.modules, "ollama", SimpleNamespace(
+        Client=lambda host: SimpleNamespace(embeddings=embed),
+    ))
+    provider = OllamaProvider(model="nomic-embed-text", host="http://unused")
+    driver = FakeDriver(1)
+    monkeypatch.setattr("visp_memory.core.neo4j_storage.GraphDatabase", SimpleNamespace(
+        driver=lambda *args, **kwargs: driver,
+    ))
+    monkeypatch.setattr(Neo4jStorage, "_probe_schema_compatibility", lambda self: True)
+    monkeypatch.setattr(Neo4jStorage, "_ensure_governance_schema", lambda self: None)
+    storage = Neo4jStorage(embedding_fn=provider.embed)
+    prompts.clear()
+    yield storage, prompts
+    storage.close()
+
+
+def test_nomic_graph_writes_and_search_use_separate_instructions(nomic_graph):
+    storage, prompts = nomic_graph
+    storage.store_memory("Retain cited knowledge", layer="intent", repo_id="repo", auto_link=False)
+    assert prompts == ["search_document: Retain cited knowledge"]
+    prompts.clear()
+    storage.search_memories("How is evidence retained?", repo_id="repo")
+    assert prompts == ["search_query: How is evidence retained?"]
+    assert storage._vector_property == "embedding_3_nomic_search_v1"
+    assert storage._vector_index == "memory_embedding_index_3_nomic_search_v1"
+    queries = [q for q, _ in storage.driver.session_obj.calls]
+    assert any("CREATE VECTOR INDEX memory_embedding_index_3_nomic_search_v1" in q for q in queries)
+    assert any("queryNodes('memory_embedding_index_3_nomic_search_v1'" in q for q in queries)
+
+
+def test_nomic_graph_update_and_rebuild_use_document_space(nomic_graph, monkeypatch):
+    storage, prompts = nomic_graph
+    assert storage.update_memory("note", content="Corrected knowledge")
+    assert prompts == ["search_document: Corrected knowledge"]
+    monkeypatch.setattr(storage, "list_memories", lambda **kwargs: [
+        {"id": "note", "content": "Corrected knowledge"},
+    ])
+    prompts.clear()
+    assert storage.rebuild_embedding_index(dry_run=True).dry_run
+    assert prompts == []
+    assert storage.rebuild_embedding_index(dry_run=False).reindexed_memories == 1
+    assert prompts == ["search_document: Corrected knowledge"]
+    assert all(
+        p["vector_property"] == "embedding_3_nomic_search_v1"
+        for q, p in storage.driver.session_obj.calls if "setNodeVectorProperty" in q
+    )
+
+
+@pytest.mark.parametrize("indexed,needs_reindex", [(0, True), (2, False)])
+def test_nomic_graph_reports_legacy_without_reindex_loop(nomic_graph, indexed, needs_reindex):
+    storage, _ = nomic_graph
+    storage.driver.session_obj.query_results["AS matched"] = lambda params: FakeResult({
+        "matched": 2, "indexed": indexed, "legacy": 2,
+    })
+    report = storage.inspect_embedding_index(storage_backend="neo4j", provider="ollama")
+    assert report.active_collections == ["embedding_3_nomic_search_v1"]
+    assert report.legacy_collections == ["embedding_3"]
+    assert report.needs_reindex is needs_reindex
+
+
+def test_failed_graph_index_inspection_is_not_available(nomic_graph):
+    storage, _ = nomic_graph
+
+    def unavailable(params):
+        raise RuntimeError("database is unreachable")
+
+    storage.driver.session_obj.query_results["AS matched"] = unavailable
+    report = storage.inspect_embedding_index(storage_backend="neo4j", provider="ollama")
+    assert report.status == "unknown"
+    assert report.indexed_memories is None
+
+
+@pytest.mark.parametrize("embedding", [None, [1.0, 0.0, 0.0]])
+def test_noop_graph_search_agrees_with_disabled_vector_diagnostics(embedding):
+    from visp_memory.core.embeddings import NoOpProvider
+
+    storage = neo4j_storage_with_delete_count(0)
+    provider = NoOpProvider(dimension=3)
+    storage._embedding_fn = storage._query_embedding_fn = provider.embed
+    storage._uses_noop_embeddings = True
+    storage.search_memories("Browser sessions", repo_id="repo", embedding=embedding)
+    queries = [query for query, _ in storage.driver.session_obj.calls]
+    assert not any("db.index.vector.queryNodes" in query for query in queries)
+    assert any("toLower(m.content) CONTAINS term" in query for query in queries)
+
+
 def test_neo4j_node_to_dict_strips_dimension_specific_vectors():
     data = Neo4jStorage._node_to_dict(
         {
@@ -474,7 +572,7 @@ def test_neo4j_memory_reads_normalize_contract_fields_and_search_scores():
 
     assert results[0]["id"] == "memory-1"
     assert results[0]["similarity"] == 0.87
-    search_params = session.calls[-1][1]
+    search_params = next(params for query, params in session.calls if "RETURN m, score" in query)
     assert search_params["repo_id"] == "repo-a"
     assert search_params["exclude_raw"] is True
 

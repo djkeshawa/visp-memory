@@ -24,11 +24,30 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from visp_memory.core.ranking import _LEXICAL_STOPWORDS
+from visp_memory.core.source_support import scope_signature
+from visp_memory.core.trust import provenance_of
 from visp_memory.quality.secrets import redact_for_storage
 
 DEFAULT_NOOP_THRESHOLD = 0.95
 DEFAULT_UPDATE_THRESHOLD = 0.8
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9_]+")
+_DISTINGUISHING_WORDS = frozenset(
+    "no not never neither nor without cannot can't don't didn't isn't wasn't won't "
+    "monday tuesday wednesday thursday friday saturday sunday "
+    "january february march april may june july august september october november december "
+    "yesterday today tomorrow last next before after planned planning intend intended "
+    "one two three four five six seven eight nine ten eleven twelve".split()
+)
+
+
+def _detail_signature(text: str) -> tuple:
+    """Conservative guard; lexical resemblance cannot establish event equivalence."""
+    lowered = text.casefold().replace("’", "'")
+    return (
+        tuple(re.findall(r"\d+(?:[./:-]\d+)*", lowered)),
+        tuple(word for word in re.findall(r"[a-z]+(?:'[a-z]+)?", lowered)
+              if word in _DISTINGUISHING_WORDS),
+    )
 
 
 def _normalize(text: str) -> str:
@@ -86,6 +105,8 @@ class Reconciler:
         layer: str = "semantic",
         repo_id: str = None,
         category: str = None,
+        scope: dict | None = None,
+        provenance=None,
     ) -> ReconcileDecision:
         content, _ = redact_for_storage(content, None)
         new_tokens = _tokens(content)
@@ -93,13 +114,23 @@ class Reconciler:
         best_overlap = 0.0
         best_extends = False
         for candidate in self._candidates(content, layer, repo_id):
+            if scope_signature(candidate.get("metadata")) != scope_signature(scope):
+                continue
+            if provenance is not None and provenance_of(candidate) != provenance:
+                continue
             candidate_content = str(candidate.get("content", ""))
+            if _detail_signature(content) != _detail_signature(candidate_content):
+                continue
             overlap = content_overlap(content, candidate_content)
             # A strict extension (the existing memory's tokens all appear in the
             # new content) is an update signal even at moderate Jaccard, because
             # Jaccard punishes added detail by construction.
             candidate_tokens = _tokens(candidate_content)
             extends = bool(candidate_tokens) and candidate_tokens <= new_tokens
+            # Shared wording alone cannot justify replacing a different entity.
+            # Keep substitutions separate unless a caller explicitly revises them.
+            if not extends and not new_tokens <= candidate_tokens:
+                continue
             if overlap > best_overlap or (overlap == best_overlap and extends and not best_extends):
                 best = candidate
                 best_overlap = overlap

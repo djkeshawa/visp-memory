@@ -77,6 +77,22 @@ qa-docs/
 .codex-local/
 plan/
 
+# Local benchmark runs, caches, reports, and experiment-only harnesses.
+# Product source, regression tests, and existing tracked benchmarks stay versioned.
+/benchmarks/
+/scripts/*longmemeval*.py
+/scripts/*native_improvement*.py
+/scripts/*native_validation*.py
+/scripts/compare_native_extraction.py
+/scripts/native_fact_preparation.py
+/scripts/*comparison*.py
+/scripts/comparison_support/
+/tests/scripts/test_*longmemeval*.py
+/tests/scripts/test_*native_improvement*.py
+/tests/scripts/test_*native_validation*.py
+/tests/scripts/test_native_fact_preparation.py
+/tests/scripts/test_*comparison*.py
+
 # Build artifacts
 src/visp_memory/server/static/
 *.spec.log

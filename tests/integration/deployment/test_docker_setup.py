@@ -54,6 +54,17 @@ def test_app_waits_for_the_selected_ollama_model(tmp_path, profile):
     assert config["services"]["ollama-pull"]["command"] == ["pull", model]
 
 
+@pytest.mark.parametrize("extras", [None, "api,mcp"])
+def test_ollama_overlay_builds_both_provider_and_vector_index(tmp_path, extras):
+    config = compose_config(
+        tmp_path, "docker-compose.ollama.yml",
+        values={"VISP_MEMORY_EXTRAS": extras} if extras else {},
+    )
+    app = config["services"]["visp-memory-lite"]
+    selected = set(app["build"]["args"]["VISP_MEMORY_EXTRAS"].split(","))
+    assert {"api", "mcp", "ollama", "chroma"} <= selected
+
+
 @pytest.mark.parametrize("profile", ["lite", "arcadedb"])
 def test_base_profile_keeps_persistent_storage_and_bounded_health_checks(tmp_path, profile):
     config = compose_config(tmp_path, profile=profile)

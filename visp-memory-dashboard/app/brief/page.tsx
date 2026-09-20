@@ -119,6 +119,10 @@ export default function TaskBriefPage() {
           <p className="mt-1 text-sm text-muted-foreground">
             Prepare trusted project context before work begins.
           </p>
+          <p className="mt-2 max-w-2xl text-xs text-muted-foreground">
+            Notes saved through the dashboard or API remain available in Recall, but are excluded here.
+            For context you have verified, use the local CLI to record a reviewed conclusion with its source in this project and store.
+          </p>
         </div>
         {brief ? (
           <Button

@@ -5,6 +5,24 @@ They do not establish improved coding outcomes, production-scale performance,
 or superiority over another product. No controlled live coding comparison is
 reported here; integration probes and scripted agent responses are not substitutes.
 
+## Optional evidence selection
+
+Context compilation and task briefs now accept opt-in `context_selection="coverage"`
+(CLI: `brief --context-selection coverage`). MCP `memory_context` with a query,
+`memory_prepare_task`, and HTTP context compilation/brief requests expose the same
+option. It selects verbatim passages with source offsets, retains speaker/date
+context, merges overlapping passages from one source, and reserves half the
+available evidence budget for direct matches before sharing unused capacity.
+Short conversation turns remain intact; longer turns offer bounded sentence
+windows. Task briefs pack passages once against their final rendered budget,
+including citation and conflict text, and rank additions by incremental cost.
+Coverage matching ignores conversational boilerplate and recognizes common word
+inflections without rewriting source text or identifiers. A bounded preceding
+turn is preserved with the passage so an answer retains its question and qualifiers.
+Default whole-memory selection remains unchanged. Standalone calendar dates no
+longer become inferred file paths; explicit file arguments remain authoritative
+for file selection.
+
 ## Reproduce the measurements
 
 From a development checkout:
@@ -57,14 +75,19 @@ attack queries also have legitimate answers that should remain available.
 
 | | Poisoned Retrieval Proportion |
 |---|---|
-| Undefended (relevance ranking only) | **56.25%** |
+| Undefended (relevance ranking only) | **69.57%** |
 | Defended (provenance quarantine) | **0.00%** |
 | Legitimate answers still injected | **5/5 (100%)** |
 
-The undefended arm retrieves 9 poisoned records out of 16. The defended arm blocks
+The undefended arm retrieves 16 poisoned records out of 23. The defended arm blocks
 those records while retaining useful answers. Both properties are checked; simply
 returning nothing is not considered a successful defense. These synthetic lures
 do not establish resistance to every attack. See [trust boundaries](TRUST.md).
+
+The previous undefended result was 9/16 (56.25%). Conservative reconciliation now
+keeps lexical substitutions as separate records, changing the fixture's retrieved
+population. The quarantine and legitimate-answer results are unchanged; the
+different undefended proportion is not evidence of improved answer accuracy.
 
 ## Local intelligence fixture
 

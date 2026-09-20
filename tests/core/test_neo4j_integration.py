@@ -70,6 +70,91 @@ def test_capture_citations_rollback_and_reopen(graph):
         reopened.close()
 
 
+def test_versioned_embeddings_rebuild_revision_brief_and_reopen(graph, monkeypatch):
+    """Real graph/index lifecycle; deterministic provider, no model service calls."""
+    import sys
+    from types import SimpleNamespace
+
+    from visp_memory.core.embeddings import OllamaProvider
+    from visp_memory.core.indexing import ReindexScope
+    from visp_memory.core.task_brief import TaskMemoryBriefCompiler
+
+    original, repo = graph
+    connection = {"uri": original.uri, "user": original.user, "password": original.password}
+    with Neo4jStorage(
+        **connection, embedding_fn=lambda text: [1.0, 0.0, 0.0], embedding_dimension=3
+    ) as legacy:
+        note = legacy.store_memory(
+            "Browser session cookies expire after ten minutes.",
+            repo_id=repo, tags=["provenance:authored"], auto_link=False,
+        )
+        evidence_ids = legacy.get_memory(note)["evidence_ids"]
+
+    prompts = []
+
+    def embed(*, model, prompt):
+        prompts.append(prompt)
+        return {"embedding": [1.0, 0.0, 0.0]}
+
+    monkeypatch.setitem(sys.modules, "ollama", SimpleNamespace(
+        Client=lambda host: SimpleNamespace(embeddings=embed),
+    ))
+    provider = OllamaProvider(model="nomic-embed-text", host="http://unused")
+    with Neo4jStorage(**connection, embedding_fn=provider.embed) as storage:
+        scope = ReindexScope(repo_id=repo)
+        before = storage.inspect_embedding_index(
+            storage_backend="neo4j", provider="ollama", scope=scope,
+        )
+        assert before.indexed_memories == 0 and before.needs_reindex
+        assert before.legacy_collections == ["embedding_3"]
+        prompts.clear()
+        assert storage.rebuild_embedding_index(scope=scope).dry_run
+        assert prompts == []
+        rebuilt = storage.rebuild_embedding_index(scope=scope, dry_run=False)
+        assert rebuilt.reindexed_memories == 1 and rebuilt.failed_memories == 0
+        assert prompts == ["search_document: Browser session cookies expire after ten minutes."]
+        with storage.driver.session() as session:
+            record = session.run(
+                "MATCH (m:Memory {id: $id}) RETURN m.embedding_3 AS legacy, "
+                "m.embedding_3_nomic_search_v1 AS current", id=note,
+            ).single()
+            assert list(record["legacy"]) == list(record["current"]) == [1.0, 0.0, 0.0]
+            session.run("CALL db.awaitIndexes(30)").consume()
+        assert storage.get_memory(note)["evidence_ids"] == evidence_ids
+        matches = storage.search_memories("Browser session", repo_id=repo)
+        assert any(m["id"] == note for m in matches)
+        assert "search_query: Browser session" in prompts
+
+        belief = storage.store_memory(
+            "Browser session cookies expire after ten minutes.", layer="semantic",
+            source_ids=[note], repo_id=repo, tags=["provenance:authored"], auto_link=False,
+        )
+        correction = storage.store_evidence(
+            "Verified browser session cookies expire after twenty minutes.", repo_id=repo,
+        )
+        successor = storage.revise_memory(
+            belief, "Browser session cookies expire after twenty minutes.",
+            evidence_ids=[correction], reason="Verified the corrected timeout",
+        )
+        assert "search_document: Browser session cookies expire after twenty minutes." in prompts
+        brief = TaskMemoryBriefCompiler(storage).prepare(
+            "Review browser session cookie timeout", repo_id=repo, ranking_strategy="hybrid",
+        )
+        cited = {item["memory_id"] for item in brief["citations"]}
+        assert successor in cited and belief not in cited
+        assert brief["retrieval"]["direct_ranking_strategy"] == "hybrid"
+        assert storage.get_all_relationships(repo)
+        assert brief["token_count"] <= brief["token_budget"]
+
+    with Neo4jStorage(**connection, embedding_fn=provider.embed) as reopened:
+        report = reopened.inspect_embedding_index(
+            storage_backend="neo4j", provider="ollama", scope=ReindexScope(repo_id=repo),
+        )
+        assert not report.needs_reindex
+        assert report.legacy_collections == ["embedding_3"]
+        assert reopened.get_memory(successor)["evidence_ids"] == [correction]
+
+
 def test_external_completion_is_ordered_and_bound(graph):
     s, repo = graph
     intent = s.set_intent("Ship the change", repo_id=repo, context={"workflow_history": ["forged"]})
@@ -304,6 +389,9 @@ def test_legacy_migration_backup_restore_preserves_history(admin_driver, tmp_pat
         assert memory["source"] == "unknown"
         assert storage.get_evidence(memory["evidence_ids"][0])["evidence_type"] == "legacy_snapshot"
         assert storage.get_active_intents("legacy-project", "all")[0]["status"] == "completed"
+        feedback_id = storage.log_recall_event("legacy", "used", task_id="task")
+        feedback_before = storage.inspect_recall_utility(memory_id="legacy")
+        assert feedback_before["events"][0]["id"] == feedback_id
     finally:
         storage.close()
     backup = tmp_path / "current.json"
@@ -321,6 +409,11 @@ def test_legacy_migration_backup_restore_preserves_history(admin_driver, tmp_pat
         return sorted((n["labels"], n["properties"]) for n in json.loads(path.read_text())["nodes"])
 
     assert nodes(roundtrip) == nodes(backup)
+    with Neo4jStorage(
+        uri=os.environ["VISP_TEST_NEO4J_ADMIN_URI"],
+        user="neo4j", password=os.environ["VISP_TEST_NEO4J_PASSWORD"],
+    ) as reopened:
+        assert reopened.inspect_recall_utility(memory_id="legacy") == feedback_before
 
 
 def test_failed_legacy_migration_keeps_original_graph_and_backup(admin_driver, tmp_path):
@@ -401,6 +494,11 @@ def test_native_vector_index(graph):
         assert results[0]["id"] == mid
         assert results[0]["retrieval_method"] == "vector"
         assert results[0]["similarity"] > 0.9
+        vector.log_recall_event(mid, "used", query="Different query words")
+        used = vector.search_memories("Different query words", repo_id=repo)[0]
+        assert used["retrieval_method"] == "vector"
+        assert used["utility_signal"]["counts"] == {"used": 1}
+        assert used["utility_score"] == pytest.approx(0.30)
     finally:
         vector.close()
 

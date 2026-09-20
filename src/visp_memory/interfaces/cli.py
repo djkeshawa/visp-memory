@@ -1406,6 +1406,11 @@ def recall(
     task_id: str = typer.Option(
         None, "--task-id", help="Task ID to associate with surfaced results"
     ),
+    ranking_strategy: str = typer.Option(
+        "default", "--ranking-strategy",
+        click_type=click.Choice(["default", "hybrid"]),
+        help="Hybrid reranks at least 100 candidates before applying the result limit",
+    ),
 ):
     """Search across all memories."""
     memory = get_memory()
@@ -1436,6 +1441,7 @@ def recall(
         task_id=task_id,
         environment=environment,
         task_type=task_type,
+        ranking_strategy=ranking_strategy,
     )
 
     if not results:
@@ -1458,6 +1464,9 @@ def recall(
         return
 
     from rich.box import ROUNDED
+
+    if ranking_strategy == "hybrid":
+        console.print("[dim]Hybrid ranking; scores describe the underlying retrieval match.[/dim]")
 
     table = Table(title=f"Search Results for '{query}'", box=ROUNDED)
     table.add_column("ID", style="dim", width=16)
@@ -1865,6 +1874,15 @@ def brief(
     min_confidence: float = typer.Option(
         0.0, "--min-confidence", min=0.0, max=1.0
     ),
+    ranking_strategy: str = typer.Option(
+        "default", "--ranking-strategy", click_type=click.Choice(["default", "hybrid"]),
+        help="Optional canonical/BM25 direct ranking before native graph expansion",
+    ),
+    context_selection: str = typer.Option(
+        "default", "--context-selection", click_type=click.Choice(["default", "coverage"]),
+        help="Select whole memories or verbatim passages with broader evidence coverage",
+    ),
+    as_of: str = typer.Option(None, "--as-of", help="Historical selection time (ISO 8601)"),
     format: str = typer.Option("text", "--format", help="Output format: text or json"),
 ):
     """Prepare a cited, token-budgeted memory brief before work begins."""
@@ -1887,6 +1905,9 @@ def brief(
         constraints=constraints or [],
         previous_fingerprint=previous_fingerprint,
         min_confidence=min_confidence,
+        ranking_strategy=ranking_strategy,
+        context_selection=context_selection,
+        as_of=as_of,
     )
     if format == "json":
         console.print_json(json.dumps(result, default=str))

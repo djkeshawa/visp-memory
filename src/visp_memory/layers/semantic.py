@@ -18,12 +18,13 @@ from visp_memory.core.beliefs import BeliefType, normalize_belief_type
 from visp_memory.core.clock import utc_now
 from visp_memory.core.eligibility import require_repo_id
 from visp_memory.core.ranking import rank_memory_results
+from visp_memory.core.source_support import source_support
 from visp_memory.core.storage import UNSCOPED_REPO_ID, BaseStorage
 from visp_memory.core.trust import (
     WriteChannel,
     channel_policy,
     parse_write_channel,
-    with_channel_provenance,
+    with_provenance,
 )
 from visp_memory.layers.base import BaseMemoryLayer
 
@@ -110,10 +111,14 @@ class SemanticMemory(BaseMemoryLayer):
         write_channel = parse_write_channel(_write_channel)
         policy = channel_policy(write_channel)
         belief_type = normalize_belief_type(category)
+        _, inherited_scope, provenance = source_support(
+            self.storage, source_episodes, repo_id, write_channel
+        )
         metadata = {
             "established_at": utc_now().isoformat(),
             "applies_to": applies_to or [],
             "write_channel": write_channel.value,
+            **inherited_scope,
         }
 
         return self.storage.store_memory(
@@ -123,7 +128,7 @@ class SemanticMemory(BaseMemoryLayer):
             authority_attestation=authority_attestation,
             importance=importance,
             repo_id=repo_id,
-            tags=with_channel_provenance(tags, write_channel),
+            tags=with_provenance(tags, provenance),
             metadata=metadata,
             source_ids=source_episodes or [],
             evidence_ids=evidence_ids or [],

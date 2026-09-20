@@ -9,12 +9,19 @@ x-ollama-dependencies: &ollama-dependencies
   ollama-pull:
     condition: service_completed_successfully
 
+# The provider alone is insufficient: SQLite semantic recall also needs Chroma.
+x-ollama-build: &ollama-build
+  args:
+    VISP_MEMORY_EXTRAS: ${VISP_MEMORY_EXTRAS:-api,mcp,arcadedb,neo4j,openai,anthropic},ollama,chroma
+
 services:
   visp-memory-lite:
+    build: *ollama-build
     environment: *ollama-environment
     depends_on: *ollama-dependencies
 
   visp-memory-arcadedb:
+    build: *ollama-build
     environment: *ollama-environment
     depends_on: *ollama-dependencies
 

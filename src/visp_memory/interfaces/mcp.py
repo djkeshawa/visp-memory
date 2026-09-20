@@ -767,6 +767,13 @@ def create_mcp_server() -> "Server":
 
 def _handle_context(args: dict[str, Any], memory: Memory) -> str:
     """Handle context tools."""
+    from visp_memory.core.coverage_selection import validate_context_selection
+    from visp_memory.core.lexical_ranking import validate_ranking_strategy
+
+    context_selection = args.get("context_selection", "default")
+    validate_context_selection(context_selection)
+    ranking_strategy = args.get("ranking_strategy", "default")
+    validate_ranking_strategy(ranking_strategy)
     fmt = args.get("format", "text")
     if args.get("query"):
         from visp_memory.core.context_compiler import ContextCompiler
@@ -783,6 +790,9 @@ def _handle_context(args: dict[str, Any], memory: Memory) -> str:
             previous_fingerprint=args.get("previous_fingerprint"),
             environment=args.get("environment"),
             task_type=args.get("task_type"),
+            ranking_strategy=ranking_strategy,
+            context_selection=context_selection,
+            as_of=args.get("as_of"),
         )
         if fmt == "json":
             return json.dumps(compiled, indent=2, default=str)
@@ -795,6 +805,9 @@ def _handle_context(args: dict[str, Any], memory: Memory) -> str:
             f"Token count: {compiled['token_count']}/{compiled['token_budget']}\n\n"
             f"{compiled['context']}"
         )
+    if (context_selection != "default" or ranking_strategy != "default"
+            or args.get("as_of") is not None):
+        raise ValueError("query is required for ranking_strategy or as_of context selection")
     include_history = args.get("include_history", True)
     ctx = memory.context(
         format=fmt,
@@ -830,6 +843,9 @@ def _handle_task_brief(args: dict[str, Any], memory: Memory) -> str:
         min_confidence=float(args.get("min_confidence", 0.0)),
         environment=args.get("environment"),
         task_type=args.get("task_type"),
+        ranking_strategy=args.get("ranking_strategy", "default"),
+        context_selection=args.get("context_selection", "default"),
+        as_of=args.get("as_of"),
     )
     if args.get("format", "text") == "json":
         return json.dumps(brief, indent=2, default=str)
@@ -841,6 +857,9 @@ def _handle_task_brief(args: dict[str, Any], memory: Memory) -> str:
 def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
     """Handle search tools."""
     if name == "memory_recall":
+        ranking_strategy = args.get("ranking_strategy", "default")
+        if ranking_strategy not in ("default", "hybrid"):
+            return "Error: 'ranking_strategy' must be 'default' or 'hybrid'."
         layers = args.get("layers")
         if layers is not None:
             if not isinstance(layers, list):
@@ -865,6 +884,7 @@ def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
             dependencies=args.get("dependencies"),
             environment=args.get("environment"),
             task_type=args.get("task_type"),
+            ranking_strategy=ranking_strategy,
         )
         # An agent reads this number and quotes it onward, so it says what it is:
         # two rounds of battle-ground notes reported lexical overlap as semantic
@@ -882,6 +902,8 @@ def _handle_search(name: str, args: dict[str, Any], memory: Memory) -> str:
 
         score_label = LEXICAL_SCORE_LABEL if lexical else DEFAULT_SCORE_LABEL
         output = [f"Found {len(results)} memories:\n"]
+        if ranking_strategy == "hybrid":
+            output.append("Hybrid ranking; scores describe the underlying retrieval match.\n")
         for r in results:
             sim = f" ({score_label}: {r.get('similarity', 0):.2f})" if r.get("similarity") else ""
             output.append(

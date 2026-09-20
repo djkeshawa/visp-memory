@@ -35,6 +35,7 @@ from visp_memory.core.ranking import DEFAULT_RECALL_MIN_SCORE, rank_memory_resul
 from visp_memory.core.recall_candidates import recall_candidates
 from visp_memory.core.remote_storage import RemoteStorage
 from visp_memory.core.repository import RepositoryManager
+from visp_memory.core.source_support import source_support
 from visp_memory.core.storage import UNSCOPED_REPO_ID, LocalStorage
 from visp_memory.core.team import TeamManager
 from visp_memory.core.trust import (
@@ -345,6 +346,12 @@ class Memory:
             reconcile = False
         evidence_ids = list(kwargs.pop("evidence_ids", []) or [])
         source_episodes = list(kwargs.get("source_episodes", []) or [])
+        # Reconciliation may return before establish(), so validate and resolve
+        # source support before taking any write path, including a duplicate.
+        source_evidence, source_scope, source_provenance = source_support(
+            self._storage, source_episodes, effective_repo_id, _write_channel
+        )
+        evidence_ids = list(dict.fromkeys([*evidence_ids, *source_evidence]))
         if not evidence_ids and not source_episodes:
             policy = channel_policy(_write_channel)
             evidence_repo_id = effective_repo_id
@@ -389,7 +396,8 @@ class Memory:
         # conflict must be recorded as its own memory and edge, never merged.
         if reconcile and not verdict.has_conflict:
             decision = self.reconciler.decide(
-                knowledge, layer="semantic", repo_id=effective_repo_id, category=category_value
+                knowledge, layer="semantic", repo_id=effective_repo_id, category=category_value,
+                scope=source_scope, provenance=source_provenance,
             )
             if decision.action in ("noop", "update") and decision.target_id:
                 return self._apply_reconcile_decision(
@@ -520,6 +528,14 @@ class Memory:
                 memory_id,
             )
 
+    def _link_reconciled_sources(self, memory_id: str, source_ids: List[str]) -> None:
+        for source_id in dict.fromkeys(source_ids):
+            if source_id != memory_id:
+                self._storage.add_relationship(
+                    source_id=source_id, target_id=memory_id,
+                    relationship="derived_from", strength=1.0,
+                )
+
     def _apply_reconcile_decision(
         self,
         decision,
@@ -540,21 +556,6 @@ class Memory:
         merged_importance = max(float(existing.get("importance", 0.5) or 0.0), float(importance))
         if decision.action == "update":
             revision_evidence_ids = list(dict.fromkeys(evidence_ids or []))
-            # A source-episode semantic write normally lets storage resolve lineage
-            # through ``source_ids``.  Revisions are a new row, so carry the source
-            # rows' Evidence explicitly or the successor would fail the governed
-            # evidence requirement (and, worse, reconciliation would behave
-            # differently from a first write).
-            peek = getattr(self._storage, "peek_memory", None)
-            for source_id in source_episodes or []:
-                source = (
-                    peek(source_id)
-                    if callable(peek)
-                    else self._storage.get_memory(source_id)
-                )
-                if source:
-                    revision_evidence_ids.extend(source.get("evidence_ids") or [])
-            revision_evidence_ids = list(dict.fromkeys(revision_evidence_ids))
             existing_evidence_ids = set(existing.get("evidence_ids") or [])
             if not any(
                 evidence_id not in existing_evidence_ids
@@ -589,6 +590,7 @@ class Memory:
                 decision.similarity,
                 decision.reason,
             )
+            self._link_reconciled_sources(successor_id, source_episodes)
             return successor_id
 
         updates: Dict[str, Any] = {"importance": merged_importance}
@@ -602,6 +604,7 @@ class Memory:
                 repo_id=evidence_repo_id,
             )
         self._storage.update_memory(decision.target_id, **updates)
+        self._link_reconciled_sources(decision.target_id, source_episodes)
         logger.info(
             "Reconciled knowledge into %s (%s, overlap=%.2f): %s",
             decision.target_id,
@@ -860,6 +863,7 @@ class Memory:
         environment: Any = None,
         task_type: Any = None,
         as_of: Any = None,
+        ranking_strategy: str = "default",
     ) -> List[Dict[str, Any]]:
         """
         Search across all memory layers.
@@ -869,10 +873,25 @@ class Memory:
             layers: Which layers to search (default: all)
             limit: Maximum results per layer
             min_score: Minimum canonical relevance score to return
+            ranking_strategy: "hybrid" reranks at least 100 eligible candidates using
+                lexical evidence; "default" preserves canonical relevance ordering.
 
         Returns:
             List of matching memories with similarity scores
         """
+        from visp_memory.core.lexical_ranking import (
+            HYBRID_CANDIDATE_LIMIT,
+            rerank_lexical,
+            validate_ranking_strategy,
+        )
+
+        validate_ranking_strategy(ranking_strategy)
+
+        candidate_limit = (
+            max(limit, HYBRID_CANDIDATE_LIMIT)
+            if ranking_strategy == "hybrid" and limit > 0
+            else limit
+        )
         query, _ = redact_for_storage(query, None)
         layers = layers or ["episodic", "semantic", "intent"]
         search_repo_id = require_repo_id(repo_id or self.config.repo_id)
@@ -887,7 +906,7 @@ class Memory:
 
         def rank_candidates(candidates):
             return self._rank_recall_candidates(
-                candidates, ranking_context, query=query, limit=limit, min_score=min_score
+                candidates, ranking_context, query=query, limit=candidate_limit, min_score=min_score
             )
 
         eligibility = recall_candidates(
@@ -895,7 +914,7 @@ class Memory:
             query,
             repo_id=search_repo_id,
             layers=layers,
-            limit=limit,
+            limit=candidate_limit,
             status=status,
             environment=environment,
             task_type=task_type,
@@ -906,6 +925,8 @@ class Memory:
         self.last_recall_eligibility = eligibility.diagnostics()
 
         ranked = rank_candidates(eligibility.allowed)
+        if ranking_strategy == "hybrid":
+            ranked = rerank_lexical(ranked, query)[: max(0, limit)]
         if log_utility:
             for result in ranked:
                 memory_id = result.get("id")

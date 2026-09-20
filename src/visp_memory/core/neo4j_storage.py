@@ -13,7 +13,9 @@ except ImportError:  # pragma: no cover - exercised only when optional extra is 
     GraphDatabase = None
 
 from visp_memory.config import load_config
+from visp_memory.core.embedding_binding import bind_embeddings
 from visp_memory.core.indexing import EmbeddingIndexReport, ReindexResult, ReindexScope
+from visp_memory.core.neo4j_feedback import Neo4jFeedback
 from visp_memory.core.neo4j_governance import Neo4jGovernance
 from visp_memory.core.ranking import (
     clamp_score,
@@ -51,7 +53,7 @@ def _normalize_relationship_type(relationship: str) -> str:
     return rel_type
 
 
-class Neo4jStorage(Neo4jGovernance, BaseStorage):
+class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, BaseStorage):
     """
     Storage implementation using Neo4j for both structured data and vector embeddings.
     """
@@ -141,17 +143,6 @@ class Neo4jStorage(Neo4jGovernance, BaseStorage):
         "metadata",
         "created_at",
     }
-    FEEDBACK_NODE_FIELDS = {
-        "id",
-        "memory_id",
-        "event_type",
-        "repo_id",
-        "query_hash",
-        "task_id",
-        "outcome",
-        "metadata",
-        "created_at",
-    }
 
     def __init__(
         self,
@@ -169,15 +160,18 @@ class Neo4jStorage(Neo4jGovernance, BaseStorage):
         self.uri = uri or config.storage.neo4j_uri
         self.user = user or config.storage.neo4j_user
         self.password = password or config.storage.neo4j_password
-        self._embedding_fn = embedding_fn
-        embedding_owner = getattr(embedding_fn, "__self__", None)
-        self._embedding_dimension = embedding_dimension or getattr(
-            embedding_owner, "dimension", None
+        binding = bind_embeddings(embedding_fn, embedding_dimension)
+        self._embedding_fn = binding.document
+        self._query_embedding_fn = binding.query
+        self._embedding_dimension = binding.dimension
+        self._embedding_space = binding.space
+        self._vector_property = self._vector_property_name(
+            self._embedding_dimension, self._embedding_space
         )
-        self._vector_property = self._vector_property_name(self._embedding_dimension)
-        self._vector_index = self._vector_index_name(self._embedding_dimension)
-        embedding_owner_name = embedding_owner.__class__.__name__.lower() if embedding_owner else ""
-        self._uses_noop_embeddings = embedding_owner_name == "noopprovider"
+        self._vector_index = self._vector_index_name(
+            self._embedding_dimension, self._embedding_space
+        )
+        self._uses_noop_embeddings = binding.is_noop
         self._upgrade_session_schema_marker = False
 
         try:
@@ -190,6 +184,7 @@ class Neo4jStorage(Neo4jGovernance, BaseStorage):
                 self._upgrade_v4_session_schema()
             self._ensure_indexes()
             self._ensure_governance_schema()
+            self._ensure_feedback_indexes()
         except Exception as e:
             logger.error(f"Failed to initialize Neo4j driver: {e}")
             driver = getattr(self, "driver", None)
@@ -265,7 +260,7 @@ class Neo4jStorage(Neo4jGovernance, BaseStorage):
             )
 
             # Vector index dimensions must match the active embedding provider.
-            if self._embedding_dimension:
+            if self._embedding_dimension and not self._uses_noop_embeddings:
                 try:
                     dimensions = int(self._embedding_dimension)
                     session.run(f"""
@@ -366,16 +361,14 @@ class Neo4jStorage(Neo4jGovernance, BaseStorage):
         return False
 
     @staticmethod
-    def _vector_property_name(dimension: int = None) -> str:
-        if dimension:
-            return f"embedding_{int(dimension)}"
-        return "embedding"
+    def _vector_property_name(dimension: int = None, space: str = None) -> str:
+        name = f"embedding_{int(dimension)}" if dimension else "embedding"
+        return f"{name}_{space}" if space else name
 
     @staticmethod
-    def _vector_index_name(dimension: int = None) -> str:
-        if dimension:
-            return f"memory_embedding_index_{int(dimension)}"
-        return "memory_embedding_index"
+    def _vector_index_name(dimension: int = None, space: str = None) -> str:
+        name = f"memory_embedding_index_{int(dimension)}" if dimension else "memory_embedding_index"
+        return f"{name}_{space}" if space else name
 
     @staticmethod
     def _generate_id(content: str) -> str:
@@ -685,10 +678,13 @@ class Neo4jStorage(Neo4jGovernance, BaseStorage):
         embedding = kwargs.get("embedding")
         status = kwargs.get("status", "active")
 
-        # Generate embedding from query if not provided and embedding function is available
-        if not embedding and self._embedding_fn is not None:
+        # Noop means keyword-only, matching local storage and index diagnostics.
+        # Constant vectors must not make every memory appear semantically relevant.
+        if self._uses_noop_embeddings:
+            embedding = None
+        elif not embedding and self._embedding_fn is not None:
             try:
-                embedding = self._embedding_fn(query)
+                embedding = self._query_embedding_fn(query)
             except Exception as e:
                 logger.warning(f"Failed to generate embedding for query: {e}")
                 embedding = None
@@ -791,6 +787,7 @@ class Neo4jStorage(Neo4jGovernance, BaseStorage):
                 mem["similarity"] = record["score"]
                 mem["retrieval_method"] = "vector" if params.get("embedding") else "keyword"
                 memories.append(mem)
+            self._attach_recall_utility_scores(memories)
             return memories
 
     def list_memories(
@@ -948,6 +945,7 @@ class Neo4jStorage(Neo4jGovernance, BaseStorage):
         scope = scope or ReindexScope()
         where = ["1 = 1"]
         params: dict[str, Any] = {"vector_property": self._vector_property}
+        legacy_property = self._vector_property_name(self._embedding_dimension)
         if scope.layer:
             where.append("m.layer = $layer")
             params["layer"] = scope.layer
@@ -962,17 +960,22 @@ class Neo4jStorage(Neo4jGovernance, BaseStorage):
             MATCH (m:Memory)
             WHERE {" AND ".join(where)}
             RETURN count(m) AS matched,
-                   count(m.`{self._vector_property}`) AS indexed
+                   count(m.`{self._vector_property}`) AS indexed,
+                   count(m.`{legacy_property}`) AS legacy
         """
         matched = 0
         indexed = 0
+        legacy = 0
+        inspection_failed = False
         try:
             with self.driver.session() as session:
                 record = session.run(query, **params).single()
                 matched = int(record["matched"])
                 indexed = int(record["indexed"])
+                legacy = int(record.get("legacy", 0))
         except Exception:
-            pass
+            inspection_failed = True
+            indexed = None
 
         if self._uses_noop_embeddings:
             status = "disabled"
@@ -980,14 +983,19 @@ class Neo4jStorage(Neo4jGovernance, BaseStorage):
         elif self._embedding_fn is None:
             status = "not_configured"
             message = "No embedding function is configured; text fallback is used."
+        elif inspection_failed:
+            status = "unknown"
+            message = "Could not inspect Neo4j vector coverage; index readiness is unknown."
         elif dimension or self._embedding_dimension:
             status = "available"
-            message = "Neo4j vector property is available for the active provider dimension."
+            message = "Neo4j vector property is available for the active embedding space."
         else:
             status = "unknown"
             message = "Embedding provider is active but its vector dimension is unknown."
 
-        needs_reindex = bool(matched and status == "available" and indexed < matched)
+        needs_reindex = bool(
+            matched and status == "available" and indexed is not None and indexed < matched
+        )
         if needs_reindex:
             message = "The active Neo4j vector property has fewer vectors than matching memories."
 
@@ -1003,7 +1011,9 @@ class Neo4jStorage(Neo4jGovernance, BaseStorage):
             matched_memories=matched,
             indexed_memories=indexed,
             active_collections=[self._vector_property],
-            legacy_collections=[],
+            legacy_collections=(
+                [legacy_property] if legacy and legacy_property != self._vector_property else []
+            ),
             needs_reindex=needs_reindex,
         )
 
@@ -1093,6 +1103,9 @@ class Neo4jStorage(Neo4jGovernance, BaseStorage):
     def delete_memory(self, memory_id: str) -> bool:
         """Delete node and relationships."""
         with self._write_session() as session:
+            session.run(
+                "MATCH (e:RecallFeedback {memory_id: $id}) DETACH DELETE e", id=memory_id,
+            ).consume()
             session.run(
                 "MATCH (m:Memory) WHERE $id IN m.source_ids "
                 "SET m.source_ids = [x IN m.source_ids WHERE x <> $id]",
@@ -1717,7 +1730,7 @@ class Neo4jStorage(Neo4jGovernance, BaseStorage):
                     session.run(
                         "MATCH (n) WHERE n.repo_id = $id AND "
                         "(n:Evidence OR n:DreamProject OR n:DreamRun OR n:DreamAction "
-                        "OR n:DreamDismissal) DETACH DELETE n",
+                        "OR n:DreamDismissal OR n:RecallFeedback) DETACH DELETE n",
                         id=repo_id,
                     ).consume()
                 session.run("MATCH (i:Intent {repo_id: $id}) DETACH DELETE i", id=repo_id)

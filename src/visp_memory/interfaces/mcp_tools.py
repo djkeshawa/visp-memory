@@ -40,6 +40,13 @@ RUNTIME_SCOPE_SCHEMA = {
     ]
 }
 
+CONTEXT_RANKING_SCHEMA = {
+    "type": "string",
+    "enum": ["default", "hybrid"],
+    "default": "default",
+    "description": "Optional canonical/BM25 direct ranking before native graph expansion",
+}
+
 # Every MCP tool definition (name + description + input schema) is loaded into the
 # assistant's context on every session. With the full surface that is several
 # thousand tokens of overhead before any work begins - at odds with this project's
@@ -239,6 +246,13 @@ def build_tool_definitions() -> list["Tool"]:
                         "description": "The concrete task the LLM is about to perform",
                     },
                     "repo_id": {"type": "string"},
+                    "context_selection": {
+                        "type": "string", "enum": ["default", "coverage"],
+                        "default": "default",
+                        "description": "Whole memories or cited verbatim coverage passages",
+                    },
+                    "ranking_strategy": CONTEXT_RANKING_SCHEMA,
+                    "as_of": {"type": "string", "format": "date-time"},
                     "environment": RUNTIME_SCOPE_SCHEMA,
                     "task_type": RUNTIME_SCOPE_SCHEMA,
                     "files": {"type": "array", "items": {"type": "string"}},
@@ -295,6 +309,19 @@ def build_tool_definitions() -> list["Tool"]:
                         "type": "string",
                         "description": "Optional task query for compact ranked context",
                     },
+                    "context_selection": {
+                        "type": "string", "enum": ["default", "coverage"],
+                        "default": "default",
+                        "description": "Whole memories or cited verbatim coverage passages",
+                    },
+                    "ranking_strategy": {
+                        **CONTEXT_RANKING_SCHEMA,
+                        "description": "Direct ranking for compact context; hybrid requires query",
+                    },
+                    "as_of": {
+                        "type": "string", "format": "date-time",
+                        "description": "Historical selection time; requires query",
+                    },
                     "repo_id": {"type": "string"},
                     "environment": RUNTIME_SCOPE_SCHEMA,
                     "task_type": RUNTIME_SCOPE_SCHEMA,
@@ -321,6 +348,12 @@ def build_tool_definitions() -> list["Tool"]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "ranking_strategy": {
+                        "type": "string",
+                        "enum": ["default", "hybrid"],
+                        "default": "default",
+                        "description": "Hybrid reranks at least 100 candidates before the limit.",
+                    },
                     "query": {
                         "type": "string",
                         "description": "What to search for (natural language)",

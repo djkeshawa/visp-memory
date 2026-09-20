@@ -37,6 +37,27 @@ guarded reads still require valid project, time, environment, and task scope.
 Graph expansion cannot use rejected nodes as hidden bridges. An attacker with
 direct database-mutation access is outside this policy boundary.
 
+### Notes saved in the dashboard or API
+
+Dashboard writes use HTTP, including writes by signed-in administrators. They
+remain searchable in Recall but are excluded from task briefs and automatic
+context. Setting a pending note to active records a review; it does not change
+the note's provenance or make it eligible for automatic context.
+
+To use a conclusion you have personally checked, inspect the original source,
+then record your own reviewed conclusion through the local CLI in the **same
+project and data store**, including a source reference:
+
+```bash
+visp-memory record "Verified: session cookies use HttpOnly; source: src/auth.py" --repo my-project
+```
+
+For a Docker-hosted store, run that CLI command inside the application container
+using `docker exec`; a host CLI with a different data directory writes to a
+different store. The original HTTP note keeps its provenance. Do not blindly
+copy external instructions or relabel an external record as trusted. A CLI note
+still has to pass relevance, scope, freshness, and other eligibility checks.
+
 Inspect your store with:
 
 ```bash
@@ -102,6 +123,14 @@ Generic completion commands remain advisory. The legacy
 deprecated inputs and returns `authoritative: false` and `status_changed: false`.
 
 ## Retention and deletion
+
+Source-backed semantic learning preserves the source environment and task scope.
+Sources with different scopes must be learned separately. A derived fact cannot
+receive a stronger provenance tier than its source episodes. Reconciliation only
+combines matching scope and provenance tiers; repeated facts retain new source
+Evidence and `derived_from` relationships. Lexical overlap alone cannot reconcile
+changes to numeric, temporal, or negation markers. Ambiguous changes remain
+separate facts for explicit conflict handling or revision.
 
 Archiving, merging, and quarantine retain data; they are not erasure. Dreaming
 keeps original content and action history so changes can be undone, and never

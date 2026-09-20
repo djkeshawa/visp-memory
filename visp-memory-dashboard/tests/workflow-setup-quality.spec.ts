@@ -64,7 +64,7 @@ test("reflects external completion and shows evidence and history after refresh"
 test("explains search matches and flags stale or conflicting knowledge", async ({ page }) => {
   await mockWorkspace(page)
   await page.route("**/recall", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify([{
-    id: "memory-1", content: "Login uses sessions", layer: "semantic", importance: 0.7, tags: [],
+    id: "memory-1", content: "Login uses sessions", layer: "semantic", importance: 0.7, tags: ["provenance:external"],
     created_at: "2026-01-01T00:00:00Z", retrieval_method: "keyword", match_explanation: "Matched words: login",
     relevance_score: 0.75, quality_flags: ["possible_conflict"], valid_to: "2025-01-01T00:00:00Z",
     evidence_ids: ["evidence-1"], source: "assistant", metadata: {},
@@ -73,6 +73,8 @@ test("explains search matches and flags stale or conflicting knowledge", async (
   await page.getByPlaceholder("What did I decide about authentication?").fill("login")
   await page.getByRole("button", { name: "Search", exact: true }).click()
   await expect(page.getByText("Keyword search", { exact: true })).toBeVisible()
+  await expect(page.getByText("Excluded from task briefs", { exact: true })).toBeVisible()
+  await expect(page.getByText(/Dashboard and API notes remain searchable/)).toBeVisible()
   await expect(page.getByText("May be stale · review before using")).toBeVisible()
   await expect(page.getByText("Possible conflict · review sources")).toBeVisible()
   await page.getByText("Match explanation and quality", { exact: true }).click()

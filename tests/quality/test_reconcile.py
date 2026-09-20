@@ -167,3 +167,59 @@ class TestReconcilerUnit:
 
         decision = Reconciler(BrokenStorage()).decide("anything", layer="semantic")
         assert decision.action == "add"
+
+
+@pytest.mark.parametrize("old,new", [
+    ("2024/03/01", "2024/03/02"),
+    ("Monday", "Tuesday"),
+    ("$25", "$50"),
+    ("approved", "not approved"),
+])
+def test_reconciliation_does_not_erase_changed_event_details(memory, old, new):
+    template = "The workshop reservation for the community centre was {} according to my notes."
+    first = memory.learn(template.format(old))
+    second = memory.learn(template.format(new))
+    assert second != first
+    assert memory._storage.get_memory(first)["status"] == "active"
+    assert memory._storage.get_memory(second)["status"] == "active"
+
+
+def test_repeated_fact_attaches_new_episode_evidence_and_graph_link(memory):
+    fact = "The workshop booking requires a refundable deposit."
+    episodes = [memory.record(f"Session {n}: {fact}", repo_id="workshops") for n in (1, 2)]
+    first = memory.learn(fact, source_episodes=[episodes[0]], repo_id="workshops")
+    second = memory.learn(fact, source_episodes=[episodes[1]], repo_id="workshops")
+    assert first == second
+    expected = {
+        eid for source in episodes
+        for eid in memory._storage.get_memory(source)["evidence_ids"]
+    }
+    assert expected <= set(memory._storage.get_memory(first)["evidence_ids"])
+    edges = memory._storage.get_all_relationships(repo_id="workshops")
+    assert all(any(
+        e["source_id"] == source and e["target_id"] == first
+        and e["relationship"] == "derived_from" for e in edges
+    ) for source in episodes)
+
+
+@pytest.mark.parametrize("source", ["missing", "foreign"])
+def test_repeated_fact_cannot_bypass_source_validation(memory, source):
+    fact = "The workshop booking requires a refundable deposit."
+    first = memory.learn(fact, repo_id="workshops", importance=0.5)
+    source_id = (
+        memory.record(fact, repo_id="other") if source == "foreign" else "missing-source"
+    )
+    with pytest.raises(ValueError, match="[Ss]ource|repository"):
+        memory.learn(fact, source_episodes=[source_id], repo_id="workshops", importance=0.9)
+    assert memory._storage.get_memory(first)["importance"] == pytest.approx(0.5)
+
+
+def test_similar_wording_does_not_replace_a_different_named_entity(memory):
+    template = (
+        "The workshop reservation for our community centre team meeting with "
+        "accessible seating and audio equipment is assigned to {} Hall."
+    )
+    first = memory.learn(template.format("Cedar"))
+    second = memory.learn(template.format("Willow"))
+    assert second != first
+    assert memory._storage.get_memory(first)["status"] == "active"

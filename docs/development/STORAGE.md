@@ -78,6 +78,26 @@ models, then rebuild/reindex existing content for the chosen model. Settings in
 the dashboard describe connection status; they do not themselves rebuild an index.
 `visp-memory doctor` and the Operations page help distinguish fallback from semantic search.
 
+SQLite and Neo4j share provider binding for document and query embeddings. With
+Nomic, writes, content updates and explicit rebuilds use `search_document:`, while
+retrieval uses `search_query:`. Corrected vectors occupy a `nomic_search_v1`
+namespace: SQLite keeps its existing suffixed Chroma collections; Neo4j uses
+`embedding_<dimension>_nomic_search_v1` and a matching vector index. The older
+dimension-only vectors are retained and never queried by the corrected Nomic path.
+Existing Nomic data on Neo4j therefore needs an explicit rebuild of the new space;
+startup does not regenerate vectors or call an embedding API for that rebuild.
+
+Index inspection distinguishes incomplete active coverage from retained legacy
+vectors. Once the active space covers the selected memories, retained old vectors
+alone do not request another rebuild. Failed Neo4j coverage inspection reports
+unknown readiness rather than an available, empty index. Generic providers keep
+their existing dimension-based namespaces, so changing to a different model still
+requires the explicit backup/rebuild procedure above. This instruction-space
+versioning is not automatic model-identity detection.
+
+On Neo4j, `noop` uses keyword search and does not create a new vector index.
+It cannot use constant vectors to make unrelated memories look semantically similar.
+
 Vector-wide `visp-memory dedup` requires real embeddings and a vector collection;
 without them it reports an unavailable check. [Dreaming](DREAMING.md) can merge
 eligible exact duplicates without either dependency.
@@ -130,7 +150,7 @@ refused rather than truncated. See [export contracts](CONTRACT_SURFACE.md#export
 | Backend | Status and search | Graph export / atomic import |
 |---|---|---|
 | SQLite | Supported; keyword or optional Chroma | Yes / Yes |
-| ArcadeDB | Frozen; embedded runtime, Chroma/text fallback | Yes / No |
+| ArcadeDB | Frozen; embedded runtime, keyword search only | Yes / No |
 | Neo4j | Opt-in beta; Evidence graph, native vectors or keyword search | Neo4j backup / empty-store restore; portable packs unavailable |
 | Remote/HTTP | Uses the server's backend and access policy | No / No |
 
@@ -154,6 +174,17 @@ SQLite remains the default and the recommended choice for a local installation.
 Choose Neo4j when you want to operate a separate graph database. The beta supports
 capture, immutable Evidence citations, governed beliefs, recall, corrections,
 external workflow completion, and scheduled dreaming. Retrieval never calls an LLM.
+
+Neo4j supports recall utility logging, inspection, verification and reset through
+the existing Memory, CLI and MCP operations. Feedback is stored as `RecallFeedback`
+nodes linked to the canonical memory; raw queries are hashed and metadata uses the
+same filtering as SQLite. Explicit use reinforces access metrics atomically with
+the event, while inspection and mere exposure do not. Keyword and vector candidates
+receive the existing bounded utility adjustment; trust and lifecycle filters still
+apply. Scoped inspection/reset excludes misattributed historical events, which
+remain visible to verification. Feedback survives graph backup/restore and is
+removed when its memory is deleted. New indexes are additive; existing memories
+and vectors require no rewrite.
 
 ```yaml
 storage:
