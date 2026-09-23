@@ -24,8 +24,11 @@ def is_calendar_date(value: str) -> bool:
     return False
 
 
+CONTEXT_SELECTIONS = ("default", "coverage")
+
+
 def validate_context_selection(value: str) -> None:
-    if value not in ("default", "coverage"):
+    if value not in CONTEXT_SELECTIONS:
         raise ValueError("context_selection must be 'default' or 'coverage'")
 
 

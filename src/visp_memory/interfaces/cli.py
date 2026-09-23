@@ -22,6 +22,7 @@ import json
 import os
 import shlex
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -49,6 +50,7 @@ from visp_memory.core.contract_recall import (
     recall_for_task,
     structural_caveat,
 )
+from visp_memory.core.coverage_selection import CONTEXT_SELECTIONS
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID
 from visp_memory.core.embedding_status import (
     DISABLED_STATUS_MESSAGE,
@@ -59,6 +61,7 @@ from visp_memory.core.embedding_status import (
     LEXICAL_SCORE_LABEL,
 )
 from visp_memory.core.intent_usage import STATUS_NEVER_USED, check_intent_usage
+from visp_memory.core.lexical_ranking import RANKING_STRATEGIES
 from visp_memory.core.ranking import projected_importance
 from visp_memory.core.reporting import MemoryIntelligenceReporter
 from visp_memory.core.storage import LocalStorage
@@ -67,6 +70,12 @@ from visp_memory.hooks.reachability import ReachabilityReport, check_reachabilit
 from visp_memory.interfaces.maintenance import app as maintenance_app
 
 console = Console()
+
+# Typer-native choices. Typer 0.27 bundles its own Click, so a click.Choice from the
+# separately installed package raised an unhandled exception (exit 1) on an invalid
+# value instead of the usage error (exit 2) every other bad option produces.
+RankingStrategy = Enum("RankingStrategy", {name: name for name in RANKING_STRATEGIES}, type=str)
+ContextSelection = Enum("ContextSelection", {name: name for name in CONTEXT_SELECTIONS}, type=str)
 
 
 class _RefusalBoundary(TyperGroup):
@@ -1406,13 +1415,13 @@ def recall(
     task_id: str = typer.Option(
         None, "--task-id", help="Task ID to associate with surfaced results"
     ),
-    ranking_strategy: str = typer.Option(
-        "default", "--ranking-strategy",
-        click_type=click.Choice(["default", "hybrid", "hybrid_union"]),
+    ranking_strategy: RankingStrategy = typer.Option(
+        RankingStrategy.default, "--ranking-strategy",
         help="Hybrid reranks candidates; hybrid_union also discovers independent keyword matches",
     ),
 ):
     """Search across all memories."""
+    ranking_strategy = RankingStrategy(ranking_strategy).value
     memory = get_memory()
     # Same refusal as the write side, and for the same reason: "repo_id is
     # required" names the field rather than the fix, and the person reading it
@@ -1874,13 +1883,12 @@ def brief(
     min_confidence: float = typer.Option(
         0.0, "--min-confidence", min=0.0, max=1.0
     ),
-    ranking_strategy: str = typer.Option(
-        "default", "--ranking-strategy",
-        click_type=click.Choice(["default", "hybrid", "hybrid_union"]),
+    ranking_strategy: RankingStrategy = typer.Option(
+        RankingStrategy.default, "--ranking-strategy",
         help="Optional canonical/BM25 ranking; hybrid_union adds keyword candidate discovery",
     ),
-    context_selection: str = typer.Option(
-        "default", "--context-selection", click_type=click.Choice(["default", "coverage"]),
+    context_selection: ContextSelection = typer.Option(
+        ContextSelection.default, "--context-selection",
         help="Select whole memories or verbatim passages with broader evidence coverage",
     ),
     as_of: str = typer.Option(None, "--as-of", help="Historical selection time (ISO 8601)"),
@@ -1888,6 +1896,9 @@ def brief(
 ):
     """Prepare a cited, token-budgeted memory brief before work begins."""
     from visp_memory.core.task_brief import TaskMemoryBriefCompiler
+
+    ranking_strategy = RankingStrategy(ranking_strategy).value
+    context_selection = ContextSelection(context_selection).value
 
     if format not in {"text", "json"}:
         console.print("[red]--format must be text or json[/red]")
