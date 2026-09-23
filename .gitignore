@@ -115,3 +115,6 @@ dist-standalone/
 # `provider: sentence-transformers` reintroduced the missing-provider warning for
 # anyone on the lean install.
 visp-memory.yaml
+
+# Local Compose overrides (custom volumes, pinned images). Never shared.
+docker-compose.override.yml

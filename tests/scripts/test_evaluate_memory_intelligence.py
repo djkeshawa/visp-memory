@@ -9,7 +9,7 @@ from pathlib import Path
 def test_evaluate_memory_intelligence_json_matches_baseline():
     root = Path(__file__).resolve().parents[2]
     script = root / "scripts" / "evaluate_memory_intelligence.py"
-    baseline_path = root / "docs" / "development" / "MEMORY_INTELLIGENCE_BASELINE.json"
+    baseline_path = root / "docs" / "reference" / "MEMORY_INTELLIGENCE_BASELINE.json"
     baseline = json.loads(baseline_path.read_text())
 
     completed = subprocess.run(

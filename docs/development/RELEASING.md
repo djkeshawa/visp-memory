@@ -1,7 +1,7 @@
 # Releasing
 
 This is the single release procedure and checklist. Build details live in
-[PACKAGING.md](PACKAGING.md); the executable source of the pipeline is
+[PACKAGING.md](../guides/INSTALLATION.md); the executable source of the pipeline is
 [build-release.yml](../../.github/workflows/build-release.yml).
 Publication is an owner-authorized action. Preparing and testing artifacts does
 not authorize tagging, pushing or publishing.
@@ -53,10 +53,10 @@ Release outputs include:
 5. Smoke CLI capture/recall in a disposable project. Exercise initialization and
    maintenance only against disposable data.
 6. Smoke API/dashboard using the built distribution and disposable storage.
-   Configure [authentication](AUTH.md); auth-disabled tests must stay on loopback.
+   Configure [authentication](../guides/AUTHENTICATION.md); auth-disabled tests must stay on loopback.
    Verify server status at `/`, and dashboard pages `/dashboard`,
    `/dashboard/graph`, `/dashboard/recall` and `/dashboard/intents`.
-7. Review [feature status](../FEATURE_STATUS.md), migration notes and benchmark
+7. Review [feature status](../reference/FEATURE_STATUS.md), migration notes and benchmark
    limits. Do not relabel beta/frozen features or claim coding benefit from
    selection or integration tests.
 
@@ -69,8 +69,7 @@ container build. These options require their respective local tooling.
 
 Commit only the intended changes, then create and push the matching tag after
 authorization. Keep unrelated work and local configuration out of the release.
-Use this procedure for version updates and publication; the former
-`create-release.sh` helper has been retired.
+Use this procedure for version updates and publication.
 
 ```bash
 git tag -a vX.Y.Z -m "Release X.Y.Z"

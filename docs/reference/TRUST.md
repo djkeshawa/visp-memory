@@ -13,7 +13,7 @@ as project data with the same access restrictions as the original store.
 
 Evidence is immutable source content with a hash and provenance. Semantic beliefs
 cite separate, same-project evidence; missing or cross-project citations refuse
-the write. See [storage contracts](development/CONTRACT_SURFACE.md#evidence-and-belief-storage-contract).
+the write. See [storage contracts](CONTRACTS.md#evidence-and-belief-storage-contract).
 
 ## Provenance and quarantine
 
@@ -100,7 +100,7 @@ and configured model-based features are separate provider boundaries.
 - Cloud embeddings and optional cloud model features may send content or queries to
   the selected provider. Choose configuration consistent with the project's data policy.
 
-See [storage and embeddings](development/STORAGE.md#how-embeddings-work) before enabling a provider.
+See [storage and embeddings](../guides/STORAGE.md#how-embeddings-work) before enabling a provider.
 
 ## Local and server modes
 
@@ -113,14 +113,14 @@ controls and HTTPS.
 
 Authentication is enabled by default; no public default account password is
 shipped. Prefer scoped tokens for integrations and limit them to the necessary
-projects and operations. [Accounts and tokens](deployment/AUTH.md) owns setup and
+projects and operations. [Accounts and tokens](../guides/AUTHENTICATION.md) owns setup and
 compatibility settings. Team and cross-project features remain
 [frozen](FEATURE_STATUS.md), with access checks still required.
 
 ## Workflow authority and compatibility
 
 Memory describes goals and records outcome history. Explicit
-[workflow reports](development/WORKFLOW_REPORTS.md) can mirror the owning
+[workflow reports](../guides/WORKFLOW_REPORTS.md) can mirror the owning
 assistant's status, with reporter identity, revisions, and evidence. Memory does
 not execute those checks or certify completion, readiness, permission, or scope.
 
@@ -145,4 +145,4 @@ purges memories. Deleting an active memory is not a promise that evidence,
 operational history, prior exports, or backups have been erased.
 
 Choose retention for the whole data root and its backups. For restoration and
-migration, follow [storage maintenance](development/STORAGE.md#backup-and-schema-upgrades).
+migration, follow [storage maintenance](../guides/STORAGE.md#backup-and-schema-upgrades).

@@ -71,29 +71,20 @@ API key alone does not prove that vectors are indexed.
 
 Set provider and model explicitly for predictable behavior. `auto` chooses among
 available providers and can fall back to keyword search. Cloud providers can
-receive memory text and queries; see [provider boundaries](../TRUST.md#provider-boundaries).
+receive memory text and queries; see [provider boundaries](../reference/TRUST.md#provider-boundaries).
 
 Do not mix vectors from different models. Back up before changing providers or
 models, then rebuild/reindex existing content for the chosen model. Settings in
 the dashboard describe connection status; they do not themselves rebuild an index.
 `visp-memory doctor` and the Operations page help distinguish fallback from semantic search.
 
-SQLite and Neo4j share provider binding for document and query embeddings. With
-Nomic, writes, content updates and explicit rebuilds use `search_document:`, while
-retrieval uses `search_query:`. Corrected vectors occupy a `nomic_search_v1`
-namespace: SQLite keeps its existing suffixed Chroma collections; Neo4j uses
-`embedding_<dimension>_nomic_search_v1` and a matching vector index. The older
-dimension-only vectors are retained and never queried by the corrected Nomic path.
-Existing Nomic data on Neo4j therefore needs an explicit rebuild of the new space;
-startup does not regenerate vectors or call an embedding API for that rebuild.
-
-Index inspection distinguishes incomplete active coverage from retained legacy
-vectors. Once the active space covers the selected memories, retained old vectors
-alone do not request another rebuild. Failed Neo4j coverage inspection reports
-unknown readiness rather than an available, empty index. Generic providers keep
-their existing dimension-based namespaces, so changing to a different model still
-requires the explicit backup/rebuild procedure above. This instruction-space
-versioning is not automatic model-identity detection.
+With `nomic-embed-text`, documents are embedded with the `search_document:` prefix
+and queries with `search_query:`. These vectors live in a separate versioned space
+(`nomic_search_v1`), so they are never mixed with older unprefixed vectors, which
+are retained but not queried. After upgrading an existing Nomic store, rebuild the
+index explicitly; startup never regenerates vectors. Other providers use
+dimension-based spaces, so changing model still requires the backup and rebuild
+procedure above.
 
 On Neo4j, `noop` uses keyword search and does not create a new vector index.
 It cannot use constant vectors to make unrelated memories look semantically similar.
@@ -143,7 +134,7 @@ preserve account and operational data that graph exports do not replace.
 Format 2.0 includes evidence, memories, intents, and relationships. It validates
 hashes and same-project references, and refuses malformed graphs or secret-bearing
 legacy records. Each record kind has a 10,000-record export ceiling; overflow is
-refused rather than truncated. See [export contracts](CONTRACT_SURFACE.md#export-and-import).
+refused rather than truncated. See [export contracts](../reference/CONTRACTS.md#export-and-import).
 
 ## Choose a backend
 
@@ -164,8 +155,8 @@ storage:
 ```
 
 The server owns embedding configuration in client mode. Configure client
-credentials and project access through [authentication](../deployment/AUTH.md).
-Use HTTPS beyond localhost. See [feature status](../FEATURE_STATUS.md) before
+credentials and project access through [authentication](AUTHENTICATION.md).
+Use HTTPS beyond localhost. See [feature status](../reference/FEATURE_STATUS.md) before
 relying on team or cross-project features.
 
 ## Optional Neo4j backend
@@ -175,16 +166,9 @@ Choose Neo4j when you want to operate a separate graph database. The beta suppor
 capture, immutable Evidence citations, governed beliefs, recall, corrections,
 external workflow completion, and scheduled dreaming. Retrieval never calls an LLM.
 
-Neo4j supports recall utility logging, inspection, verification and reset through
-the existing Memory, CLI and MCP operations. Feedback is stored as `RecallFeedback`
-nodes linked to the canonical memory; raw queries are hashed and metadata uses the
-same filtering as SQLite. Explicit use reinforces access metrics atomically with
-the event, while inspection and mere exposure do not. Keyword and vector candidates
-receive the existing bounded utility adjustment; trust and lifecycle filters still
-apply. Scoped inspection/reset excludes misattributed historical events, which
-remain visible to verification. Feedback survives graph backup/restore and is
-removed when its memory is deleted. New indexes are additive; existing memories
-and vectors require no rewrite.
+Recall feedback works as on SQLite: explicit use reinforces a memory, while
+inspection and mere exposure do not. Raw queries are stored hashed. Feedback
+survives graph backup and restore and is removed with its memory.
 
 ```yaml
 storage:
@@ -194,7 +178,7 @@ storage:
 
 Install the `neo4j` extra and provide `NEO4J_URI`, `NEO4J_USER`, and
 `NEO4J_PASSWORD` through your environment. Use `neo4j+s://` for a TLS-enabled
-remote service. [Docker deployment](../deployment/PACKAGING.md#neo4j-beta) provides
+remote service. [Docker deployment](INSTALLATION.md#neo4j-beta) provides
 an isolated database and authenticated application with persistent volumes.
 The tested server is Neo4j 5.26 Community.
 

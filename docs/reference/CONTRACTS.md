@@ -43,7 +43,7 @@ must choose the actual interface rather than assume a `contract` equivalent.
 - **Maintenance** (`decay`, `compress`, `dedup`, `import`, `export`, `serve`, `init`,
   `hooks install`). Operator actions, not agent actions.
 - **Frozen areas** (`teams`, `admin`, `repos`) — see
-  [FEATURE_STATUS.md](../FEATURE_STATUS.md).
+  [FEATURE_STATUS.md](FEATURE_STATUS.md).
 
 ## Rule for anything added here
 
@@ -110,7 +110,7 @@ commits governed writes, citations, and explicit lineage in one transaction.
 ### Schema version 3 migration
 
 Evidence was introduced by schema version 3; the current SQLite schema is 5.
-Use the [backup and upgrade procedure](STORAGE.md#backup-and-schema-upgrades) for
+Use the [backup and upgrade procedure](../guides/STORAGE.md#backup-and-schema-upgrades) for
 existing stores. The Evidence transform from a version-2 store is idempotent:
 
 1. Create the Evidence store and belief-to-evidence references.

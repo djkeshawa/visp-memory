@@ -16,8 +16,7 @@ make lint
 
 `make test` runs the full pytest suite; `make lint` runs Ruff. Python dependencies
 come from the project's existing extras. For debugging, add `-x -vv`, use `--lf`
-to rerun failures or `--pdb` to inspect one. Counts and timings belong in run
-receipts, not a permanently stale test-count claim in this guide.
+to rerun failures or `--pdb` to inspect one.
 
 ## Test map
 
@@ -29,7 +28,7 @@ receipts, not a permanently stale test-count claim in this guide.
 | [tests/interfaces/](../../tests/interfaces) | MCP, profiles and protocol behavior |
 | [tests/server/](../../tests/server) | API, authentication and repository access |
 | [tests/recall/](../../tests/recall) | Proactive recall and guarded context |
-| [tests/scripts/](../../tests/scripts) | Evaluators, benchmark preparation and verification |
+| [tests/scripts/](../../tests/scripts) | Evaluation scripts |
 | [tests/docs/](../../tests/docs) | Published benchmark figures compared with measured output |
 | [tests/test_release_artifacts.py](../../tests/test_release_artifacts.py) | Distribution capabilities and required artifact contents |
 
@@ -79,12 +78,12 @@ SQLite remains covered by the default full suite.
 Initialize a disposable project and test `decision`, `warn`, `recall`, `brief`, `preview` and `audit` with
 known inputs. Maintenance commands should run only against disposable data.
 
-For assistant integration, follow [MCP.md](MCP.md): install the integration,
+For assistant integration, follow [MCP.md](../guides/MCP.md): install the integration,
 check `doctor`, capture a known decision and retrieve it in a fresh session.
 A hook subprocess passing is different from the host actually dispatching it.
 
 For dashboard and release artifacts, use the
-[release checklist](../deployment/RELEASING.md#before-tagging). It owns frontend,
+[release checklist](RELEASING.md#before-tagging). It owns frontend,
 packaged HTTP/browser smoke, metadata and license/NOTICE checks. Keep auth-enabled
 access tests in the gate even if a local visual smoke disables auth on loopback.
 
@@ -100,7 +99,7 @@ python3 scripts/benchmark_memory.py --items 100 --json
 python3 -m pytest --cov=visp_memory --cov-report=term-missing
 ```
 
-Selection and poisoning results are documented in [BENCHMARK.md](../BENCHMARK.md). `evaluate_agent_ab.py` uses scripted responses, not a
+Selection and poisoning results are documented in [benchmarks](../reference/BENCHMARK.md). `evaluate_agent_ab.py` uses scripted responses, not a
 live coding agent; its fixture success gap cannot establish coding benefit.
 Performance timings depend on the machine. Use the benchmark script instead of
 brittle elapsed-time assertions in unit tests.

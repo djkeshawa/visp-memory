@@ -24,7 +24,7 @@ selects another storage directory. Keep this directory when replacing the execut
 
 ## Configuration and updates
 
-The [installation guide](https://github.com/djkeshawa/visp-memory/blob/develop/docs/deployment/PACKAGING.md)
+The [installation guide](https://github.com/djkeshawa/visp-memory/blob/develop/docs/guides/INSTALLATION.md)
 explains other distributions. Before upgrading, stop all writers and follow the
-[backup procedure](https://github.com/djkeshawa/visp-memory/blob/develop/docs/development/STORAGE.md#backup-and-schema-upgrades).
+[backup procedure](https://github.com/djkeshawa/visp-memory/blob/develop/docs/guides/STORAGE.md#backup-and-schema-upgrades).
 The standalone bundle excludes local transformer models and the ArcadeDB/JVM runtime.

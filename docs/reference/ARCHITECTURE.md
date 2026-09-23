@@ -29,7 +29,7 @@ Memories, Evidence, workflow and dreaming journals")]
 Local CLI and stdio MCP use project configuration directly. Remote clients call
 an authenticated server, which owns storage and provider configuration. The
 SQLite is the default; Neo4j is an opt-in beta with native vectors.
-[Backend limits and backup requirements](STORAGE.md#choose-a-backend) are explicit.
+[Backend limits and backup requirements](../guides/STORAGE.md#choose-a-backend) are explicit.
 
 ## What is stored
 
@@ -43,7 +43,7 @@ SQLite is the default; Neo4j is an opt-in beta with native vectors.
 
 Evidence and conclusions remain separate. Corrections create new source records;
 missing or cross-project citations cause a semantic write to be refused.
-See [storage contracts](CONTRACT_SURFACE.md#evidence-and-belief-storage-contract).
+See [storage contracts](CONTRACTS.md#evidence-and-belief-storage-contract).
 
 ## Capture and write
 
@@ -63,7 +63,7 @@ flowchart TD
 Adapters assign provenance from the write channel; a payload cannot grant itself
 a trusted tier. Known secret patterns are redacted on normal capture. Imports
 that would need rewriting are refused to preserve their content hashes.
-[Trust and privacy](../TRUST.md) explains the boundary and its limits.
+[Trust and privacy](TRUST.md) explains the boundary and its limits.
 
 Explicit conversation capture records the redacted original source before learning
 from bounded chunks. Model output must identify a source, speaker and complete
@@ -81,7 +81,7 @@ Explicit search and automatic prompt injection have different purposes. Search
 lets a user inspect candidates, including quarantined records within their scope.
 Task briefs and automatic prompt context apply additional trust and budget checks.
 The lower-level query context compiler remains an inspection surface unless its
-caller supplies a trust filter; see [the trust boundary](../TRUST.md).
+caller supplies a trust filter; see [the trust boundary](TRUST.md).
 
 ```mermaid
 flowchart TD
@@ -109,51 +109,44 @@ and relationship signals; the machine recall contract can add structurally
 related memories without displacing direct matches. Scores rank results; they
 are not probabilities of correctness. The retrieval policy never calls an LLM.
 
-Python callers can opt into lexical reranking with
-`memory.recall(query, ranking_strategy="hybrid", limit=10)`. This requests a
-candidate pool of 100 (or the requested limit, if larger), applies the existing
-scope, eligibility and relevance checks, then combines canonical and BM25 ranks
-using equal-weight reciprocal-rank fusion. BM25 statistics come from the eligible
-candidate pool; this is not a full-corpus lexical index. It cannot recover a
-record absent from that pool. The default strategy remains canonical ranking.
+### Ranking strategies
 
-`ranking_strategy="hybrid_union"` is a separate experimental option on SQLite and
-Neo4j. It requests bounded vector and keyword candidate pools independently,
-deduplicates them without overwriting semantic scores, applies the same eligibility
-and relevance gates, and fuses ranks before limiting the combined results. Keyword
-discovery does not request embeddings. Backends without independent search channels
-reject this option explicitly. The existing `default` and `hybrid` strategies remain
-available as controls; improved answer accuracy has not yet been established.
+Every surface that ranks memories accepts a `ranking_strategy`. All strategies
+apply the same scope, eligibility, trust, and relevance checks; they only change
+how eligible candidates are found and ordered.
 
-Hybrid results retain their canonical `relevance_score` and expose
-`hybrid_rank_score` and `hybrid_ranks` separately. Fusion scores only order eligible
-results; they do not grant authority or replace the relevance floor. Corpus size
-does not determine reranking cost: the work is proportional to candidate text,
-plus sorting. Backend candidate discovery and eligibility refill have their own
-costs. The option is available through the Python recall API, the
-`visp-memory recall --ranking-strategy hybrid` CLI flag, and `ranking_strategy`
-on the `memory_recall` MCP tool.
+| Strategy | Candidates | Ordering | Backends |
+|---|---|---|---|
+| `default` | Canonical search (keyword, or vectors when configured) | Canonical relevance | All |
+| `hybrid` | Canonical pool of at least 100 eligible candidates | Equal-weight reciprocal-rank fusion of canonical and BM25 ranks | All |
+| `hybrid_union` (experimental) | Separate bounded vector and keyword pools, deduplicated | Same fusion as `hybrid` | SQLite, Neo4j; others refuse it |
 
-The same opt-in `ranking_strategy="hybrid"` is available on
-`HybridRetriever.retrieve`, `ContextCompiler.compile`, and
-`TaskMemoryBriefCompiler.prepare`. In the native graph path it gathers up to 100
-direct candidates per layer, retains up to 100 canonically ranked candidates,
-applies the existing eligibility and seed relevance gates, and uses the shared
-canonical/BM25 fusion to order direct evidence before choosing graph seeds.
-Graph and code-entity channels still contribute; structural-only admissions keep
-their separate limits and cannot become graph seeds. Final graph ranking retains
-its native scoring policy rather than treating BM25 fusion as a confidence score.
-Context time, scope, redundancy and budget policies still apply, as do the task
-brief's additional trust checks.
+BM25 statistics come from the eligible candidate pool, not a full-corpus index, so
+fusion cannot recover a record absent from that pool. Results keep their canonical
+`relevance_score` and expose `hybrid_rank_score` and `hybrid_ranks` separately;
+fusion orders results but does not replace the relevance floor.
 
-Use `visp-memory brief "task" --ranking-strategy hybrid`, the `ranking_strategy`
-field on `memory_prepare_task` or query-based `memory_context`, or the same field
-on `POST /context/brief` and `POST /context/compile`. Defaults are unchanged.
-These surfaces also accept `hybrid_union` for independent candidate discovery.
-Hybrid context reports `retrieval.direct_ranking_strategy`; direct items carry
-original/lexical ranks in `retrieval_factors.lexical_ranks`. This makes the recent
-lexical implementation usable within native graph context without installing the
-benchmark's custom answer packers or making model calls in retrieval policy.
+In task briefs and graph context, the chosen strategy orders direct evidence before
+graph seeds are chosen. Graph, file, and symbol channels still contribute, and
+structural-only admissions cannot become graph seeds. The strategy is available on
+Python recall, `visp-memory recall` and `brief` (`--ranking-strategy`), the
+`memory_recall`, `memory_prepare_task`, and `memory_context` MCP tools, and the
+`POST /context/brief` and `POST /context/compile` endpoints.
+
+### Context selection
+
+Context compilation and task briefs accept `context_selection`:
+
+- `default` packs whole memories in rank order.
+- `coverage` (experimental) selects verbatim passages with source offsets. Short
+  conversation turns stay intact; long turns offer bounded sentence windows, with a
+  bounded preceding turn so an answer keeps its question and qualifiers. Overlapping
+  passages from one source merge under one citation. Half the evidence budget is
+  reserved for direct matches before remaining capacity is shared, and passages are
+  chosen by query-term coverage, relevance, and incremental token cost.
+
+Use `brief --context-selection coverage`, or the `context_selection` field on
+`memory_prepare_task`, query-based `memory_context`, and the HTTP context endpoints.
 
 ### Injection policy
 
@@ -171,15 +164,15 @@ from [the implementation](../../src/visp_memory/core/injection.py) are:
 
 Hooks can use smaller budgets. Preview the actual selection and available
 rejection counts with `visp-memory preview "fix session expiry" --file src/auth.py`.
-Threshold changes should be evaluated against [selection benchmarks](../BENCHMARK.md).
+Evaluate threshold changes against the [selection benchmarks](BENCHMARK.md).
 
 ## Maintenance and progress
 
-[Dreaming](DREAMING.md) runs bounded, project-scoped cleanup in the server. It
+[Dreaming](../guides/DREAMING.md) runs bounded, project-scoped cleanup in the server. It
 merges eligible exact duplicates reversibly and leaves broader consolidation
 and expiry proposals for review. It does not call a model or modify intent status.
 
-[Workflow reports](WORKFLOW_REPORTS.md) mirror explicit status from the assistant
+[Workflow reports](../guides/WORKFLOW_REPORTS.md) mirror explicit status from the assistant
 or external workflow that owns a task. Ordered reports, reporter identity, and
 history prevent stale updates from replacing newer ones. Memory checks report
 consistency; it does not verify the underlying work.
@@ -199,5 +192,5 @@ Paths are relative to `src/visp_memory/`.
 | `core/embeddings.py` | Provider selection and embedding generation |
 | `core/dreaming/`, `core/intent_workflow.py` | Cleanup journals and external progress reports |
 
-For exact API guarantees, use the [contracts reference](CONTRACT_SURFACE.md).
-For changes, follow [Contributing](../../CONTRIBUTING.md) and [testing](TESTING.md).
+For exact API guarantees, use the [contracts reference](CONTRACTS.md).
+For changes, follow [Contributing](../../CONTRIBUTING.md) and [testing](../development/TESTING.md).

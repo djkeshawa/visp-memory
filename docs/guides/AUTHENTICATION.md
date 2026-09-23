@@ -54,12 +54,12 @@ workflow reports need `intent:write` and access to the target intent/project.
 
 Persist the complete storage directory, including accounts and sessions. Set
 `VISP_MEMORY_STORAGE_DATA_DIR` when choosing a custom location. Follow the
-[backup procedure](../development/STORAGE.md#backup-and-schema-upgrades) before upgrades.
+[backup procedure](STORAGE.md#backup-and-schema-upgrades) before upgrades.
 
 For access beyond localhost, use HTTPS, enable secure session cookies with
 `VISP_MEMORY_SERVER_SESSION_COOKIE_SECURE=true`, and configure explicit client
 origins through `VISP_MEMORY_SERVER_CORS_ORIGINS`. A wildcard origin disables
-credentialed CORS responses. Team features remain [frozen](../FEATURE_STATUS.md).
+credentialed CORS responses. Team features remain [frozen](../reference/FEATURE_STATUS.md).
 
 ## Compatibility settings
 

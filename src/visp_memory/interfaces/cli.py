@@ -2694,7 +2694,7 @@ def capture_tests(report: str = typer.Argument("report.xml", help="Path to JUnit
 # Repository Commands (Phase 3.2)
 # =============================================================================
 
-# FROZEN. docs/FEATURE_STATUS.md marks cross-repo aggregation frozen: implemented
+# FROZEN. docs/reference/FEATURE_STATUS.md marks cross-repo aggregation frozen: implemented
 # and tested, not actively developed, and dependent on the team server. `--help`
 # is the only status a user reads before typing a command, so it says so here too
 # rather than only in a document they may never open.

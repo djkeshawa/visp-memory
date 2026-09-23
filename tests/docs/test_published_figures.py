@@ -1,6 +1,6 @@
 """Published benchmark values must match the local evaluators exactly.
 
-Measurements and their negative results live in docs/BENCHMARK.md. These tests
+Measurements and their negative results live in docs/reference/BENCHMARK.md. These tests
 check the printed values, recall cost, and counts without loosening the evaluator's
 independent behavioral assertions. README links readers to this verification.
 """
@@ -18,7 +18,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 README = "README.md"
-BENCHMARK = "docs/BENCHMARK.md"
+BENCHMARK = "docs/reference/BENCHMARK.md"
 
 
 def _run_eval(script: str) -> dict:
@@ -303,7 +303,7 @@ def test_the_token_ratio_headline_matches_the_report(oracle_gap):
     ratio = f"{unfiltered / policy:.1f}×"
 
     line = _anchored_line(BENCHMARK, "fewer tokens** than naive retrieval")
-    assert ratio in line, f"docs/BENCHMARK.md claims a token ratio other than {ratio}: {line!r}"
+    assert ratio in line, f"{BENCHMARK} claims a token ratio other than {ratio}: {line!r}"
 
 
 # ---------------------------------------------------------------------------

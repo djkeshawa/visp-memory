@@ -5,7 +5,7 @@ history across sessions. Retrieve relevant context with source citations, inspec
 why it matched, and maintain the store from a local dashboard.
 
 SQLite and keyword search work without a model or an external database.
-An [optional Neo4j backend](docs/deployment/PACKAGING.md#neo4j-beta) is available
+An [optional Neo4j backend](docs/guides/INSTALLATION.md#neo4j-beta) is available
 as an opt-in beta.
 
 ```mermaid
@@ -35,7 +35,7 @@ docker logs visp-memory
 
 Open [the dashboard](http://127.0.0.1:8000/dashboard). On a fresh store, use the
 one-use setup link in the logs to create your administrator account. There is no
-shared default password. See [installation](docs/deployment/PACKAGING.md) for
+shared default password. See [installation](docs/guides/INSTALLATION.md) for
 Compose, upgrades, Python, and standalone downloads.
 
 ![Visp Memory dashboard showing project totals, recent memories, and recall navigation](https://raw.githubusercontent.com/djkeshawa/visp-memory/v0.7.4/docs/dashboard-preview.png)
@@ -55,20 +55,20 @@ visp-memory brief "implement local storage"
 ```
 
 `init` creates project configuration and imports selected Git history. Connect
-your assistant separately using the [MCP and hooks guide](docs/development/MCP.md).
+your assistant separately using the [MCP and hooks guide](docs/guides/MCP.md).
 Use `visp-memory doctor` to inspect configuration and integration problems.
 
 ## What you can do
 
 - **Recall project knowledge:** search decisions and history, or prepare a cited task brief.
 - **Understand results:** inspect matching words, retrieval method, sources, and quality flags.
-- **Maintain memories:** preview [dreaming cycles](docs/development/DREAMING.md), schedule exact-duplicate cleanup, and review related or expired notes. Applied changes can be undone.
-- **Follow task progress:** receive explicit [completion reports](docs/development/WORKFLOW_REPORTS.md) from your assistant or workflow, with evidence and history.
-- **Keep control of data:** use local storage, scoped access, and [backup and restore](docs/development/STORAGE.md#backup-and-schema-upgrades).
+- **Maintain memories:** preview [dreaming cycles](docs/guides/DREAMING.md), schedule exact-duplicate cleanup, and review related or expired notes. Applied changes can be undone.
+- **Follow task progress:** receive explicit [completion reports](docs/guides/WORKFLOW_REPORTS.md) from your assistant or workflow, with evidence and history.
+- **Keep control of data:** use local storage, scoped access, and [backup and restore](docs/guides/STORAGE.md#backup-and-schema-upgrades).
 
 The supported path is one developer working in one local repository. Dashboard/API
 and some integrations are still early; team and graph features are frozen. Check
-[feature status](docs/FEATURE_STATUS.md) for the limits of each surface.
+[feature status](docs/reference/FEATURE_STATUS.md) for the limits of each surface.
 
 ## Documentation
 
@@ -76,13 +76,13 @@ Start with the [documentation index](docs/README.md), or go directly to:
 
 | Learn | Configure | Integrate |
 |---|---|---|
-| [Architecture and data flow](docs/development/ARCHITECTURE.md) | [Installation](docs/deployment/PACKAGING.md) | [MCP and hooks](docs/development/MCP.md) |
-| [Trust and privacy](docs/TRUST.md) | [Accounts and tokens](docs/deployment/AUTH.md) | [Workflow reports](docs/development/WORKFLOW_REPORTS.md) |
-| [Dreaming](docs/development/DREAMING.md) | [Storage and embeddings](docs/development/STORAGE.md) | [Machine contracts](docs/development/CONTRACT_SURFACE.md) |
+| [Architecture and data flow](docs/reference/ARCHITECTURE.md) | [Installation](docs/guides/INSTALLATION.md) | [MCP and hooks](docs/guides/MCP.md) |
+| [Trust and privacy](docs/reference/TRUST.md) | [Accounts and tokens](docs/guides/AUTHENTICATION.md) | [Workflow reports](docs/guides/WORKFLOW_REPORTS.md) |
+| [Dreaming](docs/guides/DREAMING.md) | [Storage and embeddings](docs/guides/STORAGE.md) | [Machine contracts](docs/reference/CONTRACTS.md) |
 
 ## Evidence and limits
 
-[Benchmarks](docs/BENCHMARK.md) describe deterministic selection and poisoning
+[Benchmarks](docs/reference/BENCHMARK.md) describe deterministic selection and poisoning
 fixtures, including missed memories and other negative results. They do not
 establish better coding outcomes or superiority over another memory product.
 Published selection figures are checked against measured output by

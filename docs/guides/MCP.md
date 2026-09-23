@@ -21,7 +21,7 @@ visp-memory hooks install codex \
 
 The installer writes managed MCP configuration and project-level `AGENTS.md`
 guidance. Restart the assistant to load the new configuration. Configure server
-credentials and project access as described in [authentication](../deployment/AUTH.md).
+credentials and project access as described in [authentication](AUTHENTICATION.md).
 In client mode, storage and embedding generation happen on the server.
 
 ### Other MCP clients
@@ -71,7 +71,7 @@ For example, call `memory_prepare_task` with:
 
 It returns cited context, relevant intent, constraints, contradictions, and
 unknowns. Reuse its fingerprint to avoid repeating an unchanged brief. The
-[architecture guide](ARCHITECTURE.md#search-and-task-context) explains selection.
+[architecture guide](../reference/ARCHITECTURE.md#search-and-task-context) explains selection.
 
 For CLI direction, use `visp-memory goal`, `visp-memory focus`, and
 `visp-memory working`. `visp-memory done` records an advisory outcome. These
@@ -91,7 +91,7 @@ is deduplicated within the session. Hook failures do not block the assistant;
 the returned memory is context, never a permission decision.
 
 Codex, Cursor, Aider, and generic integration support varies; see
-[feature status](../FEATURE_STATUS.md). Review generated project instructions.
+[feature status](../reference/FEATURE_STATUS.md). Review generated project instructions.
 Use the installed command's help for adapter-specific options:
 
 ```bash
@@ -116,46 +116,28 @@ import so previously retrieved memory does not become a new source.
 For CLI inspection, use `visp-memory remember --repo my-project` or
 `visp-memory recall "session expiry" --repo my-project`.
 
-To opt into hybrid ranking, pass `ranking_strategy: "hybrid"` to `memory_recall`,
-or use the CLI flag:
+## Ranking, selection, and time
+
+`memory_recall`, `memory_prepare_task`, and query-based `memory_context` accept
+`ranking_strategy` (`default`, `hybrid`, or `hybrid_union`). The two context tools
+also accept `context_selection` (`default` or `coverage`) and an ISO 8601 `as_of`
+timestamp. The CLI equivalents are `--ranking-strategy`, `--context-selection`, and
+`--as-of`:
 
 ```bash
-visp-memory recall "session expiry" --repo my-project --ranking-strategy hybrid --limit 10
+visp-memory brief "session expiry" --repo my-project --ranking-strategy hybrid
 ```
 
-The default is `default`. Hybrid combines canonical and lexical ranks over at
-least 100 eligible candidates, then applies the requested result limit. Repository
-scope, eligibility and the relevance floor still apply. Displayed match scores
-retain their original meaning; the fusion changes result order. The extra
-candidate work can increase latency.
-
-On SQLite and Neo4j, `ranking_strategy: "hybrid_union"` additionally discovers
-keyword candidates independently of vector candidates before fusion. Use the same
-value with `--ranking-strategy` on CLI recall or brief, or on the context tools and
-HTTP endpoints below. This experimental mode has separate bounded candidate pools;
-it preserves scope, trust and relevance gates. Unsupported backends reject it.
-
-For a native graph-backed brief, pass `ranking_strategy: "hybrid"` to
-`memory_prepare_task`, or use
-`visp-memory brief "session expiry" --repo my-project --ranking-strategy hybrid`.
-Query-based `memory_context` and HTTP `/context/compile` and `/context/brief`
-accept the same field. Here lexical fusion orders eligible direct evidence before
-graph seed selection; graph expansion, file/symbol channels, trust, time filters
-and context budgets remain active. It does not replace the native compiler with
-the experimental benchmark packer. Omitted options retain the existing policies.
-
-Both MCP context tools accept an ISO 8601 `as_of` timestamp; CLI brief exposes
-`--as-of`. `memory_context` requires a query when selecting either hybrid mode or an
-`as_of` time, rather than silently applying those options to its legacy project
-summary. Automatic injection and contract recall retain their own policies.
-See [the architecture](ARCHITECTURE.md#search-and-task-context) for stage ordering
-and [benchmarks](../BENCHMARK.md) for the limits of measured quality claims.
+`memory_context` requires a query for a hybrid strategy or an `as_of` time, rather
+than silently applying them to its legacy project summary. Omitted options keep the
+defaults. The [architecture guide](../reference/ARCHITECTURE.md#ranking-strategies)
+describes each option; hybrid modes examine more candidates and can add latency.
 
 For context supplied automatically to an assistant, prefer `memory_prepare_task`:
 it filters quarantined records. Query-based `memory_context` is a lower-level
 inspection surface and can return them with provenance tags in JSON. Ranking and
 coverage selection do not add trust filtering to that surface. See
-[trust policies](../TRUST.md#provenance-and-quarantine) for the distinction.
+[trust policies](../reference/TRUST.md#provenance-and-quarantine) for the distinction.
 
 ## Verify the connection
 
@@ -179,7 +161,7 @@ the repository ID and data path. If semantic search is unavailable, check both
 
 Set `VISP_MEMORY_MCP_PROFILE` to choose a profile. Profiles affect advertisement,
 **not authorization**: a hidden tool can still be called by name. Enforce access
-through server credentials and scopes. See [server authentication](../deployment/AUTH.md).
+through server credentials and scopes. See [server authentication](AUTHENTICATION.md).
 
 The [footprint test](../../tests/interfaces/test_mcp_profile_footprint.py) measures
 serialized schemas and checks a 35–45% reduction for core versus full. This is a

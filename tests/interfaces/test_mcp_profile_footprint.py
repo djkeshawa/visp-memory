@@ -26,7 +26,7 @@ import pytest
 from visp_memory.config import MemoryConfig
 from visp_memory.core.memory import Memory
 
-# Documented in docs/development/MCP.md ("Tool profiles").
+# Documented in docs/guides/MCP.md ("Tool profiles").
 # Keep that guide and these assertions in agreement.
 #
 # The measured figure at the time of writing is 39.5%, which the docs round to

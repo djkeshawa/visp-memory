@@ -109,8 +109,8 @@ def test_standalone_builds_use_shared_assets_and_omit_mcp():
     assert "standalone/start-server.sh standalone/start-server.ps1" in workflow
     assert "verify_distribution_artifacts.py" in workflow
 
-    packaging_guide = (ROOT / "docs/deployment/PACKAGING.md").read_text()
-    releasing_guide = (ROOT / "docs/deployment/RELEASING.md").read_text()
+    packaging_guide = (ROOT / "docs/guides/INSTALLATION.md").read_text()
+    releasing_guide = (ROOT / "docs/development/RELEASING.md").read_text()
     assert "api,mcp,capture,analysis,chroma,neo4j" not in packaging_guide
     assert "visp_memory_mcp" not in releasing_guide
     assert "visp_memory-X.Y.Z-py3-none-any.whl" in releasing_guide

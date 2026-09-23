@@ -8,9 +8,9 @@ Use a small pull request with a clear description and relevant verification.
 - **Small fixes**: open a pull request directly.
 - **Anything that changes behaviour**: open an issue first. The injection thresholds in
   particular are calibrated against measurements, not preference — see
-  [injection policy](docs/development/ARCHITECTURE.md#injection-policy).
+  [injection policy](docs/reference/ARCHITECTURE.md#injection-policy).
 - **A feature that would widen scope**: check
-  [docs/FEATURE_STATUS.md](docs/FEATURE_STATUS.md) first. Several areas are deliberately
+  [docs/FEATURE_STATUS.md](docs/reference/FEATURE_STATUS.md) first. Several areas are deliberately
   frozen, and a PR reviving one is likely to be declined on maintenance grounds rather
   than merit.
 
@@ -68,8 +68,8 @@ dashboard, install its locked dependencies with `npm ci --prefix visp-memory-das
 ```bash
 make test
 make lint
-python3 scripts/evaluate_oracle_gap.py    # must match docs/BENCHMARK.md
-python3 scripts/evaluate_poisoning.py     # must match docs/TRUST.md
+python3 scripts/evaluate_oracle_gap.py    # must match docs/reference/BENCHMARK.md
+python3 scripts/evaluate_poisoning.py     # must match docs/reference/BENCHMARK.md
 ```
 
 Both evaluation scripts run in CI. If your change moves those numbers, that is not

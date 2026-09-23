@@ -19,8 +19,8 @@ docker run -d --name visp-memory \
 ```
 
 Open [the dashboard](http://127.0.0.1:8000/dashboard). Read `docker logs visp-memory`
-for the first administrator setup link, then follow [account setup](AUTH.md).
-This example uses keyword search. [Storage and embeddings](../development/STORAGE.md)
+for the first administrator setup link, then follow [account setup](AUTHENTICATION.md).
+This example uses keyword search. [Storage and embeddings](STORAGE.md)
 explains how to enable semantic search.
 
 The named volume persists data across container replacement. The image runs as
@@ -30,7 +30,7 @@ UID 1000; a bind-mounted `/data` directory must be writable by that user. The
 ### Stop and upgrade
 
 `docker stop visp-memory` stops the server without deleting its data. Before an
-upgrade, stop all writers and [back up the store](../development/STORAGE.md#backup-and-schema-upgrades).
+upgrade, stop all writers and [back up the store](STORAGE.md#backup-and-schema-upgrades).
 Pull the chosen version, then recreate the container with the **same volume and
 configuration**. Keep the previous image and backup until the new version is verified.
 Do not remove the data volume during a routine restart or upgrade.
@@ -81,7 +81,7 @@ when `nomic-embed-text` is selected. These vectors use separate versioned
 collections so they cannot be mixed with earlier unprefixed vectors. Existing
 SQLite notes are retained; rebuild the active index when upgrading this setup.
 
-The optional `arcadedb` profile is [frozen](../FEATURE_STATUS.md).
+The optional `arcadedb` profile is [frozen](../reference/FEATURE_STATUS.md).
 
 ### Neo4j beta
 
@@ -101,7 +101,7 @@ set `VISP_MEMORY_PORT=8001` for this command.
 
 Two named volumes persist the graph and application accounts/journals. Keep both for
 a complete backup. For graph backup or legacy migration, stop only the application
-service, leave Neo4j running, and run the [administration commands](../development/STORAGE.md#backup-restore-and-legacy-migration)
+service, leave Neo4j running, and run the [administration commands](STORAGE.md#backup-restore-and-legacy-migration)
 inside a one-off application container. For example:
 
 ```bash
@@ -123,7 +123,7 @@ visp-memory serve
 ```
 
 The dashboard is at `/dashboard`, and generated API documentation is at `/docs`.
-Use [MCP and hooks](../development/MCP.md) to connect an assistant. Uninstalling
+Use [MCP and hooks](MCP.md) to connect an assistant. Uninstalling
 with `pip uninstall visp-memory` leaves project configuration and stored data intact.
 
 ## Standalone downloads
@@ -145,7 +145,7 @@ python3 -m build
 
 Build the frontend first so the wheel includes dashboard assets. For a standalone
 build, use `./build_standalone.sh` on the target platform. Maintainers should follow
-[Releasing](RELEASING.md) for checks and publication.
+[Releasing](../development/RELEASING.md) for checks and publication.
 
 The frontend helper runs `npm ci` before each build, synchronizing dependencies
 with `package-lock.json` even when `node_modules` already exists.
