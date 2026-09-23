@@ -1,6 +1,9 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from visp_memory.config import load_config
+from visp_memory.core.answer_prompt import ANSWER_SYSTEM_PROMPT, answer_prompt
 from visp_memory.core.coverage_selection import coverage_candidates, select_coverage
 from visp_memory.core.eligibility import filter_recall_eligible
 from visp_memory.core.model_router import ModelUnavailableError
@@ -118,15 +121,14 @@ async def ask_memory(
             provider_status="not_configured",
         )
 
-    context = _evidence_text(selected)
+    # Relative dates in the question ("last week") resolve against the time the
+    # answer is for: the requested historical view, otherwise now.
+    question_date = (payload.as_of or datetime.now(timezone.utc)).date().isoformat()
     try:
         generated = router.complete(
             "answer",
-            f"Question: {payload.query}\n\nMemory evidence:\n{context}",
-            system_prompt=(
-                "Answer only from the supplied memory evidence. Cite supporting memory IDs "
-                "in square brackets. If evidence is insufficient, say so clearly."
-            ),
+            answer_prompt(payload.query, _evidence_text(selected), question_date=question_date),
+            system_prompt=ANSWER_SYSTEM_PROMPT,
         )
     except (ModelUnavailableError, ValueError, RuntimeError):
         return AskMemoryResponse(
