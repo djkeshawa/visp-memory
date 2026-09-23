@@ -214,7 +214,15 @@ def select_coverage(
     budget: int,
     cost: Callable[[list[dict[str, Any]]], int],
 ) -> list[dict[str, Any]]:
-    """Reserve half the evidence budget for direct matches, then share capacity."""
+    """Reserve half the evidence budget for direct matches, then share capacity.
+
+    ``cost`` may render the whole brief, so it is never called once per candidate
+    per step. Candidates are valued by a cached marginal cost measured against at
+    most one prior passage of the same memory, and the exact ``cost`` is checked
+    only for the candidate about to be taken. Rendered cost never shrinks as the
+    selection grows, so a candidate that does not fit stays excluded for the rest
+    of the phase. The budget therefore remains exact.
+    """
     selected: list[dict[str, Any]] = []
     covered: set[str] = set()
     pending = list(rows)
@@ -225,16 +233,36 @@ def select_coverage(
     selected_evidence: set[tuple[Any, ...]] = set()
     matches_by_text: dict[str, set[str]] = {}
     source_matches: dict[str, set[str]] = {}
+    single_costs: dict[tuple[Any, ...], int] = {(): base}
+    marginal_costs: dict[tuple[Any, ...], int] = {}
+
+    def cost_of(items: list[dict[str, Any]]) -> int:
+        key = tuple(_passage_identity(item) for item in items)
+        if key not in single_costs:
+            single_costs[key] = cost(items)
+        return single_costs[key]
+
+    def marginal(row: dict[str, Any]) -> int:
+        prior = next((r for r in selected if r["id"] == row["id"]), None)
+        before = [prior] if prior else []
+        key = (_passage_identity(row), _passage_identity(prior) if prior else None)
+        if key not in marginal_costs:
+            marginal_costs[key] = cost_of(_append_passage(before, row)) - cost_of(before)
+        return marginal_costs[key]
+
+    identities = {id(row): _passage_identity(row) for row in rows}
     for direct_only, limit in ((True, direct_limit), (False, budget)):
+        too_large: set[tuple[Any, ...]] = set()
         while pending:
             eligible = [r for r in pending if not direct_only or is_direct(r)]
             if not eligible:
                 break
 
-            current_cost = cost(selected)
+            selected_identities = {_passage_identity(r) for r in selected}
             choices = []
             for row in eligible:
-                if any(_passage_identity(row) == _passage_identity(r) for r in selected):
+                identity = identities[id(row)]
+                if identity in too_large or identity in selected_identities:
                     continue
                 if _evidence_key(row) in selected_evidence:
                     continue
@@ -244,12 +272,6 @@ def select_coverage(
                 matching = matches_by_text[focus_text]
                 if not focus_text.strip() or (row.get("_has_matching_passage") and not matching):
                     continue
-                trial = _append_passage(selected, row)
-                if trial == selected:
-                    continue
-                trial_cost = cost(trial)
-                if trial_cost > limit:
-                    continue
                 content = row.get("content", "")
                 novelty = len(matching - covered)
                 relevance = float(row.get("relevance_score") or row.get("similarity") or 0)
@@ -258,21 +280,31 @@ def select_coverage(
                 value = (
                     relevance * (0.25 + len(matching) / max(1, len(query_terms)))
                     + 0.15 * novelty / max(1, len(query_terms))
-                ) / (max(1, trial_cost - current_cost) ** 0.5)
+                ) / (max(1, marginal(row)) ** 0.5)
                 # Repeated query matches in one source have diminishing value.
                 # Other sources can contribute independent events using the same
                 # vocabulary; do not apply this discount across source IDs.
                 prior_matches = source_matches.get(str(row["id"]), set())
                 if prior_matches and matching <= prior_matches:
                     value *= 0.25
-                choices.append(((-value, str(row.get("id")), content), row, trial))
-            if not choices:
+                choices.append(((-value, str(row.get("id")), content), row))
+            choices.sort(key=lambda choice: choice[0])
+
+            chosen = None
+            for _, row in choices:
+                trial = _append_passage(selected, row)
+                if trial == selected:
+                    continue
+                if cost(trial) > limit:
+                    too_large.add(identities[id(row)])
+                    continue
+                chosen = row, trial
                 break
-            _, candidate, trial = min(choices, key=lambda choice: choice[0])
+            if chosen is None:
+                break
+            candidate, selected = chosen
             pending.remove(candidate)
-            identity = _passage_identity(candidate)
-            selected = trial
-            seen.add(identity)
+            seen.add(identities[id(candidate)])
             evidence = _evidence_key(candidate)
             if evidence is not None:
                 selected_evidence.add(evidence)
@@ -282,5 +314,5 @@ def select_coverage(
             )
         if direct_only:
             # Reconsider large direct passages using the shared budget.
-            pending = [r for r in rows if _passage_identity(r) not in seen]
+            pending = [r for r in rows if identities[id(r)] not in seen]
     return selected

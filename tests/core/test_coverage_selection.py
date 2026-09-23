@@ -89,6 +89,28 @@ def test_selection_uses_incremental_rendered_cost_not_just_passage_length():
     assert [row["id"] for row in selected] == ["b"]
 
 
+def test_full_brief_is_rendered_per_pick_not_per_candidate_per_pick():
+    from visp_memory.core.coverage_selection import select_coverage
+
+    rows = [
+        {"id": str(i), "content": f"user: Workshop number {i} cost ${i}.",
+         "relevance_score": 0.5 + i / 200, "retrieval_channels": ["direct"]}
+        for i in range(60)
+    ]
+    renders = []
+    def cost(items):
+        # A brief renderer is not additive: a header appears once there is content.
+        if len(items) > 1:
+            renders.append(len(items))
+        return (20 if items else 0) + sum(12 for _ in items)
+    selected = select_coverage(rows, "workshop cost", 400, cost)
+    assert cost(selected) <= 400
+    assert len(selected) == 31
+    # Re-rendering every candidate at every step made large budgets quadratic
+    # (about 1,800 renders here); each candidate now fails at most once per phase.
+    assert len(renders) <= 2 * len(rows) + len(selected)
+
+
 def test_derived_copy_does_not_spend_budget_on_its_episode_twice():
     from visp_memory.core.coverage_selection import coverage_candidates
 
