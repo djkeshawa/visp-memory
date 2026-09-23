@@ -295,13 +295,25 @@ class EpisodicMemory(BaseMemoryLayer):
         before filtering so up to ``limit`` genuinely-uncompressed episodes are
         returned.
         """
-        episodes = self.list_items(
-            layer="episodic",
-            limit=max(limit * 4, limit),
-            order_by="created_at ASC",
-            repo_id=repo_id,
-        )
-        uncompressed = [
-            ep for ep in episodes if not (ep.get("metadata") or {}).get("compressed_to")
-        ]
-        return uncompressed[:limit]
+        if limit <= 0:
+            return []
+
+        page_limit = min(200, max(50, limit * 4))
+        offset = 0
+        uncompressed = []
+        while True:
+            episodes = self.list_items(
+                layer="episodic",
+                limit=page_limit,
+                offset=offset,
+                order_by="created_at ASC",
+                repo_id=repo_id,
+            )
+            uncompressed.extend(
+                ep
+                for ep in episodes
+                if not (ep.get("metadata") or {}).get("compressed_to")
+            )
+            if len(uncompressed) >= limit or len(episodes) < page_limit:
+                return uncompressed[:limit]
+            offset += page_limit

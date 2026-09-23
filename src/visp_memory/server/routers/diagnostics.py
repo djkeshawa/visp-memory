@@ -345,7 +345,11 @@ async def get_embedding_index_status(
     user: UserContext = Depends(get_current_user),
 ):
     """Return the current embedding/index compatibility summary."""
-    del user
+    # Collection names and indexed totals are process-wide diagnostics, not
+    # repository-scoped data. Until the storage layer can calculate a genuinely
+    # tenant-filtered index report, expose this endpoint only to administrators
+    # rather than presenting global counts as if they belonged to ``repo_id``.
+    require_admin(user)
     runtime_config = load_config()
     storage = request.app.state.storage
     embedding_provider = getattr(request.app.state, "embedding_provider", None)

@@ -493,6 +493,67 @@ async def test_non_admin_memory_routes_are_scoped_to_current_team(client):
 
 
 @pytest.mark.asyncio
+async def test_memory_listing_paginates_after_record_visibility(client):
+    app.state.storage.store_repository(
+        {"name": "Alpha Repo", "id": "repo-alpha", "team_id": "team-alpha"}
+    )
+    visible_ids = []
+    for index in range(49):
+        visible_ids.append(
+            app.state.storage.store_memory(
+                f"visible compressed {index}",
+                repo_id="repo-alpha",
+                metadata={"team_id": "team-alpha", "compressed_to": "semantic-1"},
+            )
+        )
+    app.state.storage.store_memory(
+        "hidden compressed",
+        repo_id="repo-alpha",
+        metadata={"team_id": "team-beta", "compressed_to": "semantic-1"},
+    )
+    for index in range(6):
+        visible_ids.append(
+            app.state.storage.store_memory(
+                f"visible open {index}",
+                repo_id="repo-alpha",
+                metadata={"team_id": "team-alpha"},
+            )
+        )
+
+    set_current_user(
+        UserContext(
+            user_id="alice", username="alice", team_id="team-alpha", is_admin=False
+        )
+    )
+    try:
+        first = await client.get(
+            "/memories",
+            params={
+                "repo_id": "repo-alpha",
+                "limit": 50,
+                "offset": 0,
+                "order_by": "created_at ASC",
+            },
+        )
+        second = await client.get(
+            "/memories",
+            params={
+                "repo_id": "repo-alpha",
+                "limit": 50,
+                "offset": 50,
+                "order_by": "created_at ASC",
+            },
+        )
+    finally:
+        clear_current_user()
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert [item["id"] for item in first.json()] == visible_ids[:50]
+    assert [item["id"] for item in second.json()] == visible_ids[50:]
+
+
+@pytest.mark.asyncio
 async def test_evidence_routes_enforce_server_owned_team_scope(client):
     shared_repo_id = "same-unregistered-repo"
     alice = UserContext(

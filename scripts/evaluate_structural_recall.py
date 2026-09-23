@@ -11,10 +11,10 @@ thing it was built to do on a corpus where the right answer is known.
 It is **not** a field result, and no number it prints is evidence about a real
 repository or a real task. It is not comparable to, and must never be quoted beside,
 `visp-kit`'s context-pack measurements: different system, different corpus, different
-metric. This round's claim ceiling for Memory is conformance plus this benchmark.
+metric.
 
-Nothing here derives from `planning/private/holdout/`. The fixture is authored from
-scratch and contains no material from any measured project.
+The fixture is authored from scratch and contains no material from any measured
+project or held-out task.
 
 THE CIRCULARITY PROBLEM, AND WHAT IS DONE ABOUT IT
 --------------------------------------------------

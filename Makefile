@@ -1,6 +1,6 @@
 .PHONY: help build build-frontend build-python clean install install-dev test lint format release-check docker-build docker-run
 
-PYTHON ?= python
+PYTHON ?= python3
 PIP ?= $(PYTHON) -m pip
 PYTEST ?= $(PYTHON) -m pytest
 RUFF ?= $(PYTHON) -m ruff
@@ -46,7 +46,7 @@ install: build
 
 install-dev:
 	@echo "Installing visp-memory with dev dependencies..."
-	$(PIP) install -e ".[all]"
+	$(PIP) install -e ".[api,mcp,capture,dev]"
 
 test:
 	@echo "Running tests..."

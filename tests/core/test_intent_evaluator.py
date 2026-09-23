@@ -122,3 +122,17 @@ def test_model_router_prefers_sampling_callback():
     )
     assert result["provider"] == "mcp-sampling"
     assert result["text"].startswith("sampled:")
+
+
+def test_negative_and_unrelated_text_cannot_suggest_completion(tmp_path):
+    storage = LocalStorage(tmp_path)
+    storage.set_intent("Implement secure login", repo_id="repo-a")
+    config = LLMConfig()
+    evaluator = IntentEvaluator(storage, ModelRouter(config), config)
+    for text in ["Secure login is not completed; test failed.",
+                 "Merged documentation changes. Test passed."]:
+        memory_id = storage.store_memory(text, repo_id="repo-a", auto_link=False)
+        result = evaluator.evaluate(storage.get_active_intents(repo_id="repo-a")[0],
+            summary=text, memory_ids=[memory_id], actor_id="worker")
+        assert result["decision"] == "incomplete"
+        assert result["reason"]

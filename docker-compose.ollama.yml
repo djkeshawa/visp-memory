@@ -1,0 +1,33 @@
+# Optional overlay: Compose waits for the model download before starting the app.
+# docker compose -f docker-compose.yml -f docker-compose.ollama.yml --profile lite up -d --build --wait
+x-ollama-environment: &ollama-environment
+  OLLAMA_HOST: http://ollama:11434
+  VISP_MEMORY_EMBEDDING_PROVIDER: ollama
+  VISP_MEMORY_EMBEDDING_MODEL: ${VISP_MEMORY_OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+
+x-ollama-dependencies: &ollama-dependencies
+  ollama-pull:
+    condition: service_completed_successfully
+
+# The provider alone is insufficient: SQLite semantic recall also needs Chroma.
+x-ollama-build: &ollama-build
+  args:
+    VISP_MEMORY_EXTRAS: ${VISP_MEMORY_EXTRAS:-api,mcp,arcadedb,neo4j,openai,anthropic},ollama,chroma
+
+services:
+  visp-memory-lite:
+    build: *ollama-build
+    environment: *ollama-environment
+    depends_on: *ollama-dependencies
+
+  visp-memory-arcadedb:
+    build: *ollama-build
+    environment: *ollama-environment
+    depends_on: *ollama-dependencies
+
+  # Sharing the application profiles enables the dependencies automatically.
+  ollama:
+    profiles: ["lite", "arcadedb", "ollama"]
+
+  ollama-pull:
+    profiles: ["lite", "arcadedb", "ollama"]

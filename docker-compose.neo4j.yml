@@ -1,0 +1,46 @@
+# Opt-in deployment. The default docker-compose.yml remains SQLite-first.
+# Set a unique NEO4J_PASSWORD, then:
+# docker compose -f docker-compose.neo4j.yml --profile neo4j up -d --build --wait
+name: visp-memory-neo4j
+
+services:
+  visp-memory-neo4j:
+    extends:
+      file: docker-compose.yml
+      service: visp-memory-lite
+    profiles: [neo4j]
+    environment:
+      VISP_MEMORY_STORAGE_BACKEND: neo4j
+      VISP_MEMORY_STORAGE_ALLOW_FALLBACK: "false"
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:?Set a unique NEO4J_PASSWORD}
+    volumes:
+      - visp-memory-neo4j-app-data:/data
+    depends_on:
+      neo4j:
+        condition: service_healthy
+
+  neo4j:
+    profiles: [neo4j]
+    image: neo4j:5.26.28-community
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?Set a unique NEO4J_PASSWORD}
+      NEO4J_server_memory_heap_initial__size: 256m
+      NEO4J_server_memory_heap_max__size: ${NEO4J_HEAP_MAX:-1g}
+    volumes:
+      - visp-memory-neo4j-data:/data
+    tmpfs:
+      - /var/lib/neo4j/run:uid=7474,gid=7474,mode=700
+    healthcheck:
+      test: [CMD-SHELL, 'cypher-shell -u neo4j -p "$${NEO4J_AUTH#neo4j/}" "RETURN 1" >/dev/null']
+      interval: 10s
+      timeout: 10s
+      start_period: 30s
+      retries: 12
+    stop_grace_period: 60s
+    restart: unless-stopped
+
+volumes:
+  visp-memory-neo4j-data:
+  visp-memory-neo4j-app-data:

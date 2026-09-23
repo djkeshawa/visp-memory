@@ -22,6 +22,7 @@ import json
 import os
 import shlex
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -49,6 +50,7 @@ from visp_memory.core.contract_recall import (
     recall_for_task,
     structural_caveat,
 )
+from visp_memory.core.coverage_selection import CONTEXT_SELECTIONS
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID
 from visp_memory.core.embedding_status import (
     DISABLED_STATUS_MESSAGE,
@@ -59,13 +61,21 @@ from visp_memory.core.embedding_status import (
     LEXICAL_SCORE_LABEL,
 )
 from visp_memory.core.intent_usage import STATUS_NEVER_USED, check_intent_usage
+from visp_memory.core.lexical_ranking import RANKING_STRATEGIES
 from visp_memory.core.ranking import projected_importance
 from visp_memory.core.reporting import MemoryIntelligenceReporter
 from visp_memory.core.storage import LocalStorage
 from visp_memory.core.trust import WriteChannel
 from visp_memory.hooks.reachability import ReachabilityReport, check_reachability
+from visp_memory.interfaces.maintenance import app as maintenance_app
 
 console = Console()
+
+# Typer-native choices. Typer 0.27 bundles its own Click, so a click.Choice from the
+# separately installed package raised an unhandled exception (exit 1) on an invalid
+# value instead of the usage error (exit 2) every other bad option produces.
+RankingStrategy = Enum("RankingStrategy", {name: name for name in RANKING_STRATEGIES}, type=str)
+ContextSelection = Enum("ContextSelection", {name: name for name in CONTEXT_SELECTIONS}, type=str)
 
 
 class _RefusalBoundary(TyperGroup):
@@ -123,6 +133,8 @@ app = typer.Typer(
     no_args_is_help=True,
     cls=_RefusalBoundary,
 )
+
+app.add_typer(maintenance_app, name="storage")
 
 # Global memory instance (lazy loaded)
 _memory: Optional[Memory] = None
@@ -850,6 +862,14 @@ def providers_test(
 
 
 @app.command()
+def demo():
+    """Try capture and recall in a temporary store without changing this project."""
+    from visp_memory.interfaces.onboarding import run_demo
+
+    run_demo(console)
+
+
+@app.command()
 def init(
     project_type: str = typer.Option(
         "code", "--type", "-t", help="Project type: code, writing, research, general"
@@ -898,6 +918,9 @@ def init(
 
     console.print(f"[green]Initialized Visp Memory in {config_path}[/green]")
     console.print(f"Data directory: {config.storage.data_dir}")
+    console.print(
+        "[dim]First time? Run visp-memory demo for an isolated capture/recall walkthrough.[/dim]"
+    )
 
     ignored = ensure_gitignored(Path("."), config.storage.data_dir)
     if ignored:
@@ -1321,6 +1344,23 @@ def intent_update(
         console.print(f"[green]Intent updated:[/green] {intent_id}")
 
 
+@intent_app.command("report")
+def intent_report(
+    intent_id: str = typer.Argument(..., help="Intent whose workflow reported an update"),
+    report_file: Path = typer.Option(..., "--file", exists=True, dir_okay=False),
+):
+    """Sync an explicit workflow report from a JSON file; never infer completion."""
+    import json
+
+    from visp_memory.core.intent_workflow import IntentWorkflowReport
+
+    report = IntentWorkflowReport.model_validate_json(report_file.read_text())
+    result = get_memory()._storage.report_intent_workflow(
+        intent_id, report.model_dump(mode="json"), actor_id="local-workflow", channel="cli"
+    )
+    console.print(json.dumps(result))
+
+
 @intent_app.command("complete")
 def intent_complete(intent_id: str = typer.Argument(..., help="Intent ID to complete")):
     """Record a completion outcome without changing intent status."""
@@ -1375,8 +1415,13 @@ def recall(
     task_id: str = typer.Option(
         None, "--task-id", help="Task ID to associate with surfaced results"
     ),
+    ranking_strategy: RankingStrategy = typer.Option(
+        RankingStrategy.default, "--ranking-strategy",
+        help="Hybrid reranks candidates; hybrid_union also discovers independent keyword matches",
+    ),
 ):
     """Search across all memories."""
+    ranking_strategy = RankingStrategy(ranking_strategy).value
     memory = get_memory()
     # Same refusal as the write side, and for the same reason: "repo_id is
     # required" names the field rather than the fix, and the person reading it
@@ -1405,6 +1450,7 @@ def recall(
         task_id=task_id,
         environment=environment,
         task_type=task_type,
+        ranking_strategy=ranking_strategy,
     )
 
     if not results:
@@ -1427,6 +1473,9 @@ def recall(
         return
 
     from rich.box import ROUNDED
+
+    if ranking_strategy in ("hybrid", "hybrid_union"):
+        console.print("[dim]Hybrid ranking; scores describe the underlying retrieval match.[/dim]")
 
     table = Table(title=f"Search Results for '{query}'", box=ROUNDED)
     table.add_column("ID", style="dim", width=16)
@@ -1801,7 +1850,8 @@ def preview(
     selected memories, or the reason nothing was selected, along with how many candidates
     were considered and how they were filtered.
     """
-    from visp_memory.core.injection import InjectionPolicy, format_injection, inject_for_task
+    from visp_memory.core.injection import InjectionPolicy, inject_for_task
+    from visp_memory.interfaces.injection_preview import print_preview
 
     memory = get_memory()
     policy = InjectionPolicy.relaxed() if relaxed else InjectionPolicy()
@@ -1811,24 +1861,7 @@ def preview(
         console.print_json(json.dumps(result.as_dict(), default=str))
         return
 
-    if result.abstained:
-        console.print(f"[yellow]Nothing would be injected[/yellow] — {result.reason}")
-        console.print(f"[dim]{result.considered} candidates considered.[/dim]")
-        return
-
-    console.print(Markdown(format_injection(result)))
-    console.print()
-    console.print(f"[dim]{result.summary()}[/dim]")
-    dropped = [
-        (result.dropped_quarantined, "quarantined (originated outside this repository)"),
-        (result.dropped_untrusted, "below the trust threshold (stale or unverified)"),
-        (result.dropped_below_floor, "below the relevance floor"),
-        (result.dropped_redundant, "redundant with a selected memory"),
-        (result.dropped_over_budget, "over budget"),
-    ]
-    for count, why in dropped:
-        if count:
-            console.print(f"[dim]  • {count} {why}[/dim]")
+    print_preview(console, result)
 
 
 @app.command()
@@ -1850,10 +1883,22 @@ def brief(
     min_confidence: float = typer.Option(
         0.0, "--min-confidence", min=0.0, max=1.0
     ),
+    ranking_strategy: RankingStrategy = typer.Option(
+        RankingStrategy.default, "--ranking-strategy",
+        help="Optional canonical/BM25 ranking; hybrid_union adds keyword candidate discovery",
+    ),
+    context_selection: ContextSelection = typer.Option(
+        ContextSelection.default, "--context-selection",
+        help="Select whole memories or verbatim passages with broader evidence coverage",
+    ),
+    as_of: str = typer.Option(None, "--as-of", help="Historical selection time (ISO 8601)"),
     format: str = typer.Option("text", "--format", help="Output format: text or json"),
 ):
     """Prepare a cited, token-budgeted memory brief before work begins."""
     from visp_memory.core.task_brief import TaskMemoryBriefCompiler
+
+    ranking_strategy = RankingStrategy(ranking_strategy).value
+    context_selection = ContextSelection(context_selection).value
 
     if format not in {"text", "json"}:
         console.print("[red]--format must be text or json[/red]")
@@ -1872,6 +1917,9 @@ def brief(
         constraints=constraints or [],
         previous_fingerprint=previous_fingerprint,
         min_confidence=min_confidence,
+        ranking_strategy=ranking_strategy,
+        context_selection=context_selection,
+        as_of=as_of,
     )
     if format == "json":
         console.print_json(json.dumps(result, default=str))
@@ -2657,7 +2705,7 @@ def capture_tests(report: str = typer.Argument("report.xml", help="Path to JUnit
 # Repository Commands (Phase 3.2)
 # =============================================================================
 
-# FROZEN. docs/FEATURE_STATUS.md marks cross-repo aggregation frozen: implemented
+# FROZEN. docs/reference/FEATURE_STATUS.md marks cross-repo aggregation frozen: implemented
 # and tested, not actively developed, and dependent on the team server. `--help`
 # is the only status a user reads before typing a command, so it says so here too
 # rather than only in a document they may never open.
@@ -2743,13 +2791,18 @@ def add_dependency(
 def repo_context(
     repo: str = typer.Argument(..., help="Repository ID"),
     format: str = typer.Option("text", "--format", "-f", help="Output format (text/json)"),
+    environment: str = typer.Option(None, "--environment", help="Runtime environment scope"),
+    task_type: str = typer.Option(None, "--task-type", help="Task type scope"),
+    as_of: str = typer.Option(None, "--as-of", help="Evaluate memory validity at this timestamp"),
 ):
     """Get cross-repository context (warnings from dependencies)."""
     memory = get_memory()
     from visp_memory.core.cross_repo import CrossRepoContext
 
     ctx_manager = CrossRepoContext(memory.repos.storage, memory.repos)
-    context = ctx_manager.get_context_for_repo(repo)
+    context = ctx_manager.get_context_for_repo(
+        repo, environment=environment, task_type=task_type, as_of=as_of
+    )
 
     if "error" in context:
         console.print(f"[red]{context['error']}[/red]")
@@ -2997,13 +3050,20 @@ def hook_pre_tool_use():
 
 def _get_hook_adapter(
     tool: str,
-    memory: Memory,
+    memory: Optional[Memory],
     server_url: str = "http://127.0.0.1:8000",
     repo_id: str = None,
     config_path: Path = None,
     dry_run: bool = False,
 ):
+    from types import SimpleNamespace
+
     from visp_memory.hooks import get_adapter
+
+    if dry_run:
+        # Installing hooks only needs configuration. Opening Memory would create
+        # storage and may connect to providers even when the user asked for a preview.
+        memory = SimpleNamespace(config=load_config())
 
     if tool.lower() == "codex":
         return get_adapter(
@@ -3015,7 +3075,7 @@ def _get_hook_adapter(
             dry_run=dry_run,
         )
 
-    return get_adapter(tool, memory=memory)
+    return get_adapter(tool, memory=memory, dry_run=dry_run)
 
 
 @hooks_app.command("install")
@@ -3045,7 +3105,7 @@ def hooks_install(
 
     Installs context injection for the specified tool.
     """
-    memory = get_memory()
+    memory = None if dry_run else get_memory()
 
     try:
         adapter = _get_hook_adapter(tool, memory, server_url, repo_id, config_path, dry_run)
@@ -3067,19 +3127,26 @@ def hooks_install(
         else:
             console.print(f"[yellow]✗[/yellow] {component}")
 
-    if tool.lower() == "claude-code" and auto_inject and not dry_run:
+    if tool.lower() == "claude-code" and auto_inject:
         from visp_memory.hooks.claude_code_auto import install_auto_inject_hooks
 
         try:
-            settings_path = install_auto_inject_hooks(Path.cwd())
+            settings_path = install_auto_inject_hooks(Path.cwd(), dry_run=dry_run)
             console.print(f"[green]✓[/green] auto-inject hooks ({settings_path})")
             console.print(
                 "[dim]SessionStart injects project memory; PreToolUse injects "
                 "file-relevant warnings before Read/Edit/Write. Requires `visp-memory` "
                 "on PATH for Claude Code to invoke.[/dim]"
             )
-        except ValueError as e:
+        except (ValueError, OSError, UnicodeError) as e:
+            results["auto_inject_hooks"] = False
             console.print(f"[yellow]✗ auto-inject hooks skipped:[/yellow] {e}")
+
+    if not all(results.values()):
+        console.print(
+            f"[red]{tool} integration setup failed; see the failed components above.[/red]"
+        )
+        raise typer.Exit(1)
 
     console.print(f"\n[green]{tool} integration {'validated' if dry_run else 'installed'}![/green]")
     console.print(f"Context file: {adapter.get_context_file_path()}")
@@ -3102,7 +3169,7 @@ def hooks_uninstall(
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview removal without writing"),
 ):
     """Remove hooks for an LLM tool."""
-    memory = get_memory()
+    memory = None if dry_run else get_memory()
 
     try:
         adapter = _get_hook_adapter(tool, memory, config_path=config_path, dry_run=dry_run)
@@ -3130,7 +3197,11 @@ def hooks_uninstall(
         if uninstall_auto_inject_hooks(Path.cwd()):
             console.print("[green]✓[/green] auto-inject hooks removed")
 
-    console.print(f"\n[green]{tool} integration removed.[/green]")
+    if not all(results.values()):
+        console.print(f"[red]{tool} removal failed; see the failed components above.[/red]")
+        raise typer.Exit(1)
+    outcome = "removal preview complete" if dry_run else "integration removed"
+    console.print(f"\n[green]{tool} {outcome}.[/green]")
 
 
 @hooks_app.command("update")

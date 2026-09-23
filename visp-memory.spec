@@ -34,6 +34,7 @@ if static_dir.exists():
 datas.extend([
     ('README.md', '.'),
     ('LICENSE', '.'),
+    ('NOTICE', '.'),
 ])
 
 block_cipher = None
@@ -54,9 +55,7 @@ a = Analysis(
         'visp_memory.layers.intent',
         'visp_memory.server.app',
         'visp_memory.server.schemas',
-        'visp_memory.interfaces.mcp',
         'chromadb',
-        'sentence_transformers',
         'fastapi',
         'uvicorn',
         'typer',
@@ -65,7 +64,17 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # These optional stacks are deliberately outside the standalone capability
+    # matrix. Excluding them also keeps a developer's globally installed ML/JVM
+    # packages from leaking into the frozen archive and exceeding release limits.
+    excludes=[
+        'arcadedb_embedded',
+        'jpype',
+        'sentence_transformers',
+        'tensorflow',
+        'torch',
+        'transformers',
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

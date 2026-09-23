@@ -1,16 +1,23 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from visp_memory.config import load_config
+from visp_memory.core.answer_prompt import ANSWER_SYSTEM_PROMPT, answer_prompt
+from visp_memory.core.coverage_selection import coverage_candidates, select_coverage
 from visp_memory.core.eligibility import filter_recall_eligible
 from visp_memory.core.model_router import ModelUnavailableError
 from visp_memory.core.ranking import rank_memory_results
 from visp_memory.core.reflection import ReflectionEngine
+from visp_memory.core.tokens import estimate_tokens
 from visp_memory.core.trust import filter_unsolicited
 from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import (
     can_access_scoped_record,
+    has_admin_privileges,
     require_admin,
     require_repo_scope_access,
+    require_repo_writable,
 )
 from visp_memory.server.schemas import (
     AskMemoryCitation,
@@ -20,6 +27,19 @@ from visp_memory.server.schemas import (
 )
 
 router = APIRouter(prefix="/ai", tags=["ai"])
+ANSWER_EVIDENCE_TOKEN_BUDGET = 2000
+
+
+def _evidence_text(rows: list[dict]) -> str:
+    return "\n\n".join(f"[{row['id']}] {row['content']}" for row in rows)
+
+
+def _answer_evidence(rows: list[dict], query: str) -> list[dict]:
+    """Pack authorized evidence with the same source-aware selector as briefs."""
+    return select_coverage(
+        coverage_candidates(rows, query), query, ANSWER_EVIDENCE_TOKEN_BUDGET,
+        lambda selected: estimate_tokens(_evidence_text(selected)),
+    )
 
 
 def _snippet(content: str, max_length: int = 220) -> str:
@@ -79,6 +99,7 @@ async def ask_memory(
     ranked = rank_memory_results(
         guarded.allowed, query=payload.query, limit=payload.limit
     )
+    selected = _answer_evidence(ranked, payload.query)
     citations = [
         AskMemoryCitation(
             memory_id=result["id"],
@@ -88,7 +109,7 @@ async def ask_memory(
             repo_id=result.get("repo_id"),
             relevance_score=result.get("relevance_score") or result.get("similarity"),
         )
-        for result in ranked
+        for result in selected
     ]
 
     router = request.app.state.model_router
@@ -100,17 +121,14 @@ async def ask_memory(
             provider_status="not_configured",
         )
 
-    context = "\n".join(
-        f"[{citation.memory_id}] {citation.snippet}" for citation in citations
-    )
+    # Relative dates in the question ("last week") resolve against the time the
+    # answer is for: the requested historical view, otherwise now.
+    question_date = (payload.as_of or datetime.now(timezone.utc)).date().isoformat()
     try:
         generated = router.complete(
             "answer",
-            f"Question: {payload.query}\n\nMemory evidence:\n{context}",
-            system_prompt=(
-                "Answer only from the supplied memory evidence. Cite supporting memory IDs "
-                "in square brackets. If evidence is insufficient, say so clearly."
-            ),
+            answer_prompt(payload.query, _evidence_text(selected), question_date=question_date),
+            system_prompt=ANSWER_SYSTEM_PROMPT,
         )
     except (ModelUnavailableError, ValueError, RuntimeError):
         return AskMemoryResponse(
@@ -169,7 +187,7 @@ async def preview_reflections(
     proposals = ReflectionEngine(
         request.app.state.storage, request.app.state.model_router
     ).preview(repo_id, min_evidence=max(2, min(min_evidence, 20)))
-    if user.is_admin:
+    if has_admin_privileges(user):
         return proposals
     return [
         proposal
@@ -192,7 +210,7 @@ async def materialize_reflection(
     payload: ReflectionCreateRequest,
     user: UserContext = Depends(get_current_user),
 ):
-    require_repo_scope_access(request.app.state.storage, payload.repo_id, user)
+    require_repo_writable(request.app.state.storage, payload.repo_id, user)
     if not payload.reviewed:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

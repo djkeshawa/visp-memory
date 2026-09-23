@@ -106,11 +106,11 @@ def check_intent_usage(config) -> IntentUsageReport:
             status=STATUS_NOT_CHECKED,
             detail="Storage is client mode; intent adoption is the server's to report.",
         )
-    if config.storage.backend != "sqlite":
+    if config.storage.backend not in ("sqlite", "neo4j"):
         return IntentUsageReport(
             status=STATUS_NOT_CHECKED,
             detail=(
-                f"Intent adoption reporting covers the sqlite backend; this store is "
+                f"Intent adoption reporting covers sqlite and neo4j; this store is "
                 f"{config.storage.backend}."
             ),
         )
@@ -118,7 +118,11 @@ def check_intent_usage(config) -> IntentUsageReport:
     from visp_memory.core.storage import LocalStorage
 
     try:
-        counts = LocalStorage.inspect_intent_usage(Path(config.storage.data_dir))
+        counts = (
+            _inspect_neo4j_intent_usage(config.storage)
+            if config.storage.backend == "neo4j"
+            else LocalStorage.inspect_intent_usage(Path(config.storage.data_dir))
+        )
     except Exception as exc:
         return IntentUsageReport(status=STATUS_UNREADABLE, detail=str(exc))
 
@@ -131,6 +135,30 @@ def check_intent_usage(config) -> IntentUsageReport:
         active_intents=counts["active_intents"],
         total_intents=counts["total_intents"],
     )
+
+
+def _inspect_neo4j_intent_usage(config) -> Dict[str, Any]:
+    # Constructing Neo4jStorage initializes schema; diagnostics must not do that.
+    from visp_memory.core.neo4j_storage import GraphDatabase
+
+    if GraphDatabase is None:
+        raise RuntimeError("Neo4j driver is unavailable; intent usage was not inspected")
+    with GraphDatabase.driver(
+        config.neo4j_uri, auth=(config.neo4j_user, config.neo4j_password),
+        connection_timeout=5,
+    ) as driver:
+        with driver.session(default_access_mode="READ") as session:
+            result = session.run(
+                "CALL { MATCH (m:Memory) WHERE coalesce(m.status, 'active') = 'active' "
+                "RETURN count(m) AS memories } "
+                "CALL { MATCH (i:Intent) RETURN count(i) AS total_intents, "
+                "sum(CASE WHEN coalesce(i.status, 'active') = 'active' THEN 1 ELSE 0 END) "
+                "AS active_intents } "
+                "RETURN memories, total_intents, active_intents"
+            ).single()
+            if result is None:
+                raise RuntimeError("Neo4j intent inspection returned no counts")
+            return {"exists": True, **dict(result)}
 
 
 def _status_for(counts: Dict[str, int]) -> str:

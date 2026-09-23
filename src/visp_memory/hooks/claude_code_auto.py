@@ -213,7 +213,7 @@ def _is_ours(entry: dict[str, Any]) -> bool:
     return False
 
 
-def install_auto_inject_hooks(project_root: Path | str = ".") -> Path:
+def install_auto_inject_hooks(project_root: Path | str = ".", *, dry_run: bool = False) -> Path:
     """Merge visp-memory's SessionStart/PreToolUse hooks into .claude/settings.json.
 
     Idempotent: existing visp-memory entries are replaced, everything else in the
@@ -239,8 +239,9 @@ def install_auto_inject_hooks(project_root: Path | str = ".") -> Path:
         existing = [entry for entry in hooks.get(event, []) if not _is_ours(entry)]
         hooks[event] = existing + entries
 
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-    settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    if not dry_run:
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
     return settings_path
 
 

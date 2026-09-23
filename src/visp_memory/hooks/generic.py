@@ -43,6 +43,7 @@ class GenericAdapter(LLMToolAdapter):
         context_file: str = ".llm-context.md",
         injection_marker: str = None,
         append_mode: bool = False,
+        dry_run: bool = False,
     ):
         """
         Initialize generic adapter.
@@ -58,6 +59,7 @@ class GenericAdapter(LLMToolAdapter):
         self.context_file = self.project_root / context_file
         self.injection_marker = injection_marker
         self.append_mode = append_mode
+        self.dry_run = dry_run
 
     def install(self) -> Dict[str, bool]:
         """
@@ -67,6 +69,15 @@ class GenericAdapter(LLMToolAdapter):
             Installation status
         """
         results = {}
+
+        if self.dry_run:
+            key = "injection_markers" if self.injection_marker else "context_file"
+            valid = True
+            if self.injection_marker and self.context_file.exists():
+                content = self.context_file.read_text(encoding="utf-8")
+                if self.injection_marker in content:
+                    valid = self._valid_markers(content)
+            return {key: valid}
 
         if self.injection_marker:
             # Injection mode - check target file exists
@@ -82,7 +93,7 @@ class GenericAdapter(LLMToolAdapter):
                 # Check if markers exist
                 content = self.context_file.read_text(encoding="utf-8")
                 if self.injection_marker in content:
-                    results["injection_markers"] = True
+                    results["injection_markers"] = self._valid_markers(content)
                 else:
                     # About to modify an existing user file - back it up first.
                     self._backup_file(self.context_file)
@@ -125,6 +136,8 @@ class GenericAdapter(LLMToolAdapter):
             # Remove injected section
             if self.context_file.exists():
                 content = self.context_file.read_text(encoding="utf-8")
+                if self.injection_marker not in content:
+                    return {"injection_removed": True}  # Already removed
 
                 # Find and remove marked section
                 start_marker = f"{self.injection_marker} START"
@@ -138,8 +151,9 @@ class GenericAdapter(LLMToolAdapter):
                     # Strip the (now adjacent) marker strings themselves.
                     new_content = collapsed.replace(start_marker + end_marker, "")
                     # Back up before the destructive write.
-                    self._backup_file(self.context_file)
-                    self.context_file.write_text(new_content.strip() + "\n", encoding="utf-8")
+                    if not self.dry_run:
+                        self._backup_file(self.context_file)
+                        self.context_file.write_text(new_content.strip() + "\n", encoding="utf-8")
                     results["injection_removed"] = True
                 else:
                     results["injection_removed"] = False  # Not found / malformed
@@ -148,8 +162,9 @@ class GenericAdapter(LLMToolAdapter):
         else:
             # Remove standalone file
             if self.context_file.exists():
-                self._backup_file(self.context_file)
-                self.context_file.unlink()
+                if not self.dry_run:
+                    self._backup_file(self.context_file)
+                    self.context_file.unlink()
                 results["context_file"] = True
             else:
                 results["context_file"] = True  # Already removed
@@ -167,6 +182,9 @@ class GenericAdapter(LLMToolAdapter):
         Returns:
             True if successful
         """
+        if self.dry_run:
+            return True
+
         # Get memory context
         context = self.get_memory_context(files=files, task=task)
 
@@ -206,3 +224,8 @@ class GenericAdapter(LLMToolAdapter):
     def get_context_file_path(self) -> Path:
         """Get path to context file."""
         return self.context_file
+
+    def _valid_markers(self, content: str) -> bool:
+        return _replace_between_markers(
+            content, f"{self.injection_marker} START", f"{self.injection_marker} END", ""
+        ) is not None

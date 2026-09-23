@@ -10,6 +10,12 @@ from typing import Any, Optional
 
 from visp_memory.core.clock import parse_utc
 from visp_memory.core.context_compiler import ContextCompiler
+from visp_memory.core.coverage_selection import (
+    coverage_candidates,
+    is_calendar_date,
+    select_coverage,
+    validate_context_selection,
+)
 from visp_memory.core.eligibility import (
     filter_recall_eligible,
     normalize_optional_scope_values,
@@ -133,7 +139,7 @@ class TaskMemoryBriefCompiler:
         inferred_files = [
             reference
             for reference in [*code_references, *path_references]
-            if "/" in reference or "\\" in reference
+            if ("/" in reference or "\\" in reference) and not is_calendar_date(reference)
         ]
         inferred_symbols = [
             reference
@@ -269,6 +275,7 @@ class TaskMemoryBriefCompiler:
                 {
                     "citation": citation,
                     "memory_id": item["id"],
+                    **({"passage_spans": item["passage_spans"]} if "passage_spans" in item else {}),
                     "layer": item.get("layer"),
                     "category": item.get("category"),
                     "repo_id": item.get("repo_id"),
@@ -290,6 +297,7 @@ class TaskMemoryBriefCompiler:
         *,
         repo_id: Optional[str],
         memory_filter: Optional[Callable[[dict[str, Any]], bool]],
+        relationships: Optional[list[dict[str, Any]]] = None,
     ) -> list[dict[str, Any]]:
         selected_by_id = {item["id"]: item for item in selected}
         if not selected_by_id:
@@ -298,7 +306,9 @@ class TaskMemoryBriefCompiler:
             item["id"]: f"M{index}" for index, item in enumerate(selected, start=1)
         }
         results = []
-        for relationship in self.storage.get_all_relationships(repo_id=repo_id):
+        if relationships is None:
+            relationships = self.storage.get_all_relationships(repo_id=repo_id)
+        for relationship in relationships:
             relationship_type = str(relationship.get("relationship") or "").casefold()
             if relationship_type not in {"contradicts", "conflicts_with"}:
                 continue
@@ -418,7 +428,10 @@ class TaskMemoryBriefCompiler:
         memory_filter: Optional[Callable[[dict[str, Any]], bool]] = None,
         environment: Any = None,
         task_type: Any = None,
+        ranking_strategy: str = "default",
+        context_selection: str = "default",
     ) -> dict[str, Any]:
+        validate_context_selection(context_selection)
         repo_id = require_repo_id(repo_id)
         environment = list(
             normalize_optional_scope_values(environment, field="environment")
@@ -462,6 +475,11 @@ class TaskMemoryBriefCompiler:
             memory_filter=compiler_filter,
             environment=environment,
             task_type=task_type,
+            ranking_strategy=ranking_strategy,
+            context_selection=context_selection,
+            # Pack once against the actual brief budget. Pre-packing combines
+            # source passages into indivisible blocks that may no longer fit.
+            _defer_selection=context_selection == "coverage",
         )
         trust_filter = TrustFilterResult.combine(trust_assessments.values())
         candidates = candidate_context["items"]
@@ -506,25 +524,31 @@ class TaskMemoryBriefCompiler:
             ):
                 unknowns.append(f"No cited memory evidence covers `{file_path}`.")
 
-        selected: list[dict[str, Any]] = []
-        for candidate in self._candidate_order(candidates):
-            trial = [*selected, candidate]
-            sections, _ = self._shape_sections(trial)
-            contradictions = self._contradictions(
-                trial, repo_id=repo_id, memory_filter=eligible_memory
+        coverage_relationships = (
+            self.storage.get_all_relationships(repo_id=repo_id)
+            if context_selection == "coverage" else None
+        )
+
+        def rendered_cost(items):
+            trial_sections, _ = self._shape_sections(items)
+            return estimate_tokens(self._render(
+                task=task, repo_id=repo_id, profile=profile, intent=intent,
+                constraints=resolved_constraints, sections=trial_sections,
+                contradictions=self._contradictions(
+                    items, repo_id=repo_id, memory_filter=eligible_memory,
+                    relationships=coverage_relationships,
+                ), unknowns=unknowns,
+            ))
+
+        if context_selection == "coverage":
+            selected = select_coverage(
+                coverage_candidates(candidates, query), query, token_budget, rendered_cost
             )
-            rendered = self._render(
-                task=task,
-                repo_id=repo_id,
-                profile=profile,
-                intent=intent,
-                constraints=resolved_constraints,
-                sections=sections,
-                contradictions=contradictions,
-                unknowns=unknowns,
-            )
-            if estimate_tokens(rendered) <= token_budget:
-                selected = trial
+        else:
+            selected = []
+            for candidate in self._candidate_order(candidates):
+                if rendered_cost([*selected, candidate]) <= token_budget:
+                    selected.append(candidate)
 
         if candidates and not selected:
             unknowns.append("Relevant evidence did not fit within the requested token budget.")

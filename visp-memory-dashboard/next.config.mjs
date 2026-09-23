@@ -2,9 +2,6 @@
 const nextConfig = {
   output: 'export',
   basePath: '/dashboard',
-  typescript: {
-    ignoreBuildErrors: true,
-  },
   images: {
     unoptimized: true,
   },

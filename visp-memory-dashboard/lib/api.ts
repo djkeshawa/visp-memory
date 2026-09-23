@@ -5,6 +5,7 @@ import {
     EmbeddingReindexResult,
     Memory,
     Intent,
+    IntentOutcomeResponse,
     ProviderConnectionStatus,
     ProviderDiagnostic,
     RuntimeStatus,
@@ -28,6 +29,7 @@ import {
     ModelRoutingStatus,
     TaskMemoryBrief,
 } from "./types"
+import { isRecallableLayer, normalizeMemoryLayer } from "./layers"
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_VISP_MEMORY_API_URL || ""
 
@@ -82,6 +84,7 @@ const JWT_STORAGE_KEY = "visp-memory-jwt-token"
 const CSRF_STORAGE_KEY = "visp-memory-csrf-token"
 const AUTH_USER_STORAGE_KEY = "visp-memory-auth-user"
 export const AUTH_CHANGED_EVENT = "visp-memory-auth-changed"
+export const AUTH_REQUIRED_EVENT = "visp-memory-auth-required"
 
 export function getAuthCredentials(): { apiKey: string; jwtToken: string } {
     if (typeof window === "undefined") return { apiKey: "", jwtToken: "" }
@@ -140,6 +143,10 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
             },
         })
         if (!res.ok) {
+            if (
+                res.status === 401 && typeof window !== "undefined" &&
+                !["/auth/status", "/auth/me", "/auth/login", "/auth/logout"].includes(path)
+            ) window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT))
             throw await apiErrorFromResponse(res)
         }
         return res
@@ -179,10 +186,20 @@ function rememberAuthSession(data: Record<string, unknown>, notify = false): Aut
     }
 }
 
-export async function getAuthenticationStatus(): Promise<{ authEnabled: boolean; setupRequired: boolean }> {
-    const res = await request("/auth/status")
+export async function getAuthenticationStatus(signal?: AbortSignal): Promise<{ authEnabled: boolean; setupRequired: boolean }> {
+    const res = await request("/auth/status", { signal })
     const data = await res.json()
-    return { authEnabled: Boolean(data.auth_enabled), setupRequired: Boolean(data.setup_required) }
+    if (typeof data.auth_enabled !== "boolean") {
+        throw new ApiError("Invalid authentication status", 502, "Server returned invalid authentication settings")
+    }
+    return { authEnabled: data.auth_enabled, setupRequired: Boolean(data.setup_required) }
+}
+
+export async function createInitialAccount(username: string, password: string, setupToken: string): Promise<void> {
+    await request("/auth/setup", {
+        method: "POST", headers: jsonHeaders(),
+        body: JSON.stringify({ username, password, setup_token: setupToken }),
+    })
 }
 
 export async function login(username: string, password: string): Promise<AuthSession> {
@@ -194,8 +211,8 @@ export async function login(username: string, password: string): Promise<AuthSes
     return rememberAuthSession(await res.json(), true)
 }
 
-export async function getCurrentAccount(): Promise<AuthSession> {
-    const res = await request("/auth/me")
+export async function getCurrentAccount(signal?: AbortSignal): Promise<AuthSession> {
+    const res = await request("/auth/me", { signal })
     return rememberAuthSession(await res.json())
 }
 
@@ -339,8 +356,8 @@ export async function getStats(repoId?: string | null): Promise<Stats> {
     }
 }
 
-export async function getProjectScopes(): Promise<ProjectScope[]> {
-    const res = await request("/repos/scopes", { headers: authHeaders() })
+export async function getProjectScopes(signal?: AbortSignal): Promise<ProjectScope[]> {
+    const res = await request("/repos/scopes", { headers: authHeaders(), signal })
     const data = await res.json()
 
     return data.map((item: any) => ({
@@ -410,8 +427,8 @@ export async function purgeProject(repoId: string): Promise<{ backup: string }> 
     return res.json()
 }
 
-export async function getRuntimeStatus(): Promise<RuntimeStatus> {
-    const res = await request("/", { headers: authHeaders() })
+export async function getRuntimeStatus(signal?: AbortSignal): Promise<RuntimeStatus> {
+    const res = await request("/", { headers: authHeaders(), signal })
     const data = await res.json()
 
     return {
@@ -515,8 +532,9 @@ export async function getMemories(
     repoId?: string | null,
     status = "active",
     limit = 200,
+    offset = 0,
 ): Promise<Memory[]> {
-    const res = await request(withQuery("/memories", { repo_id: repoId, status, limit }))
+    const res = await request(withQuery("/memories", { repo_id: repoId, status, limit, offset }))
     return (await res.json()).map(normalizeMemory)
 }
 
@@ -570,7 +588,7 @@ function normalizeMemory(item: any): Memory {
     return {
         id: item.id,
         content: item.content,
-        layer: item.layer,
+        layer: normalizeMemoryLayer(item.layer),
         category: item.category,
         status: item.status,
         repoId: item.repo_id,
@@ -580,6 +598,13 @@ function normalizeMemory(item: any): Memory {
         accessCount: item.access_count,
         tags: item.tags,
         metadata: item.metadata,
+        qualityFlags: Array.isArray(item.quality_flags) ? item.quality_flags : [],
+        evidenceIds: Array.isArray(item.evidence_ids) ? item.evidence_ids : [],
+        source: item.source,
+        files: Array.isArray(item.files) ? item.files : [],
+        epistemicStatus: item.epistemic_status,
+        validTo: item.valid_to,
+        approvedAt: item.approved_at,
     }
 }
 
@@ -713,13 +738,13 @@ export async function getIntents(repoId?: string | null, status: string = "activ
     const data = await res.json()
 
     return data.map((item: any) => ({
-        id: item.id,
-        description: item.description,
+        id: String(item.id),
+        description: String(item.description || ""),
         priority: mapPriority(item.priority),
         priorityValue: readNumber(item.priority) ?? 1,
-        status: item.status,
-        createdAt: item.created_at,
-        updatedAt: item.updated_at,
+        status: normalizeIntentStatus(item.status),
+        createdAt: String(item.created_at),
+        updatedAt: item.updated_at ? String(item.updated_at) : undefined,
         context: item.context || {},
     }))
 }
@@ -733,16 +758,15 @@ export async function searchMemories(query: string, limit: number = 10, repoId?:
 
     const data = await res.json()
 
-    return data.map((item: any) => ({
-        id: item.id,
-        content: item.content,
-        layer: item.layer,
-        category: item.category,
-        status: item.status,
-        createdAt: item.created_at,
-        similarity: item.similarity,
-        importance: item.importance,
-    }))
+    return data
+        .map((item: any) => ({
+            ...normalizeMemory(item),
+            similarity: readNumber(item.similarity) ?? undefined,
+            relevanceScore: readNumber(item.relevance_score) ?? undefined,
+            retrievalMethod: ["keyword", "semantic"].includes(item.retrieval_method) ? item.retrieval_method : null,
+            matchExplanation: typeof item.match_explanation === "string" ? item.match_explanation : null,
+        }))
+        .filter((item: SearchResult) => isRecallableLayer(item.layer))
 }
 
 export async function getGraphData(repoId?: string | null): Promise<GraphData> {
@@ -847,22 +871,25 @@ export async function updateIntent(
     }
 }
 
-export async function closeIntent(intentId: string): Promise<void> {
-    await request(`/intents/${encodeURIComponent(intentId)}/close`, {
+export async function closeIntent(intentId: string): Promise<IntentOutcomeResponse> {
+    const res = await request(`/intents/${encodeURIComponent(intentId)}/close`, {
         method: "POST",
         headers: authHeaders(),
     })
+    return normalizeIntentOutcome(await res.json())
 }
 
-export async function completeIntent(intentId: string): Promise<void> {
-    await request(`/intents/${encodeURIComponent(intentId)}/complete`, {
+export async function completeIntent(intentId: string): Promise<IntentOutcomeResponse> {
+    const res = await request(`/intents/${encodeURIComponent(intentId)}/complete`, {
         method: "POST",
         headers: authHeaders(),
     })
+    return normalizeIntentOutcome(await res.json())
 }
 
-export async function reopenIntent(intentId: string): Promise<void> {
-    await request(`/intents/${encodeURIComponent(intentId)}/reopen`, { method: "POST" })
+export async function reopenIntent(intentId: string): Promise<IntentOutcomeResponse> {
+    const res = await request(`/intents/${encodeURIComponent(intentId)}/reopen`, { method: "POST" })
+    return normalizeIntentOutcome(await res.json())
 }
 
 export async function getDecayPreview(options: {
@@ -1165,7 +1192,7 @@ function toGraphNode(record: Record<string, unknown>): GraphNode {
         label: readString(record.label) ?? "",
         full_label: readString(record.full_label),
         radius: readNumber(record.radius),
-        layer: (readString(record.layer) as GraphNode["layer"]) ?? "episodic",
+        layer: normalizeMemoryLayer(record.layer),
     }
 }
 
@@ -1298,8 +1325,34 @@ function mapPriority(priority: number): "high" | "medium" | "low" {
     return "low"
 }
 
+function normalizeIntentStatus(value: unknown): Intent["status"] {
+    if (value === "completed" || value === "closed") return value
+    return "active"
+}
+
+function normalizeIntentOutcome(data: Record<string, unknown>): IntentOutcomeResponse {
+    return {
+        id: String(data.id || ""),
+        status: normalizeIntentStatus(data.status),
+        authoritative: Boolean(data.authoritative),
+        statusChanged: Boolean(data.status_changed),
+        outcomeRecorded: Boolean(data.outcome_recorded),
+    }
+}
+
 function toApiPriority(priority: number): number {
     if (priority >= 8) return 3
     if (priority >= 4) return 2
     return 1
+}
+
+export async function dreamingRequest<T>(
+    repoId: string, action = "", method = "GET", body?: unknown,
+): Promise<T> {
+    const res = await request(`/dreaming/${encodeURIComponent(repoId)}${action}`, {
+        method,
+        headers: jsonHeaders(),
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    })
+    return res.json()
 }

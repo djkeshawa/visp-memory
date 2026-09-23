@@ -5,7 +5,8 @@ import logging
 import uuid
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from threading import Lock
+from typing import Any, Dict, Iterable, List, Optional
 
 from visp_memory.core.authority import (
     ProhibitionAuthorityError,
@@ -22,6 +23,7 @@ from visp_memory.core.eligibility import UNSCOPED_REPO_ID
 from visp_memory.core.ranking import rank_memory_results, text_similarity, utility_rank_adjustment
 from visp_memory.core.storage import (
     REINFORCING_RECALL_EVENTS,
+    REPOSITORY_PURGE_PAGE_SIZE,
     STORAGE_SCHEMA_VERSION,
     BaseStorage,
     EvidenceError,
@@ -30,10 +32,13 @@ from visp_memory.core.storage import (
     LocalStorage,
     MemoryLayer,
     MemoryStatus,
+    SessionCompletionStatus,
     StorageCapabilities,
     StorageMigrationRequired,
+    repository_memory_write,
+    repository_registration,
 )
-from visp_memory.quality.secrets import redact_for_storage
+from visp_memory.quality.secrets import SecretBearingContentError, redact_for_storage
 
 logger = logging.getLogger(__name__)
 
@@ -235,7 +240,9 @@ class ArcadeDbStorage(BaseStorage):
         self.data_dir = Path(data_dir) / "arcadedb"
         self.data_dir.parent.mkdir(parents=True, exist_ok=True)
         self._embedding_fn = embedding_fn
+        self._upgrade_session_schema_marker = False
         self._embedding_dimension = embedding_dimension
+        self._intent_outcome_lock = Lock()
         # ArcadeDB search is lexical (keyword) only — embeddings are not indexed.
         # Surface that explicitly so an operator who configured a real vector
         # provider knows vector recall is unavailable on this backend.
@@ -274,6 +281,14 @@ class ArcadeDbStorage(BaseStorage):
                         "storage",
                         STORAGE_SCHEMA_VERSION,
                         utc_now().isoformat(),
+                    )
+                elif self._upgrade_session_schema_marker:
+                    db.command(
+                        "sql",
+                        "UPDATE SchemaVersion SET version = ?, applied_at = ? WHERE id = ?",
+                        STORAGE_SCHEMA_VERSION,
+                        utc_now().isoformat(),
+                        "storage",
                     )
 
     def _probe_schema_compatibility(self, db) -> bool:
@@ -336,12 +351,14 @@ class ArcadeDbStorage(BaseStorage):
                     "Storage schema is newer than this visp-memory build "
                     f"({stored_version} > {STORAGE_SCHEMA_VERSION})"
                 )
-            if stored_version < STORAGE_SCHEMA_VERSION:
+            if stored_version < STORAGE_SCHEMA_VERSION - 1:
                 raise StorageMigrationRequired(
                     "ArcadeDB schema migration is not implemented; export the older "
-                    "store with its original build before using schema v4"
+                    f"store with its original build before using schema v{STORAGE_SCHEMA_VERSION}"
                 )
             self._validate_current_v4_graph(db, type_kinds, type_counts)
+            if stored_version == STORAGE_SCHEMA_VERSION - 1:
+                self._upgrade_session_schema_marker = True
             return True
         if any(type_counts.values()):
             raise StorageMigrationRequired(
@@ -813,7 +830,9 @@ class ArcadeDbStorage(BaseStorage):
         category: str = None,
         status: str = "active",
         limit: int = 50,
+        offset: int = 0,
         order_by: str = "created_at DESC",
+        after_id: str = None,
         exclude_raw: bool = False,
     ) -> List[Dict[str, Any]]:
         query = f"SELECT FROM {self.MEMORY_TYPE}"
@@ -833,6 +852,9 @@ class ArcadeDbStorage(BaseStorage):
         if category:
             conditions.append("category = ?")
             params.append(category)
+        if after_id is not None:
+            conditions.append("id > ?")
+            params.append(after_id)
         if status and status != "all":
             conditions.append("status = ?")
             params.append(status)
@@ -847,12 +869,14 @@ class ArcadeDbStorage(BaseStorage):
             "importance ASC",
             "accessed_at DESC",
             "accessed_at ASC",
+            "id ASC",
         }
         if order_by not in allowed_order_by:
             order_by = "created_at DESC"
 
-        query += f" ORDER BY {order_by} LIMIT ?"
-        params.append(limit)
+        query += f" ORDER BY {order_by}, id {'ASC' if order_by.endswith('ASC') else 'DESC'}"
+        query += " SKIP ? LIMIT ?"
+        params.extend((max(0, offset), limit))
 
         with self._database() as db:
             rows = self._rows(db.query("sql", query, *params))
@@ -1078,12 +1102,28 @@ class ArcadeDbStorage(BaseStorage):
             return [self._record_to_dict(row, fields, json_fields or set()) for row in rows]
 
     def _delete_records(self, type_name: str, filters: Dict[str, Any]) -> int:
-        records = self._list_records(type_name, ["id"], filters=filters, order_by="id ASC")
-        with self._database() as db:
-            with db.transaction():
-                for record in records:
-                    db.command("sql", f"DELETE FROM {type_name} WHERE id = ?", record["id"])
-        return len(records)
+        deleted = 0
+        # Delete the first bounded page repeatedly.  Re-reading from the start is
+        # intentional: unlike offset pagination it cannot skip rows as earlier
+        # records disappear, and it works with ArcadeDB's SQL surface across
+        # versions.
+        while True:
+            records = self._list_records(
+                type_name,
+                ["id"],
+                filters=filters,
+                limit=REPOSITORY_PURGE_PAGE_SIZE,
+                order_by="id ASC",
+            )
+            if not records:
+                return deleted
+            with self._database() as db:
+                with db.transaction():
+                    for record in records:
+                        db.command(
+                            "sql", f"DELETE FROM {type_name} WHERE id = ?", record["id"]
+                        )
+            deleted += len(records)
 
     def _create_edge(
         self,
@@ -1118,6 +1158,7 @@ class ArcadeDbStorage(BaseStorage):
             rows = self._rows(db.query("sql", f"SELECT FROM {edge_type}"))
             return [self._record_to_dict(row, fields) for row in rows]
 
+    @repository_memory_write
     def store_memory(
         self,
         content: str,
@@ -1132,6 +1173,7 @@ class ArcadeDbStorage(BaseStorage):
         status: MemoryStatus = "active",
         epistemic_status: str = None,
         authority_attestation: str = None,
+        replaces_belief_id: str = None,
         source: str = None,
         quality_flags: List[str] = None,
         embedding: List[float] = None,
@@ -1143,7 +1185,14 @@ class ArcadeDbStorage(BaseStorage):
     ) -> str:
         # Enforce the secrets policy at the single choke point every write path funnels
         # through, so a new caller cannot opt out. See visp_memory.quality.secrets.
-        content, quality_flags = redact_for_storage(content, quality_flags)
+        try:
+            content, quality_flags = redact_for_storage(
+                content,
+                quality_flags,
+                reject_if_redacted=authority_attestation is not None,
+            )
+        except SecretBearingContentError as exc:
+            raise ProhibitionAuthorityError(str(exc)) from exc
         requested_memory_id = memory_id
         memory_id = memory_id or self._generate_id(content)
         repo_id = repo_id or UNSCOPED_REPO_ID
@@ -1190,6 +1239,10 @@ class ArcadeDbStorage(BaseStorage):
             if belief_type != "prohibition" and authority_attestation is not None:
                 raise ValueError(
                     "authority attestation applies only to a prohibition belief"
+                )
+            if replaces_belief_id is not None and belief_type != "prohibition":
+                raise ValueError(
+                    "replaces_belief_id applies only to a prohibition belief"
                 )
         elif epistemic_status is not None:
             raise ValueError("epistemic status applies only to a semantic belief")
@@ -1258,6 +1311,7 @@ class ArcadeDbStorage(BaseStorage):
                         repo_id=repo_id,
                         metadata=metadata,
                         evidence=evidence_claim,
+                        expected_replaces_belief_id=replaces_belief_id,
                     )
                     for stored in self._rows(
                         db.query("sql", "SELECT FROM AuthorityAttestation")
@@ -1423,6 +1477,7 @@ class ArcadeDbStorage(BaseStorage):
         status: str = "active",
         **_kwargs,
     ) -> List[Dict[str, Any]]:
+        query, _ = redact_for_storage(query, None)
         # When no layer is requested, exclude the 'raw' layer from search results
         # (canonical SQLite behavior: search only episodic/semantic/intent). An explicit
         # ``layer='raw'`` request is still honored. list_memories keeps all layers.
@@ -1449,7 +1504,50 @@ class ArcadeDbStorage(BaseStorage):
             memory["similarity"] = text_similarity(query, content)
             results.append(memory)
 
+        self._attach_recall_utility_scores(results)
         return rank_memory_results(results, query=query, limit=limit)
+
+    def _attach_recall_utility_scores(self, memories: List[Dict[str, Any]]) -> None:
+        """Attach canonical, repository-matched utility signals to search rows."""
+        memory_repositories = {
+            memory.get("id"): memory.get("repo_id")
+            for memory in memories
+            if memory.get("id")
+        }
+        if not memory_repositories:
+            return
+
+        events = self._list_records(
+            "RecallFeedback",
+            self.RECALL_EVENT_FIELDS,
+            json_fields=self.RECORD_JSON_FIELDS["RecallFeedback"],
+            limit=100000,
+            order_by="created_at ASC",
+        )
+        counts_by_memory: Dict[str, Dict[str, int]] = {}
+        for event in events:
+            memory_id = event.get("memory_id")
+            if memory_id not in memory_repositories:
+                continue
+            memory_repo_id = memory_repositories[memory_id]
+            event_repo_id = event.get("repo_id")
+            if event_repo_id != memory_repo_id and not (
+                event_repo_id is None and memory_repo_id is None
+            ):
+                continue
+            event_type = event.get("event_type")
+            counts = counts_by_memory.setdefault(memory_id, {})
+            counts[event_type] = counts.get(event_type, 0) + 1
+
+        for memory in memories:
+            counts = counts_by_memory.get(memory.get("id"), {})
+            utility_score = LocalStorage._recall_utility_score_from_counts(counts)
+            memory["utility_score"] = utility_score
+            memory["utility_signal"] = {
+                "counts": counts,
+                "total_events": sum(counts.values()),
+                "rank_adjustment": utility_rank_adjustment(utility_score),
+            }
 
     def list_memories(
         self,
@@ -1458,7 +1556,9 @@ class ArcadeDbStorage(BaseStorage):
         category: str = None,
         status: str = "active",
         limit: int = 50,
+        offset: int = 0,
         order_by: str = "created_at DESC",
+        after_id: str = None,
     ) -> List[Dict[str, Any]]:
         return self._query_memories(
             layer=layer,
@@ -1466,12 +1566,32 @@ class ArcadeDbStorage(BaseStorage):
             category=category,
             status=status,
             limit=limit,
+            offset=offset,
             order_by=order_by,
+            after_id=after_id,
         )
 
     def update_memory(self, memory_id: str, **kwargs) -> bool:
-        if self._query_memory(memory_id) is None:
+        existing = self._query_memory(memory_id)
+        if existing is None:
             return False
+        if kwargs.get("content") is not None:
+            if existing.get("layer") == "semantic":
+                from visp_memory.core.storage import SemanticMemoryImmutableError
+
+                raise SemanticMemoryImmutableError(
+                    "Semantic belief content is immutable; create an evidence-backed "
+                    "successor with revise_memory"
+                )
+            original_content = kwargs["content"]
+            kwargs["content"], redaction_flags = redact_for_storage(
+                original_content,
+                kwargs.get("quality_flags")
+                if kwargs.get("quality_flags") is not None
+                else existing.get("quality_flags") or [],
+            )
+            if kwargs["content"] != original_content:
+                kwargs["quality_flags"] = redaction_flags
 
         allowed_fields = {
             "content",
@@ -1521,6 +1641,11 @@ class ArcadeDbStorage(BaseStorage):
             return False
         with self._database() as db:
             with db.transaction():
+                db.command(
+                    "sql",
+                    "DELETE FROM RecallFeedback WHERE memory_id = ?",
+                    memory_id,
+                )
                 db.command("sql", f"DELETE FROM {self.MEMORY_TYPE} WHERE id = ?", memory_id)
         return True
 
@@ -1591,6 +1716,53 @@ class ArcadeDbStorage(BaseStorage):
             updates,
             json_fields=self.RECORD_JSON_FIELDS["Intent"],
         )
+
+    def append_intent_outcome(
+        self, intent_id: str, outcome: Dict[str, Any]
+    ) -> bool:
+        """Append with a compare-and-swap over the serialized context value."""
+        with self._intent_outcome_lock:
+            return self._append_intent_outcome_locked(intent_id, outcome)
+
+    def _append_intent_outcome_locked(
+        self, intent_id: str, outcome: Dict[str, Any]
+    ) -> bool:
+        """Run the CAS without overlapping embedded database handles."""
+        for _attempt in range(20):
+            with self._database() as db:
+                rows = self._rows(
+                    db.query(
+                        "sql",
+                        "SELECT context FROM Intent WHERE id = ?",
+                        intent_id,
+                    )
+                )
+                if not rows:
+                    return False
+                serialized = self._record_get(rows[0], "context")
+                context = self._json_deserialize(serialized) or {}
+                history = context.get("outcome_history")
+                history = list(history) if isinstance(history, list) else []
+                history.append(dict(outcome))
+                context["outcome_history"] = history
+                with db.transaction():
+                    updated = self._rows(
+                        db.command(
+                            "sql",
+                            "UPDATE Intent SET context = ?, updated_at = ? "
+                            "WHERE id = ? AND context = ?",
+                            self._json_serialize(context),
+                            utc_now().isoformat(),
+                            intent_id,
+                            serialized,
+                        )
+                    )
+                if sum(
+                    int(self._record_get(item, "count", 0) or 0)
+                    for item in updated
+                ) > 0:
+                    return True
+        raise RuntimeError("Concurrent intent outcome append did not converge")
 
     def add_relationship(
         self,
@@ -1681,34 +1853,88 @@ class ArcadeDbStorage(BaseStorage):
             seen_ids.add(related_id)
         return related
 
-    def start_session(self) -> str:
+    def start_session(
+        self,
+        *,
+        owner_id: str = None,
+        team_id: str = None,
+        repo_id: str = None,
+    ) -> str:
         session_id = self._generate_id("session")
         now = utc_now().isoformat()
         with self._database() as db:
             with db.transaction():
                 db.command(
                     "sql",
-                    f"INSERT INTO {self.SESSION_TYPE} SET id = ?, started_at = ?",
+                    f"INSERT INTO {self.SESSION_TYPE} SET id = ?, owner_id = ?, "
+                    "team_id = ?, repo_id = ?, started_at = ?",
                     session_id,
+                    owner_id,
+                    team_id,
+                    repo_id,
                     now,
                 )
         return session_id
 
-    def end_session(self, session_id: str, summary: str, memory_ids: List[str]):
+    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        with self._database() as db:
+            records = self._rows(
+                db.query(
+                    "sql",
+                    f"SELECT FROM {self.SESSION_TYPE} WHERE id = ?",
+                    session_id,
+                )
+            )
+        if not records:
+            return None
+        record = records[0]
+        return {
+            "id": self._record_get(record, "id"),
+            "owner_id": self._record_get(record, "owner_id"),
+            "team_id": self._record_get(record, "team_id"),
+            "repo_id": self._record_get(record, "repo_id"),
+            "summary": self._record_get(record, "summary"),
+            "memory_ids": self._json_deserialize(
+                self._record_get(record, "memory_ids")
+            ) or [],
+            "started_at": self._record_get(record, "started_at"),
+            "ended_at": self._record_get(record, "ended_at"),
+        }
+
+    def end_session(
+        self, session_id: str, summary: str, memory_ids: List[str]
+    ) -> SessionCompletionStatus:
         ended_at = utc_now().isoformat()
         with self._database() as db:
             with db.transaction():
-                db.command(
-                    "sql",
-                    f"""
+                updated = self._rows(
+                    db.command(
+                        "sql",
+                        f"""
                     UPDATE {self.SESSION_TYPE}
                     SET summary = ?, memory_ids = ?, ended_at = ?
-                    WHERE id = ?
+                    WHERE id = ? AND ended_at IS NULL
+                    RETURN AFTER @this
                     """,
-                    summary,
-                    self._json_serialize(memory_ids),
-                    ended_at,
-                    session_id,
+                        summary,
+                        self._json_serialize(memory_ids),
+                        ended_at,
+                        session_id,
+                    )
+                )
+                if updated:
+                    return SessionCompletionStatus.COMPLETED
+                records = self._rows(
+                    db.query(
+                        "sql",
+                        f"SELECT FROM {self.SESSION_TYPE} WHERE id = ?",
+                        session_id,
+                    )
+                )
+                return (
+                    SessionCompletionStatus.ALREADY_COMPLETED
+                    if records
+                    else SessionCompletionStatus.NOT_FOUND
                 )
 
     def get_all_relationships(self, repo_id: str = None) -> List[Dict[str, Any]]:
@@ -1767,6 +1993,7 @@ class ArcadeDbStorage(BaseStorage):
             "total_relationships": len(self.get_all_relationships(repo_id=repo_id)),
         }
 
+    @repository_registration
     def store_repository(self, repo: Dict[str, Any]) -> str:
         repo_id = repo.get("id") or self._generate_id(repo["name"])
         if self.get_repository(repo_id) is not None:
@@ -1836,13 +2063,182 @@ class ArcadeDbStorage(BaseStorage):
             json_fields=self.RECORD_JSON_FIELDS["Repository"],
         )
 
-    def delete_repository(self, repo_id: str) -> bool:
+    def _purge_repository_children(
+        self, repo_id: str, *, memory_ids: Iterable[str] = ()
+    ) -> list[Dict[str, Any]]:
+        """Delete repository records plus authority graph children of purged beliefs."""
+        errors: list[Dict[str, Any]] = []
+        for type_name in ("Intent", "Evidence", "Session", "RecallFeedback"):
+            try:
+                self._delete_records(type_name, {"repo_id": repo_id})
+            except Exception as exc:
+                errors.append({"kind": type_name, "error": exc.__class__.__name__})
+
+        purged_belief_ids = {memory_id for memory_id in memory_ids if memory_id}
+        failed_authority_beliefs: set[str] = set()
+        authority_links_available = True
+        try:
+            authority_links = self._list_edge_records(
+                self.BELIEF_AUTHORITY_EDGE, self.BELIEF_AUTHORITY_FIELDS
+            )
+            for link in authority_links:
+                belief_id = link.get("belief_id")
+                if belief_id not in purged_belief_ids:
+                    continue
+                link_id = link.get("id")
+                if not link_id:
+                    errors.append(
+                        {
+                            "kind": self.BELIEF_AUTHORITY_EDGE,
+                            "error": "missing_id",
+                        }
+                    )
+                    failed_authority_beliefs.add(belief_id)
+                    continue
+                try:
+                    with self._database() as db:
+                        with db.transaction():
+                            db.command(
+                                "sql",
+                                f"DELETE EDGE {self.BELIEF_AUTHORITY_EDGE} WHERE id = ?",
+                                link_id,
+                            )
+                except Exception as exc:
+                    failed_authority_beliefs.add(belief_id)
+                    errors.append(
+                        {
+                            "kind": self.BELIEF_AUTHORITY_EDGE,
+                            "id": link_id,
+                            "error": exc.__class__.__name__,
+                        }
+                    )
+        except Exception as exc:
+            authority_links_available = False
+            errors.append(
+                {"kind": self.BELIEF_AUTHORITY_EDGE, "error": exc.__class__.__name__}
+            )
+
+        try:
+            attestations = self._list_records(
+                "AuthorityAttestation", self.AUTHORITY_ATTESTATION_FIELDS
+            )
+            for attestation in attestations:
+                belief_id = attestation.get("belief_id")
+                if (
+                    not authority_links_available
+                    or belief_id not in purged_belief_ids
+                    or belief_id in failed_authority_beliefs
+                ):
+                    continue
+                attestation_id = attestation.get("id")
+                if not attestation_id:
+                    errors.append(
+                        {
+                            "kind": "AuthorityAttestation",
+                            "error": "missing_id",
+                        }
+                    )
+                    continue
+                try:
+                    with self._database() as db:
+                        with db.transaction():
+                            db.command(
+                                "sql",
+                                "DELETE FROM AuthorityAttestation WHERE id = ?",
+                                attestation_id,
+                            )
+                except Exception as exc:
+                    errors.append(
+                        {
+                            "kind": "AuthorityAttestation",
+                            "id": attestation_id,
+                            "error": exc.__class__.__name__,
+                        }
+                    )
+        except Exception as exc:
+            errors.append({"kind": "AuthorityAttestation", "error": exc.__class__.__name__})
+
+        # A backend may acknowledge a DELETE while leaving a record behind. Report
+        # those scoped leftovers as errors so BaseStorage retains the repository.
+        if purged_belief_ids:
+            try:
+                residual_links = self._list_edge_records(
+                    self.BELIEF_AUTHORITY_EDGE, self.BELIEF_AUTHORITY_FIELDS
+                )
+                for link in residual_links:
+                    if link.get("belief_id") in purged_belief_ids:
+                        errors.append(
+                            {
+                                "kind": self.BELIEF_AUTHORITY_EDGE,
+                                "id": link.get("id"),
+                                "error": "residual",
+                            }
+                        )
+            except Exception as exc:
+                errors.append(
+                    {
+                        "kind": "BeliefAuthority",
+                        "error": f"verification:{exc.__class__.__name__}",
+                    }
+                )
+            try:
+                residual_attestations = self._list_records(
+                    "AuthorityAttestation", self.AUTHORITY_ATTESTATION_FIELDS
+                )
+                for attestation in residual_attestations:
+                    if attestation.get("belief_id") in purged_belief_ids:
+                        errors.append(
+                            {
+                                "kind": "AuthorityAttestation",
+                                "id": attestation.get("id"),
+                                "error": "residual",
+                            }
+                        )
+            except Exception as exc:
+                errors.append(
+                    {
+                        "kind": "AuthorityAttestation",
+                        "error": f"verification:{exc.__class__.__name__}",
+                    }
+                )
+
+        try:
+            dependencies = self._list_edge_records(
+                self.REPO_DEPENDENCY_EDGE, self.REPO_DEPENDENCY_FIELDS
+            )
+            for dependency in dependencies:
+                if repo_id not in {
+                    dependency.get("source_repo_id"),
+                    dependency.get("target_repo_id"),
+                }:
+                    continue
+                try:
+                    with self._database() as db:
+                        with db.transaction():
+                            db.command(
+                                "sql",
+                                f"DELETE EDGE {self.REPO_DEPENDENCY_EDGE} WHERE id = ?",
+                                dependency.get("id"),
+                            )
+                except Exception as exc:
+                    errors.append(
+                        {
+                            "kind": "RepoDependency",
+                            "id": dependency.get("id"),
+                            "error": exc.__class__.__name__,
+                        }
+                    )
+        except Exception as exc:
+            errors.append({"kind": "RepoDependency", "error": exc.__class__.__name__})
+        return errors
+
+    def _delete_repository_record(self, repo_id: str) -> bool:
         if self.get_repository(repo_id) is None:
             return False
-        self._delete_records("Memory", {"repo_id": repo_id})
-        self._delete_records("Intent", {"repo_id": repo_id})
-        self._delete_records("Repository", {"id": repo_id})
-        return True
+        with self._database() as db:
+            with db.transaction():
+                db.command("sql", "DELETE FROM Repository WHERE id = ?", repo_id)
+        return self.get_repository(repo_id) is None
 
     def list_project_ids(self) -> List[str]:
         memories = self.list_memories(status="all", limit=100000)
@@ -2027,10 +2423,7 @@ class ArcadeDbStorage(BaseStorage):
         outcome: str = None,
         metadata: Dict[str, Any] = None,
     ) -> str:
-        memory = self._query_memory(memory_id)
-        if memory is None:
-            raise ValueError(f"Memory not found: {memory_id}")
-        memory_data = self._memory_record_to_dict(memory)
+        _, canonical_repo_id = self._resolve_recall_memory_scope(memory_id, repo_id)
         normalized_type = LocalStorage._normalize_recall_event_type(event_type)
         event_id = self._generate_id(f"{memory_id}:{normalized_type}")
         self._insert_record(
@@ -2039,7 +2432,7 @@ class ArcadeDbStorage(BaseStorage):
                 "id": event_id,
                 "memory_id": memory_id,
                 "event_type": normalized_type,
-                "repo_id": repo_id if repo_id is not None else memory_data.get("repo_id"),
+                "repo_id": canonical_repo_id,
                 "query_hash": LocalStorage._hash_recall_query(query),
                 "task_id": task_id,
                 "outcome": outcome,
@@ -2072,21 +2465,17 @@ class ArcadeDbStorage(BaseStorage):
         event_type: str = None,
         limit: int = 50,
     ) -> Dict[str, Any]:
+        canonical_repo_id = None
+        if memory_id is not None:
+            _, canonical_repo_id = self._resolve_recall_memory_scope(memory_id, repo_id)
+        normalized_event_type = (
+            LocalStorage._normalize_recall_event_type(event_type) if event_type else None
+        )
         filters = {
             "memory_id": memory_id,
-            "repo_id": repo_id,
-            "event_type": LocalStorage._normalize_recall_event_type(event_type)
-            if event_type
-            else None,
+            "repo_id": repo_id if memory_id is None else None,
+            "event_type": normalized_event_type,
         }
-        events = self._list_records(
-            "RecallFeedback",
-            self.RECALL_EVENT_FIELDS,
-            json_fields=self.RECORD_JSON_FIELDS["RecallFeedback"],
-            filters=filters,
-            limit=limit,
-            order_by="created_at DESC",
-        )
         all_events = self._list_records(
             "RecallFeedback",
             self.RECALL_EVENT_FIELDS,
@@ -2095,6 +2484,19 @@ class ArcadeDbStorage(BaseStorage):
             limit=100000,
             order_by="created_at DESC",
         )
+        if memory_id is not None:
+            all_events = [
+                event for event in all_events if event.get("repo_id") == canonical_repo_id
+            ]
+        elif repo_id is not None:
+            memory_repos = self._recall_memory_repositories()
+            all_events = [
+                event
+                for event in all_events
+                if memory_repos.get(event.get("memory_id")) == repo_id
+                and event.get("repo_id") == repo_id
+            ]
+        events = all_events[: max(0, int(limit))]
         by_event_type: dict[str, int] = {}
         signals_by_memory: dict[str, dict[str, Any]] = {}
         for event in all_events:
@@ -2134,7 +2536,83 @@ class ArcadeDbStorage(BaseStorage):
             },
             "signals": signals,
             "events": events,
+            "verification": self.verify_recall_utility(
+                memory_id=memory_id,
+                repo_id=repo_id,
+                event_type=event_type,
+            ),
         }
+
+    def verify_recall_utility(
+        self,
+        memory_id: str = None,
+        repo_id: str = None,
+        event_type: str = None,
+    ) -> Dict[str, Any]:
+        """Verify historical recall event repository attribution without rewriting it."""
+        canonical_repo_id = None
+        if memory_id is not None:
+            _, canonical_repo_id = self._resolve_recall_memory_scope(memory_id, repo_id)
+
+        normalized_event_type = (
+            LocalStorage._normalize_recall_event_type(event_type) if event_type else None
+        )
+        filters = {
+            "memory_id": memory_id,
+            # Verification must inspect every event attached to the selected
+            # memory/repository, including rows whose historical event scope is
+            # the defect being diagnosed.
+            "repo_id": None,
+            "event_type": normalized_event_type,
+        }
+        events = self._list_records(
+            "RecallFeedback",
+            self.RECALL_EVENT_FIELDS,
+            json_fields=self.RECORD_JSON_FIELDS["RecallFeedback"],
+            filters=filters,
+            limit=100000,
+            order_by="created_at ASC",
+        )
+
+        if memory_id is not None:
+            memory_repos = {memory_id: canonical_repo_id}
+        else:
+            memory_repos = self._recall_memory_repositories()
+            if repo_id is not None:
+                events = [
+                    event
+                    for event in events
+                    if memory_repos.get(event.get("memory_id")) == repo_id
+                ]
+
+        violations = []
+        for event in events:
+            if event.get("memory_id") not in memory_repos:
+                continue
+            memory_repo_id = memory_repos[event["memory_id"]]
+            if event.get("repo_id") == memory_repo_id:
+                continue
+            violations.append(
+                {
+                    "event_id": event.get("id"),
+                    "memory_id": event.get("memory_id"),
+                    "event_repo_id": event.get("repo_id"),
+                    "memory_repo_id": memory_repo_id,
+                }
+            )
+
+        return {
+            "valid": not violations,
+            "checked_events": len(events),
+            "cross_repository_events": len(violations),
+            "violations": violations,
+        }
+
+    def _recall_memory_repositories(self) -> Dict[str, Any]:
+        memories = self._list_records(
+            "Memory", ["id", "repo_id"], limit=100000, order_by="id ASC"
+        )
+        return {memory["id"]: memory.get("repo_id") for memory in memories}
 
     def reset_recall_utility(
         self,
@@ -2142,8 +2620,56 @@ class ArcadeDbStorage(BaseStorage):
         repo_id: str = None,
         event_type: str = None,
     ) -> int:
+        if memory_id is not None:
+            _, canonical_repo_id = self._resolve_recall_memory_scope(memory_id, repo_id)
+            normalized_event_type = (
+                LocalStorage._normalize_recall_event_type(event_type) if event_type else None
+            )
+            events = self._list_records(
+                "RecallFeedback",
+                self.RECALL_EVENT_FIELDS,
+                filters={"memory_id": memory_id},
+                limit=100000,
+                order_by="id ASC",
+            )
+            matching_ids = [
+                event["id"]
+                for event in events
+                if event.get("repo_id") == canonical_repo_id
+                and (
+                    normalized_event_type is None
+                    or event.get("event_type") == normalized_event_type
+                )
+            ]
+            deleted = 0
+            for event_id in matching_ids:
+                deleted += self._delete_records("RecallFeedback", {"id": event_id})
+            return deleted
+
+        if repo_id is not None:
+            normalized_event_type = (
+                LocalStorage._normalize_recall_event_type(event_type) if event_type else None
+            )
+            events = self._list_records(
+                "RecallFeedback",
+                self.RECALL_EVENT_FIELDS,
+                filters={"event_type": normalized_event_type},
+                limit=100000,
+                order_by="id ASC",
+            )
+            memory_repos = self._recall_memory_repositories()
+            matching_ids = [
+                event["id"]
+                for event in events
+                if memory_repos.get(event.get("memory_id")) == repo_id
+                and event.get("repo_id") == repo_id
+            ]
+            deleted = 0
+            for event_id in matching_ids:
+                deleted += self._delete_records("RecallFeedback", {"id": event_id})
+            return deleted
+
         filters = {
-            "memory_id": memory_id,
             "repo_id": repo_id,
             "event_type": LocalStorage._normalize_recall_event_type(event_type)
             if event_type

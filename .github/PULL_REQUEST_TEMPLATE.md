@@ -18,7 +18,7 @@
 
 - [ ] `python3 scripts/evaluate_oracle_gap.py` — numbers recorded below
 - [ ] `python3 scripts/evaluate_poisoning.py` — numbers recorded below
-- [ ] Published numbers in `docs/BENCHMARK.md` / `docs/TRUST.md` updated to match
+- [ ] Published numbers in `docs/reference/BENCHMARK.md` updated to match
 
 <!--
 Paste the before/after numbers here. A change that raises recall by lowering

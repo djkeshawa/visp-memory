@@ -11,6 +11,7 @@ or fall back to heuristic-based compression.
 """
 
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
@@ -18,9 +19,15 @@ from visp_memory.core.beliefs import map_producer_belief_type
 from visp_memory.core.clock import utc_now
 from visp_memory.core.eligibility import normalize_optional_scope_values, require_repo_id
 from visp_memory.core.ranking import projected_importance
-from visp_memory.core.storage import BaseStorage
+from visp_memory.core.source_support import source_support
+from visp_memory.core.storage import BaseStorage, EvidenceReferenceError
 from visp_memory.core.tokens import compute_savings
-from visp_memory.core.trust import WriteChannel, channel_policy, with_channel_provenance
+from visp_memory.core.trust import (
+    WriteChannel,
+    channel_policy,
+    with_provenance,
+)
+from visp_memory.quality.secrets import redact_for_storage
 
 COMPRESSION_PROMPT_HEADER = (
     "Compress these {count} related memories into a single piece of actionable "
@@ -62,6 +69,71 @@ def _shared_compression_scope(
             inherited[field] = list(normalized[0])
 
     return repo_ids[0], inherited
+
+
+@dataclass(frozen=True)
+class _CompressionInputs:
+    memories: List[Dict[str, Any]]
+    source_ids: List[str]
+    evidence_ids: List[str]
+    repo_id: str
+    scope: Dict[str, List[str]]
+    provenance: Any
+
+
+def _canonical_compression_inputs(
+    storage: BaseStorage,
+    memories: List[Dict[str, Any]],
+    write_channel: WriteChannel,
+) -> Optional[_CompressionInputs]:
+    """Resolve source rows from storage before compression can call a model.
+
+    Every supported backend exposes ``get_memory`` or ``peek_memory`` and is
+    therefore validated against canonical rows, rather than trusting the caller's
+    copied content, scope, status, or provenance fields.
+    """
+    source_ids = list(dict.fromkeys(memory.get("id") for memory in memories))
+    if any(not source_id for source_id in source_ids):
+        raise EvidenceReferenceError("Compression source IDs are required")
+    lookup = getattr(storage, "peek_memory", None)
+    if not callable(lookup):
+        lookup = getattr(storage, "get_memory", None)
+    if not callable(lookup):
+        raise EvidenceReferenceError(
+            "Compression requires storage-backed source lookup"
+        )
+
+    canonical = []
+    for source_id in source_ids:
+        source = lookup(source_id)
+        if not source or source.get("status") == "deleted":
+            raise EvidenceReferenceError(f"Lineage source {source_id!r} is missing or deleted")
+        if source.get("status") != "active":
+            raise EvidenceReferenceError(f"Lineage source {source_id!r} must be active")
+        canonical.append(source)
+    if not canonical:
+        return None
+
+    repo_id = require_repo_id(canonical[0].get("repo_id"))
+    try:
+        evidence_ids, inherited_scope, provenance = source_support(
+            storage, source_ids, repo_id, write_channel
+        )
+    except EvidenceReferenceError:
+        raise
+    except (AttributeError, TypeError, ValueError):
+        # Compression has historically represented ambiguous groups as a skipped
+        # optional maintenance operation; keep that contract while validating
+        # canonical source rows before any model call.
+        return None
+    return _CompressionInputs(
+        memories=canonical,
+        source_ids=source_ids,
+        evidence_ids=evidence_ids,
+        repo_id=repo_id,
+        scope=inherited_scope,
+        provenance=provenance,
+    )
 
 
 class MemoryCompressor:
@@ -128,13 +200,20 @@ class MemoryCompressor:
         if not episodes:
             return None
 
-        compression_scope = _shared_compression_scope(episodes)
-        if compression_scope is None:
+        write_channel = WriteChannel.COMPRESSION
+        canonical_inputs = _canonical_compression_inputs(
+            self.storage, episodes, write_channel
+        )
+        if canonical_inputs is None:
             return None
-        repo_id, inherited_scope = compression_scope
+        episodes = canonical_inputs.memories
+        source_ids = canonical_inputs.source_ids
+        source_evidence = canonical_inputs.evidence_ids
+        repo_id = canonical_inputs.repo_id
+        inherited_scope = canonical_inputs.scope
+        source_provenance = canonical_inputs.provenance
 
-        contents = [ep["content"] for ep in episodes]
-        source_ids = [ep["id"] for ep in episodes]
+        contents = [redact_for_storage(ep["content"], None)[0] for ep in episodes]
 
         # Calculate importance (average + boost for count)
         avg_importance = sum(ep.get("importance", 0.5) for ep in episodes) / len(episodes)
@@ -169,7 +248,6 @@ class MemoryCompressor:
         savings = compute_savings(contents, compressed)
 
         # Store semantic memory
-        write_channel = WriteChannel.COMPRESSION
         policy = channel_policy(write_channel)
         semantic_id = self.storage.store_memory(
             content=compressed,
@@ -177,7 +255,7 @@ class MemoryCompressor:
             repo_id=repo_id,
             category=category,
             importance=importance,
-            tags=with_channel_provenance(all_tags, write_channel),
+            tags=with_provenance(all_tags, source_provenance),
             metadata={
                 "compressed_from": len(episodes),
                 "compressed_at": utc_now().isoformat(),
@@ -187,6 +265,7 @@ class MemoryCompressor:
                 **inherited_scope,
             },
             source_ids=source_ids,
+            evidence_ids=source_evidence,
             source=policy.source,
         )
 
@@ -342,13 +421,20 @@ class MemoryCompressor:
         if not memories or len(memories) < 3:
             return None
 
-        compression_scope = _shared_compression_scope(memories)
-        if compression_scope is None:
+        write_channel = WriteChannel.COMPRESSION
+        canonical_inputs = _canonical_compression_inputs(
+            self.storage, memories, write_channel
+        )
+        if canonical_inputs is None:
             return None
-        repo_id, inherited_scope = compression_scope
+        memories = canonical_inputs.memories
+        source_ids = canonical_inputs.source_ids
+        source_evidence = canonical_inputs.evidence_ids
+        repo_id = canonical_inputs.repo_id
+        inherited_scope = canonical_inputs.scope
+        source_provenance = canonical_inputs.provenance
 
         contents = [m["content"] for m in memories]
-        source_ids = [m["id"] for m in memories]
 
         # Calculate importance (higher for principles)
         avg_importance = sum(m.get("importance", 0.5) for m in memories) / len(memories)
@@ -379,7 +465,6 @@ class MemoryCompressor:
         savings = compute_savings(contents, compressed)
 
         # Store principle
-        write_channel = WriteChannel.COMPRESSION
         policy = channel_policy(write_channel)
         principle_id = self.storage.store_memory(
             content=compressed,
@@ -387,9 +472,7 @@ class MemoryCompressor:
             repo_id=repo_id,
             category="procedure",
             importance=importance,
-            tags=with_channel_provenance(
-                ["compressed", "principle"], write_channel
-            ),
+            tags=with_provenance(["compressed", "principle"], source_provenance),
             metadata={
                 "compressed_from": len(memories),
                 "level": 2,
@@ -400,6 +483,7 @@ class MemoryCompressor:
                 **inherited_scope,
             },
             source_ids=source_ids,
+            evidence_ids=source_evidence,
             source=policy.source,
         )
 

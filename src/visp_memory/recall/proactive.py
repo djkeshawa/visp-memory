@@ -17,6 +17,7 @@ from visp_memory.core.eligibility import (
     normalize_optional_scope_values,
     require_repo_id,
 )
+from visp_memory.core.ranking import graph_edge_score
 from visp_memory.core.trust import TrustFilterResult, filter_unsolicited
 
 # The intent layer stores its verbs as description prefixes ("WORKING ON: ...").
@@ -31,8 +32,6 @@ _CONSTRAINT_PREFIX = "CONSTRAINT:"
 # current direction earns its place only if it stays a single short line.
 ACTIVE_INTENT_MAX_CHARS = 120
 
-_TRUNCATION_MARKER = "..."
-
 # Distinguishes "not looked up yet" from a genuine "no intent set" (None).
 _UNSET = object()
 
@@ -40,6 +39,34 @@ _UNSET = object()
 # non-authoritative history entries - they say what was reported, not that the
 # task is finished, and reading them here changes no stored status.
 _SETTLED_OUTCOMES = frozenset({"completed", "closed"})
+_INJECTION_MEMORY_LIMIT = 4
+_RELATED_CANDIDATE_LIMIT = 16
+_RELATED_MIN_CONFIDENCE = 0.5
+_MEMORY_CONTEXT_KEYS = (
+    "warnings",
+    "bugs",
+    "decisions",
+    "knowledge",
+    "related",
+    "conventions",
+    "recent_changes",
+    "patterns",
+    "recent_activity",
+    "history",
+)
+
+_MARKDOWN_SECTIONS = (
+    ("warnings", "⚠️  **Warnings**"),
+    ("bugs", "🐛 **Recent Bugs Fixed**"),
+    ("decisions", "📋 **Architectural Decisions**"),
+    ("knowledge", "💡 **Relevant Knowledge**"),
+    ("related", "🔗 **Related Context**"),
+    ("conventions", "📐 **Conventions**"),
+    ("recent_changes", "🔄 **Recent Changes**"),
+    ("patterns", "🧩 **Patterns**"),
+    ("recent_activity", "🕘 **Recent Activity**"),
+    ("history", "📜 **History**"),
+)
 
 
 def _has_completion_outcome(intent: Dict[str, Any]) -> bool:
@@ -57,13 +84,7 @@ def _has_completion_outcome(intent: Dict[str, Any]) -> bool:
 
 
 def _strip_intent_prefix(description: str) -> str:
-    """Drop the stored verb prefix and clamp to one readable line.
-
-    Truncation is on a word boundary and marked. A mid-word cut of a goal like
-    "Do not delete the legacy adapter until the served pair check passes" can
-    land as a sentence that means the opposite of what was recorded, and this
-    text is read by an LLM as an instruction.
-    """
+    """Drop the stored prefix; omit oversized direction rather than its conditions."""
     text = description.strip()
     for prefix in _INTENT_PREFIXES:
         if text.upper().startswith(prefix):
@@ -72,9 +93,7 @@ def _strip_intent_prefix(description: str) -> str:
     if len(text) <= ACTIVE_INTENT_MAX_CHARS:
         return text
 
-    budget = ACTIVE_INTENT_MAX_CHARS - len(_TRUNCATION_MARKER)
-    clipped = text[:budget].rsplit(" ", 1)[0].rstrip(" ,;:-")
-    return f"{clipped or text[:budget]}{_TRUNCATION_MARKER}"
+    return "[omitted: full direction exceeds the automatic injection budget]"
 
 
 class ProactiveRecall:
@@ -94,7 +113,15 @@ class ProactiveRecall:
         dir_context = recall.on_directory("src/auth/")
     """
 
-    def __init__(self, memory, *, environment: Any = None, task_type: Any = None, as_of=None):
+    def __init__(
+        self,
+        memory,
+        *,
+        repo_id: str = None,
+        environment: Any = None,
+        task_type: Any = None,
+        as_of=None,
+    ):
         """
         Initialize proactive recall.
 
@@ -102,7 +129,7 @@ class ProactiveRecall:
             memory: Memory instance to recall from
         """
         self.memory = memory
-        self.repo_id = require_repo_id(memory.config.repo_id)
+        self.repo_id = require_repo_id(repo_id or memory.config.repo_id)
         self.environment = list(
             normalize_optional_scope_values(environment, field="environment")
         ) or None
@@ -166,6 +193,7 @@ class ProactiveRecall:
             "bugs": [],
             "decisions": [],
             "knowledge": [],
+            "related": [],
             "recent_changes": [],
         }
 
@@ -270,6 +298,53 @@ class ProactiveRecall:
             min_score=None,
         )
 
+        if include_related:
+            direct_ids = list(
+                dict.fromkeys(
+                    item.get("id")
+                    for key in (
+                        "warnings",
+                        "bugs",
+                        "decisions",
+                        "knowledge",
+                        "recent_changes",
+                    )
+                    for item in results[key]
+                    if item.get("id")
+                )
+            )
+            related_candidates: List[Dict[str, Any]] = []
+            seen_related = set(direct_ids)
+            for source_id in direct_ids:
+                for item in self.memory._storage.get_related_memories(source_id):
+                    related_id = item.get("id")
+                    if not related_id or related_id in seen_related:
+                        continue
+                    if graph_edge_score(
+                        item.get("strength"), item.get("relationship_evidence")
+                    ) < _RELATED_MIN_CONFIDENCE:
+                        continue
+                    seen_related.add(related_id)
+                    related_candidates.append(item)
+                    if len(related_candidates) >= _RELATED_CANDIDATE_LIMIT:
+                        break
+                if len(related_candidates) >= _RELATED_CANDIDATE_LIMIT:
+                    break
+
+            trusted_related = self._trusted(
+                related_candidates,
+                trust_results,
+                eligibility_results,
+            )
+            results["related"] = self.memory.rank_with_context(
+                trusted_related,
+                query=file_path,
+                repo_id=repo_id,
+                files=[file_path],
+                limit=_INJECTION_MEMORY_LIMIT,
+                min_score=None,
+            )
+
         results["active_intent"] = self.active_intent()
 
         self.last_trust_filter = TrustFilterResult.combine(trust_results).diagnostics()
@@ -299,6 +374,7 @@ class ProactiveRecall:
             "bugs": [],
             "decisions": [],
             "knowledge": [],
+            "related": [],
         }
         for file in files:
             file_context = self.on_file_open(file)
@@ -560,76 +636,207 @@ class ProactiveRecall:
         Returns:
             Formatted string for injection
         """
+        original_memories = memories
+        memories = self._budget_injection_memories(memories)
+        omitted = self._injection_omissions(original_memories, memories)
+
         if format == "json":
-            import json
+            return self._format_json_injection(memories, max_length, omitted)
 
-            return json.dumps(memories, indent=2, default=str)[:max_length]
+        return self._format_markdown_injection(memories, max_length, omitted)
 
-        lines = []
+    @staticmethod
+    def _injection_omissions(original: Dict[str, Any], budgeted: Dict[str, Any]) -> Dict[str, int]:
+        """Count complete memory units removed by the automatic four-item gate."""
+        omitted = {}
+        for key in _MEMORY_CONTEXT_KEYS:
+            original_values = original.get(key)
+            kept_values = budgeted.get(key)
+            if isinstance(original_values, list) and isinstance(kept_values, list):
+                count = max(0, len(original_values) - len(kept_values))
+                if count:
+                    omitted[key] = count
+        return omitted
 
-        # The current direction leads: an assistant that is told what the work is
-        # aimed at does not spend the turn re-deriving it. Direction only - this
-        # line records what memory was told, and grants nothing.
+    @staticmethod
+    def _json_dump(value: Dict[str, Any], *, pretty: bool = False) -> str:
+        import json
+
+        return json.dumps(
+            value,
+            indent=2 if pretty else None,
+            separators=None if pretty else (",", ":"),
+            default=str,
+        )
+
+    @classmethod
+    def _json_payload(
+        cls, values: Dict[str, Any], omitted: Dict[str, int]
+    ) -> Dict[str, Any]:
+        payload = dict(values)
+        if omitted:
+            payload["truncated"] = True
+            payload["omitted"] = dict(omitted)
+        return payload
+
+    @classmethod
+    def _format_json_injection(
+        cls, memories: Dict[str, Any], max_length: int, omitted: Dict[str, int]
+    ) -> str:
+        """Pack whole JSON evidence units and retain a parseable envelope.
+
+        JSON callers must provide at least two characters, the size of the
+        smallest valid object (``{}``).
+        """
+        if max_length < 2:
+            raise ValueError("max_length must be at least 2 for JSON injection")
+
+        full = cls._json_dump(cls._json_payload(memories, omitted), pretty=True)
+        if len(full) <= max_length:
+            return full
+
+        # Diagnostics and other non-evidence fields can be large. During
+        # truncation retain the public memory sections and current direction;
+        # the omitted map explains why some units are absent.
+        packed: Dict[str, Any] = {
+            key: [] for key in _MEMORY_CONTEXT_KEYS if isinstance(memories.get(key), list)
+        }
+        if "active_intent" in memories:
+            packed["active_intent"] = memories["active_intent"]
+        counts = dict(omitted)
+        for key in _MEMORY_CONTEXT_KEYS:
+            values = memories.get(key)
+            if not isinstance(values, list):
+                continue
+            for item in values:
+                trial = {**packed, key: [*packed[key], item]}
+                rendered = cls._json_dump(cls._json_payload(trial, counts))
+                if len(rendered) <= max_length:
+                    packed = trial
+                else:
+                    counts[key] = counts.get(key, 0) + 1
+
+        result = cls._json_dump(cls._json_payload(packed, counts))
+        while len(result) > max_length:
+            removable = next(
+                (key for key in reversed(_MEMORY_CONTEXT_KEYS) if packed.get(key)), None
+            )
+            if removable is None:
+                break
+            packed[removable].pop()
+            counts[removable] = counts.get(removable, 0) + 1
+            result = cls._json_dump(cls._json_payload(packed, counts))
+        if len(result) <= max_length:
+            return result
+
+        # Empty sections are useful at normal sizes but are expendable when the
+        # response envelope itself is the limiting factor.
+        compact = {key: value for key, value in packed.items() if value not in ([], None, "")}
+        result = cls._json_dump(cls._json_payload(compact, counts))
+        if len(result) <= max_length:
+            return result
+        for fallback in ({"truncated": True}, {}):
+            result = cls._json_dump(fallback)
+            if len(result) <= max_length:
+                return result
+        return ""
+
+    @staticmethod
+    def _markdown_omission_marker(omitted: int, max_length: int | None = None) -> str:
+        suffix = "s" if omitted != 1 else ""
+        marker = f"⚠️ Evidence omitted ({omitted} item{suffix}) to fit max_length."
+        if max_length is None or len(marker) <= max_length:
+            return marker
+        compact = f"… {omitted} omitted"
+        if len(compact) <= max_length:
+            return compact
+        return "…" if max_length else ""
+
+    @classmethod
+    def _format_markdown_injection(
+        cls, memories: Dict[str, Any], max_length: int, omitted: Dict[str, int]
+    ) -> str:
+        """Render complete evidence units; never clip a fact or qualification."""
+        if max_length <= 0:
+            return ""
+        blocks: list[str] = []
+        selected_sections: set[str] = set()
+        total_omitted = sum(omitted.values())
+
         active_intent = memories.get("active_intent")
         if active_intent:
-            lines.append(f"\U0001F3AF **Current direction**: {active_intent}")
-            lines.append("")
+            intent = f"\U0001F3AF **Current direction**: {active_intent}"
+            marker = cls._markdown_omission_marker(total_omitted + 1, max_length)
+            if len(intent) + (len(marker) + 2 if total_omitted else 0) <= max_length:
+                blocks.append(intent)
+            else:
+                total_omitted += 1
 
-        # Add warnings (highest priority)
-        if memories.get("warnings"):
-            lines.append("⚠️  **Warnings**")
-            for w in memories["warnings"][:3]:
-                content = w["content"].replace("WARNING ", "").strip()
-                lines.append(f"  • {content[:150]}")
-            lines.append("")
+        for key, heading in _MARKDOWN_SECTIONS:
+            values = memories.get(key)
+            if not isinstance(values, list):
+                continue
+            for item in values:
+                if not isinstance(item, dict):
+                    total_omitted += 1
+                    continue
+                content = str(item.get("content", "")).strip()
+                if key == "warnings":
+                    content = content.removeprefix("WARNING ").strip()
+                if not content:
+                    total_omitted += 1
+                    continue
+                prefix = heading if key not in selected_sections else ""
+                citation = f"[{item['id']}] " if item.get("id") else ""
+                unit = f"{prefix + chr(10) if prefix else ''}  • {citation}{content}"
+                candidate = "\n\n".join([*blocks, unit])
+                marker = cls._markdown_omission_marker(total_omitted + 1, max_length)
+                if len(candidate) + (len(marker) + 2 if total_omitted else 0) <= max_length:
+                    blocks.append(unit)
+                    selected_sections.add(key)
+                else:
+                    total_omitted += 1
 
-        # Add recent bugs/fixes
-        if memories.get("bugs"):
-            lines.append("🐛 **Recent Bugs Fixed**")
-            for b in memories["bugs"][:2]:
-                content = b["content"][:150]
-                lines.append(f"  • {content}")
-            lines.append("")
-
-        # Add relevant decisions
-        if memories.get("decisions"):
-            lines.append("📋 **Architectural Decisions**")
-            for d in memories["decisions"][:2]:
-                content = d["content"].split("\n")[0][:150]
-                lines.append(f"  • {content}")
-            lines.append("")
-
-        # Add knowledge/patterns
-        if memories.get("knowledge"):
-            lines.append("💡 **Relevant Knowledge**")
-            for k in memories["knowledge"][:3]:
-                content = k["content"][:150]
-                lines.append(f"  • {content}")
-            lines.append("")
-
-        # Add conventions
-        if memories.get("conventions"):
-            lines.append("📐 **Conventions**")
-            for c in memories["conventions"][:2]:
-                content = c["content"][:150]
-                lines.append(f"  • {content}")
-            lines.append("")
-
-        # Add recent changes
-        if memories.get("recent_changes"):
-            lines.append("🔄 **Recent Changes**")
-            for r in memories["recent_changes"][:2]:
-                content = r["content"][:150]
-                lines.append(f"  • {content}")
-            lines.append("")
-
-        output = "\n".join(lines)
-
-        # Truncate if too long
-        if len(output) > max_length:
-            output = output[: max_length - 100] + "\n\n... (truncated for length)"
-
+        output = "\n\n".join(blocks)
+        if total_omitted:
+            marker = cls._markdown_omission_marker(total_omitted, max_length)
+            output = "\n\n".join([part for part in (output, marker) if part])
+            while len(output) > max_length and blocks:
+                blocks.pop()
+                total_omitted += 1
+                marker = cls._markdown_omission_marker(total_omitted, max_length)
+                output = "\n\n".join([*blocks, marker])
+            if len(output) > max_length:
+                output = cls._markdown_omission_marker(total_omitted, max_length)
         return output
+
+    @staticmethod
+    def _budget_injection_memories(
+        context: Dict[str, Any], limit: int = _INJECTION_MEMORY_LIMIT
+    ) -> Dict[str, Any]:
+        """Return a de-duplicated copy with one budget across every memory section."""
+        budgeted = dict(context)
+        seen_ids = set()
+        selected = 0
+        for key in _MEMORY_CONTEXT_KEYS:
+            values = context.get(key)
+            if not isinstance(values, list):
+                continue
+            kept = []
+            for item in values:
+                if not isinstance(item, dict):
+                    continue
+                memory_id = item.get("id")
+                dedupe_key = memory_id or (item.get("layer"), item.get("content"))
+                if dedupe_key in seen_ids:
+                    continue
+                if selected >= limit:
+                    break
+                seen_ids.add(dedupe_key)
+                kept.append(item)
+                selected += 1
+            budgeted[key] = kept
+        return budgeted
 
     def find_relevant_for_task(
         self, task_description: str, files: List[str] = None, limit: int = 10

@@ -1,5 +1,7 @@
 import pytest
 
+from visp_memory.server.app import app
+
 
 @pytest.mark.asyncio
 async def test_repo_registration_and_isolation(client):
@@ -163,3 +165,68 @@ async def test_repository_archive_restore_and_confirmed_purge(client):
     assert (await client.get("/repos/lifecycle-repo", headers=headers)).status_code == 404
     memory_lookup = await client.get(f"/memories/{memory.json()['id']}", headers=headers)
     assert memory_lookup.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_reflection_materialization_requires_a_writable_repository(client):
+    headers = {"X-API-KEY": "test_key"}
+    await client.post(
+        "/repos",
+        json={"name": "Reflection", "id": "reflection-repo"},
+        headers=headers,
+    )
+    first = await client.post(
+        "/memories", json={"content": "Evidence one", "repo_id": "reflection-repo"}, headers=headers
+    )
+    second = await client.post(
+        "/memories", json={"content": "Evidence two", "repo_id": "reflection-repo"}, headers=headers
+    )
+    assert first.status_code == second.status_code == 200
+    await client.post("/repos/reflection-repo/archive", headers=headers)
+
+    response = await client.post(
+        "/ai/reflections",
+        json={
+            "repo_id": "reflection-repo",
+            "title": "Archived runbook",
+            "evidence_ids": [first.json()["id"], second.json()["id"]],
+            "reviewed": True,
+        },
+        headers=headers,
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Repository is archived and does not accept new writes"
+
+
+@pytest.mark.asyncio
+async def test_repository_purge_reports_conflict_and_retains_scope_on_vector_failure(
+    client, monkeypatch
+):
+    headers = {"X-API-KEY": "test_key"}
+    await client.post(
+        "/repos",
+        json={"name": "Vector Failure", "id": "vector-repo"},
+        headers=headers,
+    )
+    memory = await client.post(
+        "/memories",
+        json={"content": "Keep this if vector cleanup fails", "repo_id": "vector-repo"},
+        headers=headers,
+    )
+
+    class FailingCollection:
+        def delete(self, *, ids):
+            raise RuntimeError("vector unavailable")
+
+    monkeypatch.setattr(app.state.storage, "_get_collection", lambda _layer: FailingCollection())
+
+    purged = await client.delete(
+        "/repos/vector-repo?confirmation=vector-repo", headers=headers
+    )
+
+    assert purged.status_code == 409
+    assert purged.json()["detail"]["status"] == "incomplete"
+    assert (await client.get("/repos/vector-repo", headers=headers)).status_code == 200
+    assert (
+        await client.get(f"/memories/{memory.json()['id']}", headers=headers)
+    ).status_code == 200

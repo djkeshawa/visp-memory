@@ -7,6 +7,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from visp_memory.core.numeric import bounded_float
+
 DEFAULT_RECALL_MIN_SCORE = 0.56
 UTILITY_RANKING_LIMIT = 0.08
 CONTEXT_RANKING_LIMIT = 0.12
@@ -69,11 +71,8 @@ _LEXICAL_STOPWORDS = {
 
 def clamp_score(value: Any, default: float = 0.0) -> float:
     """Normalize arbitrary numeric input to the 0..1 scoring range."""
-    try:
-        score = float(value)
-    except (TypeError, ValueError):
-        return default
-    return max(0.0, min(1.0, score))
+    normalized = bounded_float(value, default=default)
+    return default if normalized is None else normalized
 
 
 def utility_rank_adjustment(value: Any) -> float:
@@ -304,6 +303,11 @@ def _age_score(memory: dict[str, Any]) -> float:
     return 1.0 / (1.0 + age_days / 30.0)
 
 
+def is_semantic_result(memory: dict[str, Any]) -> bool:
+    """Accept the legacy Neo4j label at the shared ranking boundary."""
+    return memory.get("retrieval_method") in ("semantic", "vector")
+
+
 def score_memory_result(memory: dict[str, Any], query: str | None = None) -> float:
     """
     Calculate one canonical relevance score for memory search results.
@@ -319,6 +323,11 @@ def score_memory_result(memory: dict[str, Any], query: str | None = None) -> flo
 
     if query:
         score = similarity * 0.50 + lexical * 0.30 + importance * 0.15 + recency * 0.05
+        if is_semantic_result(memory):
+            # A vector match may express the same idea without sharing words.
+            # Keep lexical boosts, but do not halve a real semantic match merely
+            # because a paraphrase has no token overlap. Keyword behavior is unchanged.
+            score = max(score, similarity)
     else:
         score = importance * 0.70 + recency * 0.30
 
@@ -370,6 +379,8 @@ def rank_memory_results(
             seen.add(memory_id)
 
         scored = dict(memory)
+        if is_semantic_result(scored):
+            scored["retrieval_method"] = "semantic"
         scored["relevance_score"] = score_memory_result(scored, query=query)
         explanation = explain_ranking_factors(scored)
         if explanation:

@@ -1,32 +1,8 @@
-"""Every published benchmark figure must equal what the benchmark currently measures.
+"""Published benchmark values must match the local evaluators exactly.
 
-README.md said "Every number below is reproduced in CI on each push." Half of that
-was true. CI did rerun the eval scripts, but nothing compared their output to the
-figures printed in the docs, and the property tests deliberately pin *properties*
-rather than values — ``precision >= 0.9``, ``tokens < naive/4``. Precision could
-have drifted from 1.00 to 0.92, or mean tokens from 14.9 to 17, with every build
-green and the README still printing the old numbers. "Recomputed" was true;
-"so a reader can trust the printed figure is current" was not.
-
-This closes that gap from both sides:
-
-* if the measurement moves, the figure no longer matches the document and this fails;
-* if a document is edited away from the measurement, the same assertion fails.
-
-So a figure and its measurement can only disagree through a red build. It is
-deliberately separate from ``tests/scripts/test_evaluate_oracle_gap.py``: that file
-pins the properties the design claims and must keep passing across intentional
-tuning, while this one pins the exact numbers the docs advertise and *should* fail
-loudly the moment tuning changes them — the failure is the notification to go
-update the prose.
-
-The recall-cost figures are pinned here too, for a different reason. A measured
-37.5% was published three times as "about a third" or "roughly a third", always
-rounding in the direction that flattered the project — the same habit already
-corrected twice in this package for "13x" and "roughly 40%". Three occurrences is
-a habit, and a habit needs a check rather than a third correction. Pinning both
-the exact percentage and the underlying counts means the next person who reaches
-for a comfortable fraction has to get past a failing test.
+Measurements and their negative results live in docs/reference/BENCHMARK.md. These tests
+check the printed values, recall cost, and counts without loosening the evaluator's
+independent behavioral assertions. README links readers to this verification.
 """
 
 import json
@@ -42,8 +18,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 README = "README.md"
-BENCHMARK = "docs/BENCHMARK.md"
-COMPARISON = "docs/COMPARISON.md"
+BENCHMARK = "docs/reference/BENCHMARK.md"
 
 
 def _run_eval(script: str) -> dict:
@@ -123,11 +98,8 @@ def _ratio(strategy: str, metric: str) -> Callable[[dict], float]:
 TWO_DP = "{:.2f}".format
 THREE_DP = "{:.3f}".format
 ONE_DP = "{:.1f}".format
-PERCENT_0 = lambda value: f"{value * 100:.0f}%"  # noqa: E731
-# The poisoning proportions are exact sixteenths. 9/16 is 56.25%, which sits exactly
-# on the rounding boundary at one decimal — and the docs had resolved it upward to
-# 56.3%, in the direction that made the attack, and so the defence, look stronger.
-# Two decimals is exact for this benchmark, so there is no boundary to resolve.
+# Keep the documented percentage aligned with the evaluator's rounded proportion.
+# The retrieved population can change when reconciliation preserves more records.
 PERCENT_2 = lambda value: f"{value * 100:.2f}%"  # noqa: E731
 
 
@@ -138,7 +110,6 @@ FIGURES: Tuple[Figure, ...] = (
         _ratio("unfiltered", "precision"),
         TWO_DP,
         (
-            (README, "| Precision of injected memories |", 1),
             (BENCHMARK, "| unfiltered_top8 |", 1),
         ),
     ),
@@ -148,7 +119,6 @@ FIGURES: Tuple[Figure, ...] = (
         _ratio("policy", "precision"),
         TWO_DP,
         (
-            (README, "| Precision of injected memories |", 2),
             (BENCHMARK, "| **policy** |", 1),
         ),
     ),
@@ -182,7 +152,6 @@ FIGURES: Tuple[Figure, ...] = (
         _ratio("unfiltered", "mean_injected_tokens"),
         ONE_DP,
         (
-            (README, "| Mean tokens injected per task |", 1),
             (BENCHMARK, "| unfiltered_top8 |", 4),
         ),
     ),
@@ -192,7 +161,6 @@ FIGURES: Tuple[Figure, ...] = (
         _ratio("policy", "mean_injected_tokens"),
         ONE_DP,
         (
-            (README, "| Mean tokens injected per task |", 2),
             (BENCHMARK, "| **policy** |", 4),
         ),
     ),
@@ -207,15 +175,15 @@ FIGURES: Tuple[Figure, ...] = (
         "naive retrieval correct silence",
         "oracle_gap",
         _ratio("unfiltered", "silence_accuracy"),
-        PERCENT_0,
-        ((README, "| Correct silence on unanswerable tasks |", 1),),
+        TWO_DP,
+        ((BENCHMARK, "| unfiltered_top8 |", 5),),
     ),
     Figure(
         "policy correct silence",
         "oracle_gap",
         _ratio("policy", "silence_accuracy"),
-        PERCENT_0,
-        ((README, "| Correct silence on unanswerable tasks |", 2),),
+        TWO_DP,
+        ((BENCHMARK, "| **policy** |", 5),),
     ),
     Figure(
         "undefended poisoned-memory retrieval",
@@ -223,8 +191,7 @@ FIGURES: Tuple[Figure, ...] = (
         lambda report: report["undefended"]["poisoned_retrieval_proportion"],
         PERCENT_2,
         (
-            (README, "| Poisoned-memory retrieval ", 1),
-            ("docs/TRUST.md", "| Undefended (relevance ranking only) |", 1),
+            (BENCHMARK, "| Undefended (relevance ranking only) |", 1),
         ),
     ),
     Figure(
@@ -233,8 +200,7 @@ FIGURES: Tuple[Figure, ...] = (
         lambda report: report["defended"]["poisoned_retrieval_proportion"],
         PERCENT_2,
         (
-            (README, "| Poisoned-memory retrieval ", 2),
-            ("docs/TRUST.md", "| Defended (provenance quarantine) |", 1),
+            (BENCHMARK, "| Defended (provenance quarantine) |", 1),
         ),
     ),
 )
@@ -259,9 +225,7 @@ def test_published_figure_matches_the_measurement(figure, oracle_gap, poisoning)
 
 
 RECALL_COST_SITES = (
-    (README, "**What it costs:**"),
     (BENCHMARK, "**Policy recall is"),
-    (COMPARISON, "- **Recall is"),
 )
 
 
@@ -326,12 +290,6 @@ def test_the_published_counts_are_the_counts_the_benchmark_used(oracle_gap):
     assert f"retrieved {retrieved} of the {available} genuinely relevant" in benchmark
     assert f"left {missed} on the floor" in benchmark
 
-    readme = " ".join(_lines(README))
-    assert f"leaves {missed} of the {available} genuinely" in readme
-
-    comparison = " ".join(_lines(COMPARISON))
-    assert f"{missed} of the {available}" in comparison
-
 
 def test_the_oracle_gap_headline_matches_the_report(oracle_gap):
     closed = f"{oracle_gap['oracle_gap_closed'] * 100:.0f}%"
@@ -345,7 +303,7 @@ def test_the_token_ratio_headline_matches_the_report(oracle_gap):
     ratio = f"{unfiltered / policy:.1f}×"
 
     line = _anchored_line(BENCHMARK, "fewer tokens** than naive retrieval")
-    assert ratio in line, f"docs/BENCHMARK.md claims a token ratio other than {ratio}: {line!r}"
+    assert ratio in line, f"{BENCHMARK} claims a token ratio other than {ratio}: {line!r}"
 
 
 # ---------------------------------------------------------------------------

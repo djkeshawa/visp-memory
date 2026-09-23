@@ -2,7 +2,6 @@ import sqlite3
 
 import pytest
 
-from visp_memory.core.neo4j_storage import Neo4jStorage
 from visp_memory.core.trust import Provenance, assess, provenance_of, provenance_tag
 from visp_memory.server import app as server_app
 from visp_memory.server.app import app
@@ -182,7 +181,9 @@ async def test_related_memories_and_sessions_round_trip(client):
     assert related.status_code == 200
     assert related.json() == []
 
-    started = await client.post("/sessions", headers=headers)
+    started = await client.post(
+        "/sessions", json={"repo_id": "repo-a"}, headers=headers
+    )
     assert started.status_code == 200
     session_id = started.json()["id"]
     completed = await client.post(
@@ -333,6 +334,34 @@ async def test_memories_endpoint_with_api_key(client):
     response = await client.get("/memories?repo_id=repo-a", headers=headers)
     assert response.status_code == 200
     assert isinstance(response.json(), list)
+
+
+@pytest.mark.asyncio
+async def test_memories_endpoint_supports_offset_pagination(client):
+    headers = {"X-API-KEY": "test_key"}
+    created = []
+    for index in range(3):
+        response = await client.post(
+            "/memories",
+            json={"content": f"page-{index}", "repo_id": "repo-a"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+        created.append(response.json()["id"])
+
+    response = await client.get(
+        "/memories",
+        params={
+            "repo_id": "repo-a",
+            "limit": 2,
+            "offset": 1,
+            "order_by": "created_at ASC",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == created[1:]
 
 
 @pytest.mark.asyncio
@@ -501,11 +530,15 @@ async def test_http_attach_evidence_is_atomic_and_same_repo(client):
 
 
 @pytest.mark.asyncio
-async def test_http_neo_governed_write_returns_explicit_unsupported(client):
-    storage = Neo4jStorage.__new__(Neo4jStorage)
-    storage.get_repository = lambda _repo_id: None
-    storage._embedding_fn = None
-    storage._uses_noop_embeddings = False
+async def test_http_backend_evidence_refusal_returns_explicit_unsupported(client):
+    from types import SimpleNamespace
+
+    from visp_memory.core.storage import EvidenceUnsupportedError
+
+    def unsupported(**kwargs):
+        raise EvidenceUnsupportedError("Backend does not implement the Evidence graph")
+
+    storage = SimpleNamespace(get_repository=lambda _repo_id: None, store_memory=unsupported)
     original_storage = app.state.storage
     app.state.storage = storage
     try:
@@ -1163,6 +1196,31 @@ async def test_complete_intent_endpoint_records_outcome_without_status_change(cl
     assert outcome["provenance"]["source"] == "external"
     assert outcome["provenance"]["channel"] == "rest"
     assert outcome["status_changed"] is False
+
+
+@pytest.mark.asyncio
+async def test_atomic_intent_outcome_endpoint_uses_authenticated_provenance(client):
+    headers = {"X-API-KEY": "test_key"}
+    created = await client.post(
+        "/intents",
+        json={"description": "Record one remote outcome", "repo_id": "repo-a"},
+        headers=headers,
+    )
+    intent_id = created.json()["id"]
+
+    response = await client.post(
+        f"/intents/{intent_id}/outcomes",
+        json={"outcome": "verified-by-ci"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    listed = await client.get("/intents?repo_id=repo-a", headers=headers)
+    stored = next(item for item in listed.json() if item["id"] == intent_id)
+    entry = stored["context"]["outcome_history"][-1]
+    assert entry["outcome"] == "verified-by-ci"
+    assert entry["actor_id"] != "caller"
+    assert entry["provenance"]["channel"] == "rest"
 
 
 @pytest.mark.asyncio

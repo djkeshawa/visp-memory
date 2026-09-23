@@ -15,7 +15,18 @@ from visp_memory.core.code_graph import (
     FileGraph,
     normalize_path,
 )
-from visp_memory.core.ranking import clamp_score, graph_edge_score, rank_memory_results
+from visp_memory.core.lexical_ranking import (
+    HYBRID_CANDIDATE_LIMIT,
+    rerank_lexical,
+    validate_ranking_strategy,
+)
+from visp_memory.core.ranking import (
+    DEFAULT_RECALL_MIN_SCORE,
+    clamp_score,
+    graph_edge_score,
+    rank_memory_results,
+    text_similarity,
+)
 
 PPR_DAMPING = 0.5
 PPR_ITERATIONS = 20
@@ -26,6 +37,7 @@ MAX_GRAPH_EDGES = 2000
 MAX_SEEDS = 8
 DIRECT_MIN_SCORE = 0.16
 DIRECT_WITH_ENTITY_SCOPE_MIN_SCORE = 0.30
+SEMANTIC_SEED_MIN_SIMILARITY = DEFAULT_RECALL_MIN_SCORE
 # The score an exact file/symbol match has always carried in the entity channel. A
 # memory admitted for structural proximity alone is capped strictly below it, so no
 # structural admission can ever outrank an identity match. See _structural_score.
@@ -70,6 +82,15 @@ def _terms(value: str) -> set[str]:
         for term in re.findall(r"[a-z0-9_./-]+", value.casefold())
         if len(term) > 1 and term not in _STOP_WORDS
     }
+
+
+def _has_query_evidence(memory: dict[str, Any], query: str) -> bool:
+    # Importance, recency and access boosts cannot turn a substring candidate
+    # into a relevant seed. Entity and structural matches have separate channels.
+    return text_similarity(query, str(memory.get("content") or "")) > 0 or (
+        memory.get("retrieval_method") == "semantic"
+        and clamp_score(memory.get("similarity")) >= SEMANTIC_SEED_MIN_SIMILARITY
+    )
 
 
 def personalized_pagerank(
@@ -281,29 +302,55 @@ class HybridRetriever:
         environment: Any = None,
         task_type: Any = None,
         as_of: Any = None,
+        ranking_strategy: str = "default",
     ) -> list[dict[str, Any]]:
         """Return explainable hybrid results without relying on backend-specific queries."""
+        validate_ranking_strategy(ranking_strategy)
+        supports_channel = getattr(
+            self.storage, "supports_retrieval_channel", lambda _channel: False
+        )
+        if ranking_strategy == "hybrid_union" and not all(
+            supports_channel(channel)
+            for channel in ("vector", "lexical")
+        ):
+            raise ValueError(
+                "ranking_strategy 'hybrid_union' requires independent vector and lexical search"
+            )
         files = files or []
         symbols = symbols or []
         candidates: dict[str, dict[str, Any]] = {}
         direct_candidates: dict[str, dict[str, Any]] = {}
-        for layer in ("intent", "semantic", "episodic", "raw"):
-            for memory in self.storage.search_memories(
-                query=query,
-                repo_id=repo_id,
-                layer=layer,
-                status="active",
-                limit=40,
-                environment=environment,
-                task_type=task_type,
-                as_of=as_of,
-            ):
-                if candidate_filter and not candidate_filter(memory):
-                    continue
-                memory_id = str(memory.get("id") or "")
-                if not memory_id:
-                    continue
-                direct_candidates[memory_id] = memory
+        direct_limit = (
+            HYBRID_CANDIDATE_LIMIT
+            if ranking_strategy in ("hybrid", "hybrid_union")
+            else 40
+        )
+        channels = ("vector", "lexical") if ranking_strategy == "hybrid_union" else (None,)
+        for channel in channels:
+            for layer in ("intent", "semantic", "episodic", "raw"):
+                search_kwargs = {
+                    "query": query,
+                    "repo_id": repo_id,
+                    "layer": layer,
+                    "status": "active",
+                    "limit": direct_limit,
+                    "environment": environment,
+                    "task_type": task_type,
+                    "as_of": as_of,
+                }
+                if channel is not None:
+                    search_kwargs["retrieval_channel"] = channel
+                for memory in self.storage.search_memories(**search_kwargs):
+                    if candidate_filter and not candidate_filter(memory):
+                        continue
+                    memory_id = str(memory.get("id") or "")
+                    if not memory_id:
+                        continue
+                    prior = direct_candidates.get(memory_id)
+                    # A duplicate lexical hit must never overwrite its semantic
+                    # score or retrieval method.
+                    if prior is None or channel == "vector":
+                        direct_candidates[memory_id] = memory
 
         corpus = []
         for memory in self.storage.list_memories(
@@ -344,11 +391,19 @@ class HybridRetriever:
                 if score >= PROXIMITY_MIN_ADMISSION:
                     nearby[memory_id] = (score, memory)
 
-        direct = rank_memory_results(list(direct_candidates.values()), query=query, limit=60)
+        canonical_limit = (
+            HYBRID_CANDIDATE_LIMIT * 8
+            if ranking_strategy == "hybrid_union"
+            else HYBRID_CANDIDATE_LIMIT if ranking_strategy == "hybrid" else 60
+        )
+        direct = rank_memory_results(
+            list(direct_candidates.values()), query=query, limit=canonical_limit,
+        )
         direct = [
             memory
             for memory in direct
             if float(memory.get("relevance_score") or 0.0) >= DIRECT_MIN_SCORE
+            and _has_query_evidence(memory, query)
             and (
                 not (files or symbols)
                 or self._matches_entities(memory, files=files, symbols=symbols)
@@ -356,6 +411,14 @@ class HybridRetriever:
                 >= DIRECT_WITH_ENTITY_SCOPE_MIN_SCORE
             )
         ]
+        # Lexical fusion refines eligible direct evidence before choosing graph seeds.
+        # It never reranks structural-only admissions or bypasses their separate budget.
+        if ranking_strategy in ("hybrid", "hybrid_union"):
+            direct = rerank_lexical(direct, query)
+        lexical_ranks = {
+            str(memory["id"]): memory["hybrid_ranks"]
+            for memory in direct if "hybrid_ranks" in memory
+        }
         for memory in direct:
             candidates[str(memory["id"])] = memory
         # The entity channel is identity matches and nothing else, exactly as it was
@@ -515,6 +578,11 @@ class HybridRetriever:
                 f"hybrid channels: {', '.join(channels) or 'none'}",
                 f"direct={direct_score:.3f}, graph={graph_score:.3f}, rrf={rrf:.3f}",
             ]
+            if memory_id in lexical_ranks:
+                result["retrieval_factors"]["lexical_ranks"] = lexical_ranks[memory_id]
+                result["ranking_explanation"].append(
+                    "Direct evidence uses canonical/BM25 rank fusion before graph expansion"
+                )
             if structural:
                 # Labelled, always. A memory surfaced because of an import edge is
                 # being surfaced on a snapshot's authority, and a structural claim that

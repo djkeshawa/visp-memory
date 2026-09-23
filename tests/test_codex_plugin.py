@@ -47,7 +47,7 @@ def test_codex_plugin_skills_cover_required_workflows():
     }
     assert "local direct mode" in skills["visp-memory-recall"]
     assert "visp-memory remember" in skills["visp-memory-recall"]
-    assert "memory_remember" in skills["visp-memory-recall"]
+    assert "memory_prepare_task" in skills["visp-memory-recall"]
     assert "Do not require cloud AI credentials" in skills["visp-memory-recall"]
     assert "Never print API keys" in skills["visp-memory-diagnostics"]
 
@@ -59,7 +59,7 @@ def test_codex_generated_guidance_is_scoped_and_current(tmp_path):
     assert "visp-memory remember --repo repo-a" in guidance
     assert 'visp-memory recall "<task>" --repo repo-a' in guidance
     assert "visp-memory inject --file <path> --task" in guidance
-    assert "memory_remember" in guidance
+    assert "memory_prepare_task" in guidance
     assert "memory_recall" in guidance
     assert "memory_file_context" in guidance
     assert "memory_after_work" in guidance
@@ -69,9 +69,9 @@ def test_codex_generated_guidance_is_scoped_and_current(tmp_path):
 
 
 def test_memory_governance_docs_cover_required_topics():
-    guidance = (DOCS_ROOT / "development" / "ASSISTANT_GUIDANCE.md").read_text()
-    governance = (DOCS_ROOT / "development" / "MEMORY_GOVERNANCE.md").read_text()
-    release = (DOCS_ROOT / "deployment" / "RELEASE_CHECKLIST.md").read_text()
+    guidance = (DOCS_ROOT / "guides" / "MCP.md").read_text()
+    governance = (DOCS_ROOT / "reference" / "TRUST.md").read_text()
+    release = (DOCS_ROOT / "development" / "RELEASING.md").read_text()
     combined = f"{guidance}\n{governance}".lower()
 
     for phrase in [
@@ -171,7 +171,7 @@ def test_codex_installed_agents_md_carries_the_intent_verbs(tmp_path):
 
 
 def test_assistant_guidance_doc_describes_the_intent_lifecycle():
-    guidance = (DOCS_ROOT / "development" / "ASSISTANT_GUIDANCE.md").read_text()
+    guidance = (DOCS_ROOT / "guides" / "MCP.md").read_text()
 
     for verb in INTENT_VERBS:
         assert f"visp-memory {verb.name}" in guidance, verb.name

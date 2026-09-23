@@ -34,6 +34,7 @@ class AuthStore:
     @contextmanager
     def _db(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.path, timeout=30.0)
+        self.path.chmod(0o600)
         connection.row_factory = sqlite3.Row
         try:
             connection.execute("PRAGMA busy_timeout=30000")
@@ -47,6 +48,10 @@ class AuthStore:
             connection.executescript(
                 """
                 PRAGMA journal_mode=WAL;
+                CREATE TABLE IF NOT EXISTS auth_setup (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    token TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS auth_accounts (
                     id TEXT PRIMARY KEY,
                     username TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -115,6 +120,22 @@ class AuthStore:
             row = connection.execute("SELECT 1 FROM auth_accounts LIMIT 1").fetchone()
         return row is not None
 
+    def get_setup_token(self) -> Optional[str]:
+        """Return the local operator's one-use setup code; never expose it over HTTP."""
+        with self._db() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if connection.execute("SELECT 1 FROM auth_accounts LIMIT 1").fetchone():
+                connection.execute("DELETE FROM auth_setup")
+                connection.commit()
+                return None
+            connection.execute(
+                "INSERT OR IGNORE INTO auth_setup(id, token) VALUES (1, ?)",
+                (secrets.token_urlsafe(32),),
+            )
+            token = connection.execute("SELECT token FROM auth_setup WHERE id = 1").fetchone()[0]
+            connection.commit()
+            return token
+
     def create_account(
         self,
         *,
@@ -125,6 +146,7 @@ class AuthStore:
         display_name: Optional[str] = None,
         role: str = "user",
         team_id: Optional[str] = None,
+        _setup_token: Optional[str] = None,
     ) -> dict[str, Any]:
         normalized = username.strip()
         if len(normalized) < 3 or len(normalized) > 64:
@@ -138,6 +160,15 @@ class AuthStore:
         now = utc_now_iso()
         try:
             with self._db() as connection:
+                if _setup_token is not None:
+                    connection.execute("BEGIN IMMEDIATE")
+                    if connection.execute("SELECT 1 FROM auth_accounts LIMIT 1").fetchone():
+                        raise ValueError("Administrator setup has already been completed")
+                    token = connection.execute(
+                        "SELECT token FROM auth_setup WHERE id = 1"
+                    ).fetchone()
+                    if not token or not secrets.compare_digest(token[0], _setup_token):
+                        raise ValueError("Invalid setup code")
                 connection.execute(
                     """
                     INSERT INTO auth_accounts (
@@ -157,6 +188,7 @@ class AuthStore:
                         now,
                     ),
                 )
+                connection.execute("DELETE FROM auth_setup")
                 connection.commit()
         except sqlite3.IntegrityError as error:
             raise ValueError("Username or user ID already exists") from error

@@ -10,6 +10,8 @@ that test serialises exactly what a client receives and asserts the ``core``
 profile's documented byte saving, so edits here are measured, not free.
 """
 
+import copy
+import json
 import logging
 import os
 
@@ -22,11 +24,27 @@ except ImportError:
 
 logger = logging.getLogger("visp-memory-mcp")
 
+def _workflow_report_schema() -> dict:
+    from visp_memory.core.intent_workflow import IntentWorkflowReport
+
+    # Nested JSON Schema references must resolve from the enclosing tool root.
+    return json.loads(json.dumps(IntentWorkflowReport.model_json_schema()).replace(
+        "#/$defs/", "#/properties/workflow_report/$defs/"
+    ))
+
+
 RUNTIME_SCOPE_SCHEMA = {
     "oneOf": [
         {"type": "string"},
         {"type": "array", "items": {"type": "string"}},
     ]
+}
+
+CONTEXT_RANKING_SCHEMA = {
+    "type": "string",
+    "enum": ["default", "hybrid", "hybrid_union"],
+    "default": "default",
+    "description": "Canonical/BM25 ranking; hybrid_union also discovers keyword candidates",
 }
 
 # Every MCP tool definition (name + description + input schema) is loaded into the
@@ -35,8 +53,8 @@ RUNTIME_SCOPE_SCHEMA = {
 # token-efficiency goal. The "core" profile exposes only the tools an assistant
 # needs for the everyday recall-before-work / record-after-work loop, roughly
 # halving that overhead, while "full" keeps every advanced and maintenance tool.
-# Hidden tools remain fully functional if a client calls them by name; the profile
-# only controls what is advertised.
+# Profiles govern both advertisement and dispatch; clients must not call tools
+# outside the configured profile.
 #
 # Default is "core". A memory server that costs several thousand context tokens before
 # the assistant does any work is arguing against its own premise, and an advertised
@@ -85,6 +103,58 @@ READONLY_TOOL_NAMES = frozenset(
     }
 )
 
+# Stateless HTTP has no client working directory or ambient repository. Keep this
+# inventory explicit so a new tool cannot accidentally fall back to the process
+# config and cross project boundaries. The stdio transport continues to use the
+# existing optional/ambient schemas below.
+HTTP_REPO_READ_TOOL_NAMES = frozenset(
+    {
+        "memory_prepare_task",
+        "memory_context",
+        "memory_recall",
+        "memory_remember",
+        "memory_relevant",
+        "memory_trace",
+        "memory_neighbors",
+        "memory_path",
+        "memory_why_relevant",
+        "memory_file_context",
+        "memory_find_error",
+        "memory_directory_context",
+        "memory_before_change",
+        "memory_stats",
+        "memory_list_warnings",
+        "memory_list_intents",
+        "memory_feedback_inspect",
+        "memory_decay_preview",
+    }
+)
+
+HTTP_REPO_WRITE_TOOL_NAMES = frozenset(
+    {
+        "memory_session_start",
+        "memory_after_work",
+        "memory_record",
+        "memory_decision",
+        "memory_learn",
+        "memory_warn",
+        "memory_issue",
+        "memory_goal",
+        "memory_working_on",
+        "memory_done",
+        "memory_update_intent",
+        "memory_close_intent",
+        "memory_feedback_log",
+        "memory_feedback_reset",
+    }
+)
+
+HTTP_HIDDEN_TOOL_NAMES = frozenset(
+    {"memory_compress", "memory_decay", "memory_clear_goals"}
+)
+
+HTTP_REPO_TOOL_NAMES = HTTP_REPO_READ_TOOL_NAMES | HTTP_REPO_WRITE_TOOL_NAMES
+
 VALID_MCP_PROFILES = frozenset({"core", "full", "readonly"})
 
 
@@ -124,6 +194,29 @@ def _filter_tools_by_profile(tools: list["Tool"], profile: str) -> list["Tool"]:
     return [tool for tool in tools if tool.name in allowed]
 
 
+def _http_scoped_tool(tool: "Tool") -> "Tool":
+    """Return an HTTP advertisement that makes repository scope mandatory.
+
+    Tool definitions are rebuilt per request, so cloning the schema here does not
+    alter the stdio contract or the profile footprint assertions. The runtime
+    preflight remains authoritative because MCP clients may ignore JSON Schema.
+    """
+    schema = copy.deepcopy(tool.inputSchema)
+    properties = schema.setdefault("properties", {})
+    properties.setdefault(
+        "repo_id",
+        {
+            "type": "string",
+            "description": "Repository/project ID; required for stateless HTTP requests",
+        },
+    )
+    required = list(schema.get("required", []))
+    if "repo_id" not in required:
+        required.append("repo_id")
+    schema["required"] = required
+    return tool.model_copy(update={"inputSchema": schema})
+
+
 def build_tool_definitions() -> list["Tool"]:
     """The full advertised tool surface, before profile filtering.
 
@@ -153,6 +246,13 @@ def build_tool_definitions() -> list["Tool"]:
                         "description": "The concrete task the LLM is about to perform",
                     },
                     "repo_id": {"type": "string"},
+                    "context_selection": {
+                        "type": "string", "enum": ["default", "coverage"],
+                        "default": "default",
+                        "description": "Whole memories or cited verbatim coverage passages",
+                    },
+                    "ranking_strategy": CONTEXT_RANKING_SCHEMA,
+                    "as_of": {"type": "string", "format": "date-time"},
                     "environment": RUNTIME_SCOPE_SCHEMA,
                     "task_type": RUNTIME_SCOPE_SCHEMA,
                     "files": {"type": "array", "items": {"type": "string"}},
@@ -209,6 +309,19 @@ def build_tool_definitions() -> list["Tool"]:
                         "type": "string",
                         "description": "Optional task query for compact ranked context",
                     },
+                    "context_selection": {
+                        "type": "string", "enum": ["default", "coverage"],
+                        "default": "default",
+                        "description": "Whole memories or cited verbatim coverage passages",
+                    },
+                    "ranking_strategy": {
+                        **CONTEXT_RANKING_SCHEMA,
+                        "description": "Direct ranking for compact context; hybrid requires query",
+                    },
+                    "as_of": {
+                        "type": "string", "format": "date-time",
+                        "description": "Historical selection time; requires query",
+                    },
                     "repo_id": {"type": "string"},
                     "environment": RUNTIME_SCOPE_SCHEMA,
                     "task_type": RUNTIME_SCOPE_SCHEMA,
@@ -235,6 +348,14 @@ def build_tool_definitions() -> list["Tool"]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "ranking_strategy": {
+                        "type": "string",
+                        "enum": ["default", "hybrid", "hybrid_union"],
+                        "default": "default",
+                        "description": (
+                            "Hybrid reranks candidates; hybrid_union adds keyword discovery."
+                        ),
+                    },
                     "query": {
                         "type": "string",
                         "description": "What to search for (natural language)",
@@ -787,11 +908,14 @@ def build_tool_definitions() -> list["Tool"]:
             name="memory_update_intent",
             description=(
                 "Update goal content by ID. Status inputs are recorded as "
-                "non-authoritative outcome history and do not change status."
+                "non-authoritative outcome history and do not change status. "
+                "Send workflow_report separately to mirror an explicit external task status, "
+                "with ordered revisions and completion evidence (SQLite storage)."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "workflow_report": _workflow_report_schema(),
                     "intent_id": {"type": "string", "description": "Intent ID to update"},
                     "description": {"type": "string", "description": "Updated description"},
                     "priority": {

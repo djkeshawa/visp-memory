@@ -38,20 +38,18 @@ def build_frontend(required: bool = True) -> bool:
         print("Error: npm not found. Please install Node.js to build the dashboard.")
         return not required
 
-    # Check if node_modules exists
-    node_modules = dashboard_dir / "node_modules"
-    if not node_modules.exists():
-        print("\nInstalling frontend dependencies...")
-        try:
-            subprocess.run(
-                [npm, "install"],
-                cwd=dashboard_dir,
-                check=True,
-                capture_output=False,
-            )
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            print(f"Error: npm install failed: {e}")
-            return not required
+    # Existing node_modules may belong to an older lockfile or another branch.
+    print("\nSynchronizing frontend dependencies from package-lock.json...")
+    try:
+        subprocess.run(
+            [npm, "ci"],
+            cwd=dashboard_dir,
+            check=True,
+            capture_output=False,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        print(f"Error: npm ci failed: {e}")
+        return not required
 
     # Build the Next.js app
     print("\nBuilding Next.js dashboard...")

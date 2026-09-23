@@ -11,33 +11,37 @@ import json
 import logging
 import re
 import sqlite3
+import threading
 import uuid
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import timedelta
+from enum import Enum
+from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Literal, Optional
 
 from visp_memory.core.beliefs import (
     HYPOTHESIS_TTL_DAYS,
-    EpistemicStatus,
     migrate_legacy_belief_fields,
     normalize_belief_type,
     normalize_epistemic_status,
 )
 from visp_memory.core.clock import parse_utc, utc_now
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID
+from visp_memory.core.embedding_binding import bind_embeddings
 from visp_memory.core.indexing import EmbeddingIndexReport, ReindexResult, ReindexScope
 from visp_memory.core.ranking import (
     clamp_score,
     normalize_distance_score,
     rank_memory_results,
     relationship_score,
+    score_memory_result,
     text_similarity,
     utility_rank_adjustment,
 )
-from visp_memory.quality.secrets import redact_for_storage
+from visp_memory.quality.secrets import SecretBearingContentError, redact_for_storage
 
 try:
     import chromadb
@@ -78,7 +82,7 @@ RECALL_EVENT_WEIGHTS: dict[str, float] = {
 # deliberately do not reinforce, to avoid popularity bias from mere exposure.
 REINFORCING_RECALL_EVENTS = frozenset({"used", "task_linked", "outcome_linked"})
 SENSITIVE_RECALL_METADATA_KEYS = {"prompt", "response", "query", "content", "messages"}
-STORAGE_SCHEMA_VERSION = 4
+STORAGE_SCHEMA_VERSION = 5
 _STORAGE_TABLE_NAMES = frozenset(
     {
         "audit_logs",
@@ -147,6 +151,19 @@ _V4_REQUIRED_COLUMNS = {
         "outcome", "metadata", "created_at",
     },
 }
+_V5_REQUIRED_COLUMNS = {
+    **_V4_REQUIRED_COLUMNS,
+    "sessions": _V4_REQUIRED_COLUMNS["sessions"]
+    | {"owner_id", "team_id", "repo_id"},
+}
+
+
+class SessionCompletionStatus(str, Enum):
+    """Result of atomically completing a persisted work session."""
+
+    COMPLETED = "completed"
+    NOT_FOUND = "not_found"
+    ALREADY_COMPLETED = "already_completed"
 
 
 #: Marks a repositories row the store created for itself because a write named
@@ -185,6 +202,10 @@ class EvidenceUnsupportedError(EvidenceError):
     """Raised when a backend cannot represent Evidence separately."""
 
 
+class SemanticMemoryImmutableError(EvidenceError):
+    """Raised when a semantic belief is edited instead of revised."""
+
+
 class StorageMigrationRequired(RuntimeError):  # noqa: N818 - public compatibility name
     """Raised when an existing store needs an explicit, backed-up migration."""
 
@@ -199,6 +220,365 @@ class GraphImportRollbackIncompleteError(RuntimeError):
             "Graph import rolled back relational data, but vector compensation failed "
             f"for {joined}; manual vector cleanup is required before retrying"
         )
+
+
+# Repository purges must be bounded per read.  This is deliberately much smaller
+# than the historical 100,000-row cap: a purge may contain more rows than that and
+# must make progress without materialising an unbounded backend response.
+REPOSITORY_PURGE_PAGE_SIZE = 1_000
+_REPOSITORY_MUTATION_STATE_LOCK = threading.Lock()
+
+
+class RepositoryPurgedError(RuntimeError):
+    """Raised when a write races with a completed repository purge."""
+
+
+def _repository_mutation_state(storage: Any) -> tuple[dict[str, threading.RLock], set[str]]:
+    """Return the per-instance locks and completed-purge tombstones.
+
+    Storage subclasses historically do not call a shared ``BaseStorage.__init__``.
+    Initialise this state lazily under one module lock so the guard can cover all
+    built-in backends without changing their construction contracts.
+    """
+    with _REPOSITORY_MUTATION_STATE_LOCK:
+        locks = getattr(storage, "_repository_mutation_locks", None)
+        if locks is None:
+            locks = {}
+            setattr(storage, "_repository_mutation_locks", locks)
+        purged = getattr(storage, "_purged_repository_ids", None)
+        if purged is None:
+            purged = set()
+            setattr(storage, "_purged_repository_ids", purged)
+    return locks, purged
+
+
+def _repository_mutation_lock(storage: Any, repo_id: str) -> threading.RLock:
+    locks, _ = _repository_mutation_state(storage)
+    with _REPOSITORY_MUTATION_STATE_LOCK:
+        return locks.setdefault(repo_id, threading.RLock())
+
+
+def repository_memory_write(func):
+    """Serialize a memory write with purge for its repository scope."""
+
+    @wraps(func)
+    def guarded(storage, *args, **kwargs):
+        repo_id = kwargs.get("repo_id")
+        if repo_id is None and len(args) > 2:
+            repo_id = args[2]
+        repo_id = repo_id or UNSCOPED_REPO_ID
+        if repo_id == UNSCOPED_REPO_ID:
+            return func(storage, *args, **kwargs)
+
+        lock = _repository_mutation_lock(storage, repo_id)
+        with lock:
+            _, purged = _repository_mutation_state(storage)
+            if repo_id in purged:
+                raise RepositoryPurgedError(
+                    f"Repository {repo_id!r} was purged; register it before writing"
+                )
+            return func(storage, *args, **kwargs)
+
+    return guarded
+
+
+def repository_registration(func):
+    """Allow explicit registration to recreate a previously purged repository."""
+
+    @wraps(func)
+    def guarded(storage, repo, *args, **kwargs):
+        repo_id = repo.get("id") or storage._generate_id(repo["name"])
+        lock = _repository_mutation_lock(storage, repo_id)
+        with lock:
+            result = func(storage, repo, *args, **kwargs)
+            _, purged = _repository_mutation_state(storage)
+            purged.discard(repo_id)
+            return result
+
+    return guarded
+
+
+def iter_repository_memories(
+    storage: Any,
+    repo_id: str,
+    *,
+    page_size: int = REPOSITORY_PURGE_PAGE_SIZE,
+):
+    """Yield every memory in a repository using an ID keyset cursor.
+
+    All built-in backends accept ``after_id`` for this internal, deterministic
+    ordering.  The small compatibility fallback supports third-party storage
+    implementations that have not added the optional keyword yet, provided their
+    first page is short; a full page without a cursor is rejected rather than
+    silently truncating a purge.
+    """
+    page_size = max(1, int(page_size))
+    cursor = None
+    used_legacy_call = False
+    seen_ids: set[str] = set()
+
+    while True:
+        kwargs = {
+            "repo_id": repo_id,
+            "status": "all",
+            "limit": page_size,
+            "order_by": "id ASC",
+        }
+        if cursor is not None:
+            kwargs["after_id"] = cursor
+        try:
+            page = storage.list_memories(**kwargs)
+        except TypeError:
+            if cursor is not None or used_legacy_call:
+                raise
+            # Preserve compatibility with external backends that implement the
+            # pre-pagination signature.  A short page is safe; a full page is
+            # unsafe because there is no way to advance without an offset/cursor.
+            used_legacy_call = True
+            page = storage.list_memories(
+                repo_id=repo_id,
+                status="all",
+                limit=page_size,
+            )
+
+        if not page:
+            return
+
+        page_ids = []
+        for memory in page:
+            memory_id = memory.get("id") if isinstance(memory, dict) else None
+            if not isinstance(memory_id, str) or not memory_id:
+                raise ValueError("Repository memory pagination returned an invalid ID")
+            if memory_id in seen_ids:
+                raise RuntimeError(
+                    f"Repository memory pagination did not advance after {memory_id!r}"
+                )
+            seen_ids.add(memory_id)
+            page_ids.append(memory_id)
+            yield memory
+
+        if len(page) < page_size:
+            return
+        if used_legacy_call:
+            raise RuntimeError(
+                "Storage backend returned a full repository purge page without a cursor"
+            )
+        cursor = page_ids[-1]
+
+
+def _purge_repository(storage: Any, repo_id: str) -> Dict[str, Any]:
+    """Serialize purge with repository writes and retain a success tombstone."""
+    lock = _repository_mutation_lock(storage, repo_id)
+    with lock:
+        report = _purge_repository_locked(storage, repo_id)
+        if report["status"] == "purged":
+            _, purged = _repository_mutation_state(storage)
+            purged.add(repo_id)
+        return report
+
+
+def _purge_repository_locked(storage: Any, repo_id: str) -> Dict[str, Any]:
+    """Run the portable, truthful repository purge protocol.
+
+    Backend-specific implementations provide only the child cleanup and final
+    repository-row deletion hooks.  Memory deletion remains per-record so a
+    vector or child failure is observed and the repository can be retained for a
+    retry instead of being reported as successfully gone.
+    """
+    report: Dict[str, Any] = {
+        "repo_id": repo_id,
+        "status": "incomplete",
+        "purged_memory_count": 0,
+        "purged_memory_ids": [],
+        "failed_memory_ids": [],
+        "residual": {},
+        "errors": [],
+    }
+
+    if storage.get_repository(repo_id) is None:
+        report["status"] = "not_found"
+        return report
+
+    memory_ids: list[str] = []
+    memory_listing_failed = False
+    try:
+        memory_ids = [
+            memory["id"]
+            for memory in iter_repository_memories(storage, repo_id)
+        ]
+    except Exception as exc:
+        memory_listing_failed = True
+        report["errors"].append(
+            {"kind": "memory_listing", "error": exc.__class__.__name__}
+        )
+
+    if not memory_listing_failed:
+        purge_one = getattr(storage, "purge_memory", None) or storage.delete_memory
+        for memory_id in memory_ids:
+            try:
+                deleted = bool(purge_one(memory_id))
+            except Exception as exc:
+                deleted = False
+                report["errors"].append(
+                    {
+                        "kind": "memory",
+                        "id": memory_id,
+                        "error": exc.__class__.__name__,
+                    }
+                )
+            if deleted:
+                report["purged_memory_count"] += 1
+                report["purged_memory_ids"].append(memory_id)
+            else:
+                report["failed_memory_ids"].append(memory_id)
+
+        # Relationships are memory children in every backend.  Delete them
+        # through the public per-edge operation as a second line of defence for
+        # stores whose vertex delete does not detach edges automatically.
+        try:
+            relationships = storage.get_all_relationships(repo_id=repo_id) or []
+            delete_relationship = getattr(storage, "delete_relationship", None)
+            for relationship in relationships:
+                relationship_id = (
+                    relationship.get("id") if isinstance(relationship, dict) else None
+                )
+                if not relationship_id or not callable(delete_relationship):
+                    report["errors"].append(
+                        {
+                            "kind": "relationship",
+                            "id": relationship_id,
+                            "error": "unsupported_delete",
+                        }
+                    )
+                    continue
+                try:
+                    if not delete_relationship(relationship_id):
+                        report["errors"].append(
+                            {
+                                "kind": "relationship",
+                                "id": relationship_id,
+                                "error": "delete_failed",
+                            }
+                        )
+                except Exception as exc:
+                    report["errors"].append(
+                        {
+                            "kind": "relationship",
+                            "id": relationship_id,
+                            "error": exc.__class__.__name__,
+                        }
+                    )
+        except Exception as exc:
+            report["errors"].append(
+                {
+                    "kind": "relationship",
+                    "error": exc.__class__.__name__,
+                }
+            )
+
+        child_cleanup = getattr(storage, "_purge_repository_children", None)
+        if callable(child_cleanup):
+            try:
+                try:
+                    child_errors = child_cleanup(
+                        repo_id,
+                        memory_ids=report["purged_memory_ids"],
+                    ) or []
+                except TypeError:
+                    # Keep third-party hooks written against the initial one-arg
+                    # extension point working while built-ins can clean detached
+                    # edge records by the IDs they actually removed.
+                    child_errors = child_cleanup(repo_id) or []
+                if isinstance(child_errors, dict):
+                    report["errors"].append(child_errors)
+                else:
+                    report["errors"].extend(child_errors)
+            except Exception as exc:
+                report["errors"].append(
+                    {"kind": "children", "error": exc.__class__.__name__}
+                )
+
+    def residual_ids(kind: str, values: Any) -> None:
+        ids = []
+        for value in values or []:
+            if isinstance(value, dict):
+                value_id = value.get("id")
+            else:
+                value_id = value
+            if value_id:
+                ids.append(str(value_id))
+        if ids:
+            report["residual"][kind] = ids
+
+    try:
+        residual_ids(
+            "memories",
+            [memory for memory in iter_repository_memories(storage, repo_id)],
+        )
+    except Exception as exc:
+        report["errors"].append(
+            {"kind": "memory_verification", "error": exc.__class__.__name__}
+        )
+
+    try:
+        residual_ids(
+            "intents",
+            storage.get_active_intents(repo_id=repo_id, status="all"),
+        )
+    except Exception as exc:
+        report["errors"].append(
+            {"kind": "intent_verification", "error": exc.__class__.__name__}
+        )
+
+    try:
+        residual_ids("relationships", storage.get_all_relationships(repo_id=repo_id))
+    except Exception as exc:
+        report["errors"].append(
+            {"kind": "relationship_verification", "error": exc.__class__.__name__}
+        )
+
+    try:
+        residual_ids("dependencies", storage.get_repo_dependencies(repo_id))
+    except Exception as exc:
+        report["errors"].append(
+            {"kind": "dependency_verification", "error": exc.__class__.__name__}
+        )
+
+    list_evidence = getattr(storage, "list_evidence", None)
+    if callable(list_evidence):
+        try:
+            residual_ids("evidence", list_evidence(repo_id=repo_id))
+        except EvidenceUnsupportedError:
+            pass
+        except Exception as exc:
+            report["errors"].append(
+                {"kind": "evidence_verification", "error": exc.__class__.__name__}
+            )
+
+    if report["failed_memory_ids"] or report["errors"] or report["residual"]:
+        return report
+
+    delete_repository_record = getattr(storage, "_delete_repository_record", None)
+    if not callable(delete_repository_record):
+        report["errors"].append(
+            {"kind": "repository", "error": "unsupported_backend_hook"}
+        )
+        return report
+    try:
+        if not delete_repository_record(repo_id):
+            report["errors"].append(
+                {"kind": "repository", "id": repo_id, "error": "delete_failed"}
+            )
+    except Exception as exc:
+        report["errors"].append(
+            {"kind": "repository", "id": repo_id, "error": exc.__class__.__name__}
+        )
+
+    if storage.get_repository(repo_id) is not None:
+        report["residual"]["repository"] = [repo_id]
+    if not report["errors"] and not report["residual"]:
+        report["status"] = "purged"
+    return report
 
 
 @dataclass(frozen=True)
@@ -234,6 +614,10 @@ class BaseStorage(ABC):
         """Return the backend's supported optional feature set."""
         return StorageCapabilities()
 
+    def supports_retrieval_channel(self, channel: str) -> bool:
+        """Whether search can expose an independent vector or lexical pool."""
+        return False
+
     def get_schema_status(self) -> Dict[str, Any]:
         """Return non-secret schema compatibility information."""
         return {
@@ -241,6 +625,36 @@ class BaseStorage(ABC):
             "stored_version": STORAGE_SCHEMA_VERSION,
             "status": "ready",
         }
+
+    def _resolve_recall_memory_scope(
+        self, memory_id: str, repo_id: str = None
+    ) -> tuple[Dict[str, Any], str | None]:
+        """Resolve a memory's repository before reading or writing recall events.
+
+        Recall utility events describe how a particular memory was used.  The
+        repository on that memory is therefore authoritative; accepting a
+        caller-provided repository here would let a malformed or stale caller
+        attribute the event to another repository.  Prefer a no-access read for
+        backends that provide one, and fall back to the backend's ordinary read
+        for portable implementations.
+        """
+        peek = getattr(self, "peek_memory", None)
+        if callable(peek):
+            memory = peek(memory_id)
+        else:
+            query = getattr(self, "_query_memory", None)
+            memory = query(memory_id) if callable(query) else self.get_memory(memory_id)
+        if memory is None:
+            raise ValueError(f"Memory not found: {memory_id}")
+
+        canonical_repo_id = memory.get("repo_id")
+        if repo_id is not None and repo_id != canonical_repo_id:
+            raise ValueError(
+                "Recall utility repository mismatch for memory "
+                f"{memory_id!r}: memory belongs to {canonical_repo_id!r}, "
+                f"caller supplied {repo_id!r}"
+            )
+        return memory, canonical_repo_id
 
     def store_evidence(self, content: str, repo_id: str, **kwargs) -> str:
         raise EvidenceUnsupportedError(
@@ -301,6 +715,136 @@ class BaseStorage(ABC):
         """Update a memory."""
         pass
 
+    def revise_memory(
+        self,
+        memory_id: str,
+        content: str,
+        *,
+        evidence_ids: List[str],
+        authority_attestation: str = None,
+        metadata: Dict[str, Any] = None,
+        quality_flags: List[str] = None,
+        reason: str = None,
+        importance: float = None,
+        tags: List[str] = None,
+    ) -> str:
+        """Create an evidence-backed successor for an immutable semantic belief.
+
+        The implementation is deliberately expressed in terms of the portable storage
+        contract so RemoteStorage and graph backends get the same governance behavior.
+        Backends that cannot store governed Evidence fail through ``store_memory``.
+        """
+        if not isinstance(content, str) or not content:
+            raise ValueError("Revised semantic content must be a non-empty string")
+        resolved_evidence_ids = list(dict.fromkeys(evidence_ids or []))
+        if not resolved_evidence_ids:
+            raise EvidenceReferenceError(
+                "A semantic revision requires at least one evidence record"
+            )
+
+        peek = getattr(self, "peek_memory", None)
+        existing = peek(memory_id) if callable(peek) else self.get_memory(memory_id)
+        if existing is None:
+            raise ValueError(f"Memory not found: {memory_id}")
+        if existing.get("layer") != "semantic":
+            raise ValueError("Only semantic memories can be revised")
+        if existing.get("status") in NON_SERVABLE_STATUSES:
+            raise ValueError(
+                f"Cannot revise a {existing.get('status')} semantic memory"
+            )
+        existing_evidence_ids = set(existing.get("evidence_ids") or [])
+        if not any(
+            evidence_id not in existing_evidence_ids
+            for evidence_id in resolved_evidence_ids
+        ):
+            raise EvidenceReferenceError(
+                "A semantic revision requires new evidence not already linked to the original"
+            )
+
+        try:
+            sanitized_content, sanitized_flags = redact_for_storage(
+                content,
+                [*(existing.get("quality_flags") or []), *(quality_flags or [])],
+                reject_if_redacted=authority_attestation is not None,
+            )
+        except SecretBearingContentError as exc:
+            from visp_memory.core.authority import ProhibitionAuthorityError
+
+            raise ProhibitionAuthorityError(str(exc)) from exc
+
+        belief_type = existing.get("belief_type") or existing.get("category")
+        if belief_type == "prohibition" and authority_attestation is None:
+            from visp_memory.core.authority import ProhibitionAuthorityError
+
+            raise ProhibitionAuthorityError(
+                "prohibition revision requires a new authority attestation"
+            )
+        if belief_type != "prohibition" and authority_attestation is not None:
+            raise ValueError(
+                "authority attestation applies only to a prohibition revision"
+            )
+
+        revision_reason = reason or "Evidence-backed semantic revision"
+        revision_reason, _ = redact_for_storage(revision_reason, None)
+        revision_importance = existing.get("importance", 0.5)
+        if importance is not None:
+            revision_importance = max(float(revision_importance or 0.0), float(importance))
+        successor_metadata = {
+            **(existing.get("metadata") or {}),
+            **(metadata or {}),
+            "revision_of": memory_id,
+        }
+        successor_id = self.store_memory(
+            sanitized_content,
+            layer="semantic",
+            repo_id=existing.get("repo_id"),
+            category=belief_type,
+            importance=revision_importance,
+            tags=list(existing.get("tags") or []) if tags is None else list(tags),
+            metadata=successor_metadata,
+            evidence_ids=resolved_evidence_ids,
+            status="active",
+            authority_attestation=authority_attestation,
+            replaces_belief_id=memory_id if belief_type == "prohibition" else None,
+            source=existing.get("source"),
+            quality_flags=sanitized_flags,
+            auto_link=False,
+        )
+
+        try:
+            self.add_relationship(
+                successor_id,
+                memory_id,
+                "supersedes",
+                evidence={
+                    "confidence": "observed",
+                    "source": "semantic_revision",
+                    "reason": revision_reason,
+                },
+            )
+            old_metadata = {
+                **(existing.get("metadata") or {}),
+                "superseded_by": successor_id,
+                "superseded_reason": revision_reason,
+                "invalid_at": utc_now().isoformat(),
+            }
+            if not self.update_memory(
+                memory_id, status="superseded", metadata=old_metadata
+            ):
+                raise RuntimeError(
+                    f"Could not mark revised memory {memory_id!r} as superseded"
+                )
+        except Exception:
+            try:
+                self.delete_memory(successor_id)
+            except Exception:
+                logger.exception(
+                    "Failed to remove incomplete semantic revision %s", successor_id
+                )
+            raise
+
+        return successor_id
+
     @abstractmethod
     def delete_memory(self, memory_id: str) -> bool:
         """Delete a memory."""
@@ -340,6 +884,16 @@ class BaseStorage(ABC):
         """Update an intent."""
         pass
 
+    def append_intent_outcome(
+        self, intent_id: str, outcome: Dict[str, Any]
+    ) -> bool:
+        """Atomically append one non-authoritative outcome history entry."""
+        raise NotImplementedError
+
+    def report_intent_workflow(self, intent_id: str, report, *, actor_id: str, channel: str):
+        """Mirror an explicit external report when supported by the backend."""
+        raise NotImplementedError("External workflow reports currently require SQLite storage")
+
     # Relationship Operations
     @abstractmethod
     def add_relationship(
@@ -357,12 +911,25 @@ class BaseStorage(ABC):
 
     # Session Operations
     @abstractmethod
-    def start_session(self) -> str:
+    def start_session(
+        self,
+        *,
+        owner_id: str = None,
+        team_id: str = None,
+        repo_id: str = None,
+    ) -> str:
         """Start a session."""
         pass
 
     @abstractmethod
-    def end_session(self, session_id: str, summary: str, memory_ids: List[str]):
+    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Return persisted session metadata when supported."""
+        pass
+
+    @abstractmethod
+    def end_session(
+        self, session_id: str, summary: str, memory_ids: List[str]
+    ) -> SessionCompletionStatus:
         """End a session."""
         pass
 
@@ -403,6 +970,25 @@ class BaseStorage(ABC):
 
     def delete_repository(self, repo_id: str) -> bool:
         """Permanently remove a repository and its scoped records."""
+        return self.purge_repository(repo_id)["status"] == "purged"
+
+    def purge_repository(self, repo_id: str) -> Dict[str, Any]:
+        """Permanently remove a repository and return a truthful retry report.
+
+        ``delete_repository`` remains the historical boolean surface.  Callers
+        that need to distinguish a missing repository from an incomplete purge
+        should use this report-producing method.
+        """
+        return _purge_repository(self, repo_id)
+
+    def _purge_repository_children(
+        self, repo_id: str, *, memory_ids: Iterable[str] = ()
+    ) -> list[Dict[str, Any]]:
+        """Delete backend-specific repository children and return failures."""
+        return []
+
+    def _delete_repository_record(self, repo_id: str) -> bool:
+        """Delete only the repository row after all children are verified gone."""
         return False
 
     @abstractmethod
@@ -480,11 +1066,12 @@ class LocalStorage(BaseStorage):
         self.db_path = self.data_dir / "memories.db"
         self.chroma_path = self.data_dir / "vectors"
 
-        self._embedding_fn = embedding_fn
-        embedding_owner = getattr(embedding_fn, "__self__", None)
-        embedding_owner_name = embedding_owner.__class__.__name__.lower() if embedding_owner else ""
-        self._uses_noop_embeddings = embedding_owner_name == "noopprovider"
-        self._embedding_dimension = getattr(embedding_owner, "dimension", None)
+        binding = bind_embeddings(embedding_fn)
+        self._embedding_fn = binding.document
+        self._query_embedding_fn = binding.query
+        self._uses_noop_embeddings = binding.is_noop
+        self._embedding_dimension = binding.dimension
+        self._embedding_space = binding.space
         self._chroma_client = None
         self._collections = {}
 
@@ -525,7 +1112,7 @@ class LocalStorage(BaseStorage):
                     "LocalStorage.migrate_schema(...)"
                 )
             if stored_version == STORAGE_SCHEMA_VERSION:
-                self._validate_v4_schema(conn)
+                self._validate_v5_schema(conn)
 
             # Enable WAL only after compatibility checks: it persists in the
             # database header and legacy stores must remain byte-for-byte unchanged.
@@ -710,12 +1297,17 @@ class LocalStorage(BaseStorage):
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS sessions (
                     id TEXT PRIMARY KEY,
+                    owner_id TEXT DEFAULT NULL,
+                    team_id TEXT DEFAULT NULL,
+                    repo_id TEXT DEFAULT NULL,
                     summary TEXT,
                     memory_ids TEXT DEFAULT '[]',
                     started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     ended_at TIMESTAMP DEFAULT NULL
                 )
             """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_repo ON sessions(repo_id)")
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS repositories (
@@ -1041,6 +1633,7 @@ class LocalStorage(BaseStorage):
                         raise ValueError(
                             f"semantic memory {row['id']!r} has divergent category and type"
                         )
+
                 elif row["belief_type"] is not None or row["epistemic_status"] is not None:
                     raise ValueError(
                         f"non-semantic memory {row['id']!r} carries semantic belief fields"
@@ -1114,6 +1707,20 @@ class LocalStorage(BaseStorage):
                 "run a supported migration"
             ) from exc
 
+    @classmethod
+    def _validate_v5_schema(cls, conn: sqlite3.Connection) -> None:
+        """Refuse a malformed declared-v5 graph without repairing it."""
+        cls._validate_v4_schema(conn)
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(sessions)")
+        }
+        missing = _V5_REQUIRED_COLUMNS["sessions"] - columns
+        if missing:
+            raise StorageMigrationRequired(
+                "Declared schema v5 sessions table is missing columns: "
+                + ", ".join(sorted(missing))
+            )
+
     def import_graph(
         self, data: Dict[str, Any], *, default_repo_id: str
     ) -> Dict[str, Any]:
@@ -1152,6 +1759,11 @@ class LocalStorage(BaseStorage):
         relationships_by_id = indexed(relationship_items, "relationship")
         authority_by_id = indexed(authority_items, "AuthorityAttestation")
         authority_links_by_id = indexed(authority_link_items, "BeliefAuthority")
+        attested_memory_ids = {
+            item.get("belief_id")
+            for item in [*authority_items, *authority_link_items]
+            if item.get("belief_id")
+        }
 
         portable_evidence_ids = {
             evidence_id
@@ -1192,6 +1804,29 @@ class LocalStorage(BaseStorage):
                 "intent",
             }:
                 raise ValueError(f"Imported memory {memory_id!r} is malformed")
+            original_content = content
+            try:
+                content, imported_flags = redact_for_storage(
+                    content,
+                    item.get("quality_flags") or [],
+                    reject_if_redacted=(
+                        memory_id in attested_memory_ids
+                        or item.get("authority_attestation") is not None
+                        or item.get("belief_type") == "prohibition"
+                    ),
+                )
+            except SecretBearingContentError as exc:
+                from visp_memory.core.authority import ProhibitionAuthorityError
+
+                raise ProhibitionAuthorityError(str(exc)) from exc
+            if legacy_format2 and content != original_content:
+                raise SecretBearingContentError(
+                    "Legacy format-2 memory "
+                    f"{memory_id!r} contains secret-bearing content; import refused "
+                    "without rewriting the historical record"
+                )
+            item["content"] = content
+            item["quality_flags"] = imported_flags or []
             item["repo_id"] = repo_id
             belief_type = item.get("belief_type")
             epistemic_status = item.get("epistemic_status")
@@ -1643,7 +2278,7 @@ class LocalStorage(BaseStorage):
 
     @classmethod
     def migrate_schema(cls, data_dir: Path, *, backup_path: Path) -> Dict[str, Any]:
-        """Explicitly migrate a backed-up SQLite v2/v3 store to schema v4."""
+        """Explicitly migrate a backed-up SQLite v2/v3/v4 store to schema v5."""
         data_dir = Path(data_dir)
         db_path = data_dir / "memories.db"
         backup_path = Path(backup_path)
@@ -1666,9 +2301,9 @@ class LocalStorage(BaseStorage):
                 "to_version": STORAGE_SCHEMA_VERSION,
                 "status": "already_current",
             }
-        if stored_version not in {2, 3}:
+        if stored_version not in {2, 3, 4}:
             raise StorageMigrationRequired(
-                f"Only schema versions 2 and 3 can be migrated to "
+                f"Only schema versions 2, 3 and 4 can be migrated to "
                 f"{STORAGE_SCHEMA_VERSION}; "
                 f"found {stored_version}"
             )
@@ -1677,8 +2312,10 @@ class LocalStorage(BaseStorage):
             validation_conn.row_factory = sqlite3.Row
             if stored_version == 2:
                 cls._prevalidate_legacy_evidence_content(validation_conn)
-            else:
+            elif stored_version == 3:
                 cls._prevalidate_v3_graph(validation_conn)
+            else:
+                cls._validate_v4_schema(validation_conn)
 
         if backup_path.exists():
             raise FileExistsError(f"Migration backup already exists: {backup_path}")
@@ -1717,8 +2354,11 @@ class LocalStorage(BaseStorage):
                 raise RuntimeError(
                     f"Evidence migration integrity check found {invalid_hashes} invalid hashes"
                 )
-            cls._migrate_v3_to_v4(conn)
-            conn.execute("INSERT INTO schema_migrations(version) VALUES (4)")
+            if stored_version < 4:
+                cls._migrate_v3_to_v4(conn)
+                conn.execute("INSERT INTO schema_migrations(version) VALUES (4)")
+            cls._migrate_v4_to_v5(conn)
+            conn.execute("INSERT INTO schema_migrations(version) VALUES (5)")
             conn.commit()
         except Exception:
             conn.rollback()
@@ -1956,6 +2596,15 @@ class LocalStorage(BaseStorage):
             )
 
     @staticmethod
+    def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
+        """Bind new sessions to a principal and repository; legacy rows stay unbound."""
+        conn.execute("ALTER TABLE sessions ADD COLUMN owner_id TEXT DEFAULT NULL")
+        conn.execute("ALTER TABLE sessions ADD COLUMN team_id TEXT DEFAULT NULL")
+        conn.execute("ALTER TABLE sessions ADD COLUMN repo_id TEXT DEFAULT NULL")
+        conn.execute("CREATE INDEX idx_sessions_owner ON sessions(owner_id)")
+        conn.execute("CREATE INDEX idx_sessions_repo ON sessions(repo_id)")
+
+    @staticmethod
     def _ensure_supporting_v4_schema(conn: sqlite3.Connection) -> None:
         """Make an older complete store structurally current inside migration."""
         statements = (
@@ -2087,6 +2736,9 @@ class LocalStorage(BaseStorage):
             atomic_graph_import=True,
         )
 
+    def supports_retrieval_channel(self, channel: str) -> bool:
+        return channel in {"vector", "lexical"}
+
     def get_schema_status(self) -> Dict[str, Any]:
         with self._get_db() as conn:
             row = conn.execute("SELECT MAX(version) AS version FROM schema_migrations").fetchone()
@@ -2173,10 +2825,12 @@ class LocalStorage(BaseStorage):
         return self._collections[layer]
 
     def _collection_name(self, layer: MemoryLayer) -> str:
-        """Use dimension-specific collections so old noop vectors do not poison search."""
+        """Keep dimensions and versioned retrieval instructions in separate spaces."""
         if self._embedding_dimension:
-            return f"memories_{layer}_{self._embedding_dimension}"
-        return f"memories_{layer}"
+            name = f"memories_{layer}_{self._embedding_dimension}"
+        else:
+            name = f"memories_{layer}"
+        return f"{name}_{self._embedding_space}" if self._embedding_space else name
 
     def _list_vector_collection_names(self) -> List[str]:
         """Return Chroma collection names without creating new collections."""
@@ -2242,7 +2896,9 @@ class LocalStorage(BaseStorage):
                 if name == f"memories_{layer}" and name != self._collection_name(layer):
                     legacy.append(name)
                     break
-                dimension_collection = re.fullmatch(rf"memories_{re.escape(layer)}_\d+", name)
+                dimension_collection = re.fullmatch(
+                    rf"memories_{re.escape(layer)}_\d+(?:_nomic_search_v1)?", name
+                )
                 if dimension_collection and name != self._collection_name(layer):
                     legacy.append(name)
                     break
@@ -2291,12 +2947,13 @@ class LocalStorage(BaseStorage):
         needs_reindex = bool(
             matched
             and status == "available"
-            and (legacy or indexed is None or indexed < matched)
+            and (indexed is None or indexed < matched)
         )
         if legacy:
-            message = (
-                "Legacy embedding collections were found for a different dimension; "
-                "run a dry-run and rebuild after provider changes."
+            message = "Legacy embedding collections are retained outside the active space. "
+            message += (
+                "Run a dry-run and rebuild the active index."
+                if needs_reindex else "The active index covers the matching memories."
             )
         elif indexed is not None and indexed < matched and status == "available":
             message = "The active embedding index has fewer vectors than matching memories."
@@ -2363,7 +3020,8 @@ class LocalStorage(BaseStorage):
         errors: list[dict[str, str]] = []
         for memory in candidates:
             try:
-                embedding = self._embedding_fn(memory["content"])
+                safe_content, _ = redact_for_storage(memory["content"], None)
+                embedding = self._embedding_fn(safe_content)
             except Exception as exc:
                 errors.append({"id": memory["id"], "error": exc.__class__.__name__})
                 continue
@@ -2382,7 +3040,7 @@ class LocalStorage(BaseStorage):
                 layer, {"ids": [], "documents": [], "metadatas": [], "embeddings": []}
             )
             layer_group["ids"].append(memory["id"])
-            layer_group["documents"].append(memory["content"])
+            layer_group["documents"].append(safe_content)
             layer_group["metadatas"].append(metadata)
             layer_group["embeddings"].append(embedding)
 
@@ -2441,7 +3099,8 @@ class LocalStorage(BaseStorage):
 
         for memory in memories:
             try:
-                embedding = self._embedding_fn(memory["content"])
+                safe_content, _ = redact_for_storage(memory["content"], None)
+                embedding = self._embedding_fn(safe_content)
             except Exception:
                 continue
 
@@ -2455,7 +3114,7 @@ class LocalStorage(BaseStorage):
                 metadata["repo_id"] = memory["repo_id"]
 
             ids.append(memory["id"])
-            documents.append(memory["content"])
+            documents.append(safe_content)
             metadatas.append(metadata)
             embeddings.append(embedding)
 
@@ -2726,6 +3385,7 @@ class LocalStorage(BaseStorage):
                 raise EvidenceReferenceError("Evidence must belong to the same repository")
         return resolved
 
+    @repository_memory_write
     def store_memory(
         self,
         content: str,
@@ -2740,6 +3400,7 @@ class LocalStorage(BaseStorage):
         status: MemoryStatus = "active",
         epistemic_status: str = None,
         authority_attestation: str = None,
+        replaces_belief_id: str = None,
         source: str = None,
         quality_flags: List[str] = None,
         embedding: List[float] = None,
@@ -2771,7 +3432,16 @@ class LocalStorage(BaseStorage):
         """
         # Enforce the secrets policy at the single choke point every write path funnels
         # through, so a new caller cannot opt out. See visp_memory.quality.secrets.
-        content, quality_flags = redact_for_storage(content, quality_flags)
+        try:
+            content, quality_flags = redact_for_storage(
+                content,
+                quality_flags,
+                reject_if_redacted=authority_attestation is not None,
+            )
+        except SecretBearingContentError as exc:
+            from visp_memory.core.authority import ProhibitionAuthorityError
+
+            raise ProhibitionAuthorityError(str(exc)) from exc
         memory_id = memory_id or self._generate_id(content)
         repo_id = repo_id or UNSCOPED_REPO_ID
         tags = tags or []
@@ -2780,53 +3450,12 @@ class LocalStorage(BaseStorage):
         evidence_ids = evidence_ids or []
         quality_flags = quality_flags or []
         created_at = created_at or utc_now().isoformat()
-        belief_type = None
-        if layer == "semantic":
-            category = category or "fact"
-            belief_type = normalize_belief_type(category)
-            category = belief_type
-            if belief_type == "hypothesis":
-                if epistemic_status not in (None, EpistemicStatus.HYPOTHESIZED.value):
-                    raise ValueError(
-                        "a hypothesis must begin with hypothesized epistemic status"
-                    )
-                epistemic_status = EpistemicStatus.HYPOTHESIZED.value
-                created_time = parse_utc(created_at)
-                if created_time is None:
-                    raise ValueError("created_at must be a valid timestamp")
-                maximum_valid_to = created_time + timedelta(days=7)
-                supplied_valid_to = metadata.get("valid_to")
-                if supplied_valid_to is None:
-                    metadata = {**metadata, "valid_to": maximum_valid_to.isoformat()}
-                else:
-                    valid_to = parse_utc(supplied_valid_to)
-                    if valid_to is None:
-                        raise ValueError("hypothesis valid_to must be a valid timestamp")
-                    if valid_to > maximum_valid_to:
-                        raise ValueError(
-                            "hypothesis valid_to exceeds the seven-day maximum TTL"
-                        )
-                    metadata = {**metadata, "valid_to": valid_to.isoformat()}
-            elif belief_type == "prohibition":
-                if epistemic_status not in (None, EpistemicStatus.OBSERVED.value):
-                    raise ValueError(
-                        "a verified prohibition must begin with observed epistemic status"
-                    )
-                epistemic_status = EpistemicStatus.OBSERVED.value
-            else:
-                epistemic_status = normalize_epistemic_status(
-                    epistemic_status or EpistemicStatus.INFERRED.value
-                )
-            if belief_type != "prohibition" and authority_attestation is not None:
-                raise ValueError(
-                    "authority attestation applies only to a prohibition belief"
-                )
-        elif epistemic_status is not None:
-            raise ValueError(
-                "epistemic status applies only to a semantic belief"
-            )
-        else:
-            category = category or "general"
+        from visp_memory.core.belief_write import prepare_belief
+
+        category, belief_type, epistemic_status, metadata = prepare_belief(
+            layer, category, epistemic_status, metadata, created_at,
+            authority_attestation, replaces_belief_id,
+        )
         if repo_id == UNSCOPED_REPO_ID:
             from visp_memory.core.trust import Provenance, with_provenance
 
@@ -2889,6 +3518,7 @@ class LocalStorage(BaseStorage):
                     repo_id=repo_id,
                     metadata=metadata,
                     evidence=evidence_claim,
+                    expected_replaces_belief_id=replaces_belief_id,
                 )
                 nonce_row = conn.execute(
                     "SELECT digest, belief_id FROM authority_attestations "
@@ -3136,6 +3766,7 @@ class LocalStorage(BaseStorage):
         limit: int = 10,
         min_importance: float = 0.0,
         status: str = "active",
+        retrieval_channel: str = None,
         **_kwargs,
     ) -> List[Dict[str, Any]]:
         """
@@ -3152,14 +3783,18 @@ class LocalStorage(BaseStorage):
         Returns:
             List of matching memories with similarity scores
         """
+        if retrieval_channel not in (None, "vector", "lexical"):
+            raise ValueError("retrieval_channel must be 'vector' or 'lexical'")
+        query, _ = redact_for_storage(query, None)
         results = []
         seen_ids = set()
 
         # Search each relevant layer's vector collection
         layers_to_search = [layer] if layer else ["episodic", "semantic", "intent"]
+        query_embedding = None
 
         for search_layer in layers_to_search:
-            if self._uses_noop_embeddings:
+            if retrieval_channel == "lexical" or self._uses_noop_embeddings:
                 continue
 
             collection = self._get_collection(search_layer)
@@ -3179,13 +3814,20 @@ class LocalStorage(BaseStorage):
             if status and status != "all":
                 where["status"] = status
 
+            # Chroma requires one operator per expression. Flat multi-field
+            # filters are rejected and would silently force keyword fallback.
+            if len(where) > 1:
+                where = {"$and": [{key: value} for key, value in where.items()]}
+
             try:
                 query_kwargs = {
                     "n_results": limit,
                     "where": where if where else None,
                 }
                 if self._embedding_fn is not None:
-                    query_kwargs["query_embeddings"] = [self._embedding_fn(query)]
+                    if query_embedding is None:
+                        query_embedding = self._query_embedding_fn(query)
+                    query_kwargs["query_embeddings"] = [query_embedding]
                 else:
                     query_kwargs["query_texts"] = [query]
 
@@ -3209,6 +3851,7 @@ class LocalStorage(BaseStorage):
                         if status_matches:
                             seen_ids.add(mem_id)
                             memory["similarity"] = similarity
+                            memory["retrieval_method"] = "semantic"
                             results.append(memory)
 
             except Exception as exc:
@@ -3216,7 +3859,7 @@ class LocalStorage(BaseStorage):
                 # text search below. Logged at debug to avoid noise.
                 logger.debug("Vector search failed on layer %s: %s", search_layer, exc)
 
-        if len(results) < limit:
+        if retrieval_channel != "vector" and len(results) < limit:
             results.extend(
                 self._text_search_memories(
                     query=query,
@@ -3245,8 +3888,9 @@ class LocalStorage(BaseStorage):
         status: str = "active",
     ) -> List[Dict[str, Any]]:
         """Fallback SQLite search used when vector search is unavailable or incomplete."""
+        query, _ = redact_for_storage(query, None)
         exclude_ids = exclude_ids or set()
-        terms = [term.lower() for term in query.split() if term.strip()]
+        terms = list(dict.fromkeys(term.lower() for term in query.split() if term.strip()))
         sql = "SELECT * FROM memories WHERE importance >= ?"
         params: list[Any] = [min_importance]
 
@@ -3268,15 +3912,38 @@ class LocalStorage(BaseStorage):
             params.append(status)
 
         if terms:
-            sql += " AND ("
-            sql += " OR ".join("lower(content) LIKE ?" for _ in terms)
-            sql += ")"
-            params.extend(f"%{term}%" for term in terms)
+            # A source episode can contain thousands of terms during auto-linking.
+            # A table-valued parameter avoids SQLite's expression/variable limits
+            # without dropping the tail of the query or changing LIKE semantics.
+            sql += (
+                " AND EXISTS (SELECT 1 FROM json_each(?) AS query_term"
+                " WHERE lower(memories.content) LIKE '%' || query_term.value || '%')"
+            )
+            params.append(json.dumps(terms))
 
-        sql += " ORDER BY importance DESC, created_at DESC LIMIT ?"
+        sql += (
+            " ORDER BY recall_keyword_score(content, importance, created_at, accessed_at,"
+            " access_count) DESC, importance DESC, created_at DESC, id LIMIT ?"
+        )
         params.append(limit + len(exclude_ids))
 
+        def keyword_score(content, importance, created_at, accessed_at, access_count):
+            return score_memory_result(
+                {
+                    "content": content,
+                    "similarity": text_similarity(query, content),
+                    "importance": importance,
+                    "created_at": created_at,
+                    "accessed_at": accessed_at,
+                    "access_count": access_count,
+                },
+                query=query,
+            )
+
         with self._get_db() as conn:
+            # Let SQLite select the best lexical candidates before LIMIT; only
+            # that window is materialized and has evidence/utility attached.
+            conn.create_function("recall_keyword_score", 5, keyword_score)
             cursor = conn.execute(sql, params)
             rows = []
             for row in cursor.fetchall():
@@ -3289,15 +3956,12 @@ class LocalStorage(BaseStorage):
             if row["id"] in exclude_ids:
                 continue
             row["similarity"] = text_similarity(query, row["content"])
+            row["retrieval_method"] = "keyword"
             results.append(row)
             if len(results) >= limit:
                 break
 
         return results
-
-    @staticmethod
-    def _text_similarity(query: str, content: str) -> float:
-        return text_similarity(query, content)
 
     def list_memories(
         self,
@@ -3306,7 +3970,9 @@ class LocalStorage(BaseStorage):
         category: str = None,
         status: str = "active",
         limit: int = 50,
+        offset: int = 0,
         order_by: str = "created_at DESC",
+        after_id: str = None,
     ) -> List[Dict[str, Any]]:
         """List memories with optional filtering."""
         query = "SELECT * FROM memories WHERE 1=1"
@@ -3324,6 +3990,10 @@ class LocalStorage(BaseStorage):
             query += " AND category = ?"
             params.append(category)
 
+        if after_id is not None:
+            query += " AND id > ?"
+            params.append(after_id)
+
         if status and status != "all":
             query += " AND status = ?"
             params.append(status)
@@ -3335,6 +4005,7 @@ class LocalStorage(BaseStorage):
             "importance ASC",
             "accessed_at DESC",
             "accessed_at ASC",
+            "id ASC",
         }
         if order_by not in allowed_order_by:
             order_by = "created_at DESC"
@@ -3343,8 +4014,8 @@ class LocalStorage(BaseStorage):
         # a timestamp/importance are not returned in arbitrary order, which makes
         # "latest"-style queries (limit=1) flaky under same-microsecond writes.
         tiebreak = "rowid ASC" if order_by.endswith("ASC") else "rowid DESC"
-        query += f" ORDER BY {order_by}, {tiebreak} LIMIT ?"
-        params.append(limit)
+        query += f" ORDER BY {order_by}, {tiebreak} LIMIT ? OFFSET ?"
+        params.extend((limit, max(0, offset)))
 
         with self._get_db() as conn:
             cursor = conn.execute(query, params)
@@ -3375,8 +4046,24 @@ class LocalStorage(BaseStorage):
         params = []
 
         if content is not None:
+            existing = self._get_memory_row(memory_id, track_access=False)
+            if existing is None:
+                return False
+            if existing.get("layer") == "semantic":
+                raise SemanticMemoryImmutableError(
+                    "Semantic belief content is immutable; create an evidence-backed "
+                    "successor with revise_memory"
+                )
+            existing_flags = existing.get("quality_flags") or []
+            original_content = content
+            content, redaction_flags = redact_for_storage(
+                content,
+                quality_flags if quality_flags is not None else existing_flags,
+            )
             updates.append("content = ?")
             params.append(content)
+            if content != original_content:
+                quality_flags = redaction_flags
 
         if importance is not None:
             updates.append("importance = ?")
@@ -3515,6 +4202,22 @@ class LocalStorage(BaseStorage):
         if not memory:
             return False
 
+        # The vector store is not transactional with SQLite.  Remove it first so
+        # a vector failure leaves the structured row and all of its child rows in
+        # place for a truthful retry; deleting the row first would create an
+        # orphan embedding that the caller could no longer address.
+        collection = self._get_collection(memory["layer"])
+        if collection:
+            try:
+                collection.delete(ids=[memory_id])
+            except Exception as exc:
+                logger.error(
+                    "Vector delete failed for memory %s; the row remains for retry: %s",
+                    memory_id,
+                    exc,
+                )
+                return False
+
         # Delete from SQLite. Child rows (which carry FK references to
         # memories.id) must be removed before the parent row so that
         # foreign_keys=ON enforcement does not reject the parent delete.
@@ -3528,25 +4231,6 @@ class LocalStorage(BaseStorage):
             conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
             conn.commit()
 
-        # Delete from vector DB
-        collection = self._get_collection(memory["layer"])
-        if collection:
-            try:
-                collection.delete(ids=[memory_id])
-            except Exception as exc:
-                # The row is gone but its embedding is not, so semantic search can
-                # still surface content the caller believes it deleted. Reporting
-                # success here (MG-034) meant a purge could complete "cleanly" and
-                # leave the deleted text retrievable.
-                logger.error(
-                    "Vector delete failed for memory %s; the row is deleted but an "
-                    "orphaned vector remains and may still be retrievable. Run "
-                    "rebuild_embedding_index to reconcile: %s",
-                    memory_id,
-                    exc,
-                )
-                return False
-
         return True
 
     def set_intent(
@@ -3557,8 +4241,11 @@ class LocalStorage(BaseStorage):
         repo_id: str = None,
     ) -> str:
         """Set a new intent (goal/direction)."""
+        from visp_memory.core.intent_workflow import WORKFLOW_CONTEXT_KEYS
+
         intent_id = self._generate_id(description)
-        context = context or {}
+        context = {key: value for key, value in (context or {}).items()
+                   if key not in WORKFLOW_CONTEXT_KEYS}
         # Intents must obey the same scope invariant as memories: never NULL.
         #
         # `store_memory` has applied this default since the column existed, and
@@ -3603,6 +4290,13 @@ class LocalStorage(BaseStorage):
             cursor = conn.execute(query, params)
             return [self._row_to_dict(row) for row in cursor.fetchall()]
 
+    def report_intent_workflow(self, intent_id: str, report, *, actor_id: str, channel: str):
+        from visp_memory.core.intent_workflow import IntentWorkflowReport, apply_workflow_report
+
+        parsed = IntentWorkflowReport.model_validate(report)
+        with self._get_db() as connection:
+            return apply_workflow_report(connection, intent_id, parsed, actor_id, channel)
+
     def complete_intent(self, intent_id: str) -> bool:
         """Keep the legacy surface without changing externally owned status."""
         return False
@@ -3625,9 +4319,8 @@ class LocalStorage(BaseStorage):
         if priority is not None:
             updates.append("priority = ?")
             params.append(priority)
-        # Historical status rows remain readable, but Memory never creates a
-        # workflow-state transition. ``status`` stays accepted for one
-        # compatibility cycle and is deliberately ignored.
+        # Status changes require the dedicated external workflow report path.
+        # Generic edits retain this argument for compatibility.
         if context is not None:
             updates.append("context = ?")
             params.append(self._json_serialize(context))
@@ -3639,6 +4332,22 @@ class LocalStorage(BaseStorage):
         params.append(intent_id)
 
         with self._get_db() as conn:
+            if context is not None:
+                from visp_memory.core.intent_workflow import WORKFLOW_CONTEXT_KEYS
+
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT context, status FROM intents WHERE id = ?", (intent_id,)
+                ).fetchone()
+                existing = self._json_deserialize(row["context"]) if row else {}
+                merged = dict(context)
+                if row and row["status"] != "active":
+                    merged.pop("completion_evaluation", None)
+                for key in WORKFLOW_CONTEXT_KEYS:
+                    merged.pop(key, None)
+                    if key in (existing or {}):
+                        merged[key] = existing[key]
+                params[updates.index("context = ?")] = self._json_serialize(merged)
             cursor = conn.execute(
                 f"""
                 UPDATE intents
@@ -3646,6 +4355,34 @@ class LocalStorage(BaseStorage):
                 WHERE id = ?
                 """,
                 params,
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def append_intent_outcome(
+        self, intent_id: str, outcome: Dict[str, Any]
+    ) -> bool:
+        """Append an outcome under a write transaction so concurrent writers cannot race."""
+        with self._get_db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT context FROM intents WHERE id = ?", (intent_id,)
+            ).fetchone()
+            if row is None:
+                conn.rollback()
+                return False
+            context = self._json_deserialize(row["context"]) or {}
+            history = context.get("outcome_history")
+            history = list(history) if isinstance(history, list) else []
+            history.append(dict(outcome))
+            context["outcome_history"] = history
+            cursor = conn.execute(
+                """
+                UPDATE intents
+                SET context = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (self._json_serialize(context), intent_id),
             )
             conn.commit()
             return cursor.rowcount > 0
@@ -3816,28 +4553,62 @@ class LocalStorage(BaseStorage):
             conn.commit()
         return result.rowcount > 0
 
-    def start_session(self) -> str:
+    def start_session(
+        self,
+        *,
+        owner_id: str = None,
+        team_id: str = None,
+        repo_id: str = None,
+    ) -> str:
         """Start a new session for tracking."""
         session_id = self._generate_id("session")
 
         with self._get_db() as conn:
-            conn.execute("INSERT INTO sessions (id) VALUES (?)", (session_id,))
+            conn.execute(
+                "INSERT INTO sessions (id, owner_id, team_id, repo_id) VALUES (?, ?, ?, ?)",
+                (session_id, owner_id, team_id, repo_id),
+            )
             conn.commit()
 
         return session_id
 
-    def end_session(self, session_id: str, summary: str, memory_ids: List[str]):
-        """End a session with summary."""
+    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         with self._get_db() as conn:
-            conn.execute(
+            row = conn.execute(
+                "SELECT id, owner_id, team_id, repo_id, summary, memory_ids, "
+                "started_at, ended_at FROM sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        session = dict(row)
+        session["memory_ids"] = self._json_deserialize(session.get("memory_ids")) or []
+        return session
+
+    def end_session(
+        self, session_id: str, summary: str, memory_ids: List[str]
+    ) -> SessionCompletionStatus:
+        """Atomically complete an open session."""
+        with self._get_db() as conn:
+            result = conn.execute(
                 """
                 UPDATE sessions
                 SET summary = ?, memory_ids = ?, ended_at = CURRENT_TIMESTAMP
-                WHERE id = ?
+                WHERE id = ? AND ended_at IS NULL
             """,
                 (summary, self._json_serialize(memory_ids), session_id),
             )
             conn.commit()
+            if result.rowcount:
+                return SessionCompletionStatus.COMPLETED
+            exists = conn.execute(
+                "SELECT 1 FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+        return (
+            SessionCompletionStatus.ALREADY_COMPLETED
+            if exists
+            else SessionCompletionStatus.NOT_FOUND
+        )
 
     def get_stats(self, repo_id: str = None) -> Dict[str, Any]:
         """Get storage statistics."""
@@ -3915,12 +4686,9 @@ class LocalStorage(BaseStorage):
     ) -> str:
         """Record a privacy-conscious recall utility event."""
         normalized_type = self._normalize_recall_event_type(event_type)
-        memory = self._get_memory_row(memory_id, track_access=False)
-        if not memory:
-            raise ValueError(f"Memory not found: {memory_id}")
+        _, canonical_repo_id = self._resolve_recall_memory_scope(memory_id, repo_id)
 
         event_id = self._generate_id(f"{memory_id}:{normalized_type}")
-        event_repo_id = repo_id if repo_id is not None else memory.get("repo_id")
         with self._get_db() as conn:
             conn.execute(
                 """
@@ -3934,7 +4702,7 @@ class LocalStorage(BaseStorage):
                     event_id,
                     memory_id,
                     normalized_type,
-                    event_repo_id,
+                    canonical_repo_id,
                     self._hash_recall_query(query),
                     task_id,
                     outcome,
@@ -3964,7 +4732,25 @@ class LocalStorage(BaseStorage):
         limit: int = 50,
     ) -> Dict[str, Any]:
         """Return recall utility signals and recent sanitized events."""
-        where, params = self._recall_event_filters(memory_id, repo_id, event_type)
+        canonical_repo_id = None
+        if memory_id is not None:
+            _, canonical_repo_id = self._resolve_recall_memory_scope(memory_id, repo_id)
+        if memory_id is None and repo_id is not None:
+            where = (
+                "WHERE memory_id IN (SELECT id FROM memories WHERE repo_id = ?) "
+                "AND recall_events.repo_id = ?"
+            )
+            params: list[Any] = [repo_id, repo_id]
+            if event_type:
+                where += " AND event_type = ?"
+                params.append(self._normalize_recall_event_type(event_type))
+        else:
+            where, params = self._recall_event_filters(
+                memory_id,
+                canonical_repo_id,
+                event_type,
+                repo_id_is_null=memory_id is not None and canonical_repo_id is None,
+            )
         with self._get_db() as conn:
             count_cursor = conn.execute(
                 f"""
@@ -4043,6 +4829,72 @@ class LocalStorage(BaseStorage):
             },
             "signals": signals,
             "events": events,
+            "verification": self.verify_recall_utility(
+                memory_id=memory_id,
+                repo_id=repo_id,
+                event_type=event_type,
+            ),
+        }
+
+    def verify_recall_utility(
+        self,
+        memory_id: str = None,
+        repo_id: str = None,
+        event_type: str = None,
+    ) -> Dict[str, Any]:
+        """Verify historical recall event repository attribution without rewriting it."""
+        if memory_id is not None:
+            self._resolve_recall_memory_scope(memory_id, repo_id)
+
+        conditions = ["1=1"]
+        params: list[Any] = []
+        if memory_id is not None:
+            conditions.append("e.memory_id = ?")
+            params.append(memory_id)
+        elif repo_id is not None:
+            conditions.append(
+                "EXISTS (SELECT 1 FROM memories scoped WHERE scoped.id = e.memory_id "
+                "AND scoped.repo_id = ?)"
+            )
+            params.append(repo_id)
+        if event_type:
+            conditions.append("e.event_type = ?")
+            params.append(self._normalize_recall_event_type(event_type))
+
+        with self._get_db() as conn:
+            cursor = conn.execute(
+                f"""
+                SELECT e.id, e.memory_id, e.repo_id AS event_repo_id,
+                       m.id AS matched_memory_id, m.repo_id AS memory_repo_id
+                FROM recall_events e
+                LEFT JOIN memories m ON m.id = e.memory_id
+                WHERE {' AND '.join(conditions)}
+                ORDER BY e.created_at ASC, e.rowid ASC
+                """,
+                params,
+            )
+            rows = cursor.fetchall()
+
+        violations = []
+        for row in rows:
+            if row["matched_memory_id"] is None:
+                continue
+            if row["event_repo_id"] == row["memory_repo_id"]:
+                continue
+            violations.append(
+                {
+                    "event_id": row["id"],
+                    "memory_id": row["memory_id"],
+                    "event_repo_id": row["event_repo_id"],
+                    "memory_repo_id": row["memory_repo_id"],
+                }
+            )
+
+        return {
+            "valid": not violations,
+            "checked_events": len(rows),
+            "cross_repository_events": len(violations),
+            "violations": violations,
         }
 
     def reset_recall_utility(
@@ -4052,7 +4904,25 @@ class LocalStorage(BaseStorage):
         event_type: str = None,
     ) -> int:
         """Delete recall utility events matching optional filters."""
-        where, params = self._recall_event_filters(memory_id, repo_id, event_type)
+        canonical_repo_id = None
+        if memory_id is not None:
+            _, canonical_repo_id = self._resolve_recall_memory_scope(memory_id, repo_id)
+        if memory_id is None and repo_id is not None:
+            where = (
+                "WHERE memory_id IN (SELECT id FROM memories WHERE repo_id = ?) "
+                "AND recall_events.repo_id = ?"
+            )
+            params: list[Any] = [repo_id, repo_id]
+            if event_type:
+                where += " AND event_type = ?"
+                params.append(self._normalize_recall_event_type(event_type))
+        else:
+            where, params = self._recall_event_filters(
+                memory_id,
+                canonical_repo_id,
+                event_type,
+                repo_id_is_null=memory_id is not None and canonical_repo_id is None,
+            )
         with self._get_db() as conn:
             cursor = conn.execute(f"DELETE FROM recall_events {where}", params)
             conn.commit()
@@ -4068,10 +4938,13 @@ class LocalStorage(BaseStorage):
         with self._get_db() as conn:
             cursor = conn.execute(
                 f"""
-                SELECT memory_id, event_type, COUNT(*) AS count
-                FROM recall_events
-                WHERE memory_id IN ({placeholders})
-                GROUP BY memory_id, event_type
+                SELECT e.memory_id, e.event_type, COUNT(*) AS count
+                FROM recall_events e
+                JOIN memories m ON m.id = e.memory_id
+                WHERE e.memory_id IN ({placeholders})
+                  AND (e.repo_id = m.repo_id
+                       OR (e.repo_id IS NULL AND m.repo_id IS NULL))
+                GROUP BY e.memory_id, e.event_type
                 """,
                 memory_ids,
             )
@@ -4133,13 +5006,17 @@ class LocalStorage(BaseStorage):
         memory_id: str = None,
         repo_id: str = None,
         event_type: str = None,
+        *,
+        repo_id_is_null: bool = False,
     ) -> tuple[str, list[Any]]:
         where = "WHERE 1=1"
         params: list[Any] = []
-        if memory_id:
+        if memory_id is not None:
             where += " AND memory_id = ?"
             params.append(memory_id)
-        if repo_id:
+        if repo_id_is_null:
+            where += " AND repo_id IS NULL"
+        elif repo_id is not None:
             where += " AND repo_id = ?"
             params.append(repo_id)
         if event_type:
@@ -4308,6 +5185,7 @@ class LocalStorage(BaseStorage):
             return [self._row_to_dict(row) for row in cursor.fetchall()]
 
     # Repository operations
+    @repository_registration
     def store_repository(self, repo: Dict[str, Any]) -> str:
         repo_id = repo.get("id") or self._generate_id(repo["name"])
 
@@ -4412,25 +5290,35 @@ class LocalStorage(BaseStorage):
             conn.commit()
         return result.rowcount > 0
 
-    def delete_repository(self, repo_id: str) -> bool:
-        if self.get_repository(repo_id) is None:
-            return False
-        memory_ids = [
-            memory["id"]
-            for memory in self.list_memories(repo_id=repo_id, status="all", limit=100000)
-        ]
-        for memory_id in memory_ids:
-            self.delete_memory(memory_id)
+    def _purge_repository_children(self, repo_id: str) -> list[Dict[str, Any]]:
+        """Remove repository-owned rows that are not memory nodes.
+
+        Audit rows intentionally survive a purge so the destructive operation is
+        itself auditable.  Every content-bearing child is deleted in one
+        transaction and residual verification in ``BaseStorage`` decides whether
+        the repository may be removed.
+        """
+        try:
+            with self._get_db() as conn:
+                conn.execute("DELETE FROM intents WHERE repo_id = ?", (repo_id,))
+                conn.execute("DELETE FROM evidence WHERE repo_id = ?", (repo_id,))
+                conn.execute("DELETE FROM sessions WHERE repo_id = ?", (repo_id,))
+                conn.execute("DELETE FROM recall_events WHERE repo_id = ?", (repo_id,))
+                conn.execute(
+                    "DELETE FROM repository_dependencies "
+                    "WHERE source_repo_id = ? OR target_repo_id = ?",
+                    (repo_id, repo_id),
+                )
+                conn.commit()
+        except Exception as exc:
+            return [{"kind": "children", "error": exc.__class__.__name__}]
+        return []
+
+    def _delete_repository_record(self, repo_id: str) -> bool:
         with self._get_db() as conn:
-            conn.execute("DELETE FROM intents WHERE repo_id = ?", (repo_id,))
-            conn.execute(
-                "DELETE FROM repository_dependencies "
-                "WHERE source_repo_id = ? OR target_repo_id = ?",
-                (repo_id, repo_id),
-            )
-            conn.execute("DELETE FROM repositories WHERE id = ?", (repo_id,))
+            result = conn.execute("DELETE FROM repositories WHERE id = ?", (repo_id,))
             conn.commit()
-        return True
+        return result.rowcount > 0
 
     def add_repo_dependency(
         self,

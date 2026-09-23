@@ -6,7 +6,7 @@ Default mode is direct local mode:
 
 - Use the installed `visp-memory` CLI or Python package.
 - Use the bundled `.mcp.json` to expose Visp Memory tools directly in Codex.
-- Recall the latest memory with `visp-memory remember` or the MCP `memory_remember` tool.
+- Recall the latest memory with `visp-memory remember`; prepare cited task context with the default-profile MCP `memory_prepare_task` tool.
 - Read project memory for the current repository.
 - Capture decisions, changed files, tests, failures, and follow-up intents.
 - Preview memory strength/decay risk before applying decay.

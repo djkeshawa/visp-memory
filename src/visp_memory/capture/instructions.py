@@ -21,18 +21,13 @@ from typing import Any, Iterable
 
 from visp_memory.core.beliefs import BeliefType
 from visp_memory.core.clock import utc_now_iso
+from visp_memory.core.instruction_markers import strip_managed_context
 from visp_memory.core.storage import UNSCOPED_REPO_ID
 from visp_memory.core.trust import WriteChannel, channel_policy, with_channel_provenance
 
 INSTRUCTION_CATEGORY = "instruction"
 INSTRUCTION_BELIEF_TYPE = BeliefType.HYPOTHESIS.value
 INSTRUCTION_TAG = "imported_instruction"
-# Regions visp-memory itself injects into instruction files must not be
-# re-ingested, or memory would echo back into itself on every run.
-_MANAGED_BLOCK_RE = re.compile(
-    r"<!--\s*LLM-MEMORY\s*-->\s*START.*?<!--\s*LLM-MEMORY\s*-->\s*END",
-    re.DOTALL,
-)
 _HEADING_RE = re.compile(r"^#{1,6}\s+(.+)$", re.MULTILINE)
 
 # Well-known instruction files, relative to the project root. Globs allowed.
@@ -84,7 +79,7 @@ def split_sections(text: str) -> list[tuple[str, str]]:
     Content before the first heading becomes a "(preamble)" section. Managed
     visp-memory blocks are removed first.
     """
-    cleaned = _MANAGED_BLOCK_RE.sub("", text)
+    cleaned = strip_managed_context(text)
     matches = list(_HEADING_RE.finditer(cleaned))
     sections: list[tuple[str, str]] = []
 

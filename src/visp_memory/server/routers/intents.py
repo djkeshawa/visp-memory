@@ -10,6 +10,7 @@ from visp_memory.layers.intent import IntentMemory
 from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import (
     can_access_scoped_record,
+    has_admin_privileges,
     require_repo_scope_access,
     require_repo_writable,
     require_scoped_record_access,
@@ -18,6 +19,7 @@ from visp_memory.server.routers.platform import append_audit_event
 from visp_memory.server.schemas import (
     IntentCreate,
     IntentEvaluationRequest,
+    IntentOutcomeAppendRequest,
     IntentResponse,
     IntentUpdate,
 )
@@ -132,7 +134,7 @@ async def update_intent(
     if "status" in update_data:
         raise HTTPException(status_code=409, detail=STATUS_AUTHORITY_DETAIL)
 
-    if "context" in update_data and not user.is_admin:
+    if "context" in update_data and not has_admin_privileges(user):
         context = dict(update_data["context"] or {})
         existing_context = intent.get("context") or {}
         for reserved_key in ("author_id", "team_id"):
@@ -193,6 +195,52 @@ async def complete_intent(
     }
 
 
+@router.post("/{intent_id}/outcomes")
+async def append_intent_outcome(
+    request: Request,
+    intent_id: str,
+    payload: IntentOutcomeAppendRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Atomic Remote-storage endpoint for one non-authoritative outcome."""
+    storage = request.app.state.storage
+    intent = require_scoped_record_access(
+        storage,
+        _find_intent(storage, intent_id),
+        user,
+        scope_field="context",
+        not_found_detail="Intent not found",
+    )
+    recorded = IntentMemory(storage).record_outcome(
+        intent_id,
+        payload.outcome,
+        actor_id=user.user_id,
+        channel=WriteChannel.REST,
+    )
+    if not recorded:
+        raise HTTPException(status_code=404, detail="Intent not found")
+    append_audit_event(
+        storage,
+        event_type="intent.outcome_recorded",
+        actor_id=user.user_id,
+        repo_id=intent.get("repo_id"),
+        target_type="intent",
+        target_id=intent_id,
+        metadata={
+            "outcome": payload.outcome,
+            "authoritative": False,
+            "status_changed": False,
+        },
+    )
+    return {
+        "id": intent_id,
+        "status": intent.get("status", "active"),
+        "authoritative": False,
+        "status_changed": False,
+        "outcome_recorded": True,
+    }
+
+
 @router.post("/{intent_id}/close")
 async def close_intent(
     request: Request, intent_id: str, user: UserContext = Depends(get_current_user)
@@ -242,12 +290,23 @@ async def evaluate_intent(
         scope_field="context",
         not_found_detail="Intent not found",
     )
+    for memory_id in payload.memory_ids:
+        memory = storage.get_memory(memory_id)
+        if (
+            not memory
+            or memory.get("repo_id") != intent.get("repo_id")
+            or not can_access_scoped_record(storage, memory, user, scope_field="metadata")
+        ):
+            raise HTTPException(404, "Memory not found")
     result = request.app.state.intent_evaluator.evaluate(
         intent,
         summary=payload.summary,
         memory_ids=payload.memory_ids,
         actor_id=user.user_id,
         allow_auto_complete=payload.model_dump()["allow_auto_complete"],
+    )
+    storage.update_intent(
+        intent_id, context={**(intent.get("context") or {}), "completion_evaluation": result}
     )
     append_audit_event(
         storage,

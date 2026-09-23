@@ -78,3 +78,37 @@ test_*/
 .DS_Store
 Thumbs.db
 .claude/
+
+# Credentials, local stores, and exports never belong in the build context.
+.env*
+**/.env*
+visp-memory.yaml
+visp-memory.yml
+.llm-memory/
+migration-export/
+chroma_db/
+*.db-*
+*.sqlite-*
+*.sqlite3*
+*.pem
+*.key
+
+# Local tools, benchmark runs, and browser traces can be large or contain captures.
+.agents/
+.codex/
+.codex-local/
+.gemini/
+benchmarks/
+.uv-cache/
+.npm-cache/
+.pip-audit-cache/
+.playwright-cache/
+.pytest-tmp*/
+.test-tmp/
+.coverage*
+htmlcov/
+visp-memory-dashboard/test-results/
+visp-memory-dashboard/playwright-report/
+visp-memory-dashboard/tests/
+visp-memory-dashboard/tsconfig.tsbuildinfo
+docker-compose.override.yml

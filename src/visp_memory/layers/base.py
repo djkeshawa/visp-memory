@@ -62,6 +62,8 @@ class BaseMemoryLayer(ABC):
         limit: int = 50,
         order_by: str = "created_at DESC",
         repo_id: str = None,
+        *,
+        offset: int = 0,
     ) -> List[Dict[str, Any]]:
         """
         List items in this layer.
@@ -70,6 +72,7 @@ class BaseMemoryLayer(ABC):
             layer: Name of the layer
             category: Filter by category
             limit: Max items
+            offset: Number of matching items to skip
             order_by: Ordering clause
             repo_id: Optional repository filter
 
@@ -77,5 +80,10 @@ class BaseMemoryLayer(ABC):
             List of items
         """
         return self.storage.list_memories(
-            layer=layer, category=category, limit=limit, order_by=order_by, repo_id=repo_id
+            layer=layer,
+            category=category,
+            limit=limit,
+            offset=offset,
+            order_by=order_by,
+            repo_id=repo_id,
         )

@@ -32,8 +32,10 @@ from visp_memory.core.memory_context import build_context, format_context_text
 from visp_memory.core.memory_import_export import export_memory, import_memories
 from visp_memory.core.neo4j_storage import Neo4jStorage
 from visp_memory.core.ranking import DEFAULT_RECALL_MIN_SCORE, rank_memory_results, text_similarity
+from visp_memory.core.recall_candidates import recall_candidates
 from visp_memory.core.remote_storage import RemoteStorage
 from visp_memory.core.repository import RepositoryManager
+from visp_memory.core.source_support import source_support
 from visp_memory.core.storage import UNSCOPED_REPO_ID, LocalStorage
 from visp_memory.core.team import TeamManager
 from visp_memory.core.trust import (
@@ -47,6 +49,7 @@ from visp_memory.layers.intent import IntentMemory, IntentPriority
 from visp_memory.layers.semantic import KnowledgeCategory, SemanticMemory
 from visp_memory.quality.conflict import ConflictVerdict
 from visp_memory.quality.dedup import Deduplicator, DedupReport
+from visp_memory.quality.secrets import redact_for_storage
 
 logger = logging.getLogger(__name__)
 
@@ -326,12 +329,29 @@ class Memory:
         if reconcile is None:
             reconcile = self.config.quality.write_reconciliation
 
+        # Sanitize before creating Evidence or invoking conflict/reconciliation. Storage
+        # repeats this check as defense in depth, but the facade is the first boundary
+        # that can keep raw input out of every downstream model/search call.
+        knowledge, quality_flags = redact_for_storage(
+            knowledge,
+            kwargs.get("quality_flags"),
+            reject_if_redacted=kwargs.get("authority_attestation") is not None,
+        )
+        if quality_flags is not None:
+            kwargs["quality_flags"] = quality_flags
+
         effective_repo_id = repo_id or self.config.repo_id or UNSCOPED_REPO_ID
         category_value = cat.value if hasattr(cat, "value") else str(cat)
         if category_value == KnowledgeCategory.PROHIBITION.value:
             reconcile = False
         evidence_ids = list(kwargs.pop("evidence_ids", []) or [])
         source_episodes = list(kwargs.get("source_episodes", []) or [])
+        # Reconciliation may return before establish(), so validate and resolve
+        # source support before taking any write path, including a duplicate.
+        source_evidence, source_scope, source_provenance = source_support(
+            self._storage, source_episodes, effective_repo_id, _write_channel
+        )
+        evidence_ids = list(dict.fromkeys([*evidence_ids, *source_evidence]))
         if not evidence_ids and not source_episodes:
             policy = channel_policy(_write_channel)
             evidence_repo_id = effective_repo_id
@@ -376,7 +396,8 @@ class Memory:
         # conflict must be recorded as its own memory and edge, never merged.
         if reconcile and not verdict.has_conflict:
             decision = self.reconciler.decide(
-                knowledge, layer="semantic", repo_id=effective_repo_id, category=category_value
+                knowledge, layer="semantic", repo_id=effective_repo_id, category=category_value,
+                scope=source_scope, provenance=source_provenance,
             )
             if decision.action in ("noop", "update") and decision.target_id:
                 return self._apply_reconcile_decision(
@@ -384,7 +405,9 @@ class Memory:
                     knowledge,
                     importance,
                     evidence_ids=evidence_ids,
+                    source_episodes=source_episodes,
                     repo_id=effective_repo_id,
+                    write_channel=_write_channel,
                 )
 
         conflict = verdict.conflict
@@ -405,6 +428,7 @@ class Memory:
         # passing an unsupported `metadata=` kwarg into establish().
         if conflict and conflict.get("conflicting_ids"):
             reason = conflict.get("reason", "Detected contradictory knowledge")
+            reason, _ = redact_for_storage(str(reason), None)
             for conflicting_id in conflict["conflicting_ids"]:
                 try:
                     self._storage.add_relationship(
@@ -493,8 +517,8 @@ class Memory:
                     **(existing.get("metadata") or {}),
                     "contradiction_unrecorded": {
                         "conflicting_id": conflicting_id,
-                        "reason": reason,
-                        "error": str(exc),
+                        "reason": redact_for_storage(str(reason), None)[0],
+                        "error": redact_for_storage(str(exc), None)[0],
                     },
                 },
             )
@@ -504,6 +528,14 @@ class Memory:
                 memory_id,
             )
 
+    def _link_reconciled_sources(self, memory_id: str, source_ids: List[str]) -> None:
+        for source_id in dict.fromkeys(source_ids):
+            if source_id != memory_id:
+                self._storage.add_relationship(
+                    source_id=source_id, target_id=memory_id,
+                    relationship="derived_from", strength=1.0,
+                )
+
     def _apply_reconcile_decision(
         self,
         decision,
@@ -511,7 +543,9 @@ class Memory:
         importance: float,
         *,
         evidence_ids: List[str],
+        source_episodes: List[str],
         repo_id: str,
+        write_channel: WriteChannel,
     ) -> str:
         """Reinforce or refresh an existing memory instead of inserting a duplicate."""
         from visp_memory.core.clock import utc_now_iso
@@ -520,14 +554,46 @@ class Memory:
         if not existing:  # pragma: no cover - race between decide and apply
             return decision.target_id
         merged_importance = max(float(existing.get("importance", 0.5) or 0.0), float(importance))
-        updates: Dict[str, Any] = {"importance": merged_importance}
         if decision.action == "update":
-            updates["content"] = knowledge
-            updates["metadata"] = {
-                **(existing.get("metadata") or {}),
-                "reconciled_at": utc_now_iso(),
-                "reconcile_action": "update",
-            }
+            revision_evidence_ids = list(dict.fromkeys(evidence_ids or []))
+            existing_evidence_ids = set(existing.get("evidence_ids") or [])
+            if not any(
+                evidence_id not in existing_evidence_ids
+                for evidence_id in revision_evidence_ids
+            ):
+                policy = channel_policy(write_channel)
+                revision_evidence_ids.append(
+                    self._storage.store_evidence(
+                        knowledge,
+                        repo_id=repo_id,
+                        evidence_type="caller_input",
+                        provenance=policy.provenance.value,
+                        metadata={"write_channel": write_channel.value},
+                    )
+                )
+            successor_id = self._storage.revise_memory(
+                decision.target_id,
+                knowledge,
+                evidence_ids=revision_evidence_ids,
+                metadata={
+                    **(existing.get("metadata") or {}),
+                    "reconciled_at": utc_now_iso(),
+                    "reconcile_action": "update",
+                },
+                importance=merged_importance,
+                reason="Write-time reconciliation supplied a more detailed belief",
+            )
+            logger.info(
+                "Reconciled knowledge into successor %s (supersedes %s, overlap=%.2f): %s",
+                successor_id,
+                decision.target_id,
+                decision.similarity,
+                decision.reason,
+            )
+            self._link_reconciled_sources(successor_id, source_episodes)
+            return successor_id
+
+        updates: Dict[str, Any] = {"importance": merged_importance}
         if evidence_ids:
             evidence_repo_id = repo_id
             if evidence_repo_id != UNSCOPED_REPO_ID:
@@ -538,6 +604,7 @@ class Memory:
                 repo_id=evidence_repo_id,
             )
         self._storage.update_memory(decision.target_id, **updates)
+        self._link_reconciled_sources(decision.target_id, source_episodes)
         logger.info(
             "Reconciled knowledge into %s (%s, overlap=%.2f): %s",
             decision.target_id,
@@ -556,6 +623,7 @@ class Memory:
         belief stopped being held (bi-temporal validity, Zep-style).
         """
         from visp_memory.core.clock import utc_now_iso
+        reason, _ = redact_for_storage(str(reason), None)
 
         try:
             existing = self._storage.get_memory(memory_id)
@@ -593,6 +661,7 @@ class Memory:
         Returns:
             A ConflictVerdict. An undetermined verdict is not a clear one.
         """
+        content, _ = redact_for_storage(content, None)
         # Search the repository the write is actually going to. Using the
         # configured one meant a write scoped to repo B was checked against
         # repo A, so a contradiction inside repo B was never seen (MG-027).
@@ -603,6 +672,36 @@ class Memory:
         )
 
         return self.conflict_detector.detect_conflicts(content, relevant)
+
+    def revise(
+        self,
+        memory_id: str,
+        content: str,
+        *,
+        evidence_ids: List[str],
+        authority_attestation: str = None,
+        metadata: Dict[str, Any] = None,
+        quality_flags: List[str] = None,
+        reason: str = None,
+    ) -> str:
+        """Create an evidence-backed successor for a semantic belief."""
+        content, quality_flags = redact_for_storage(
+            content,
+            quality_flags,
+            reject_if_redacted=authority_attestation is not None,
+        )
+        return self._storage.revise_memory(
+            memory_id,
+            content,
+            evidence_ids=evidence_ids,
+            authority_attestation=authority_attestation,
+            metadata=metadata,
+            quality_flags=quality_flags,
+            reason=reason,
+        )
+
+    # Mirror the storage operation name for callers that use the lower-level contract.
+    revise_memory = revise
 
     def warn(
         self,
@@ -676,12 +775,13 @@ class Memory:
     def done(
         self,
         *,
+        repo_id: str = None,
         actor_id: str = "library-caller",
         channel: WriteChannel | str = WriteChannel.LIBRARY,
     ) -> int:
         """Record task completion outcomes without changing intent status."""
         return self.intent.clear_task(
-            repo_id=self.config.repo_id,
+            repo_id=repo_id or self.config.repo_id,
             actor_id=actor_id,
             channel=channel,
         )
@@ -763,6 +863,7 @@ class Memory:
         environment: Any = None,
         task_type: Any = None,
         as_of: Any = None,
+        ranking_strategy: str = "default",
     ) -> List[Dict[str, Any]]:
         """
         Search across all memory layers.
@@ -772,50 +873,111 @@ class Memory:
             layers: Which layers to search (default: all)
             limit: Maximum results per layer
             min_score: Minimum canonical relevance score to return
+            ranking_strategy: "hybrid" reranks at least 100 eligible candidates using
+                lexical evidence; "hybrid_union" fuses independent vector and lexical
+                pools before truncation; "default" preserves canonical ordering.
 
         Returns:
             List of matching memories with similarity scores
         """
-        layers = layers or ["episodic", "semantic", "intent"]
-        results = []
-
-        search_repo_id = require_repo_id(repo_id or self.config.repo_id)
-
-        for layer in layers:
-            layer_results = self._storage.search_memories(
-                query=query,
-                layer=layer,
-                repo_id=search_repo_id,
-                limit=limit,
-                status=status,
-                environment=environment,
-                task_type=task_type,
-                as_of=as_of,
-            )
-            results.extend(layer_results)
-
-        eligibility = filter_recall_eligible(
-            results,
-            repo_id=search_repo_id,
-            environment=environment,
-            task_type=task_type,
-            as_of=as_of,
+        from visp_memory.core.lexical_ranking import (
+            HYBRID_CANDIDATE_LIMIT,
+            rerank_lexical,
+            validate_ranking_strategy,
         )
-        self.last_recall_eligibility_result = eligibility
-        self.last_recall_eligibility = eligibility.diagnostics()
 
-        ranked = self.rank_with_context(
-            eligibility.allowed,
-            query=query,
+        validate_ranking_strategy(ranking_strategy)
+        if limit <= 0:
+            return []
+
+        if ranking_strategy == "hybrid_union":
+            supports_channel = getattr(
+                self._storage, "supports_retrieval_channel", lambda _channel: False
+            )
+            if not all(supports_channel(channel) for channel in ("vector", "lexical")):
+                raise ValueError(
+                    "ranking_strategy 'hybrid_union' requires independent vector and lexical search"
+                )
+
+        candidate_limit = (
+            max(limit, HYBRID_CANDIDATE_LIMIT)
+            if ranking_strategy in ("hybrid", "hybrid_union") and limit > 0
+            else limit
+        )
+        query, _ = redact_for_storage(query, None)
+        layers = layers or ["episodic", "semantic", "intent"]
+        search_repo_id = require_repo_id(repo_id or self.config.repo_id)
+        ranking_context = self._build_recall_factor_context(
             repo_id=search_repo_id,
             task=task,
             files=files,
             session_id=session_id,
             constraints=constraints,
             dependencies=dependencies,
-            limit=limit,
-            min_score=min_score,
         )
+
+        def rank_candidates(candidates):
+            return self._rank_recall_candidates(
+                candidates, ranking_context, query=query, limit=candidate_limit, min_score=min_score
+            )
+
+        if ranking_strategy == "hybrid_union":
+            channel_results = [
+                recall_candidates(
+                    self._storage,
+                    query,
+                    repo_id=search_repo_id,
+                    layers=layers,
+                    limit=candidate_limit,
+                    status=status,
+                    environment=environment,
+                    task_type=task_type,
+                    as_of=as_of,
+                    retrieval_channel=channel,
+                    rank_results=rank_candidates,
+                )
+                for channel in ("vector", "lexical")
+            ]
+            combined = EligibilityFilterResult.combine(channel_results)
+            allowed_by_id = {}
+            for memory in [*channel_results[0].allowed, *channel_results[1].allowed]:
+                allowed_by_id.setdefault(str(memory.get("id")), memory)
+            eligibility = EligibilityFilterResult(
+                allowed=list(allowed_by_id.values()),
+                rejected=combined.rejected,
+                considered_count=combined.considered_count,
+            )
+        else:
+            eligibility = recall_candidates(
+                self._storage,
+                query,
+                repo_id=search_repo_id,
+                layers=layers,
+                limit=candidate_limit,
+                status=status,
+                environment=environment,
+                task_type=task_type,
+                as_of=as_of,
+                rank_results=rank_candidates,
+            )
+        self.last_recall_eligibility_result = eligibility
+        self.last_recall_eligibility = eligibility.diagnostics()
+
+        if ranking_strategy == "hybrid_union":
+            # Each channel is bounded per layer, but the union must reach BM25
+            # before the requested limit is applied. Otherwise an exact lexical
+            # hit ranked 101 canonically would be discarded before fusion.
+            ranked = self._rank_recall_candidates(
+                eligibility.allowed,
+                ranking_context,
+                query=query,
+                limit=candidate_limit * max(1, len(layers) * 2),
+                min_score=min_score,
+            )
+        else:
+            ranked = rank_candidates(eligibility.allowed)
+        if ranking_strategy in ("hybrid", "hybrid_union"):
+            ranked = rerank_lexical(ranked, query)[: max(0, limit)]
         if log_utility:
             for result in ranked:
                 memory_id = result.get("id")
@@ -854,6 +1016,13 @@ class Memory:
             dependencies=dependencies,
             include_active_intents=include_active_intents,
         )
+        return self._rank_recall_candidates(
+            memories, context, query=query, limit=limit, min_score=min_score
+        )
+
+    def _rank_recall_candidates(
+        self, memories, context, *, query=None, limit=None, min_score=None
+    ):
         annotated = []
         for memory in memories:
             item = dict(memory)
@@ -1157,6 +1326,22 @@ class Memory:
             )
         return resetter(memory_id=memory_id, repo_id=repo_id, event_type=event_type)
 
+    def verify_utility_signals(
+        self,
+        memory_id: str = None,
+        repo_id: str = None,
+        event_type: str = None,
+    ) -> Dict[str, Any]:
+        """Verify historical recall event repository attribution without rewriting it."""
+        verifier = getattr(self._storage, "verify_recall_utility", None)
+        if not callable(verifier):
+            backend = type(self._storage).__name__
+            raise NotImplementedError(
+                f"Recall utility verification is not supported by the {backend} backend; "
+                "use local SQLite or ArcadeDB storage for this feature."
+            )
+        return verifier(memory_id=memory_id, repo_id=repo_id, event_type=event_type)
+
     def graph_neighbors(
         self,
         memory_id: str,
@@ -1436,9 +1621,9 @@ class Memory:
     # Maintenance
     # =========================================================================
 
-    def stats(self) -> Dict[str, Any]:
+    def stats(self, repo_id: str = None) -> Dict[str, Any]:
         """Get memory statistics."""
-        return self._storage.get_stats(repo_id=self.config.repo_id)
+        return self._storage.get_stats(repo_id=repo_id or self.config.repo_id)
 
     def token_efficiency(self, repo_id: str = None) -> Dict[str, Any]:
         """Quantify how the memory layer reduces tokens.

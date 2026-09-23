@@ -22,6 +22,9 @@ from visp_memory.core.storage import (
     EvidenceUnsupportedError,
     GraphImportRollbackIncompleteError,
 )
+from visp_memory.quality.secrets import SecretBearingContentError
+
+SECRET = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz"
 
 
 def _memory(tmp_path, name):
@@ -209,6 +212,35 @@ def test_format2_semantic_import_is_conservatively_quarantined(tmp_path):
     assert belief["epistemic_status"] == "hypothesized"
     assert belief["metadata"]["legacy_category"] == "instruction"
     assert "legacy_unreviewed" in belief["quality_flags"]
+
+
+def test_format2_secret_bearing_memory_is_rejected_without_rewrite(tmp_path):
+    target = _memory(tmp_path, "legacy-v2-secret-target")
+    payload = {
+        "version": "2.0",
+        "evidence": [],
+        "memories": {
+            "episodic": [
+                {
+                    "id": "legacy-secret-memory",
+                    "content": f"Legacy secret {SECRET}",
+                    "layer": "episodic",
+                    "category": "note",
+                    "repo_id": "repo-a",
+                }
+            ],
+            "semantic": [],
+        },
+        "intents": [],
+        "relationships": [],
+    }
+    path = tmp_path / "legacy-v2-secret.json"
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(SecretBearingContentError, match="legacy-secret-memory"):
+        target.import_memories(path)
+
+    assert target._storage.get_memory("legacy-secret-memory") is None
 
 
 def test_default_scope_export_round_trips_a_self_contained_quarantined_graph(tmp_path):

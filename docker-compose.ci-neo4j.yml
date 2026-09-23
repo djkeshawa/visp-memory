@@ -1,13 +1,4 @@
-# CI harness for the Neo4j backend's contract smoke -- NOT a deployment.
-#
-# The Neo4j backend fails closed on raw/episodic/semantic writes until it
-# carries the schema-v3 Evidence graph, so the operator compose file offers no
-# Neo4j profile. This file exists solely for the "Docker + Neo4j runtime smoke"
-# CI job, which pins that contract: intent writes land, the governed layers
-# return 501. Whichever change lifts the guard in Neo4jStorage.store_memory
-# should reintroduce an operator profile and update the CI job in the same PR.
-#
-#   docker compose -f docker-compose.ci-neo4j.yml up -d --build --wait
+# Disposable CI deployment for the optional Neo4j backend.
 
 services:
   visp-memory-neo4j-smoke:
@@ -16,18 +7,6 @@ services:
       args:
         VISP_MEMORY_EXTRAS: ${VISP_MEMORY_EXTRAS:-api,mcp,arcadedb,neo4j,openai,anthropic,ollama}
     image: ${VISP_MEMORY_IMAGE:-visp-memory:local}
-    # Startup gate: the application's connection retry is bounded and fail-fast,
-    # so wait for Bolt before starting the server.
-    command:
-      - sh
-      - -ec
-      - |
-        echo "Waiting for Neo4j to accept connections..."
-        until python -c "import os; from neo4j import GraphDatabase; GraphDatabase.driver(os.environ.get('NEO4J_URI','bolt://neo4j:7687'), auth=(os.environ.get('NEO4J_USER','neo4j'), os.environ['NEO4J_PASSWORD'])).verify_connectivity()" 2>/dev/null; do
-          sleep 2
-        done
-        echo "Neo4j is ready -- starting server."
-        exec uvicorn visp_memory.server.app:app --host 0.0.0.0 --port 8000
     ports:
       - "127.0.0.1:${VISP_MEMORY_PORT:-8000}:8000"
     environment:
@@ -52,6 +31,8 @@ services:
 
   neo4j:
     image: neo4j:5.26.28-community
+    ports:
+      - "127.0.0.1:17687:7687"
     # A stale pid file in the container layer blocks restart after an unclean
     # shutdown; a tmpfs is wiped on every start. Harmless in CI, kept so this
     # file stays a faithful template for a future operator profile.
@@ -59,10 +40,23 @@ services:
       - /var/lib/neo4j/run:uid=7474,gid=7474,mode=700
     environment:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?Set NEO4J_PASSWORD}
-      NEO4J_PLUGINS: '["apoc"]'
     healthcheck:
       test: ["CMD-SHELL", "cypher-shell -u neo4j -p ${NEO4J_PASSWORD:?Set NEO4J_PASSWORD} 'RETURN 1'"]
       interval: 10s
       timeout: 10s
       retries: 12
     stop_grace_period: 60s
+
+  neo4j-admin-test:
+    image: neo4j:5.26.28-community
+    ports:
+      - "127.0.0.1:27687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?Set NEO4J_PASSWORD}
+      NEO4J_server_memory_heap_initial__size: 256m
+      NEO4J_server_memory_heap_max__size: 512m
+    healthcheck:
+      test: [CMD-SHELL, 'cypher-shell -u neo4j -p "$${NEO4J_AUTH#neo4j/}" "RETURN 1" >/dev/null']
+      interval: 10s
+      timeout: 10s
+      retries: 12

@@ -1,4 +1,4 @@
-export type MemoryLayer = "episodic" | "semantic" | "intent"
+export type MemoryLayer = "raw" | "episodic" | "semantic" | "intent"
 
 export interface Memory {
   id: string
@@ -13,9 +13,19 @@ export interface Memory {
   accessCount?: number
   tags?: string[]
   metadata?: Record<string, unknown>
+  qualityFlags?: string[]
+  evidenceIds?: string[]
+  source?: string | null
+  files?: string[]
+  epistemicStatus?: string | null
+  validTo?: string | null
+  approvedAt?: string | null
 }
 
 export interface SearchResult extends Memory {
+  retrievalMethod?: "keyword" | "semantic" | null
+  matchExplanation?: string | null
+  relevanceScore?: number
   similarity?: number
 }
 
@@ -109,6 +119,14 @@ export interface Intent {
   createdAt: string
   updatedAt?: string
   context?: Record<string, any>
+}
+
+export interface IntentOutcomeResponse {
+  id: string
+  status: Intent["status"]
+  authoritative: boolean
+  statusChanged: boolean
+  outcomeRecorded: boolean
 }
 
 export interface DecayPreviewItem {

@@ -1,9 +1,10 @@
 "use client"
 
 import type React from "react"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { motion, AnimatePresence } from "framer-motion"
-import type { GraphLink, MemoryLayer, RelationshipEvidence } from "@/lib/types"
+import { DEFAULT_GRAPH_LAYERS, MEMORY_LAYER_CONFIG, MEMORY_LAYERS } from "@/lib/layers"
+import type { MemoryLayer, RelationshipEvidence } from "@/lib/types"
 import { AlertTriangle, Search, ZoomIn, ZoomOut, Maximize2, Filter, X, Link2, Clock, Tag } from "lucide-react"
 import { describeApiError, getGraphData } from "@/lib/api"
 
@@ -28,18 +29,10 @@ interface GraphEdge {
   evidence?: RelationshipEvidence | null
 }
 
-const layerColors: Record<MemoryLayer, { fill: string; glow: string; bg: string }> = {
-  episodic: { fill: "#a78bfa", glow: "rgba(167, 139, 250, 0.6)", bg: "rgba(167, 139, 250, 0.1)" },
-  semantic: { fill: "#22d3ee", glow: "rgba(34, 211, 238, 0.6)", bg: "rgba(34, 211, 238, 0.1)" },
-  intent: { fill: "#fbbf24", glow: "rgba(251, 191, 36, 0.6)", bg: "rgba(251, 191, 36, 0.1)" },
-}
-
-// The server's layer set is broader than the dashboard's (e.g. "raw"), so look
-// up colors defensively to avoid crashing on an unmapped layer value.
+const layerColors = MEMORY_LAYER_CONFIG
 const getLayerColors = (layer: string) => layerColors[layer as MemoryLayer] ?? layerColors.episodic
 
 interface Particle {
-  edgeIndex: number
   progress: number
   speed: number
 }
@@ -54,11 +47,27 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
   const [nodes, setNodes] = useState<GraphNode[]>([])
   const [edges, setEdges] = useState<GraphEdge[]>([])
   const [hoveredNode, setHoveredNode] = useState<string | null>(null)
-  const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [draggedNode, setDraggedNode] = useState<string | null>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
   const animationRef = useRef<number | null>(null)
-  const particlesRef = useRef<Particle[]>([])
+  const particlesRef = useRef<Map<number, Particle[]>>(new Map())
+  const settledRef = useRef(false)
+  const [isSettled, setIsSettled] = useState(false)
+  const requestGenerationRef = useRef(0)
+  const repoIdRef = useRef(repoId)
+  const syncedRepoIdRef = useRef(repoId)
+  const nodesRef = useRef(nodes)
+  const edgesRef = useRef(edges)
+  const hoveredNodeRef = useRef(hoveredNode)
+  const selectedNodeIdRef = useRef(selectedNodeId)
+  const draggedNodeRef = useRef(draggedNode)
+  const dimensionsRef = useRef(dimensions)
+  const zoomRef = useRef(1)
+  const panRef = useRef({ x: 0, y: 0 })
+  const filteredNodeIdsRef = useRef<Set<string>>(new Set())
+  const nodeMapRef = useRef<Map<string, GraphNode>>(new Map())
+  const adjacencyMapRef = useRef<Map<string, Set<string>>>(new Map())
 
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
@@ -66,66 +75,103 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
   const lastPanPos = useRef({ x: 0, y: 0 })
 
   const [searchQuery, setSearchQuery] = useState("")
-  const [activeFilters, setActiveFilters] = useState<MemoryLayer[]>(["episodic", "semantic", "intent"])
+  const [activeFilters, setActiveFilters] = useState<MemoryLayer[]>([...DEFAULT_GRAPH_LAYERS])
   const [showFilters, setShowFilters] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
-  // Fetch Graph Data
+  const nodeMap = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes])
+  const adjacencyMap = useMemo(() => {
+    const map = new Map<string, Set<string>>()
+    for (const node of nodes) map.set(node.id, new Set())
+    for (const edge of edges) {
+      map.get(edge.source)?.add(edge.target)
+      map.get(edge.target)?.add(edge.source)
+    }
+    return map
+  }, [edges, nodes])
+
+  repoIdRef.current = repoId
+
+  // Fetch graph data. A generation token prevents a slow response for the previous repository
+  // from replacing the graph after the user has already selected another repository.
   useEffect(() => {
+    const generation = ++requestGenerationRef.current
+    const requestedRepoId = repoId
+    settledRef.current = false
+    setIsSettled(false)
+    setNodes([])
+    setEdges([])
+    nodesRef.current = []
+    edgesRef.current = []
+    nodeMapRef.current = new Map()
+    adjacencyMapRef.current = new Map()
+    particlesRef.current = new Map()
+    setSelectedNodeId(null)
+    selectedNodeIdRef.current = null
+    setHoveredNode(null)
+    hoveredNodeRef.current = null
+    setDraggedNode(null)
+    draggedNodeRef.current = null
+    setErrorMessage(null)
+
     async function fetchData() {
       try {
-        const data = await getGraphData(repoId);
+        const data = await getGraphData(requestedRepoId)
+        if (generation !== requestGenerationRef.current || repoIdRef.current !== requestedRepoId) return
 
-        // Map API nodes to GraphNodes
-        const newNodes: GraphNode[] = data.nodes.map((n: any) => ({
-          id: n.id,
-          label: n.label, // Short label
-          layer: n.layer as MemoryLayer,
-          description: n.full_label, // Use full content as description
-          connections: 0, // Will calculate below
-          // createdAt intentionally omitted: the graph API does not return it,
-          // so we do not fabricate a date (the detail panel hides it when absent).
-          x: Math.random() * 800,
-          y: Math.random() * 600,
+        const connectionCounts = new Map<string, number>()
+        const newNodes: GraphNode[] = data.nodes.map((node) => ({
+          id: node.id,
+          label: node.label,
+          layer: node.layer,
+          description: node.full_label,
+          connections: 0,
+          // createdAt intentionally omitted: the graph API does not return it.
+          x: Math.random() * Math.max(dimensionsRef.current.width, 1),
+          y: Math.random() * Math.max(dimensionsRef.current.height, 1),
           vx: 0,
-          vy: 0
-        }));
+          vy: 0,
+        }))
 
-        // Map API links to GraphEdges
-        const newEdges: GraphEdge[] = data.links.map((l: GraphLink) => ({
-          source: l.source,
-          target: l.target,
-          strength: l.value,
-          label: l.label,
-          evidence: l.evidence
-        }));
+        const newEdges: GraphEdge[] = data.links.map((link) => ({
+          source: link.source,
+          target: link.target,
+          strength: link.value,
+          label: link.label,
+          evidence: link.evidence,
+        }))
 
-        // Calculate connection counts
-        newNodes.forEach(node => {
-          node.connections = newEdges.filter(e => e.source === node.id || e.target === node.id).length;
-        });
+        // Calculate connection counts once while normalizing the response, not during every draw.
+        for (const edge of newEdges) {
+          connectionCounts.set(edge.source, (connectionCounts.get(edge.source) || 0) + 1)
+          connectionCounts.set(edge.target, (connectionCounts.get(edge.target) || 0) + 1)
+        }
+        for (const node of newNodes) node.connections = connectionCounts.get(node.id) || 0
 
-        setNodes(newNodes);
-        setEdges(newEdges);
-        setErrorMessage(null);
+        setNodes(newNodes)
+        setEdges(newEdges)
+        setErrorMessage(null)
 
-        // Initialize particles
-        particlesRef.current = newEdges.flatMap((_, idx) =>
-          Array.from({ length: 3 }, () => ({
-            edgeIndex: idx,
-            progress: Math.random(),
-            speed: 0.002 + Math.random() * 0.003,
-          })),
-        );
-
+        // Keep particles indexed by edge so highlighted drawing does not filter the full list for
+        // every edge on every frame.
+        particlesRef.current = new Map(
+          newEdges.map((_, index) => [
+            index,
+            Array.from({ length: 3 }, () => ({
+              progress: Math.random(),
+              speed: 0.002 + Math.random() * 0.003,
+            })),
+          ]),
+        )
       } catch (error) {
-        console.error("Failed to fetch graph data:", error);
-        setErrorMessage(describeApiError(error));
+        if (generation !== requestGenerationRef.current || repoIdRef.current !== requestedRepoId) return
+        console.error("Failed to fetch graph data:", error)
+        setErrorMessage(describeApiError(error))
       }
     }
 
-    fetchData();
-  }, [repoId]);
+    void fetchData()
+  }, [repoId])
 
   const filteredNodes = nodes.filter((node) => {
     const matchesSearch =
@@ -136,7 +182,33 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
     return matchesSearch && matchesFilter
   })
 
-  const filteredNodeIds = new Set(filteredNodes.map((n) => n.id))
+  const filteredNodeIds = useMemo(() => new Set(filteredNodes.map((n) => n.id)), [filteredNodes])
+
+  useEffect(() => {
+    if (syncedRepoIdRef.current !== repoId) {
+      syncedRepoIdRef.current = repoId
+      nodesRef.current = []
+      edgesRef.current = []
+      hoveredNodeRef.current = null
+      selectedNodeIdRef.current = null
+      draggedNodeRef.current = null
+      nodeMapRef.current = new Map()
+      adjacencyMapRef.current = new Map()
+      filteredNodeIdsRef.current = new Set()
+      return
+    }
+    nodesRef.current = nodes
+    edgesRef.current = edges
+    hoveredNodeRef.current = hoveredNode
+    selectedNodeIdRef.current = selectedNodeId
+    draggedNodeRef.current = draggedNode
+    dimensionsRef.current = dimensions
+    zoomRef.current = zoom
+    panRef.current = pan
+    filteredNodeIdsRef.current = filteredNodeIds
+    nodeMapRef.current = nodeMap
+    adjacencyMapRef.current = adjacencyMap
+  }, [adjacencyMap, dimensions, draggedNode, edges, filteredNodeIds, hoveredNode, nodeMap, nodes, pan, repoId, selectedNodeId, zoom])
 
   useEffect(() => {
     const container = containerRef.current
@@ -155,96 +227,108 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
     return () => resizeObserver.disconnect()
   }, [])
 
-  const simulate = useCallback(() => {
-    setNodes((prevNodes) => {
-      const newNodes = prevNodes.map((node) => ({ ...node }))
-      let totalEnergy = 0
-
-      for (let i = 0; i < newNodes.length; i++) {
-        const node = newNodes[i]
-        if (node.id === draggedNode) continue
-
-        // Repulsion between nodes (inverse square law)
-        for (let j = 0; j < newNodes.length; j++) {
-          if (i === j) continue
-          const other = newNodes[j]
-          const dx = node.x - other.x
-          const dy = node.y - other.y
-          let dist = Math.sqrt(dx * dx + dy * dy)
-          if (dist < 1) dist = 1 // Prevent division by zero
-
-          const force = 2000 / (dist * dist)
-          const cappedForce = Math.min(force, 2) // Cap to prevent explosions
-
-          node.vx += (dx / dist) * cappedForce
-          node.vy += (dy / dist) * cappedForce
-        }
-
-        // Attraction along edges (spring force)
-        for (const edge of edges) {
-          let other: GraphNode | undefined
-          if (edge.source === node.id) {
-            other = newNodes.find((n) => n.id === edge.target)
-          } else if (edge.target === node.id) {
-            other = newNodes.find((n) => n.id === edge.source)
-          }
-          if (other) {
-            const dx = other.x - node.x
-            const dy = other.y - node.y
-            const dist = Math.sqrt(dx * dx + dy * dy) || 1
-            const force = (dist - 150) * 0.01
-            node.vx += (dx / dist) * force
-            node.vy += (dy / dist) * force
-          }
-        }
-
-        // Center gravity - gentle pull to canvas center
-        const centerX = dimensions.width / 2
-        const centerY = dimensions.height / 2
-        node.vx += (centerX - node.x) * 0.0003
-        node.vy += (centerY - node.y) * 0.0003
-
-        // Apply velocity with strong damping for quick settling
-        node.vx *= 0.85
-        node.vy *= 0.85
-        node.x += node.vx
-        node.y += node.vy
-
-        // Track total kinetic energy
-        totalEnergy += Math.abs(node.vx) + Math.abs(node.vy)
-      }
-
-      // Stop updating if energy is very low (system has settled)
-      if (totalEnergy < 0.5 && !draggedNode) {
-        return prevNodes
-      }
-
-      return newNodes
+  const renderRef = useRef<() => void>(() => undefined)
+  const scheduleRender = useCallback(() => {
+    if (animationRef.current !== null || !canvasRef.current) return
+    animationRef.current = requestAnimationFrame(() => {
+      animationRef.current = null
+      renderRef.current()
     })
-  }, [draggedNode, dimensions, edges])
+  }, [])
+
+  const simulate = useCallback(() => {
+    if (settledRef.current && !draggedNodeRef.current) return
+
+    const generation = requestGenerationRef.current
+    const currentNodes = nodesRef.current
+    if (currentNodes.length === 0) {
+      settledRef.current = true
+      setIsSettled(true)
+      return
+    }
+
+    const nextNodes = currentNodes.map((node) => ({ ...node }))
+    const nextNodeMap = new Map(nextNodes.map((node) => [node.id, node]))
+    const activeDraggedNode = draggedNodeRef.current
+    const { width, height } = dimensionsRef.current
+    let totalEnergy = 0
+
+    for (const node of nextNodes) {
+      if (node.id === activeDraggedNode) continue
+
+      // Repulsion between nodes (inverse square law).
+      for (const other of nextNodes) {
+        if (node.id === other.id) continue
+        const dx = node.x - other.x
+        const dy = node.y - other.y
+        const distance = Math.max(Math.sqrt(dx * dx + dy * dy), 1)
+        const force = Math.min(2000 / (distance * distance), 2)
+        node.vx += (dx / distance) * force
+        node.vy += (dy / distance) * force
+      }
+
+      // Attraction along the precomputed adjacency map.
+      for (const neighborId of adjacencyMapRef.current.get(node.id) || []) {
+        const other = nextNodeMap.get(neighborId)
+        if (!other) continue
+        const dx = other.x - node.x
+        const dy = other.y - node.y
+        const distance = Math.sqrt(dx * dx + dy * dy) || 1
+        const force = (distance - 150) * 0.01
+        node.vx += (dx / distance) * force
+        node.vy += (dy / distance) * force
+      }
+
+      node.vx += (width / 2 - node.x) * 0.0003
+      node.vy += (height / 2 - node.y) * 0.0003
+      node.vx *= 0.85
+      node.vy *= 0.85
+      node.x += node.vx
+      node.y += node.vy
+      totalEnergy += Math.abs(node.vx) + Math.abs(node.vy)
+    }
+
+    const nowSettled = totalEnergy < 0.5 && !activeDraggedNode
+    if (nowSettled) {
+      for (const node of nextNodes) {
+        node.vx = 0
+        node.vy = 0
+      }
+      settledRef.current = true
+      setIsSettled(true)
+    }
+    if (generation !== requestGenerationRef.current) return
+    nodesRef.current = nextNodes
+    setNodes((current) => (generation === requestGenerationRef.current ? nextNodes : current))
+  }, [])
 
   const render = useCallback(() => {
     const canvas = canvasRef.current
     const ctx = canvas?.getContext("2d")
     if (!canvas || !ctx) return
 
-    ctx.save()
+    const currentNodes = nodesRef.current
+    const currentEdges = edgesRef.current
+    const currentHoveredNode = hoveredNodeRef.current
+    const currentSelectedNodeId = selectedNodeIdRef.current
+    const currentFilteredNodeIds = filteredNodeIdsRef.current
+    const { width, height } = dimensionsRef.current
+    const currentZoom = zoomRef.current
+    const currentPan = panRef.current
 
-    // Clear with dark background
+    ctx.save()
     ctx.fillStyle = "#0a0a0f"
     ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.translate(currentPan.x, currentPan.y)
+    ctx.scale(currentZoom, currentZoom)
 
-    ctx.translate(pan.x, pan.y)
-    ctx.scale(zoom, zoom)
-
-    // Draw subtle grid pattern
     ctx.strokeStyle = "rgba(255, 255, 255, 0.03)"
-    ctx.lineWidth = 1 / zoom
+    ctx.lineWidth = 1 / currentZoom
     const gridSize = 40
-    const startX = Math.floor(-pan.x / zoom / gridSize) * gridSize
-    const startY = Math.floor(-pan.y / zoom / gridSize) * gridSize
-    const endX = startX + canvas.width / zoom + gridSize * 2
-    const endY = startY + canvas.height / zoom + gridSize * 2
+    const startX = Math.floor(-currentPan.x / currentZoom / gridSize) * gridSize
+    const startY = Math.floor(-currentPan.y / currentZoom / gridSize) * gridSize
+    const endX = startX + canvas.width / currentZoom + gridSize * 2
+    const endY = startY + canvas.height / currentZoom + gridSize * 2
 
     for (let x = startX; x < endX; x += gridSize) {
       ctx.beginPath()
@@ -259,25 +343,23 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
       ctx.stroke()
     }
 
-    // Draw edges
-    for (let edgeIdx = 0; edgeIdx < edges.length; edgeIdx++) {
-      const edge = edges[edgeIdx]
-      const sourceNode = nodes.find((n) => n.id === edge.source)
-      const targetNode = nodes.find((n) => n.id === edge.target)
+    for (let edgeIndex = 0; edgeIndex < currentEdges.length; edgeIndex += 1) {
+      const edge = currentEdges[edgeIndex]
+      const sourceNode = nodeMapRef.current.get(edge.source)
+      const targetNode = nodeMapRef.current.get(edge.target)
       if (!sourceNode || !targetNode) continue
 
-      const sourceVisible = filteredNodeIds.has(sourceNode.id)
-      const targetVisible = filteredNodeIds.has(targetNode.id)
+      const sourceVisible = currentFilteredNodeIds.has(sourceNode.id)
+      const targetVisible = currentFilteredNodeIds.has(targetNode.id)
       if (!sourceVisible && !targetVisible) continue
 
       const isHighlighted =
-        hoveredNode === edge.source ||
-        hoveredNode === edge.target ||
-        selectedNode?.id === edge.source ||
-        selectedNode?.id === edge.target
+        currentHoveredNode === edge.source ||
+        currentHoveredNode === edge.target ||
+        currentSelectedNodeId === edge.source ||
+        currentSelectedNodeId === edge.target
       const opacity = !sourceVisible || !targetVisible ? 0.05 : isHighlighted ? 0.6 : 0.15
 
-      // Edge glow effect
       if (isHighlighted) {
         ctx.shadowColor = "rgba(255, 255, 255, 0.5)"
         ctx.shadowBlur = 8
@@ -294,69 +376,54 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
       ctx.moveTo(sourceNode.x, sourceNode.y)
       ctx.quadraticCurveTo(ctrlX, ctrlY, targetNode.x, targetNode.y)
       ctx.strokeStyle = `rgba(255, 255, 255, ${opacity})`
-      ctx.lineWidth = ((edge.strength || 0.5) * 2 + 0.5) / zoom
+      ctx.lineWidth = ((edge.strength || 0.5) * 2 + 0.5) / currentZoom
       ctx.stroke()
-
       ctx.shadowColor = "transparent"
       ctx.shadowBlur = 0
 
       if (isHighlighted && sourceVisible && targetVisible) {
-        const edgeParticles = particlesRef.current.filter((p) => p.edgeIndex === edgeIdx)
-        for (const particle of edgeParticles) {
+        for (const particle of particlesRef.current.get(edgeIndex) || []) {
           particle.progress += particle.speed
           if (particle.progress > 1) particle.progress = 0
-
           const t = particle.progress
           const px = (1 - t) * (1 - t) * sourceNode.x + 2 * (1 - t) * t * ctrlX + t * t * targetNode.x
           const py = (1 - t) * (1 - t) * sourceNode.y + 2 * (1 - t) * t * ctrlY + t * t * targetNode.y
-
           ctx.beginPath()
-          ctx.arc(px, py, 2 / zoom, 0, Math.PI * 2)
+          ctx.arc(px, py, 2 / currentZoom, 0, Math.PI * 2)
           ctx.fillStyle = "rgba(255, 255, 255, 0.8)"
           ctx.fill()
         }
       }
     }
 
-    // Draw nodes
-    for (const node of nodes) {
-      const isFiltered = filteredNodeIds.has(node.id)
+    for (const node of currentNodes) {
+      const isFiltered = currentFilteredNodeIds.has(node.id)
       const colors = getLayerColors(node.layer)
-      const isHovered = hoveredNode === node.id
-      const isSelected = selectedNode?.id === node.id
-      const isConnected =
-        (hoveredNode || selectedNode?.id) &&
-        edges.some(
-          (e) =>
-            (e.source === (hoveredNode || selectedNode?.id) && e.target === node.id) ||
-            (e.target === (hoveredNode || selectedNode?.id) && e.source === node.id),
-        )
+      const isHovered = currentHoveredNode === node.id
+      const isSelected = currentSelectedNodeId === node.id
+      const isConnected = Boolean(
+        (currentHoveredNode || currentSelectedNodeId) &&
+          adjacencyMapRef.current.get(currentHoveredNode || currentSelectedNodeId || "")?.has(node.id),
+      )
       const shouldHighlight = isHovered || isSelected || isConnected
-
       const baseRadius = isHovered || isSelected ? 12 : 8
       const pulseRadius = baseRadius + Math.sin(Date.now() / 500) * (isHovered ? 2 : 1)
-
-      // Dim non-filtered nodes
       const nodeOpacity = isFiltered ? 1 : 0.2
 
-      // Outer glow
       if (shouldHighlight && isFiltered) {
         const gradient = ctx.createRadialGradient(node.x, node.y, 0, node.x, node.y, pulseRadius * 4)
         gradient.addColorStop(0, colors.glow)
         gradient.addColorStop(0.5, colors.glow.replace("0.6", "0.2"))
         gradient.addColorStop(1, "transparent")
-
         ctx.beginPath()
         ctx.arc(node.x, node.y, pulseRadius * 4, 0, Math.PI * 2)
         ctx.fillStyle = gradient
         ctx.fill()
       }
 
-      // Node circle with glow
       ctx.shadowColor = isFiltered ? colors.glow : "transparent"
       ctx.shadowBlur = shouldHighlight ? 20 : 10
       ctx.globalAlpha = nodeOpacity
-
       ctx.beginPath()
       ctx.arc(node.x, node.y, pulseRadius, 0, Math.PI * 2)
       ctx.fillStyle = colors.fill
@@ -366,31 +433,27 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
         ctx.beginPath()
         ctx.arc(node.x, node.y, pulseRadius + 4, 0, Math.PI * 2)
         ctx.strokeStyle = "rgba(255, 255, 255, 0.8)"
-        ctx.lineWidth = 2 / zoom
+        ctx.lineWidth = 2 / currentZoom
         ctx.stroke()
       }
 
       ctx.shadowColor = "transparent"
       ctx.shadowBlur = 0
       ctx.globalAlpha = 1
-
-      // Label - always show for filtered nodes
-      if (isFiltered && (shouldHighlight || zoom > 0.8)) {
-        ctx.font = `${12 / zoom}px Inter, system-ui, sans-serif`
+      if (isFiltered && (shouldHighlight || currentZoom > 0.8)) {
+        ctx.font = `${12 / currentZoom}px Inter, system-ui, sans-serif`
         ctx.textAlign = "center"
         ctx.fillStyle = `rgba(255, 255, 255, ${shouldHighlight ? 0.9 : 0.6})`
-        ctx.fillText(node.label, node.x, node.y - pulseRadius - 10 / zoom)
+        ctx.fillText(node.label, node.x, node.y - pulseRadius - 10 / currentZoom)
       }
     }
-
     ctx.restore()
 
     const minimapSize = 120
     const minimapPadding = 12
     const minimapX = canvas.width - minimapSize - minimapPadding
     const minimapY = canvas.height - minimapSize - minimapPadding
-    const minimapScale = minimapSize / Math.max(dimensions.width, dimensions.height)
-
+    const minimapScale = minimapSize / Math.max(width, height, 1)
     ctx.fillStyle = "rgba(0, 0, 0, 0.6)"
     ctx.strokeStyle = "rgba(255, 255, 255, 0.2)"
     ctx.lineWidth = 1
@@ -399,41 +462,52 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
     ctx.fill()
     ctx.stroke()
 
-    // Minimap nodes
-    for (const node of nodes) {
-      if (!filteredNodeIds.has(node.id)) continue
+    for (const node of currentNodes) {
+      if (!currentFilteredNodeIds.has(node.id)) continue
       const colors = getLayerColors(node.layer)
-      const mx = minimapX + node.x * minimapScale
-      const my = minimapY + node.y * minimapScale
-
       ctx.beginPath()
-      ctx.arc(mx, my, 2, 0, Math.PI * 2)
+      ctx.arc(minimapX + node.x * minimapScale, minimapY + node.y * minimapScale, 2, 0, Math.PI * 2)
       ctx.fillStyle = colors.fill
       ctx.fill()
     }
 
-    // Minimap viewport indicator
     ctx.strokeStyle = "rgba(255, 255, 255, 0.5)"
     ctx.lineWidth = 1
     ctx.strokeRect(
-      minimapX + (-pan.x / zoom) * minimapScale,
-      minimapY + (-pan.y / zoom) * minimapScale,
-      (canvas.width / zoom) * minimapScale,
-      (canvas.height / zoom) * minimapScale,
+      minimapX + (-currentPan.x / currentZoom) * minimapScale,
+      minimapY + (-currentPan.y / currentZoom) * minimapScale,
+      (canvas.width / currentZoom) * minimapScale,
+      (canvas.height / currentZoom) * minimapScale,
     )
 
     simulate()
-    animationRef.current = requestAnimationFrame(render)
-  }, [nodes, hoveredNode, selectedNode, simulate, zoom, pan, filteredNodeIds, dimensions])
+    const hasAnimatedParticles = Boolean(currentHoveredNode || currentSelectedNodeId)
+    if (!settledRef.current || hasAnimatedParticles || draggedNodeRef.current) scheduleRender()
+  }, [scheduleRender, simulate])
+
+  renderRef.current = render
+
+  // Data, filters, resizing, and dragging are the only events that restart the force layout.
+  useEffect(() => {
+    if (!nodes.length) return
+    settledRef.current = false
+    setIsSettled(false)
+    scheduleRender()
+  }, [activeFilters, dimensions.height, dimensions.width, nodes.length, scheduleRender, searchQuery])
 
   useEffect(() => {
-    animationRef.current = requestAnimationFrame(render)
+    scheduleRender()
     return () => {
-      if (animationRef.current) {
+      if (animationRef.current !== null) {
         cancelAnimationFrame(animationRef.current)
+        animationRef.current = null
       }
     }
-  }, [render])
+  }, [scheduleRender])
+
+  useEffect(() => {
+    scheduleRender()
+  }, [edges, filteredNodeIds, hoveredNode, pan, selectedNodeId, scheduleRender, zoom])
 
   const screenToCanvas = useCallback(
     (screenX: number, screenY: number) => {
@@ -502,24 +576,36 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
       if (node) {
         if (e.detail === 2) {
           // Double click to select
-          setSelectedNode(node)
+          setSelectedNodeId(node.id)
+          selectedNodeIdRef.current = node.id
         } else {
+          draggedNodeRef.current = node.id
           setDraggedNode(node.id)
+          settledRef.current = false
+          setIsSettled(false)
+          scheduleRender()
         }
       } else {
         // Start panning
         setIsPanning(true)
         lastPanPos.current = { x, y }
-        setSelectedNode(null)
+        setSelectedNodeId(null)
+        selectedNodeIdRef.current = null
       }
     },
-    [getNodeAtPosition],
+    [getNodeAtPosition, scheduleRender],
   )
 
   const handleMouseUp = useCallback(() => {
+    if (draggedNodeRef.current) {
+      settledRef.current = false
+      setIsSettled(false)
+    }
+    draggedNodeRef.current = null
     setDraggedNode(null)
     setIsPanning(false)
-  }, [])
+    scheduleRender()
+  }, [scheduleRender])
 
   const handleWheel = useCallback(
     (e: React.WheelEvent<HTMLCanvasElement>) => {
@@ -557,12 +643,9 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
   }
 
   const getConnectedNodes = (nodeId: string) => {
-    const connected = new Set<string>()
-    edges.forEach((edge: GraphEdge) => {
-      if (edge.source === nodeId) connected.add(edge.target)
-      if (edge.target === nodeId) connected.add(edge.source)
-    })
-    return nodes.filter((n) => connected.has(n.id))
+    return Array.from(adjacencyMap.get(nodeId) || [])
+      .map((connectedId) => nodeMap.get(connectedId))
+      .filter((node): node is GraphNode => Boolean(node))
   }
 
   const getConnectedEdges = (nodeId: string) => {
@@ -570,7 +653,7 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
   }
 
   const getNodeLabel = (nodeId: string) => {
-    return nodes.find((node) => node.id === nodeId)?.label || nodeId
+    return nodeMap.get(nodeId)?.label || nodeId
   }
 
   const describeEvidence = (evidence?: RelationshipEvidence | null) => {
@@ -583,7 +666,15 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
     return parts.length ? parts.join(" · ") : "No relationship evidence recorded."
   }
 
+  const selectedNode = selectedNodeId ? nodeMap.get(selectedNodeId) || null : null
   const selectedEdges = selectedNode ? getConnectedEdges(selectedNode.id) : []
+
+  useEffect(() => {
+    if (selectedNodeId && !nodeMap.has(selectedNodeId)) {
+      setSelectedNodeId(null)
+      selectedNodeIdRef.current = null
+    }
+  }, [nodeMap, selectedNodeId])
 
   if (errorMessage) {
     return (
@@ -607,8 +698,9 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
     >
       <canvas
         ref={canvasRef}
-        width={dimensions.width}
-        height={dimensions.height}
+        width={Math.max(1, Math.floor(dimensions.width))}
+        height={Math.max(1, Math.floor(dimensions.height))}
+        aria-label="Interactive memory graph"
         onMouseMove={handleMouseMove}
         onMouseDown={handleMouseDown}
         onMouseUp={handleMouseUp}
@@ -617,6 +709,30 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
         className={isPanning ? "cursor-grabbing" : draggedNode ? "cursor-grabbing" : "cursor-grab"}
         style={{ width: "100%", height: "100%" }}
       />
+
+      <span className="sr-only" data-testid="graph-node-labels">
+        {filteredNodes.map((node) => node.label).join(" | ")}
+      </span>
+      <span className="sr-only" data-testid="graph-link-count">
+        {edges.length} graph link{edges.length === 1 ? "" : "s"}
+      </span>
+      <div className="sr-only" data-testid="graph-node-controls" aria-label="Graph node controls">
+        {filteredNodes.map((node) => (
+          <button
+            type="button"
+            key={node.id}
+            data-testid={`graph-node-control-${node.id}`}
+            aria-label={`Select graph node ${node.label}`}
+            onClick={() => {
+              setSelectedNodeId(node.id)
+              selectedNodeIdRef.current = node.id
+              scheduleRender()
+            }}
+          >
+            {node.label}
+          </button>
+        ))}
+      </div>
 
       <div className="absolute top-4 left-4 flex items-center gap-2">
         <div className="relative">
@@ -639,6 +755,9 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
         </div>
 
         <button
+          type="button"
+          aria-label="Show graph filters"
+          aria-expanded={showFilters}
           onClick={() => setShowFilters(!showFilters)}
           className={`p-2 rounded-lg backdrop-blur-sm border transition-colors ${showFilters ? "bg-white/10 border-white/20" : "bg-black/50 border-white/10 hover:border-white/20"
             }`}
@@ -654,10 +773,13 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
               exit={{ opacity: 0, x: -10 }}
               className="flex gap-2"
             >
-              {(Object.keys(layerColors) as MemoryLayer[]).map((layer) => (
+              {MEMORY_LAYERS.map((layer) => (
                 <button
+                  type="button"
                   key={layer}
                   onClick={() => toggleFilter(layer)}
+                  aria-pressed={activeFilters.includes(layer)}
+                  data-testid={`graph-filter-${layer}`}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize backdrop-blur-sm border transition-all ${activeFilters.includes(layer) ? "border-white/30" : "border-white/10 opacity-50"
                     }`}
                   style={{
@@ -665,7 +787,7 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
                     color: layerColors[layer].fill,
                   }}
                 >
-                  {layer}
+                  {layerColors[layer].label}
                 </button>
               ))}
             </motion.div>
@@ -719,7 +841,7 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
                   </span>
                 </div>
                 <button
-                  onClick={() => setSelectedNode(null)}
+                  onClick={() => setSelectedNodeId(null)}
                   className="p-1 rounded hover:bg-white/10 transition-colors"
                 >
                   <X className="w-4 h-4 text-white/50" />
@@ -751,7 +873,7 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
                   {getConnectedNodes(selectedNode.id).map((node) => (
                     <button
                       key={node.id}
-                      onClick={() => setSelectedNode(node)}
+                      onClick={() => setSelectedNodeId(node.id)}
                       className="text-xs px-2 py-1 rounded bg-white/5 hover:bg-white/10 transition-colors"
                       style={{ color: getLayerColors(node.layer).fill }}
                     >
@@ -793,15 +915,22 @@ export function MemoryGraph({ repoId }: MemoryGraphProps) {
 
       {/* Legend */}
       <div className="absolute bottom-4 left-4 flex gap-4 px-4 py-2 rounded-lg bg-black/50 backdrop-blur-sm border border-white/10">
-        {Object.entries(layerColors).map(([layer, colors]) => (
+        {MEMORY_LAYERS.map((layer) => {
+          const colors = layerColors[layer]
+          return (
           <div key={layer} className="flex items-center gap-2">
             <div
               className="w-3 h-3 rounded-full"
               style={{ backgroundColor: colors.fill, boxShadow: `0 0 8px ${colors.glow}` }}
             />
-            <span className="text-xs text-white/70 capitalize">{layer}</span>
+            <span className="text-xs text-white/70">{colors.label}</span>
           </div>
-        ))}
+          )
+        })}
+      </div>
+
+      <div className="absolute bottom-16 left-4 text-xs text-white/40" role="status" data-testid="graph-settlement">
+        {isSettled ? "Layout settled" : "Arranging layout"} · {filteredNodes.length} of {nodes.length} nodes visible
       </div>
 
       {/* Instructions */}

@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
 import { staggerItem } from "@/lib/animations"
+import { WorkflowDetails } from "@/components/intents/workflow-details"
 import type { Intent } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -66,8 +67,9 @@ export function IntentCard({ intent, onComplete, onClose, onUpdate, onReopen }: 
           <div className="mt-1 flex flex-wrap items-center gap-2">
             <p className="text-xs capitalize text-muted-foreground">{intent.priority} priority</p>
             {isClosed ? <p className="text-xs text-muted-foreground">closed</p> : null}
-            {intent.context?.completed_automatically ? <span className="inline-flex items-center gap-1 text-xs text-primary"><Sparkles className="h-3 w-3" />Completed automatically · {Math.round(Number(intent.context?.completion_evaluation?.confidence || 0) * 100)}%</span> : null}
+            {intent.context?.completed_automatically ? <span className="inline-flex items-center gap-1 text-xs text-highlight"><Sparkles className="h-3 w-3" />Completed automatically · {Math.round(Number(intent.context?.completion_evaluation?.confidence || 0) * 100)}%</span> : null}
           </div>
+          <WorkflowDetails intent={intent} />
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {onUpdate ? (
@@ -76,12 +78,26 @@ export function IntentCard({ intent, onComplete, onClose, onUpdate, onReopen }: 
             </Button>
           ) : null}
           {!isCompleted && !isClosed && onComplete ? (
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onComplete(intent)}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => onComplete(intent)}
+              aria-label="Record completion outcome"
+              title="Record completion outcome"
+            >
               <Check className="h-4 w-4" />
             </Button>
           ) : null}
           {!isCompleted && !isClosed && onClose ? (
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onClose(intent)}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => onClose(intent)}
+              aria-label="Record close outcome"
+              title="Record close outcome"
+            >
               <X className="h-4 w-4" />
             </Button>
           ) : null}

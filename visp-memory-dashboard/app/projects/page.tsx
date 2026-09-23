@@ -22,9 +22,11 @@ import {
   purgeProject,
   restoreProject,
 } from "@/lib/api"
+import { useRefreshProjectScopes } from "@/lib/project-selection"
 import type { Project } from "@/lib/types"
 
 export default function ProjectsPage() {
+  const refreshProjectScopes = useRefreshProjectScopes()
   const [projects, setProjects] = useState<Project[]>([])
   const [includeArchived, setIncludeArchived] = useState(false)
   const [name, setName] = useState("")
@@ -60,7 +62,7 @@ export default function ProjectsPage() {
       setName("")
       setId("")
       setDescription("")
-      await load()
+      await Promise.all([load(), refreshProjectScopes()])
     } catch (saveError) {
       setError(describeApiError(saveError))
     } finally {
@@ -71,7 +73,7 @@ export default function ProjectsPage() {
   const archive = async (project: Project) => {
     try {
       await archiveProject(project.id)
-      await load()
+      await Promise.all([load(), refreshProjectScopes()])
     } catch (actionError) {
       setError(describeApiError(actionError))
     }
@@ -80,7 +82,7 @@ export default function ProjectsPage() {
   const restore = async (project: Project) => {
     try {
       await restoreProject(project.id)
-      await load()
+      await Promise.all([load(), refreshProjectScopes()])
     } catch (actionError) {
       setError(describeApiError(actionError))
     }
@@ -103,7 +105,7 @@ export default function ProjectsPage() {
     try {
       await purgeProject(purgeTarget.id)
       setPurgeTarget(null)
-      await load()
+      await Promise.all([load(), refreshProjectScopes()])
     } catch (purgeError) {
       setError(describeApiError(purgeError))
     } finally {
@@ -127,7 +129,7 @@ export default function ProjectsPage() {
       {error ? <p className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive" role="alert">{error}</p> : null}
 
       <section className="border-b border-border pb-7" aria-labelledby="create-project-heading">
-        <div className="flex items-center gap-2"><Plus className="h-5 w-5 text-primary" /><h2 id="create-project-heading" className="text-lg font-semibold">Create project</h2></div>
+        <div className="flex items-center gap-2"><Plus className="h-5 w-5 text-highlight" /><h2 id="create-project-heading" className="text-lg font-semibold">Create project</h2></div>
         <form onSubmit={create} className="mt-4 grid gap-4 md:grid-cols-[1fr_0.8fr_1.4fr_auto] md:items-end">
           <div className="space-y-2"><Label htmlFor="project-name">Name</Label><Input id="project-name" value={name} onChange={(event) => setName(event.target.value)} required /></div>
           <div className="space-y-2"><Label htmlFor="project-id">ID</Label><Input id="project-id" value={id} onChange={(event) => setId(event.target.value)} placeholder="generated-from-name" /></div>
@@ -144,7 +146,7 @@ export default function ProjectsPage() {
             <tbody className="divide-y divide-border">
               {projects.map((project) => (
                 <tr key={project.id}>
-                  <td className="px-4 py-3"><div className="flex items-center gap-3"><FolderGit2 className="h-4 w-4 text-primary" /><div><p className="font-medium text-foreground">{project.name}</p><p className="max-w-sm truncate text-xs text-muted-foreground">{project.description || "No description"}</p></div></div></td>
+                  <td className="px-4 py-3"><div className="flex items-center gap-3"><FolderGit2 className="h-4 w-4 text-highlight" /><div><p className="font-medium text-foreground">{project.name}</p><p className="max-w-sm truncate text-xs text-muted-foreground">{project.description || "No description"}</p></div></div></td>
                   <td className="px-4 py-3"><code className="text-xs">{project.id}</code></td>
                   <td className="px-4 py-3"><span className={project.status === "active" ? "text-success" : "text-intent"}>{project.status}</span></td>
                   <td className="px-4 py-3 text-muted-foreground">{new Date(project.createdAt).toLocaleDateString()}</td>

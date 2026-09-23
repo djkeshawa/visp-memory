@@ -25,12 +25,15 @@ from visp_memory.core.authority import (
     build_prohibition_claim,
     sign_prohibition_attestation,
 )
+from visp_memory.core.ranking import utility_rank_adjustment
 from visp_memory.core.storage import (
     STORAGE_SCHEMA_VERSION,
     EvidenceError,
     EvidenceImmutableError,
     EvidenceReferenceError,
     LocalStorage,
+    SemanticMemoryImmutableError,
+    SessionCompletionStatus,
     StorageMigrationRequired,
 )
 from visp_memory.core.trust import Provenance, provenance_tag
@@ -140,16 +143,30 @@ class FakeArcadeDb:
             record_id = params[-1]
             if record_id in self.records[type_name]:
                 record = self.records[type_name][record_id]
+                if "ended_at IS NULL" in sql and record.get("ended_at") is not None:
+                    return []
                 param_values = iter(params[:-1])
                 for field, spec in _update_assignments(sql):
                     if spec == "increment":
                         record[field] = int(record.get(field) or 0) + 1
                     else:
                         record[field] = next(param_values)
-            return None
+                if "RETURN AFTER" in sql:
+                    return [record]
+            return [] if "RETURN AFTER" in sql else None
         if sql.startswith("DELETE FROM "):
             type_name = sql.split()[2]
-            self.records[type_name].pop(params[0], None)
+            if "WHERE memory_id = ?" in sql:
+                memory_id = params[0]
+                for record_id, record in list(self.records[type_name].items()):
+                    if record.get("memory_id") == memory_id:
+                        self.records[type_name].pop(record_id, None)
+            else:
+                self.records[type_name].pop(params[0], None)
+            return None
+        if sql.startswith("DELETE EDGE "):
+            edge_type = sql.split()[2]
+            self.edges[edge_type].pop(params[0], None)
             return None
         raise AssertionError(f"Unhandled SQL command: {sql}")
 
@@ -211,7 +228,8 @@ class FakeArcadeDb:
             rows.sort(key=lambda row: row.get(field) or "", reverse=direction == "DESC")
 
         limit = params[-1] if params else len(rows)
-        return rows[:limit]
+        skip = params[-2] if " SKIP ? " in sql else 0
+        return rows[skip : skip + limit]
 
 
 class FakeArcadeTransaction:
@@ -400,6 +418,48 @@ def test_arcadedb_memory_crud_list_search_stats_and_projects(fake_arcadedb, tmp_
     assert fake_arcadedb.paths[-1] == tmp_path / "arcadedb"
 
 
+def test_arcadedb_memory_listing_supports_offsets(fake_arcadedb, tmp_path):
+    storage = ArcadeDbStorage(tmp_path)
+    memory_ids = [
+        storage.store_memory(f"memory-{index}", repo_id="repo-a")
+        for index in range(3)
+    ]
+
+    page = storage.list_memories(
+        repo_id="repo-a", limit=2, offset=1, order_by="created_at ASC"
+    )
+
+    assert [item["id"] for item in page] == memory_ids[1:]
+
+
+def test_arcadedb_semantic_content_is_immutable_and_episodic_updates_redact(
+    fake_arcadedb, tmp_path
+):
+    storage = ArcadeDbStorage(tmp_path)
+    evidence_id = storage.store_evidence("Observed semantic content", repo_id="repo-a")
+    belief_id = storage.store_memory(
+        "Immutable governed fact",
+        layer="semantic",
+        repo_id="repo-a",
+        evidence_ids=[evidence_id],
+        auto_link=False,
+    )
+
+    with pytest.raises(SemanticMemoryImmutableError):
+        storage.update_memory(belief_id, content="Attempted replacement")
+    assert storage.get_memory(belief_id)["content"] == "Immutable governed fact"
+
+    episodic_id = storage.store_memory(
+        "Mutable observation", repo_id="repo-a", auto_link=False
+    )
+    secret = "sk-proj-abcdefghijklmnopqrstuvwxyz123456"
+    assert storage.update_memory(episodic_id, content=f"Updated with {secret}") is True
+
+    updated = storage.get_memory(episodic_id)
+    assert secret not in updated["content"]
+    assert "secret_redacted" in updated["quality_flags"]
+
+
 def test_arcadedb_persists_evidence_separately_and_validates_beliefs_atomically(
     fake_arcadedb, tmp_path
 ):
@@ -558,6 +618,103 @@ def test_arcadedb_verified_prohibition_attestation_round_trip_and_replay(
         )
 
 
+def test_arcadedb_repository_purge_removes_authority_graph_only_for_purged_memories(
+    fake_arcadedb, tmp_path
+):
+    storage = ArcadeDbStorage(tmp_path)
+    storage.store_repository({"id": "repo-a", "name": "Repo A"})
+    storage.store_repository({"id": "repo-b", "name": "Repo B"})
+    purged_belief_id = storage.store_memory(
+        "Repo A prohibition placeholder",
+        layer="episodic",
+        repo_id="repo-a",
+        auto_link=False,
+    )
+    retained_belief_id = storage.store_memory(
+        "Repo B prohibition placeholder",
+        layer="episodic",
+        repo_id="repo-b",
+        auto_link=False,
+    )
+
+    for belief_id, suffix in (
+        (purged_belief_id, "a"),
+        (retained_belief_id, "b"),
+    ):
+        attestation_id = f"att-{suffix}"
+        fake_arcadedb.db.records["AuthorityAttestation"][attestation_id] = {
+            "id": attestation_id,
+            "belief_id": belief_id,
+            "key_id": f"key-{suffix}",
+            "nonce": f"nonce-{suffix}",
+            "digest": f"digest-{suffix}",
+            "envelope": f"envelope-{suffix}",
+            "created_at": "2026-08-27T00:00:00+00:00",
+        }
+        fake_arcadedb.db.edges["BeliefAuthority"][f"ba-{suffix}"] = {
+            "id": f"ba-{suffix}",
+            "belief_id": belief_id,
+            "attestation_id": attestation_id,
+            "created_at": "2026-08-27T00:00:00+00:00",
+        }
+
+    report = storage.purge_repository("repo-a")
+
+    assert report["status"] == "purged"
+    assert "att-a" not in fake_arcadedb.db.records["AuthorityAttestation"]
+    assert "ba-a" not in fake_arcadedb.db.edges["BeliefAuthority"]
+    assert "att-b" in fake_arcadedb.db.records["AuthorityAttestation"]
+    assert "ba-b" in fake_arcadedb.db.edges["BeliefAuthority"]
+
+
+def test_arcadedb_repository_purge_retains_repository_on_authority_cleanup_failure(
+    fake_arcadedb, tmp_path, monkeypatch
+):
+    storage = ArcadeDbStorage(tmp_path)
+    storage.store_repository({"id": "repo-a", "name": "Repo A"})
+    belief_id = storage.store_memory(
+        "Repo A authority cleanup failure",
+        layer="episodic",
+        repo_id="repo-a",
+        auto_link=False,
+    )
+    fake_arcadedb.db.records["AuthorityAttestation"]["att-a"] = {
+        "id": "att-a",
+        "belief_id": belief_id,
+        "key_id": "key-a",
+        "nonce": "nonce-a",
+        "digest": "digest-a",
+        "envelope": "envelope-a",
+        "created_at": "2026-08-27T00:00:00+00:00",
+    }
+    fake_arcadedb.db.edges["BeliefAuthority"]["ba-a"] = {
+        "id": "ba-a",
+        "belief_id": belief_id,
+        "attestation_id": "att-a",
+        "created_at": "2026-08-27T00:00:00+00:00",
+    }
+
+    original_command = fake_arcadedb.db.command
+
+    def fail_authority_edge_delete(language, sql, *params):
+        if sql.startswith("DELETE EDGE BeliefAuthority"):
+            raise RuntimeError("authority edge store unavailable")
+        return original_command(language, sql, *params)
+
+    monkeypatch.setattr(fake_arcadedb.db, "command", fail_authority_edge_delete)
+
+    report = storage.purge_repository("repo-a")
+
+    assert report["status"] == "incomplete"
+    assert storage.get_repository("repo-a") is not None
+    assert "ba-a" in fake_arcadedb.db.edges["BeliefAuthority"]
+    assert "att-a" in fake_arcadedb.db.records["AuthorityAttestation"]
+    assert any(
+        error["kind"] == "BeliefAuthority" and error["id"] == "ba-a"
+        for error in report["errors"]
+    )
+
+
 def test_arcadedb_v2_constructor_refuses_without_schema_or_marker_drift(
     fake_arcadedb, tmp_path
 ):
@@ -614,6 +771,23 @@ def _configure_current_arcadedb(fake_arcadedb, tmp_path):
         "version": STORAGE_SCHEMA_VERSION,
         "applied_at": "2026-01-01T00:00:00+00:00",
     }
+
+
+def test_arcadedb_v4_marker_upgrade_preserves_unbound_legacy_session(
+    fake_arcadedb, tmp_path
+):
+    _configure_current_arcadedb(fake_arcadedb, tmp_path)
+    fake_arcadedb.db.records["SchemaVersion"]["storage"]["version"] = 4
+    fake_arcadedb.db.records["Session"]["legacy-session"] = {
+        "id": "legacy-session",
+        "started_at": "2026-01-01T00:00:00+00:00",
+    }
+
+    storage = ArcadeDbStorage(tmp_path)
+
+    assert fake_arcadedb.db.records["SchemaVersion"]["storage"]["version"] == 5
+    assert storage.get_session("legacy-session")["owner_id"] is None
+    assert storage.get_session("legacy-session")["repo_id"] is None
 
 
 def _add_current_arcadedb_evidence_graph(fake_arcadedb):
@@ -758,12 +932,33 @@ def test_arcadedb_search_excludes_raw_layer_by_default(fake_arcadedb, tmp_path):
 def test_arcadedb_sessions_round_trip(fake_arcadedb, tmp_path):
     storage = ArcadeDbStorage(tmp_path)
 
-    session_id = storage.start_session()
-    storage.end_session(session_id, "Finished backend selection", ["mem-a", "mem-b"])
+    session_id = storage.start_session(
+        owner_id="alice", team_id="team-a", repo_id="repo-a"
+    )
+    assert (
+        storage.end_session(session_id, "Finished backend selection", ["mem-a", "mem-b"])
+        is SessionCompletionStatus.COMPLETED
+    )
 
     session = fake_arcadedb.db.sessions[session_id]
+    assert session["owner_id"] == "alice"
+    assert session["repo_id"] == "repo-a"
     assert session["summary"] == "Finished backend selection"
     assert storage._json_deserialize(session["memory_ids"]) == ["mem-a", "mem-b"]
+    assert storage.get_session(session_id)["team_id"] == "team-a"
+    assert (
+        storage.end_session(session_id, "Again", [])
+        is SessionCompletionStatus.ALREADY_COMPLETED
+    )
+    assert session["summary"] == "Finished backend selection"
+    completion_updates = [
+        command
+        for command in fake_arcadedb.db.commands
+        if command.startswith("UPDATE Session SET summary")
+    ]
+    assert completion_updates
+    assert "ended_at IS NULL" in completion_updates[0]
+    assert "RETURN AFTER" in completion_updates[0]
 
 
 def test_arcadedb_get_collection_is_none_for_conservative_vector_v1(fake_arcadedb, tmp_path):
@@ -1096,6 +1291,59 @@ def test_arcadedb_audit_and_recall_feedback(fake_arcadedb, tmp_path):
         storage.log_recall_event("missing", "used")
 
 
+def test_arcadedb_delete_memory_removes_recall_feedback(fake_arcadedb, tmp_path):
+    """Deleting a memory purges its feedback just like LocalStorage."""
+    storage = ArcadeDbStorage(tmp_path)
+    deleted_id = storage.store_memory("ArcadeDB feedback to purge", repo_id="repo-a")
+    retained_id = storage.store_memory("ArcadeDB feedback to retain", repo_id="repo-a")
+    deleted_event = storage.log_recall_event(deleted_id, "used")
+    retained_event = storage.log_recall_event(retained_id, "used")
+
+    assert storage.delete_memory(deleted_id) is True
+    assert deleted_event not in fake_arcadedb.db.records["RecallFeedback"]
+    assert retained_event in fake_arcadedb.db.records["RecallFeedback"]
+    assert storage.inspect_recall_utility(repo_id="repo-a")["summary"] == {
+        "total_events": 1,
+        "by_event_type": {"used": 1},
+        "memories": 1,
+    }
+
+
+def test_arcadedb_search_attaches_canonical_recall_utility_scores(
+    fake_arcadedb, tmp_path
+):
+    """ArcadeDB search ranks the same canonical utility signals as SQLite."""
+    storage = ArcadeDbStorage(tmp_path)
+    memory_id = storage.store_memory("ArcadeDB utility ranking parity", repo_id="repo-a")
+    storage.log_recall_event(memory_id, "used")
+    storage._insert_record(
+        "RecallFeedback",
+        {
+            "id": "cross-repo-search-event",
+            "memory_id": memory_id,
+            "event_type": "dismissed",
+            "repo_id": "repo-b",
+            "query_hash": None,
+            "task_id": None,
+            "outcome": None,
+            "metadata": {},
+            "created_at": "2024-01-01T00:00:00+00:00",
+        },
+        storage.RECALL_EVENT_FIELDS,
+        storage.RECORD_JSON_FIELDS["RecallFeedback"],
+    )
+
+    results = storage.search_memories("utility ranking", repo_id="repo-a")
+
+    assert results[0]["id"] == memory_id
+    assert results[0]["utility_score"] > 0
+    assert results[0]["utility_signal"] == {
+        "counts": {"used": 1},
+        "total_events": 1,
+        "rank_adjustment": utility_rank_adjustment(results[0]["utility_score"]),
+    }
+
+
 def test_arcadedb_reinforces_on_use_in_parity_with_local(fake_arcadedb, tmp_path):
     # Backend parity: a used memory must strengthen (access_count++) just like SQLite,
     # while a merely-surfaced one must not.
@@ -1113,6 +1361,63 @@ def test_arcadedb_reinforces_on_use_in_parity_with_local(fake_arcadedb, tmp_path
     assert access_count() == 1  # surfaced/dismissed do not reinforce
     storage.log_recall_event(memory_id, "task_linked")
     assert access_count() == 2
+
+
+def test_arcadedb_recall_utility_enforces_scope_and_verifies_history(
+    fake_arcadedb, tmp_path
+):
+    storage = ArcadeDbStorage(tmp_path)
+    memory_id = storage.store_memory("ArcadeDB repository-scoped recall", repo_id="repo-a")
+
+    with pytest.raises(ValueError, match="repository mismatch"):
+        storage.log_recall_event(memory_id, "used", repo_id="repo-b")
+    with pytest.raises(ValueError, match="repository mismatch"):
+        storage.inspect_recall_utility(memory_id=memory_id, repo_id="repo-b")
+    with pytest.raises(ValueError, match="repository mismatch"):
+        storage.reset_recall_utility(memory_id=memory_id, repo_id="repo-b")
+
+    good_id = storage.log_recall_event(memory_id, "used", repo_id="repo-a")
+    storage._insert_record(
+        "RecallFeedback",
+        {
+            "id": "legacy-arcade-cross-repo-event",
+            "memory_id": memory_id,
+            "event_type": "dismissed",
+            "repo_id": "repo-b",
+            "query_hash": None,
+            "task_id": None,
+            "outcome": None,
+            "metadata": {},
+            "created_at": "2024-01-01T00:00:00+00:00",
+        },
+        storage.RECALL_EVENT_FIELDS,
+        storage.RECORD_JSON_FIELDS["RecallFeedback"],
+    )
+
+    report = storage.inspect_recall_utility(memory_id=memory_id)
+    assert report["summary"]["total_events"] == 1
+    assert report["summary"]["by_event_type"] == {"used": 1}
+    assert [event["id"] for event in report["events"]] == [good_id]
+    assert report["verification"] == {
+        "valid": False,
+        "checked_events": 2,
+        "cross_repository_events": 1,
+        "violations": [
+            {
+                "event_id": "legacy-arcade-cross-repo-event",
+                "memory_id": memory_id,
+                "event_repo_id": "repo-b",
+                "memory_repo_id": "repo-a",
+            }
+        ],
+    }
+
+    assert storage.inspect_recall_utility(repo_id="repo-a")["summary"]["total_events"] == 1
+    assert storage.inspect_recall_utility(repo_id="repo-b")["summary"]["total_events"] == 0
+    assert storage.reset_recall_utility(repo_id="repo-b") == 0
+
+    assert storage.reset_recall_utility(memory_id=memory_id) == 1
+    assert "legacy-arcade-cross-repo-event" in fake_arcadedb.db.records["RecallFeedback"]
 
 
 def test_arcadedb_graph_recall_uses_public_memory_contract(fake_arcadedb, tmp_path):
@@ -1267,3 +1572,27 @@ def test_real_arcadedb_memory_smoke_skips_without_extra(tmp_path):
     memory_id = storage.store_memory("Real ArcadeDB smoke", repo_id="repo-real", auto_link=False)
 
     assert storage.get_memory(memory_id)["content"] == "Real ArcadeDB smoke"
+
+
+def test_real_arcadedb_memory_listing_supports_offsets(tmp_path):
+    if sys.platform == "win32":
+        pytest.skip("arcadedb_embedded native smoke is unstable on Windows")
+
+    try:
+        import arcadedb_embedded  # noqa: F401
+    except ImportError:
+        pytest.skip("arcadedb_embedded is not installed")
+
+    storage = ArcadeDbStorage(tmp_path)
+    memory_ids = [
+        storage.store_memory(
+            f"Real ArcadeDB page {index}", repo_id="repo-real", auto_link=False
+        )
+        for index in range(3)
+    ]
+
+    page = storage.list_memories(
+        repo_id="repo-real", limit=2, offset=1, order_by="created_at ASC"
+    )
+
+    assert [item["id"] for item in page] == memory_ids[1:]

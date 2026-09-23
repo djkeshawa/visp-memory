@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from visp_memory.core.api_limits import MAX_QUERY_LIMIT
 from visp_memory.core.beliefs import (
     BeliefType,
     EpistemicStatus,
@@ -19,7 +20,6 @@ MemoryLayer = Literal["raw", "episodic", "semantic", "intent"]
 MemoryStatus = Literal["active", "pending", "archived", "superseded", "merged", "deleted"]
 IntentStatus = Literal["active", "completed", "closed"]
 RelationshipConfidence = Literal["observed", "inferred", "ambiguous", "manual"]
-MAX_QUERY_LIMIT = 200
 
 
 class ScopedRequest(BaseModel):
@@ -122,6 +122,8 @@ class MemoryResponse(BaseModel):
     accessed_at: datetime
     similarity: Optional[float] = None
     relevance_score: Optional[float] = None
+    retrieval_method: Optional[str] = None
+    match_explanation: Optional[str] = None
     title: Optional[str] = None
     summary: Optional[str] = None
     observed_at: Optional[datetime] = None
@@ -179,6 +181,21 @@ class RelatedMemoryResponse(MemoryResponse):
 class SessionCreateResponse(BaseModel):
     id: str
     status: Literal["started"] = "started"
+
+
+class SessionCreateRequest(BaseModel):
+    repo_id: str = Field(min_length=1)
+
+
+class SessionResponse(BaseModel):
+    id: str
+    owner_id: Optional[str] = None
+    team_id: Optional[str] = None
+    repo_id: Optional[str] = None
+    summary: Optional[str] = None
+    memory_ids: List[str] = Field(default_factory=list)
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
 
 
 class SessionCompleteRequest(BaseModel):
@@ -350,6 +367,10 @@ class IntentResponse(IntentCreate):
     updated_at: Optional[datetime] = None
 
 
+class IntentOutcomeAppendRequest(BaseModel):
+    outcome: str = Field(min_length=1, max_length=200)
+
+
 class IntentEvaluationRequest(BaseModel):
     summary: str = Field(min_length=1, max_length=20000)
     memory_ids: List[str] = Field(default_factory=list)
@@ -394,6 +415,19 @@ class MemoryUpdate(BaseModel):
     status: Optional[MemoryStatus] = None
     source: Optional[str] = None
     quality_flags: Optional[List[str]] = None
+
+
+class MemoryRevision(BaseModel):
+    """Request to create an evidence-backed successor for a semantic belief."""
+
+    content: str = Field(min_length=1)
+    evidence_ids: List[str] = Field(min_length=1)
+    authority_attestation: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    quality_flags: Optional[List[str]] = None
+    reason: Optional[str] = None
+    importance: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    tags: Optional[List[str]] = None
 
 
 class MemoryMergePreviewRequest(BaseModel):
@@ -454,6 +488,8 @@ class AskMemoryResponse(BaseModel):
 
 
 class ContextCompileRequest(ScopedRequest):
+    ranking_strategy: Literal["default", "hybrid", "hybrid_union"] = "default"
+    context_selection: Literal["default", "coverage"] = "default"
     query: str = Field(min_length=1, max_length=20000)
     repo_id: Optional[str] = None
     token_budget: int = Field(default=2000, ge=64, le=100000)
@@ -465,6 +501,8 @@ class ContextCompileRequest(ScopedRequest):
 
 
 class TaskMemoryBriefRequest(ScopedRequest):
+    ranking_strategy: Literal["default", "hybrid", "hybrid_union"] = "default"
+    context_selection: Literal["default", "coverage"] = "default"
     task: str = Field(min_length=1, max_length=20000)
     repo_id: Optional[str] = None
     token_budget: int = Field(default=2000, ge=128, le=100000)

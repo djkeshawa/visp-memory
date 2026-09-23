@@ -6,12 +6,15 @@ key is absent, so an explicit ``accessed_at=None`` used to flow straight into
 ``_parse_datetime`` and crash on ``None.replace(...)``.
 """
 
+import sys
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any, Dict, List
 
 import pytest
 
-from visp_memory.core.compression import MemoryCompressor
+from visp_memory.core.compression import MemoryCompressor, create_llm_compressor
+from visp_memory.core.storage import EvidenceReferenceError
 from visp_memory.core.trust import Provenance, provenance_of
 
 
@@ -26,6 +29,15 @@ class _FakeStorage:
 
     def list_memories(self, layer: str = None, limit: int = 50, **kwargs):
         return [row for row in self._rows if row.get("layer") == layer]
+
+    def get_memory(self, memory_id: str):
+        for row in self._rows:
+            if row.get("id") == memory_id:
+                return {**row, "status": row.get("status", "active")}
+        return None
+
+    def peek_memory(self, memory_id: str):
+        return self.get_memory(memory_id)
 
     def update_memory(self, memory_id: str, **kwargs) -> bool:
         self.updates.append({"id": memory_id, **kwargs})
@@ -149,6 +161,201 @@ def test_parse_datetime_returns_none_for_falsy_or_garbage():
     parsed = compressor._parse_datetime("2024-01-01T00:00:00Z")
     assert parsed is not None
     assert parsed.tzinfo is not None
+    assert compressor._parse_datetime("2024-01-01T00:00:00").tzinfo is not None
+
+
+def test_compress_episodes_uses_llm_result_and_marks_sources():
+    calls = []
+
+    def compress(contents):
+        calls.append(contents)
+        return "LLM-derived deployment pattern"
+
+    episodes = [_episode("one"), _episode("two")]
+    storage = _FakeStorage(episodes)
+    semantic_id = MemoryCompressor(storage, llm_compress_fn=compress).compress_episodes_to_semantic(
+        episodes, category="fact"
+    )
+
+    assert semantic_id == "semantic-1"
+    assert calls == [[episode["content"] for episode in episodes]]
+    assert storage.stores[0]["content"] == "LLM-derived deployment pattern"
+    assert storage.stores[0]["source_ids"] == ["one", "two"]
+    assert len(storage.updates) == 2
+
+
+def test_compression_skips_writes_when_llm_returns_empty():
+    episodes = [_episode("one"), _episode("two")]
+    storage = _FakeStorage(episodes)
+
+    compressor = MemoryCompressor(storage, llm_compress_fn=lambda _contents: "")
+    assert compressor.compress_episodes_to_semantic(episodes) is None
+    assert storage.stores == []
+    assert storage.updates == []
+
+
+def test_compression_refuses_non_mapping_metadata_without_writes():
+    first = _episode("one")
+    second = _episode("two")
+    first["metadata"] = ["not", "a", "mapping"]
+    storage = _FakeStorage([first, second])
+
+    assert MemoryCompressor(storage).compress_episodes_to_semantic([first, second]) is None
+    assert storage.stores == []
+
+
+def test_heuristic_compression_covers_singleton_and_no_keyword_fallback():
+    compressor = MemoryCompressor(_FakeStorage([]))
+
+    assert compressor._heuristic_compress(["One incident"]) == "Pattern observed: One incident"
+    assert compressor._heuristic_compress(["the and is", "the and is"]) == (
+        "Pattern (2 instances): the and is..."
+    )
+
+
+def test_principle_compression_uses_llm_prompt_and_restores_callback():
+    calls = []
+
+    def compress(contents):
+        calls.append(contents)
+        return "Universal deployment principle"
+
+    memories = [_episode(str(index)) for index in range(3)]
+    storage = _FakeStorage(memories)
+    compressor = MemoryCompressor(storage, llm_compress_fn=compress)
+
+    principle_id = compressor.compress_semantic_to_principle(memories)
+
+    assert principle_id == "semantic-1"
+    assert calls[0][-1].startswith("\n\nExtract the underlying universal principle")
+    assert calls[0][:-1] == [memory["content"] for memory in memories]
+    assert compressor._llm_compress is compress
+    assert len(storage.relationships) == 3
+
+
+def test_principle_compression_restores_callback_when_llm_fails():
+    def compress(_contents):
+        raise RuntimeError("provider unavailable")
+
+    memories = [_episode(str(index)) for index in range(3)]
+    storage = _FakeStorage(memories)
+    compressor = MemoryCompressor(storage, llm_compress_fn=compress)
+
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        compressor.compress_semantic_to_principle(memories)
+
+    assert compressor._llm_compress is compress
+    assert storage.stores == []
+
+
+def test_auto_compress_skips_compressed_undated_unscoped_and_small_groups():
+    compressed = _episode("compressed")
+    compressed.update(
+        layer="episodic", created_at=_iso_days_ago(30), metadata={"compressed_to": "s"}
+    )
+    undated = _episode("undated")
+    undated.update(layer="episodic", created_at=None)
+    unscoped = _episode("unscoped", repo_id=None)
+    unscoped.update(layer="episodic", created_at=_iso_days_ago(30))
+    semantic_unscoped = _episode("semantic-unscoped", repo_id=None)
+    semantic_unscoped.update(layer="semantic", metadata={"level": 1})
+    storage = _FakeStorage([compressed, undated, unscoped, semantic_unscoped])
+
+    created = MemoryCompressor(storage).auto_compress(
+        min_episodes=1, category_threshold=3, age_days=7
+    )
+
+    assert created == []
+    assert storage.stores == []
+
+
+def test_decay_skips_recent_and_floor_rows_and_recovers_invalid_importance():
+    old = _iso_days_ago(365)
+    rows = [
+        {
+            "id": "recent",
+            "layer": "episodic",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "importance": 0.9,
+            "access_count": 0,
+        },
+        {
+            "id": "floor",
+            "layer": "episodic",
+            "created_at": old,
+            "importance": 0.1,
+            "access_count": 0,
+        },
+        {
+            "id": "invalid-importance",
+            "layer": "semantic",
+            "created_at": old,
+            "importance": "not-a-number",
+            "access_count": 0,
+        },
+    ]
+    storage = _FakeStorage(rows)
+
+    assert MemoryCompressor(storage).decay_old_memories() == 1
+    assert [update["id"] for update in storage.updates] == ["invalid-importance"]
+    assert storage.updates[0]["importance"] < 0.5
+
+
+def test_create_llm_compressors_adapt_provider_response_shapes(monkeypatch):
+    openai_calls = []
+
+    class FakeOpenAI:
+        def __init__(self, api_key=None):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create)
+            )
+            self.api_key = api_key
+
+        def _create(self, **kwargs):
+            openai_calls.append(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=" openai result "))]
+            )
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    openai_compress = create_llm_compressor("openai", model="test-openai", api_key="secret")
+    assert openai_compress(["first", "second"]) == "openai result"
+    assert openai_calls[0]["model"] == "test-openai"
+    assert "first" in openai_calls[0]["messages"][0]["content"]
+
+    anthropic_calls = []
+
+    class FakeAnthropic:
+        def __init__(self, api_key=None):
+            self.api_key = api_key
+            self.messages = SimpleNamespace(create=self._create)
+
+        def _create(self, **kwargs):
+            anthropic_calls.append(kwargs)
+            return SimpleNamespace(content=[SimpleNamespace(text=" anthropic result ")])
+
+    monkeypatch.setitem(sys.modules, "anthropic", SimpleNamespace(Anthropic=FakeAnthropic))
+    anthropic_compress = create_llm_compressor(
+        "anthropic", model="test-anthropic", api_key="secret"
+    )
+    assert anthropic_compress(["fact"]) == "anthropic result"
+    assert anthropic_calls[0]["model"] == "test-anthropic"
+
+    ollama_calls = []
+
+    def fake_ollama_chat(**kwargs):
+        ollama_calls.append(kwargs)
+        return {"message": {"content": " ollama result "}}
+
+    monkeypatch.setitem(sys.modules, "ollama", SimpleNamespace(chat=fake_ollama_chat))
+    ollama_compress = create_llm_compressor("ollama", model="test-ollama")
+    assert ollama_compress(["rule"]) == "ollama result"
+    assert ollama_calls[0]["model"] == "test-ollama"
+
+
+def test_create_llm_compressor_rejects_unknown_provider():
+    with pytest.raises(ValueError, match="Unknown provider"):
+        create_llm_compressor("unsupported")
 
 
 def _episode(
@@ -170,12 +377,12 @@ def _episode(
         "category": "incident",
         "importance": 0.7,
         "metadata": metadata,
-        "tags": [],
+        "tags": ["provenance:authored"],
+        "status": "active",
     }
 
 
 def test_compression_preserves_identical_normalized_source_scope():
-    storage = _FakeStorage([])
     episodes = [
         _episode(
             "one",
@@ -188,6 +395,7 @@ def test_compression_preserves_identical_normalized_source_scope():
             task_type=["deploy"],
         ),
     ]
+    storage = _FakeStorage(episodes)
 
     semantic_id = MemoryCompressor(storage).compress_episodes_to_semantic(episodes)
 
@@ -204,11 +412,10 @@ def test_compression_preserves_identical_normalized_source_scope():
 
 
 def test_compression_keeps_all_unscoped_dimensions_unscoped():
-    storage = _FakeStorage([])
+    episodes = [_episode("one"), _episode("two")]
+    storage = _FakeStorage(episodes)
 
-    semantic_id = MemoryCompressor(storage).compress_episodes_to_semantic(
-        [_episode("one"), _episode("two")]
-    )
+    semantic_id = MemoryCompressor(storage).compress_episodes_to_semantic(episodes)
 
     assert semantic_id == "semantic-1"
     metadata = storage.stores[0]["metadata"]
@@ -217,18 +424,25 @@ def test_compression_keeps_all_unscoped_dimensions_unscoped():
 
 
 @pytest.mark.parametrize(
-    "episodes",
+    "episodes, rejects",
     [
-        [_episode("one", repo_id="repo-a"), _episode("two", repo_id="repo-b")],
-        [_episode("one", repo_id="repo-a"), _episode("two", repo_id=None)],
-        [_episode("one", environment="prod"), _episode("two")],
-        [_episode("one", environment="prod"), _episode("two", environment="dev")],
-        [_episode("one", task_type="deploy"), _episode("two", task_type="review")],
-        [_episode("one", environment={"prod": True}), _episode("two", environment="prod")],
+        ([_episode("one", repo_id="repo-a"), _episode("two", repo_id="repo-b")], True),
+        ([_episode("one", repo_id="repo-a"), _episode("two", repo_id=None)], True),
+        ([_episode("one", environment="prod"), _episode("two")], False),
+        ([_episode("one", environment="prod"), _episode("two", environment="dev")], False),
+        ([_episode("one", task_type="deploy"), _episode("two", task_type="review")], False),
+        ([_episode("one", environment={"prod": True}), _episode("two", environment="prod")], False),
     ],
 )
-def test_compression_refuses_ambiguous_or_malformed_source_scope(episodes):
-    storage = _FakeStorage([])
+def test_compression_refuses_ambiguous_or_malformed_source_scope(episodes, rejects):
+    storage = _FakeStorage(episodes)
+
+    if rejects:
+        with pytest.raises(EvidenceReferenceError, match="same repository"):
+            MemoryCompressor(storage).compress_episodes_to_semantic(episodes)
+        assert storage.stores == []
+        assert storage.updates == []
+        return
 
     semantic_id = MemoryCompressor(storage).compress_episodes_to_semantic(episodes)
 
@@ -238,7 +452,6 @@ def test_compression_refuses_ambiguous_or_malformed_source_scope(episodes):
 
 
 def test_principle_compression_preserves_identical_source_scope():
-    storage = _FakeStorage([])
     memories = [
         _episode(
             str(index),
@@ -247,6 +460,7 @@ def test_principle_compression_preserves_identical_source_scope():
         )
         for index in range(3)
     ]
+    storage = _FakeStorage(memories)
 
     principle_id = MemoryCompressor(storage).compress_semantic_to_principle(memories)
 
@@ -262,23 +476,30 @@ def test_principle_compression_preserves_identical_source_scope():
 
 
 @pytest.mark.parametrize(
-    "memories",
+    "memories, rejects",
     [
-        [_episode("one"), _episode("two", repo_id="repo-b"), _episode("three")],
-        [
+        ([_episode("one"), _episode("two", repo_id="repo-b"), _episode("three")], True),
+        ([
             _episode("one", environment="prod"),
             _episode("two"),
             _episode("three", environment="prod"),
-        ],
-        [
+        ], False),
+        ([
             _episode("one", task_type="deploy"),
             _episode("two", task_type="review"),
             _episode("three", task_type="deploy"),
-        ],
+        ], False),
     ],
 )
-def test_principle_compression_refuses_ambiguous_source_scope(memories):
-    storage = _FakeStorage([])
+def test_principle_compression_refuses_ambiguous_source_scope(memories, rejects):
+    storage = _FakeStorage(memories)
+
+    if rejects:
+        with pytest.raises(EvidenceReferenceError, match="same repository"):
+            MemoryCompressor(storage).compress_semantic_to_principle(memories)
+        assert storage.stores == []
+        assert storage.relationships == []
+        return
 
     principle_id = MemoryCompressor(storage).compress_semantic_to_principle(memories)
 

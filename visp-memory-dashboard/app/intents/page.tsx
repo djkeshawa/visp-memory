@@ -1,6 +1,6 @@
 "use client"
 
-import { Suspense, useEffect, useState } from "react"
+import { Suspense, useEffect, useRef, useState } from "react"
 import { motion } from "framer-motion"
 import { AlertTriangle, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -30,18 +30,35 @@ function IntentsContent() {
   const [newPriority, setNewPriority] = useState([5])
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [outcomeMessage, setOutcomeMessage] = useState<string | null>(null)
+  const selectedRepoIdRef = useRef(selectedRepoId)
+  const requestGenerationRef = useRef(0)
+  selectedRepoIdRef.current = selectedRepoId
 
   useEffect(() => {
-    fetchIntents()
+    ++requestGenerationRef.current
+    setIntents([])
+    setErrorMessage(null)
+    setOutcomeMessage(null)
+    void fetchIntents()
+    const refresh = () => { if (document.visibilityState === "visible") void fetchIntents() }
+    const timer = window.setInterval(refresh, 15000)
+    window.addEventListener("focus", refresh)
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", refresh) }
   }, [selectedRepoId])
 
   const fetchIntents = () => {
-    getIntents(selectedRepoId, "all")
+    const requestedRepoId = selectedRepoId
+    if (selectedRepoIdRef.current !== requestedRepoId) return
+    const generation = ++requestGenerationRef.current
+    getIntents(requestedRepoId, "all")
       .then((data) => {
+        if (generation !== requestGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
         setIntents(data)
         setErrorMessage(null)
       })
       .catch((error) => {
+        if (generation !== requestGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
         console.error(error)
         setErrorMessage(describeApiError(error))
       })
@@ -52,14 +69,17 @@ function IntentsContent() {
     if (!newDescription.trim()) return
 
     setIsSubmitting(true)
+    const requestedRepoId = selectedRepoId
     try {
-      await createIntent(newDescription, newPriority[0], selectedRepoId)
+      await createIntent(newDescription, newPriority[0], requestedRepoId)
+      if (selectedRepoIdRef.current !== requestedRepoId) return
       setErrorMessage(null)
       setNewDescription("")
       setNewPriority([5])
       setIsDialogOpen(false)
       fetchIntents()
     } catch (error) {
+      if (selectedRepoIdRef.current !== requestedRepoId) return
       console.error("Failed to create intent", error)
       setErrorMessage(describeApiError(error))
     } finally {
@@ -68,39 +88,54 @@ function IntentsContent() {
   }
 
   const handleComplete = async (intent: Intent) => {
+    const requestedRepoId = selectedRepoId
     try {
-      await completeIntent(intent.id)
+      const outcome = await completeIntent(intent.id)
+      if (selectedRepoIdRef.current !== requestedRepoId) return
+      setOutcomeMessage(formatOutcomeMessage("Completion", outcome.statusChanged, outcome.status))
       fetchIntents()
     } catch (error) {
+      if (selectedRepoIdRef.current !== requestedRepoId) return
       console.error("Failed to complete intent", error)
       setErrorMessage(describeApiError(error))
     }
   }
 
   const handleClose = async (intent: Intent) => {
+    const requestedRepoId = selectedRepoId
     try {
-      await closeIntent(intent.id)
+      const outcome = await closeIntent(intent.id)
+      if (selectedRepoIdRef.current !== requestedRepoId) return
+      setOutcomeMessage(formatOutcomeMessage("Close", outcome.statusChanged, outcome.status))
       fetchIntents()
     } catch (error) {
+      if (selectedRepoIdRef.current !== requestedRepoId) return
       console.error("Failed to close intent", error)
       setErrorMessage(describeApiError(error))
     }
   }
 
   const handleReopen = async (intent: Intent) => {
+    const requestedRepoId = selectedRepoId
     try {
-      await reopenIntent(intent.id)
+      const outcome = await reopenIntent(intent.id)
+      if (selectedRepoIdRef.current !== requestedRepoId) return
+      setOutcomeMessage(formatOutcomeMessage("Reopen", outcome.statusChanged, outcome.status))
       fetchIntents()
     } catch (error) {
+      if (selectedRepoIdRef.current !== requestedRepoId) return
       setErrorMessage(describeApiError(error))
     }
   }
 
   const handleUpdate = async (intent: Intent, updates: { description: string; priority: number }) => {
+    const requestedRepoId = selectedRepoId
     try {
       await updateIntent(intent.id, updates)
+      if (selectedRepoIdRef.current !== requestedRepoId) return
       fetchIntents()
     } catch (error) {
+      if (selectedRepoIdRef.current !== requestedRepoId) return
       console.error("Failed to update intent", error)
       setErrorMessage(describeApiError(error))
     }
@@ -115,7 +150,7 @@ function IntentsContent() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-foreground">Intents</h1>
-          <p className="text-muted-foreground mt-1">Track your goals and objectives</p>
+          <p className="text-muted-foreground mt-1">Track goals and follow status reported by your assistant or workflow</p>
         </div>
 
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
@@ -178,10 +213,16 @@ function IntentsContent() {
         </div>
       ) : null}
 
+      {outcomeMessage ? (
+        <div className="rounded-lg border border-highlight/30 bg-accent p-4 text-sm text-muted-foreground" role="status">
+          {outcomeMessage}
+        </div>
+      ) : null}
+
       {/* Two Column Layout */}
       <div className="grid gap-8 md:grid-cols-2">
         <IntentsColumn
-          title="Active"
+          title="Active intents"
           intents={activeIntents}
           type="active"
           onComplete={handleComplete}
@@ -189,7 +230,7 @@ function IntentsContent() {
           onUpdate={handleUpdate}
         />
         <IntentsColumn
-          title="Closed"
+          title="Recorded outcomes"
           intents={closedIntents}
           type="completed"
           onUpdate={handleUpdate}
@@ -206,4 +247,15 @@ export default function IntentsPage() {
       <IntentsContent />
     </Suspense>
   )
+}
+
+function formatOutcomeMessage(
+  outcomeName: "Completion" | "Close" | "Reopen",
+  statusChanged: boolean,
+  status: Intent["status"],
+): string {
+  if (statusChanged) {
+    return `${outcomeName} outcome recorded and the backend changed the authoritative status to ${status}.`
+  }
+  return `${outcomeName} outcome recorded. The authoritative intent remains ${status} until its workflow authority changes it.`
 }

@@ -15,13 +15,16 @@ try:
 except ImportError:
     REQUESTS_AVAILABLE = False
 
+from visp_memory.core.api_limits import MAX_QUERY_LIMIT
 from visp_memory.core.beliefs import normalize_belief_type
 from visp_memory.core.storage import (
     BaseStorage,
     EvidenceImmutableError,
     MemoryLayer,
+    SessionCompletionStatus,
     StorageCapabilities,
 )
+from visp_memory.quality.secrets import SecretBearingContentError, redact_for_storage
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +134,7 @@ class RemoteStorage(BaseStorage):
         **kwargs,
     ) -> str:
         try:
+            content, _ = redact_for_storage(content, None)
             payload = {
                 "content": content,
                 "repo_id": repo_id,
@@ -210,6 +214,16 @@ class RemoteStorage(BaseStorage):
         self, content: str, layer: MemoryLayer = "episodic", repo_id: str = None, **kwargs
     ) -> str:
         """Store a memory remotely."""
+        try:
+            content, quality_flags = redact_for_storage(
+                content,
+                kwargs.get("quality_flags"),
+                reject_if_redacted=kwargs.get("authority_attestation") is not None,
+            )
+        except SecretBearingContentError as exc:
+            raise RemoteStorageError(str(exc)) from exc
+        if quality_flags is not None:
+            kwargs["quality_flags"] = quality_flags
         if "epistemic_status" in kwargs:
             raise RemoteStorageError(
                 "initial epistemic status is assigned by the memory service"
@@ -269,11 +283,16 @@ class RemoteStorage(BaseStorage):
     def search_memories(self, query: str, repo_id: str = None, **kwargs) -> List[Dict[str, Any]]:
         """Search across memories."""
         try:
+            query, _ = redact_for_storage(query, None)
             filters = {
                 key: self._serialize_request_value(value)
                 for key, value in kwargs.items()
                 if value is not None
             }
+            # Recall refill may request a larger local window than the HTTP API
+            # allows. Returning the capped page lets refill stop on exhaustion.
+            if "limit" in filters:
+                filters["limit"] = min(filters["limit"], MAX_QUERY_LIMIT)
             layer = filters.pop("layer", None)
             if layer and "layers" not in filters:
                 filters["layers"] = [layer]
@@ -314,6 +333,15 @@ class RemoteStorage(BaseStorage):
     def update_memory(self, memory_id: str, **kwargs) -> bool:
         """Update a memory."""
         try:
+            if kwargs.get("content") is not None:
+                original_content = kwargs["content"]
+                content, redaction_flags = redact_for_storage(
+                    original_content,
+                    kwargs.get("quality_flags") or [],
+                )
+                kwargs["content"] = content
+                if content != original_content:
+                    kwargs["quality_flags"] = redaction_flags
             response = self.session.patch(f"{self.server_url}/memories/{memory_id}", json=kwargs)
             if response.status_code == 404:
                 return False
@@ -321,6 +349,53 @@ class RemoteStorage(BaseStorage):
             return True
         except requests.RequestException as e:
             raise self._write_error("update memory", e) from e
+
+    def revise_memory(
+        self,
+        memory_id: str,
+        content: str,
+        *,
+        evidence_ids: List[str],
+        authority_attestation: str = None,
+        metadata: Dict[str, Any] = None,
+        quality_flags: List[str] = None,
+        reason: str = None,
+        importance: float = None,
+        tags: List[str] = None,
+    ) -> str:
+        """Create a governed successor through the remote revision endpoint."""
+        try:
+            content, quality_flags = redact_for_storage(
+                content,
+                quality_flags,
+                reject_if_redacted=authority_attestation is not None,
+            )
+        except SecretBearingContentError as exc:
+            raise RemoteStorageError(str(exc)) from exc
+        payload = {
+            "content": content,
+            "evidence_ids": list(evidence_ids or []),
+            "metadata": metadata or {},
+            "quality_flags": quality_flags or [],
+        }
+        if authority_attestation is not None:
+            payload["authority_attestation"] = authority_attestation
+        if reason is not None:
+            payload["reason"] = reason
+        if importance is not None:
+            payload["importance"] = importance
+        if tags is not None:
+            payload["tags"] = tags
+        try:
+            response = self.session.post(
+                f"{self.server_url}/memories/{memory_id}/revisions", json=payload
+            )
+            if response.status_code == 404:
+                raise RemoteStorageError(f"Memory not found: {memory_id}")
+            response.raise_for_status()
+            return self._response_id(response, "revise memory")
+        except requests.RequestException as e:
+            raise self._write_error("revise memory", e) from e
 
     def delete_memory(self, memory_id: str) -> bool:
         """Delete a memory."""
@@ -472,6 +547,32 @@ class RemoteStorage(BaseStorage):
         except requests.RequestException as e:
             raise self._write_error("update intent", e) from e
 
+    def report_intent_workflow(self, intent_id: str, report, *, actor_id: str, channel: str):
+        try:
+            response = self.session.post(
+                f"{self.server_url}/intents/{intent_id}/workflow-status", json=report
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as error:
+            raise self._write_error("report intent workflow status", error) from error
+
+    def append_intent_outcome(
+        self, intent_id: str, outcome: Dict[str, Any]
+    ) -> bool:
+        """Append through the server's single atomic outcome endpoint."""
+        try:
+            response = self.session.post(
+                f"{self.server_url}/intents/{intent_id}/outcomes",
+                json={"outcome": str(outcome.get("outcome") or "")},
+            )
+            if response.status_code == 404:
+                return False
+            response.raise_for_status()
+            return True
+        except requests.RequestException as e:
+            raise self._write_error("append intent outcome", e) from e
+
     # Relationship Operations
     def add_relationship(
         self,
@@ -554,24 +655,47 @@ class RemoteStorage(BaseStorage):
             raise self._write_error("delete relationship", e) from e
 
     # Session Operations
-    def start_session(self) -> str:
+    def start_session(
+        self,
+        *,
+        owner_id: str = None,
+        team_id: str = None,
+        repo_id: str = None,
+    ) -> str:
         try:
-            response = self.session.post(f"{self.server_url}/sessions")
+            del owner_id, team_id
+            response = self.session.post(
+                f"{self.server_url}/sessions", json={"repo_id": repo_id}
+            )
             response.raise_for_status()
             return self._response_id(response, "start session")
         except requests.RequestException as e:
             raise self._write_error("start session", e) from e
 
-    def end_session(self, session_id: str, summary: str, memory_ids: List[str]):
+    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            response = self.session.get(f"{self.server_url}/sessions/{session_id}")
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            return self._response_json(response, "get session", dict)
+        except requests.RequestException as e:
+            raise self._write_error("get session", e) from e
+
+    def end_session(
+        self, session_id: str, summary: str, memory_ids: List[str]
+    ) -> SessionCompletionStatus:
         try:
             response = self.session.post(
                 f"{self.server_url}/sessions/{session_id}/complete",
                 json={"summary": summary, "memory_ids": memory_ids},
             )
             if response.status_code == 404:
-                return False
+                return SessionCompletionStatus.NOT_FOUND
+            if response.status_code == 409:
+                return SessionCompletionStatus.ALREADY_COMPLETED
             response.raise_for_status()
-            return True
+            return SessionCompletionStatus.COMPLETED
         except requests.RequestException as e:
             raise self._write_error("complete session", e) from e
 
@@ -629,16 +753,44 @@ class RemoteStorage(BaseStorage):
             raise self._write_error(f"{action} repository", e) from e
 
     def delete_repository(self, repo_id: str) -> bool:
+        return self.purge_repository(repo_id)["status"] == "purged"
+
+    def purge_repository(self, repo_id: str) -> Dict[str, Any]:
+        """Purge a repository through the server's bounded purge protocol."""
         try:
             response = self.session.delete(
                 f"{self.server_url}/repos/{repo_id}", params={"confirmation": repo_id}
             )
             if response.status_code == 404:
-                return False
+                return {
+                    "repo_id": repo_id,
+                    "status": "not_found",
+                    "purged_memory_count": 0,
+                    "failed_memory_ids": [],
+                    "residual": {},
+                    "errors": [],
+                }
+            if response.status_code == 409:
+                try:
+                    payload = response.json()
+                except ValueError:
+                    payload = {}
+                if isinstance(payload, dict):
+                    detail = payload.get("detail")
+                    if isinstance(detail, dict):
+                        return detail
             response.raise_for_status()
-            return True
         except requests.RequestException as e:
             raise self._write_error("purge repository", e) from e
+
+        payload = self._response_json(response, "purge repository", dict)
+        if payload.get("status") != "purged":
+            return {
+                **payload,
+                "repo_id": payload.get("repo_id", repo_id),
+                "status": payload.get("status", "incomplete"),
+            }
+        return payload
 
     def list_project_ids(self) -> List[str]:
         try:

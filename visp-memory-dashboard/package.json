@@ -7,7 +7,9 @@
     "export": "next build",
     "dev": "next dev",
     "lint": "tsc --noEmit",
-    "start": "next start"
+    "typecheck": "tsc --noEmit",
+    "start": "next start",
+    "test:e2e": "playwright test"
   },
   "overrides": {
     "next": {

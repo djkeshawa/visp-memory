@@ -25,7 +25,7 @@ class AiderAdapter(GenericAdapter):
     Creates .aider file for context that Aider can read.
     """
 
-    def __init__(self, memory, project_root: Path = None):
+    def __init__(self, memory, project_root: Path = None, dry_run: bool = False):
         """
         Initialize Aider adapter.
 
@@ -39,6 +39,7 @@ class AiderAdapter(GenericAdapter):
             context_file=".aider",
             injection_marker=None,  # Aider uses standalone file
             append_mode=False,
+            dry_run=dry_run,
         )
 
     def install(self) -> Dict[str, bool]:
@@ -53,7 +54,7 @@ class AiderAdapter(GenericAdapter):
         # Seed the file BEFORE delegating: GenericAdapter.install() creates a
         # missing standalone context file, which left this branch unreachable.
         results = {}
-        if not self.context_file.exists():
+        if not self.dry_run and not self.context_file.exists():
             self._ensure_directory(self.context_file)
             self.context_file.write_text(self._initial_context(), encoding="utf-8")
             results["aider_file_created"] = True
@@ -93,6 +94,8 @@ Context is automatically updated below.
         Returns:
             True if successful
         """
+        if self.dry_run:
+            return True
         # Get memory context
         context = self.get_memory_context(files=files, task=task)
 

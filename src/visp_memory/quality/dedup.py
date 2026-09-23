@@ -23,7 +23,8 @@ except ImportError:
     # Without scikit-learn the cosine similarity is computed from numpy directly.
     SKLEARN_AVAILABLE = False
 
-from visp_memory.core.storage import BaseStorage
+from visp_memory.core.storage import BaseStorage, SemanticMemoryImmutableError
+from visp_memory.quality.secrets import redact_for_storage
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +225,8 @@ class Deduplicator:
             )
 
         try:
-            vector = embedding_fn(content)
+            safe_content, _ = redact_for_storage(content or "", None)
+            vector = embedding_fn(safe_content)
         except Exception as exc:
             return None, f"the configured embedding provider could not embed the content: {exc}"
 
@@ -330,7 +332,13 @@ class Deduplicator:
             return None
 
         # Update content if provided
-        if target_content:
+        if target_content and primary_mem.get("layer") == "semantic":
+            if target_content != primary_mem.get("content", ""):
+                raise SemanticMemoryImmutableError(
+                    "Semantic belief content is immutable; create an evidence-backed "
+                    "successor with revise_memory"
+                )
+        elif target_content:
             self.storage.update_memory(primary_id, content=target_content)
 
         # Merge provenance from the duplicates into the primary. ``update_memory``

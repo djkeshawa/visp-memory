@@ -1,7 +1,7 @@
 "use client"
 
 import type { ReactNode } from "react"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { motion } from "framer-motion"
 import {
   AlertTriangle,
@@ -49,6 +49,17 @@ export default function TaskBriefPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const selectedRepoIdRef = useRef(selectedRepoId)
+  const requestGenerationRef = useRef(0)
+  selectedRepoIdRef.current = selectedRepoId
+
+  useEffect(() => {
+    ++requestGenerationRef.current
+    setBrief(null)
+    setErrorMessage(null)
+    setCopied(false)
+    setIsLoading(false)
+  }, [selectedRepoId])
 
   const evidenceItems = useMemo(
     () => (brief ? Object.values(brief.sections).flat() : []),
@@ -63,24 +74,30 @@ export default function TaskBriefPage() {
 
   const prepareBrief = async (checkForChanges = false) => {
     if (!task.trim() || !selectedRepoId) return
+    const requestedRepoId = selectedRepoId
+    const generation = ++requestGenerationRef.current
     setIsLoading(true)
     setErrorMessage(null)
     setCopied(false)
     try {
       const result = await prepareTaskMemoryBrief({
         task: task.trim(),
-        repoId: selectedRepoId,
+        repoId: requestedRepoId,
         tokenBudget,
         files: splitLines(files),
         symbols: splitLines(symbols),
         constraints: splitLines(constraints),
         previousFingerprint: checkForChanges ? brief?.fingerprint : null,
       })
+      if (generation !== requestGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
       setBrief(result)
     } catch (error) {
+      if (generation !== requestGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
       setErrorMessage(describeApiError(error))
     } finally {
-      setIsLoading(false)
+      if (generation === requestGenerationRef.current && selectedRepoIdRef.current === requestedRepoId) {
+        setIsLoading(false)
+      }
     }
   }
 
@@ -101,6 +118,10 @@ export default function TaskBriefPage() {
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Prepare trusted project context before work begins.
+          </p>
+          <p className="mt-2 max-w-2xl text-xs text-muted-foreground">
+            Notes saved through the dashboard or API remain available in Recall, but are excluded here.
+            For context you have verified, use the local CLI to record a reviewed conclusion with its source in this project and store.
           </p>
         </div>
         {brief ? (
@@ -312,7 +333,7 @@ export default function TaskBriefPage() {
                     {evidenceItems.map((item) => (
                       <div key={item.citation} className="p-4">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="rounded bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
+                          <span className="rounded bg-accent px-2 py-0.5 text-xs font-semibold text-highlight">
                             {item.citation}
                           </span>
                           <span className="text-xs text-muted-foreground">

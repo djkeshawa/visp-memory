@@ -16,7 +16,7 @@ Use this skill when Codex should load project memory before work.
    - Run `visp-memory recall "<task>" --repo <repo-id>` when a repo id is known.
    - Run `visp-memory context --task "<task>"` when broader context is needed.
 3. Set the direction before the work starts: `visp-memory goal "<objective>"`, `visp-memory focus "<area>" --avoid "<what to stay away from>"`, and `visp-memory working "<task>" --file <path>`. Run `visp-memory intent list` first to see what is already active, and `visp-memory intent update <id>` rather than setting a second competing goal. Intents are direction, not permission: memory records them and grants no scope.
-4. In MCP mode, call `memory_remember` for the latest memory and `memory_recall` for semantic search. `memory_goal` and `memory_working_on` set direction; `focus` is CLI-only.
+4. In MCP mode, call `memory_prepare_task` with the task and repo ID for a cited brief, and `memory_recall` for search. These are available in the default core and readonly profiles. `memory_goal` and `memory_working_on` set direction in core/full profiles; `focus` is CLI-only. For the latest recorded memory, use the CLI command above.
 5. If the CLI is unavailable, inspect the local Python package only if it is installed in the project environment.
 6. Use server mode only when the project config explicitly points to a server.
 7. Summarize relevant conventions, fragile areas, active intents, and recent episodes with memory IDs when available.

@@ -41,7 +41,7 @@ def test_the_measured_figures_are_the_ones_reported():
 
 
 def test_the_described_fixture_is_the_fixture():
-    """The Setup paragraph in docs/BENCHMARK.md is a claim like any other.
+    """The Setup paragraph in docs/reference/BENCHMARK.md is a claim like any other.
 
     It said "fourteen invented files" while the graph had thirteen, and "some
     labelled memories are structurally unreachable" while exactly one was. Small

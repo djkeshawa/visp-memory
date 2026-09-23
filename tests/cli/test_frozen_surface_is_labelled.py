@@ -1,6 +1,6 @@
 """A frozen feature must look frozen where the user actually looks.
 
-docs/FEATURE_STATUS.md freezes teams/users/JWT auth and cross-repo aggregation:
+docs/reference/FEATURE_STATUS.md freezes teams/users/JWT auth and cross-repo aggregation:
 implemented and tested, not actively developed, kept working rather than
 extended. That was true in the document and invisible everywhere else. A user
 who installs the package and runs `visp-memory --help` sees `teams`, `admin` and
@@ -19,7 +19,7 @@ from visp_memory.interfaces.cli import app
 
 runner = CliRunner()
 
-FEATURE_STATUS = Path(__file__).resolve().parents[2] / "docs" / "FEATURE_STATUS.md"
+FEATURE_STATUS = Path(__file__).resolve().parents[2] / "docs" / "reference" / "FEATURE_STATUS.md"
 
 # Group name -> the FEATURE_STATUS row that freezes it.
 FROZEN_GROUPS = {

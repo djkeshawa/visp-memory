@@ -324,6 +324,7 @@ def verify_prohibition_attestation(
     repo_id: str,
     metadata: dict[str, Any],
     evidence: list[dict[str, str]],
+    expected_replaces_belief_id: str | None = None,
 ) -> VerifiedProhibitionAttestation:
     """Verify one envelope against the exact LocalStorage write candidate."""
     if not ED25519_AVAILABLE:
@@ -369,7 +370,7 @@ def verify_prohibition_attestation(
         valid_from=metadata.get("valid_from"),
         valid_to=metadata.get("valid_to"),
         evidence=evidence,
-        replaces_belief_id=claim.get("replaces_belief_id"),
+        replaces_belief_id=expected_replaces_belief_id,
     )
     if claim != expected_claim:
         raise ProhibitionAuthorityError(
@@ -397,4 +398,3 @@ def verify_prohibition_attestation(
         nonce=envelope["nonce"],
         envelope=canonical,
     )
-
