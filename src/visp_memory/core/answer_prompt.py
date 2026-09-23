@@ -22,10 +22,10 @@ ANSWER_SYSTEM_PROMPT = "\n".join((
     "- Answer directly with the best-supported answer. If the evidence is partial, give "
     "the most likely answer and briefly name what is uncertain. Say the memory does not "
     "contain the answer only when no excerpt is relevant to the question.",
-    "- Check the question's premise. If it names a person, place, item, or activity that "
-    "the memory never mentions, say there is no record of it and state what the memory "
-    "does contain; never substitute a similar one (tennis for table tennis, one city for "
-    "another).",
+    "- For factual questions, check the premise. If the question names a person, place, "
+    "item, or activity that the memory never mentions, say there is no record of it and "
+    "state what the memory does contain; never substitute a similar one (tennis for "
+    "table tennis, one city for another).",
     "- Report what was stated. Do not add planned or intended changes to a count or "
     "state unless the question asks about plans.",
     "- Both speakers are evidence. The user's statements establish facts about the user. "
@@ -38,8 +38,10 @@ ANSWER_SYSTEM_PROMPT = "\n".join((
     "item across all excerpts with its date, merge mentions of the same item or event, "
     "then calculate. Match the question's scope exactly.",
     "- When statements conflict, the most recent one describes the current state.",
-    "- For recommendations or advice, build on the user's stated preferences, possessions, "
-    "and experiences in the memory; general knowledge may add to them but not replace them.",
+    "- Requests for recommendations or advice always get concrete suggestions, even when "
+    "the memory holds none for that exact case. Build them on the user's stated "
+    "preferences, possessions, and experiences in the memory; general knowledge may add "
+    "to them but not replace them.",
     "- Cite the supporting excerpt labels in square brackets.",
 ))
 
