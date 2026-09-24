@@ -117,7 +117,6 @@ def render_command_block(verbs: Sequence[MemoryVerb]) -> str:
     return f"```bash\n{lines}\n```"
 
 
-
 def render_inline_commands(verbs: Sequence[MemoryVerb]) -> str:
     """Render verb names as a comma-separated inline list of CLI commands."""
     return ", ".join(f"`visp-memory {verb.name}`" for verb in verbs)

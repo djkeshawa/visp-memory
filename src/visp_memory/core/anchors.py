@@ -117,7 +117,6 @@ def extract_anchors(content: str) -> tuple[str, ...]:
     return tuple(seen)
 
 
-
 def anchors_of(memory: dict[str, Any]) -> tuple[str, ...]:
     """Read anchors from tags when present, else recover them from the content."""
     tagged = [
