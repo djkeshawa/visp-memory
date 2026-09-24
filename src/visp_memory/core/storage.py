@@ -41,6 +41,7 @@ from visp_memory.core.ranking import (
     text_similarity,
     utility_rank_adjustment,
 )
+from visp_memory.core.turn_key_index import ChromaTurnKeyIndex
 from visp_memory.quality.secrets import SecretBearingContentError, redact_for_storage
 
 try:
@@ -705,6 +706,16 @@ class BaseStorage(ABC):
         """Search across memories."""
         pass
 
+    def search_turn_keys(
+        self, query: str, *, repo_id: str = None, limit: int = 10, status: str = "active"
+    ) -> List[Dict[str, Any]]:
+        """Best-matching conversation turns as ``{memory, span, similarity}`` hits.
+
+        Backends without a turn-key index return nothing; callers then rely on
+        memory-level search alone.
+        """
+        return []
+
     @abstractmethod
     def list_memories(self, repo_id: str = None, **kwargs) -> List[Dict[str, Any]]:
         """List memories."""
@@ -1051,7 +1062,7 @@ class LocalStorage(BaseStorage):
     LEGACY_RELATIONSHIP_EVIDENCE_REASON = "Legacy relationship without evidence metadata."
     UNSPECIFIED_RELATIONSHIP_EVIDENCE_REASON = "Relationship created without evidence metadata."
 
-    def __init__(self, data_dir: Path, embedding_fn=None):
+    def __init__(self, data_dir: Path, embedding_fn=None, turn_keys: bool = False):
         """
         Initialize storage.
 
@@ -1059,6 +1070,7 @@ class LocalStorage(BaseStorage):
             data_dir: Directory for all data files
             embedding_fn: Optional function to generate embeddings.
                          If None, ChromaDB's default will be used.
+            turn_keys: Index each conversation user turn as its own search key.
         """
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -1074,6 +1086,7 @@ class LocalStorage(BaseStorage):
         self._embedding_space = binding.space
         self._chroma_client = None
         self._collections = {}
+        self._turn_keys = ChromaTurnKeyIndex(self) if turn_keys else None
 
         self._init_sqlite()
 
@@ -3062,6 +3075,15 @@ class LocalStorage(BaseStorage):
                     for memory_id in payload["ids"]
                 )
 
+        if self._turn_keys is not None:
+            for memory in candidates:
+                try:
+                    self._turn_keys.index(memory)
+                except Exception as exc:
+                    errors.append(
+                        {"id": memory["id"], "error": f"TurnKeys:{exc.__class__.__name__}"}
+                    )
+
         failed = len(errors)
         status = "completed" if failed == 0 else "partial_failure"
         message = (
@@ -3637,6 +3659,7 @@ class LocalStorage(BaseStorage):
                     memory_id,
                     exc,
                 )
+        self._index_turn_keys(memory_id)
 
         self._auto_link_memory(
             memory_id=memory_id,
@@ -4160,8 +4183,38 @@ class LocalStorage(BaseStorage):
                             memory_id,
                             exc,
                         )
+        if updated and content is not None:
+            self._index_turn_keys(memory_id)
 
         return updated
+
+    def _index_turn_keys(self, memory_id: str) -> None:
+        """Keys are an index: a failure is logged and repaired by a rebuild."""
+        if self._turn_keys is None:
+            return
+        memory = self._get_memory_row(memory_id, track_access=False)
+        if memory is None:
+            return
+        try:
+            self._turn_keys.index(memory)
+        except Exception as exc:
+            logger.warning(
+                "Turn-key indexing failed for memory %s (run rebuild_embedding_index "
+                "to reconcile): %s", memory_id, exc,
+            )
+
+    def search_turn_keys(
+        self, query: str, *, repo_id: str = None, limit: int = 10, status: str = "active"
+    ) -> List[Dict[str, Any]]:
+        if self._turn_keys is None or not self._turn_keys.available():
+            return []
+        query, _ = redact_for_storage(query, None)
+        try:
+            embedding = self._query_embedding_fn(query)
+        except Exception as exc:
+            logger.warning("Turn-key query embedding failed: %s", exc)
+            return []
+        return self._turn_keys.search(embedding, repo_id=repo_id, limit=limit, status=status)
 
     def _drop_deleted_source_reference(self, conn, memory_id: str) -> None:
         """Remove a hard-deleted memory from every survivor's ``source_ids``.
@@ -4213,6 +4266,16 @@ class LocalStorage(BaseStorage):
             except Exception as exc:
                 logger.error(
                     "Vector delete failed for memory %s; the row remains for retry: %s",
+                    memory_id,
+                    exc,
+                )
+                return False
+        if self._turn_keys is not None:
+            try:
+                self._turn_keys.remove(memory_id)
+            except Exception as exc:
+                logger.error(
+                    "Turn-key delete failed for memory %s; the row remains for retry: %s",
                     memory_id,
                     exc,
                 )
@@ -5310,6 +5373,8 @@ class LocalStorage(BaseStorage):
                     (repo_id, repo_id),
                 )
                 conn.commit()
+            if self._turn_keys is not None:
+                self._turn_keys.remove_repository(repo_id)
         except Exception as exc:
             return [{"kind": "children", "error": exc.__class__.__name__}]
         return []
