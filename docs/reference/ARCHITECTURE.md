@@ -145,6 +145,10 @@ Context compilation and task briefs accept `context_selection`:
   reserved for direct matches before remaining capacity is shared, and passages are
   chosen by query-term coverage, relevance, and incremental token cost.
 
+With [turn keys](../guides/STORAGE.md#turn-keys-experimental) enabled, coverage briefs
+also add up to ten individually matched conversation turns as cited passages, ranked
+as equals of the existing candidates rather than automatic winners.
+
 Use `brief --context-selection coverage`, or the `context_selection` field on
 `memory_prepare_task`, query-based `memory_context`, and the HTTP context endpoints.
 
