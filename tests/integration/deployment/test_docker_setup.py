@@ -32,7 +32,9 @@ def compose_config(tmp_path, *overlays, profile="lite", values=None):
     for overlay in overlays:
         command.extend(["-f", str(ROOT / overlay)])
     command.extend(["--profile", profile, "config", "--format", "json"])
-    result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=30)
+    # `compose config` only renders files, but a cold Docker on Windows CI runners has
+    # taken longer than 30 seconds to answer; the timeout guards hangs, not speed.
+    result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=180)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
 

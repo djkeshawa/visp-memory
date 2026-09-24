@@ -1102,7 +1102,8 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, Neo4jTurnKeys, BaseStorage):
 
         if self._turn_keys_available():
             for memory in candidates:
-                self._index_turn_keys(memory["id"])
+                if self._index_turn_keys(memory["id"]) is None:
+                    errors.append({"id": memory["id"], "error": "TurnKeys"})
 
         failed = len(errors)
         return ReindexResult(

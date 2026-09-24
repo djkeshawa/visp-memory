@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -343,24 +343,3 @@ def bootstrap_project(
             report.errors.append(f"instruction ingest failed: {exc}")
 
     return report
-
-
-def summarize_fragile_files(memory: Any, repo_path: Optional[Path] = None) -> dict[str, int]:
-    """Return fix-count-per-file, for reporting without writing memories."""
-    counts: dict[str, int] = defaultdict(int)
-    try:
-        import git
-
-        repo = git.Repo(Path(repo_path or Path.cwd()), search_parent_directories=True)
-    except Exception:
-        return {}
-
-    for commit in repo.iter_commits(max_count=DEFAULT_COMMIT_LIMIT):
-        if len(commit.parents) > 1:
-            continue
-        subject = (commit.message or "").strip().splitlines()[0:1]
-        if not subject or not _FIX_RE.search(subject[0]):
-            continue
-        for path in _changed_paths(commit):
-            counts[path] += 1
-    return dict(counts)

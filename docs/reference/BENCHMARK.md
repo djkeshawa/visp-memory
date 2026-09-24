@@ -129,6 +129,32 @@ can outrank an identity match. With a fully wrong adjacency, precision@5 falls t
 0.4875 and fourteen of eighteen admissions are wasted, but recall never falls
 below arm A, because admissions are added to the result rather than swapped in.
 
+## Conversation-memory evaluation (method)
+
+The maintainers also evaluate conversation memory on
+[LongMemEval](https://github.com/xiaowu0162/LongMemEval) (the 500-question `_s`
+variant). No scores are published here: the configurations below were selected on
+that same question set, and the reader and judge models differ from the benchmark's
+reference setup, so a figure would not be comparable with published results.
+
+How a question is evaluated:
+
+1. **Ingestion.** Each question's conversation history is stored as dated, verbatim
+   episodes. Extracted facts must quote their source episode.
+2. **Retrieval.** A task brief is compiled from the question with coverage selection,
+   turn keys, and a fixed token budget, under the normal scope and trust checks.
+   Retrieval makes no model calls.
+3. **Reading.** A separate reader model answers from the brief alone, citing
+   passages. Memory never chooses this model; in real use it is the client's.
+4. **Judging.** A different judge model grades the answer against the expected
+   answer using the benchmark's rubric. The reader never sees the expected answer.
+
+Comparisons change one factor at a time and keep the reader, judge, and budget fixed.
+Results are reported alongside a reader-independent retrieval check: whether every
+answer-bearing turn reached the brief. Because single runs vary, changes are judged
+over repeated runs with paired intervals rather than one score. These are component
+measurements of retrieval and context assembly; they do not establish coding outcomes.
+
 ## Scope
 
 All corpora are synthetic with known labels. These are mechanism checks, not

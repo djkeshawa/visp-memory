@@ -25,6 +25,7 @@ from visp_memory.core.eligibility import (
     normalize_optional_scope_values,
     require_repo_id,
 )
+from visp_memory.core.numeric import bounded_float
 from visp_memory.core.tokens import estimate_tokens
 from visp_memory.core.trust import TrustFilterResult, filter_unsolicited
 from visp_memory.core.turn_keys import BRIEF_TURN_KEYS, key_passages
@@ -511,7 +512,8 @@ class TaskMemoryBriefCompiler:
             # Turns matched individually reach evidence buried in long conversations.
             # They pass the same scope, time, trust and confidence checks as any
             # other candidate, and carry the same citation fields.
-            threshold = float(min_confidence or 0.0)
+            # Same normalization as the compiler, so both paths apply one threshold.
+            threshold = bounded_float(min_confidence) or 0.0
             hits = []
             for hit in search_turns(query, repo_id=repo_id, limit=BRIEF_TURN_KEYS):
                 confidence = memory_confidence(hit["memory"])

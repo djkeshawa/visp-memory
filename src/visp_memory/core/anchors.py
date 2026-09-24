@@ -117,9 +117,6 @@ def extract_anchors(content: str) -> tuple[str, ...]:
     return tuple(seen)
 
 
-def anchor_tag(path: str) -> str:
-    return f"{ANCHOR_TAG_PREFIX}{path}"
-
 
 def anchors_of(memory: dict[str, Any]) -> tuple[str, ...]:
     """Read anchors from tags when present, else recover them from the content."""
@@ -307,10 +304,3 @@ class AnchorIndex:
 
 def _normalize(path: str) -> str:
     return str(path).replace("\\", "/").lstrip("./")
-
-
-def anchored_to(memory: dict[str, Any], files: Iterable[str]) -> bool:
-    """Whether a memory is anchored to any of the given files."""
-    if not files:
-        return False
-    return bool(AnchorIndex.build([{**memory, "id": memory.get("id") or "_"}]).for_files(files))
