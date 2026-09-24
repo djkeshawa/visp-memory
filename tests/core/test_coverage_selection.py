@@ -359,3 +359,17 @@ def test_derived_passages_without_a_unique_eligible_origin_remain_distinct(sourc
                                "workshop deposit cost", 2000,
                                lambda items: sum(len(r["content"]) for r in items))
     assert {"a", "b"} <= {r["id"] for r in selected}
+
+
+def test_cited_passages_are_not_folded_into_their_memory_row():
+    from visp_memory.core.coverage_selection import coverage_candidates
+
+    content = "user: first turn about pricing.\nuser: second turn about my old job.\n"
+    memory = {"id": "m", "content": content, "relevance_score": 0.9}
+    start = content.index("user: second")
+    passage = {**memory, "content": content[start:],
+               "passage_spans": [{"start": start, "end": len(content),
+                                  "text": content[start:]}]}
+    rows = coverage_candidates([memory, passage], "pricing")
+    # The cited passage survives alongside the memory's own word-matched windows.
+    assert any(row.get("passage_spans") == passage["passage_spans"] for row in rows)

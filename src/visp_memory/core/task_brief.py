@@ -9,7 +9,11 @@ from collections.abc import Callable
 from typing import Any, Optional
 
 from visp_memory.core.clock import parse_utc
-from visp_memory.core.context_compiler import ContextCompiler
+from visp_memory.core.context_compiler import (
+    ContextCompiler,
+    memory_confidence,
+    memory_item,
+)
 from visp_memory.core.coverage_selection import (
     coverage_candidates,
     is_calendar_date,
@@ -505,12 +509,19 @@ class TaskMemoryBriefCompiler:
         search_turns = getattr(self.storage, "search_turn_keys", None)
         if context_selection == "coverage" and search_turns is not None:
             # Turns matched individually reach evidence buried in long conversations.
-            # They pass the same scope, time and trust checks as any other candidate.
-            hits = [
-                hit for hit in search_turns(query, repo_id=repo_id, limit=BRIEF_TURN_KEYS)
-                if eligible_memory(hit["memory"])
-            ]
-            candidates = [*candidates, *key_passages(hits, candidates)]
+            # They pass the same scope, time, trust and confidence checks as any
+            # other candidate, and carry the same citation fields.
+            threshold = float(min_confidence or 0.0)
+            hits = []
+            for hit in search_turns(query, repo_id=repo_id, limit=BRIEF_TURN_KEYS):
+                confidence = memory_confidence(hit["memory"])
+                if (confidence is not None and confidence >= threshold
+                        and eligible_memory(hit["memory"])):
+                    hits.append(hit)
+            candidates = [*candidates, *(
+                memory_item(passage, memory_confidence(passage))
+                for passage in key_passages(hits, candidates)
+            )]
 
         unknowns = []
         if not intent:

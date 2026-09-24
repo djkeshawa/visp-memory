@@ -90,7 +90,8 @@ class Neo4jTurnKeys:
     def search_turn_keys(
         self, query: str, *, repo_id: str = None, limit: int = 10, status: str = "active"
     ) -> List[Dict[str, Any]]:
-        if not self._turn_keys_available() or limit <= 0:
+        # Missing project scope never grants a global read.
+        if not self._turn_keys_available() or limit <= 0 or not repo_id:
             return []
         query, _ = redact_for_storage(query, None)
         try:
@@ -100,7 +101,7 @@ class Neo4jTurnKeys:
                     CALL db.index.vector.queryNodes('{self._turn_key_index}', $fetch, $embedding)
                     YIELD node AS k, score
                     MATCH (m:Memory {{id: k.parent_id}})
-                    WHERE ($repo_id IS NULL OR m.repo_id = $repo_id)
+                    WHERE m.repo_id = $repo_id
                     AND ($status = 'all' OR m.status = $status
                          OR ($status = 'active' AND m.status IS NULL))
                     RETURN m, k.start AS start, k.end AS end, score

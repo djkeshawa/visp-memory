@@ -711,8 +711,8 @@ class BaseStorage(ABC):
     ) -> List[Dict[str, Any]]:
         """Best-matching conversation turns as ``{memory, span, similarity}`` hits.
 
-        Backends without a turn-key index return nothing; callers then rely on
-        memory-level search alone.
+        Scoped to ``repo_id``; without one there are no hits. Backends without a
+        turn-key index return nothing and callers rely on memory-level search.
         """
         return []
 

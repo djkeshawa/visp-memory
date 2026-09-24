@@ -4,7 +4,7 @@ import re
 
 import pytest
 
-from visp_memory.core.turn_keys import conversation_keys, key_passages
+from visp_memory.core.turn_keys import conversation_keys, key_id, key_passages
 
 CONVERSATION = (
     "Session date: 2023/05/20 (Sat) 10:00\n"
@@ -94,10 +94,12 @@ def test_keys_respect_scope_status_and_lifecycle(tmp_path):
     assert storage.search_turn_keys(query, repo_id="repo-a") == []
     storage.update_memory(memory_id, status="active")
 
-    # Rewritten content is re-keyed: the old turn no longer matches.
-    storage.update_memory(memory_id, content="Session date: 2023/05/20\nuser: A recipe question.\n")
-    assert all("marketing" not in h["memory"]["content"]
-               for h in storage.search_turn_keys(query, repo_id="repo-a"))
+    # Rewritten content is re-keyed: only the new turn's span remains.
+    new_content = "Session date: 2023/05/20\nuser: A recipe question for dinner.\n"
+    storage.update_memory(memory_id, content=new_content)
+    stored = storage._turn_keys.collection().get(where={"parent_id": memory_id})
+    assert sorted(stored["ids"]) == [key_id(memory_id, span)
+                                     for span in conversation_keys(new_content)]
 
     assert storage.delete_memory(memory_id)
     assert storage._turn_keys.collection().get(where={"parent_id": memory_id})["ids"] == []
@@ -176,4 +178,28 @@ def test_default_selection_ignores_turn_keys(tmp_path):
     storage.search_turn_keys = lambda *a, **k: pytest.fail("default selection used turn keys")
     TaskMemoryBriefCompiler(storage).prepare("What was my previous occupation?",
                                              repo_id="repo-a", token_budget=2000)
+    storage.close()
+
+
+def test_turn_keys_require_a_repository_scope(tmp_path):
+    storage = _storage(tmp_path)
+    _store(storage)
+    assert storage.search_turn_keys("marketing specialist", repo_id=None) == []
+    storage.close()
+
+
+def test_turn_keys_respect_min_confidence_and_carry_citation_fields(tmp_path):
+    from visp_memory.core.task_brief import TaskMemoryBriefCompiler
+
+    storage = _storage(tmp_path)
+    _store(storage, LONG_CONVERSATION, tags=["provenance:authored"],
+           metadata={"confidence": 0.1})
+    compiler = TaskMemoryBriefCompiler(storage)
+    ask = dict(repo_id="repo-a", token_budget=2000, context_selection="coverage")
+    low = compiler.prepare("What was my previous occupation?", min_confidence=0.9, **ask)
+    assert "marketing specialist" not in low["context"]
+
+    brief = compiler.prepare("What was my previous occupation?", **ask)
+    assert "marketing specialist" in brief["context"]
+    assert {c["confidence"] for c in brief["citations"]} == {0.1}
     storage.close()

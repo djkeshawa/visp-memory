@@ -26,6 +26,39 @@ from visp_memory.core.numeric import bounded_float
 from visp_memory.core.tokens import estimate_tokens
 
 
+def memory_confidence(memory: dict[str, Any]) -> float | None:
+    """A memory's stated confidence, or ``None`` when it is not finite numeric data."""
+    return bounded_float((memory.get("metadata") or {}).get("confidence", 0.5))
+
+
+def memory_item(memory: dict[str, Any], confidence: float) -> dict[str, Any]:
+    """The context item for an eligible memory or passage, with its citation fields."""
+    metadata = memory.get("metadata") or {}
+    return {
+        "id": memory["id"],
+        **({"passage_spans": memory["passage_spans"]} if "passage_spans" in memory else {}),
+        "content": memory.get("content", ""),
+        "layer": memory.get("layer"),
+        "category": memory.get("category"),
+        "repo_id": memory.get("repo_id"),
+        "tags": memory.get("tags") or [],
+        "source_ids": memory.get("source_ids") or [],
+        "relevance_score": memory.get("relevance_score") or memory.get("similarity"),
+        "confidence": confidence,
+        "observed_at": metadata.get("observed_at") or memory.get("created_at"),
+        "valid_from": metadata.get("valid_from"),
+        "valid_to": metadata.get("valid_to"),
+        "source_revision": metadata.get("source_revision"),
+        "source_hash": metadata.get("source_hash"),
+        "evidence": metadata.get("evidence") or [],
+        "files": metadata.get("files") or metadata.get("applies_to") or [],
+        "symbols": metadata.get("symbols") or [],
+        "retrieval_channels": memory.get("retrieval_channels") or [],
+        "retrieval_factors": memory.get("retrieval_factors") or {},
+        "ranking_explanation": memory.get("ranking_explanation") or [],
+    }
+
+
 class ContextCompiler:
     """Build compact context from text, graph, temporal, and code-entity signals.
 
@@ -96,9 +129,8 @@ class ContextCompiler:
                     memory, eligibility
                 )
                 return False
-            metadata = memory.get("metadata") or {}
             memory_id = str(memory.get("id"))
-            confidence = bounded_float(metadata.get("confidence", 0.5))
+            confidence = memory_confidence(memory)
             if confidence is None:
                 confidence_rejections[memory_id] = {
                     "memory_id": memory_id,
@@ -152,35 +184,10 @@ class ContextCompiler:
             token_cost = estimate_tokens(memory.get("content", "")) + 18
             if not _defer_selection and consumed_tokens + token_cost > max(64, token_budget):
                 continue
-            metadata = memory.get("metadata") or {}
-            selected.append(
-                {
-                    "id": memory["id"],
-                    **({"passage_spans": memory["passage_spans"]}
-                       if "passage_spans" in memory else {}),
-                    "content": memory.get("content", ""),
-                    "layer": memory.get("layer"),
-                    "category": memory.get("category"),
-                    "repo_id": memory.get("repo_id"),
-                    "tags": memory.get("tags") or [],
-                    "source_ids": memory.get("source_ids") or [],
-                    "relevance_score": memory.get("relevance_score")
-                    or memory.get("similarity"),
-                    "confidence": confidence_by_id[str(memory.get("id"))],
-                    "observed_at": metadata.get("observed_at") or memory.get("created_at"),
-                    "valid_from": metadata.get("valid_from"),
-                    "valid_to": metadata.get("valid_to"),
-                    "source_revision": metadata.get("source_revision"),
-                    "source_hash": metadata.get("source_hash"),
-                    "evidence": metadata.get("evidence") or [],
-                    "files": metadata.get("files") or metadata.get("applies_to") or [],
-                    "symbols": metadata.get("symbols") or [],
-                    "retrieval_channels": memory.get("retrieval_channels") or [],
-                    "retrieval_factors": memory.get("retrieval_factors") or {},
-                    "ranking_explanation": memory.get("ranking_explanation") or [],
-                    "token_cost": token_cost,
-                }
-            )
+            selected.append({
+                **memory_item(memory, confidence_by_id[str(memory.get("id"))]),
+                "token_cost": token_cost,
+            })
             selected_terms.append(content_terms)
             consumed_tokens += token_cost
 

@@ -81,13 +81,14 @@ class ChromaTurnKeyIndex:
         self, query_embedding, *, repo_id: str | None, limit: int, status: str = "active"
     ) -> list[dict[str, Any]]:
         collection = self.collection()
-        if collection is None or limit <= 0:
+        # Missing project scope never grants a global read.
+        if collection is None or limit <= 0 or not repo_id:
             return []
         try:
             result = collection.query(
                 query_embeddings=[query_embedding],
                 n_results=limit * 3,
-                where={"repo_id": repo_id} if repo_id else None,
+                where={"repo_id": repo_id},
             )
         except Exception as exc:  # empty collection or index not yet built
             logger.debug("Turn-key search failed: %s", exc)
@@ -95,7 +96,9 @@ class ChromaTurnKeyIndex:
         hits = []
         for index, metadata in enumerate((result.get("metadatas") or [[]])[0]):
             parent = self._storage._get_memory_row(metadata["parent_id"], track_access=False)
-            if parent is None or (status != "all" and parent.get("status") != status):
+            if parent is None or parent.get("repo_id") != repo_id or (
+                status != "all" and parent.get("status") != status
+            ):
                 continue
             distance = result["distances"][0][index] if result.get("distances") else 0
             hits.append({
