@@ -238,6 +238,7 @@ def initialize_storage(config, embedding_fn=None, embedding_provider=None):
                     password=config.storage.neo4j_password,
                     embedding_fn=embedding_fn,
                     embedding_dimension=getattr(embedding_provider, "dimension", None),
+                    turn_keys=config.embedding.turn_keys,
                 )
                 logger.info("Initialized Neo4j storage")
                 return storage, "neo4j"

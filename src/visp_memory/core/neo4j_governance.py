@@ -349,6 +349,10 @@ class Neo4jGovernance:
             limit=auto_link_limit,
             min_score=auto_link_min_score,
         )
+        # Turn keys index the committed row; they are rebuilt if this fails.
+        index_turn_keys = getattr(self, "_index_turn_keys", None)
+        if index_turn_keys is not None:
+            index_turn_keys(memory_id)
         return memory_id
 
     def _verify_graph_authority(self, tx, record, evidence_ids, envelope, replaces_belief_id):
