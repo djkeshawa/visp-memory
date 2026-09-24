@@ -1,5 +1,7 @@
 """Conversation turns stay retrievable when their memory is about something else."""
 
+import re
+
 import pytest
 
 from visp_memory.core.turn_keys import conversation_keys, key_passages
@@ -12,14 +14,21 @@ CONVERSATION = (
     "user: Before this I worked as a marketing specialist at a small startup.\n"
     "assistant: That experience will help with pricing and branding.\n"
 )
-VOCAB = ("soap", "candles", "market", "marketing", "specialist", "occupation", "startup",
-         "pricing", "weather", "recipe")
+# A stand-in for a semantic model: words with related meaning share a dimension,
+# so "occupation" matches "specialist" without sharing a word.
+MEANINGS = (
+    {"occupation", "job", "career", "specialist", "worked", "startup"},
+    {"soap", "candles", "market", "price", "pricing", "handmade"},
+    {"cat", "vet", "clinic", "pet"},
+    {"weather", "hiking", "rain"},
+    {"recipe", "cook", "dinner"},
+)
 
 
 def embed(text: str) -> list[float]:
-    words = text.casefold()
-    # A small constant keeps every vector non-zero for cosine distance.
-    return [words.count(term) + 0.01 for term in VOCAB]
+    words = re.findall(r"[a-z]+", text.casefold())
+    # A small bias keeps every vector non-zero for cosine distance.
+    return [sum(word in group for word in words) + 0.05 for group in MEANINGS]
 
 
 def test_keys_are_substantive_user_turns_only():
@@ -113,4 +122,58 @@ def test_disabled_or_keyword_only_stores_have_no_keys(tmp_path):
     storage = _storage(tmp_path / "off", turn_keys=False)
     _store(storage)
     assert storage.search_turn_keys("marketing specialist", repo_id="repo-a") == []
+    storage.close()
+
+
+# The fact is stated once, deep in a conversation whose other turns share the
+# question's words ("previous"), so word-matched selection prefers them.
+LONG_CONVERSATION = (
+    "Session date: 2023/05/20 (Sat) 10:00\n"
+    + "".join(
+        f"user: My previous cat visit {n} went to the previous vet clinic downtown again.\n"
+        f"assistant: {'Regular vet visits help keep a pet healthy. ' * 6}\n"
+        for n in range(6)
+    )
+    + "user: Before all this I worked as a marketing specialist at a small startup.\n"
+    + "assistant: That background will help you run the shop.\n"
+)
+
+
+def _brief(storage, budget=2000):
+    from visp_memory.core.task_brief import TaskMemoryBriefCompiler
+
+    return TaskMemoryBriefCompiler(storage).prepare(
+        "What was my previous occupation?", repo_id="repo-a", token_budget=budget,
+        context_selection="coverage",
+    )["context"]
+
+
+def test_turn_keys_bring_a_buried_fact_into_the_brief(tmp_path):
+    fact = "marketing specialist at a small startup"
+    without = _storage(tmp_path / "without", turn_keys=False)
+    _store(without, LONG_CONVERSATION, tags=["provenance:authored"])
+    assert fact not in _brief(without)
+    without.close()
+
+    storage = _storage(tmp_path / "with")
+    _store(storage, LONG_CONVERSATION, tags=["provenance:authored"])
+    assert fact in _brief(storage)
+    storage.close()
+
+
+def test_turn_keys_do_not_bypass_the_trust_policy(tmp_path):
+    storage = _storage(tmp_path)
+    # The only copy of the fact is untrusted external content.
+    _store(storage, LONG_CONVERSATION, tags=["provenance:external"])
+    assert "marketing specialist" not in _brief(storage)
+    storage.close()
+
+
+def test_default_selection_ignores_turn_keys(tmp_path):
+    from visp_memory.core.task_brief import TaskMemoryBriefCompiler
+
+    storage = _storage(tmp_path)
+    storage.search_turn_keys = lambda *a, **k: pytest.fail("default selection used turn keys")
+    TaskMemoryBriefCompiler(storage).prepare("What was my previous occupation?",
+                                             repo_id="repo-a", token_budget=2000)
     storage.close()

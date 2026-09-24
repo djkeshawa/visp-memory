@@ -23,6 +23,7 @@ from visp_memory.core.eligibility import (
 )
 from visp_memory.core.tokens import estimate_tokens
 from visp_memory.core.trust import TrustFilterResult, filter_unsolicited
+from visp_memory.core.turn_keys import BRIEF_TURN_KEYS, key_passages
 
 SECTION_ORDER = ("warnings", "decisions", "knowledge", "history")
 # Both sets carry the governed belief type first and keep the pre-v4 words after
@@ -500,6 +501,16 @@ class TaskMemoryBriefCompiler:
                     now=parse_utc(as_of) if as_of is not None else None,
                 ).allowed
             )
+
+        search_turns = getattr(self.storage, "search_turn_keys", None)
+        if context_selection == "coverage" and search_turns is not None:
+            # Turns matched individually reach evidence buried in long conversations.
+            # They pass the same scope, time and trust checks as any other candidate.
+            hits = [
+                hit for hit in search_turns(query, repo_id=repo_id, limit=BRIEF_TURN_KEYS)
+                if eligible_memory(hit["memory"])
+            ]
+            candidates = [*candidates, *key_passages(hits, candidates)]
 
         unknowns = []
         if not intent:
