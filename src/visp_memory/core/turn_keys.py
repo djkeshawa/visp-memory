@@ -24,8 +24,8 @@ MIN_KEY_CHARS = 20
 # where people state the fact they then elaborate on.
 MAX_KEY_CHARS = 1500
 MAX_KEYS_PER_MEMORY = 64
-# How many matching turns a brief adds to its candidate pool. Measured at 10;
-# more adds passages faster than they help.
+# How many matching turns a brief adds to its candidate pool; 10 is the only
+# value evaluated so far.
 BRIEF_TURN_KEYS = 10
 
 
