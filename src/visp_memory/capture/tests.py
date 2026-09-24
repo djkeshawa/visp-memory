@@ -108,8 +108,6 @@ class TestCapture:
                         )
                         memory_ids.append(mem_id)
 
-                        # Also potentially warn if it seems fragile
-                        # self.memory.warn(file, f"Test {name} is failing: {msg}")
 
         manifest.record("test_report", str(path), content_hash, memory_ids, status=status)
         self.last_manifest_report = CaptureManifest.status_report([status])

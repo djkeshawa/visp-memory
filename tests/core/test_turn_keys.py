@@ -203,3 +203,18 @@ def test_turn_keys_respect_min_confidence_and_carry_citation_fields(tmp_path):
     assert "marketing specialist" in brief["context"]
     assert {c["confidence"] for c in brief["citations"]} == {0.1}
     storage.close()
+
+
+def test_out_of_range_min_confidence_is_clamped_like_the_compiler(tmp_path):
+    from visp_memory.core.task_brief import TaskMemoryBriefCompiler
+
+    storage = _storage(tmp_path)
+    _store(storage, LONG_CONVERSATION, tags=["provenance:authored"],
+           metadata={"confidence": 1.0})
+    brief = TaskMemoryBriefCompiler(storage).prepare(
+        "What was my previous occupation?", repo_id="repo-a", token_budget=2000,
+        context_selection="coverage", min_confidence=5,
+    )
+    # The compiler clamps 5 to 1.0 and keeps full-confidence memories; so must turn keys.
+    assert "marketing specialist" in brief["context"]
+    storage.close()

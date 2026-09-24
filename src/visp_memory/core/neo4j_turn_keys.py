@@ -50,8 +50,13 @@ class Neo4jTurnKeys:
     def _remove_turn_keys_tx(tx, memory_id: str) -> None:
         tx.run("MATCH (k:MemoryKey {parent_id: $id}) DETACH DELETE k", id=memory_id).consume()
 
-    def _index_turn_keys(self, memory_id: str) -> int:
-        """(Re)index one memory's keys. Keys are an index: failures only log."""
+    def _index_turn_keys(self, memory_id: str) -> int | None:
+        """(Re)index one memory's keys; ``None`` when indexing failed.
+
+        Keys are an index, so failures only log. A failure removes the memory's
+        existing keys: after a content edit their spans would point into text that
+        no longer matches. A rebuild restores them.
+        """
         if not self._turn_keys_available():
             return 0
         try:
@@ -85,7 +90,12 @@ class Neo4jTurnKeys:
                 "Turn-key indexing failed for memory %s (run rebuild_embedding_index "
                 "to reconcile): %s", memory_id, exc,
             )
-            return 0
+            try:
+                with self._write_session() as tx:
+                    self._remove_turn_keys_tx(tx, memory_id)
+            except Exception as cleanup:
+                logger.warning("Could not remove stale turn keys for %s: %s", memory_id, cleanup)
+            return None
 
     def search_turn_keys(
         self, query: str, *, repo_id: str = None, limit: int = 10, status: str = "active"
