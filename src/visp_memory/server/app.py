@@ -238,6 +238,7 @@ def initialize_storage(config, embedding_fn=None, embedding_provider=None):
                     password=config.storage.neo4j_password,
                     embedding_fn=embedding_fn,
                     embedding_dimension=getattr(embedding_provider, "dimension", None),
+                    turn_keys=config.embedding.turn_keys,
                 )
                 logger.info("Initialized Neo4j storage")
                 return storage, "neo4j"
@@ -259,7 +260,10 @@ def initialize_storage(config, embedding_fn=None, embedding_provider=None):
                 "fallback mode (%s)",
                 last_error.__class__.__name__,
             )
-            fallback = LocalStorage(config.storage.data_dir, embedding_fn=embedding_fn)
+            fallback = LocalStorage(
+                config.storage.data_dir, embedding_fn=embedding_fn,
+                turn_keys=config.embedding.turn_keys,
+            )
             return fallback, "sqlite-fallback"
 
         raise RuntimeError("Neo4j storage is unavailable and fallback is disabled") from last_error
@@ -273,7 +277,10 @@ def initialize_storage(config, embedding_fn=None, embedding_provider=None):
         logger.info("Initialized ArcadeDB Storage")
         return storage, "arcadedb"
 
-    return LocalStorage(config.storage.data_dir, embedding_fn=embedding_fn), "sqlite"
+    storage = LocalStorage(
+        config.storage.data_dir, embedding_fn=embedding_fn, turn_keys=config.embedding.turn_keys
+    )
+    return storage, "sqlite"
 
 
 cors_options = get_cors_options(config)

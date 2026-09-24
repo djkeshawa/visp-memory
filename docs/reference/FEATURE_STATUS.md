@@ -12,6 +12,7 @@ features need more field use. Frozen features are retained but not actively exte
 | Keyword recall (no embeddings) | Stable | Default when no provider is configured. |
 | Independent keyword/vector discovery (`hybrid_union`) | Experimental | Opt-in SQLite/Neo4j candidate union before rank fusion. Defaults are unchanged. |
 | Coverage context selection (`context_selection="coverage"`) | Experimental | Opt-in verbatim passages with source offsets for briefs and context compilation. |
+| [Turn keys](../guides/STORAGE.md#turn-keys-experimental) (`embedding.turn_keys`) | Experimental | Opt-in per-turn search keys for conversation memories; used by coverage briefs. SQLite (Chroma) and Neo4j. |
 | Semantic recall (OpenAI / OpenRouter / Ollama / sentence-transformers) | Stable | Requires a working provider and vector index; otherwise keyword fallback. |
 | Git capture (`sync_history`, commit/merge hooks) | Stable | Foundation of first-run bootstrap. |
 | Claude Code auto-injection hooks | Beta | Injection policy is new; see below. |

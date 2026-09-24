@@ -89,6 +89,26 @@ procedure above.
 On Neo4j, `noop` uses keyword search and does not create a new vector index.
 It cannot use constant vectors to make unrelated memories look semantically similar.
 
+### Turn keys (experimental)
+
+A conversation memory's single embedding is dominated by what most of its turns
+discuss, so a fact mentioned once in passing can be hard to retrieve. Turn keys
+also embed each substantive user turn separately, pointing back to the memory and
+the exact span of that turn. Coverage briefs (`context_selection="coverage"`) then
+add up to ten best-matching turns as cited passages. Each passes the same scope,
+time and trust checks as any other candidate.
+
+```yaml
+embedding:
+  turn_keys: true   # or VISP_MEMORY_EMBEDDING_TURN_KEYS=true
+```
+
+Turn keys need a real embedding provider and cost one embedding per user turn at
+write time. They live in a separate index (a Chroma collection on SQLite,
+`:MemoryKey` nodes on Neo4j), so memory-level search is unchanged. Keys are
+removed with their memory or repository. Existing memories gain keys when you run
+the explicit index rebuild.
+
 Vector-wide `visp-memory dedup` requires real embeddings and a vector collection;
 without them it reports an unavailable check. [Dreaming](DREAMING.md) can merge
 eligible exact duplicates without either dependency.

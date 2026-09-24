@@ -543,3 +543,38 @@ def test_reopen_rejects_corrupt_citation_scope(graph):
         ).consume()
     with pytest.raises(StorageMigrationRequired, match="scope"):
         Neo4jStorage(uri=s.uri, user=s.user, password=s.password)
+
+
+def test_turn_keys_find_a_passing_fact_and_follow_the_memory_lifecycle():
+    uri = os.environ.get("VISP_TEST_NEO4J_URI")
+    if not uri:
+        pytest.skip("Set VISP_TEST_NEO4J_URI for the dedicated integration database")
+    from tests.core.test_turn_keys import CONVERSATION, MEANINGS, embed
+
+    storage = Neo4jStorage(uri=uri, user="neo4j", password=os.environ["VISP_TEST_NEO4J_PASSWORD"],
+                           embedding_fn=embed, embedding_dimension=len(MEANINGS), turn_keys=True)
+    repo = "integration-turnkeys-" + uuid.uuid4().hex
+    try:
+        memory_id = storage.store_memory(CONVERSATION, layer="episodic", repo_id=repo,
+                                         auto_link=False)
+        with storage.driver.session() as session:
+            session.run("CALL db.awaitIndexes()").consume()
+        [hit, *_] = storage.search_turn_keys("previous occupation", repo_id=repo, limit=3)
+        assert hit["memory"]["id"] == memory_id
+        start, end = hit["span"]
+        assert "marketing specialist" in hit["memory"]["content"][start:end]
+        assert storage.search_turn_keys("previous occupation", repo_id=repo + "-other") == []
+
+        storage.update_memory(memory_id, status="archived")
+        assert storage.search_turn_keys("previous occupation", repo_id=repo) == []
+        storage.update_memory(memory_id, status="active")
+
+        assert storage.delete_memory(memory_id)
+        with storage.driver.session() as session:
+            left = session.run("MATCH (k:MemoryKey {parent_id: $id}) RETURN count(k) AS c",
+                               id=memory_id).single()["c"]
+        assert left == 0
+    finally:
+        with storage.driver.session() as session:
+            session.run("MATCH (n) WHERE n.repo_id = $repo DETACH DELETE n", repo=repo).consume()
+        storage.close()

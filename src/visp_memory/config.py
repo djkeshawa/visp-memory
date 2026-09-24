@@ -36,6 +36,9 @@ class EmbeddingConfig(BaseSettings):
     model: str = "all-MiniLM-L6-v2"
     api_key: Optional[str] = Field(default=None, validation_alias="EMBEDDING_API_KEY")
     api_base: Optional[str] = Field(default=None, validation_alias="EMBEDDING_API_BASE")
+    # Experimental: also index each conversation user turn as its own search key,
+    # so a fact stated once in a long conversation stays retrievable.
+    turn_keys: bool = False
 
 
 #: Storage settings that were removed because nothing read them. They are accepted

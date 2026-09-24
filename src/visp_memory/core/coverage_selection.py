@@ -142,9 +142,15 @@ def _evidence_key(row):
 
 def _coalesce_source_copies(rows):
     """Share budget only for identical text with explicit, eligible source lineage."""
-    by_id = {row["id"]: row for row in rows}
+    by_id = {row["id"]: row for row in rows if not row.get("passage_spans")}
     grouped = {}
+    passages = []
     for row in rows:
+        if row.get("passage_spans"):
+            # An already-cited passage (e.g. a matched turn) stands on its own; folding
+            # it into its memory's row would discard the span it was retrieved for.
+            passages.append(row)
+            continue
         sources = row.get("source_ids") or []
         source = by_id.get(sources[0]) if len(sources) == 1 else None
         canonical = source if source and source.get("content") == row.get("content") else row
@@ -157,7 +163,7 @@ def _coalesce_source_copies(rows):
             "retrieval_channels": sorted(set(prior.get("retrieval_channels") or [])
                                          | set(row.get("retrieval_channels") or [])),
         }
-    return list(grouped.values())
+    return [*grouped.values(), *passages]
 
 
 def _new_focus_text(candidate, selected):

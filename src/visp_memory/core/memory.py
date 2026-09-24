@@ -152,6 +152,7 @@ class Memory:
                 user=self.config.storage.neo4j_user,
                 password=self.config.storage.neo4j_password,
                 embedding_fn=embedding_fn,
+                turn_keys=self.config.embedding.turn_keys,
             )
         elif self.config.storage.backend == "arcadedb":
             self._storage = ArcadeDbStorage(
@@ -159,7 +160,11 @@ class Memory:
                 embedding_fn=embedding_fn,
             )
         else:
-            self._storage = LocalStorage(self.config.storage.data_dir, embedding_fn=embedding_fn)
+            self._storage = LocalStorage(
+                self.config.storage.data_dir,
+                embedding_fn=embedding_fn,
+                turn_keys=self.config.embedding.turn_keys,
+            )
 
         # Initialize layers
         self.episodic = EpisodicMemory(self._storage)

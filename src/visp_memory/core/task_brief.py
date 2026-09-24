@@ -9,7 +9,11 @@ from collections.abc import Callable
 from typing import Any, Optional
 
 from visp_memory.core.clock import parse_utc
-from visp_memory.core.context_compiler import ContextCompiler
+from visp_memory.core.context_compiler import (
+    ContextCompiler,
+    memory_confidence,
+    memory_item,
+)
 from visp_memory.core.coverage_selection import (
     coverage_candidates,
     is_calendar_date,
@@ -23,6 +27,7 @@ from visp_memory.core.eligibility import (
 )
 from visp_memory.core.tokens import estimate_tokens
 from visp_memory.core.trust import TrustFilterResult, filter_unsolicited
+from visp_memory.core.turn_keys import BRIEF_TURN_KEYS, key_passages
 
 SECTION_ORDER = ("warnings", "decisions", "knowledge", "history")
 # Both sets carry the governed belief type first and keep the pre-v4 words after
@@ -500,6 +505,23 @@ class TaskMemoryBriefCompiler:
                     now=parse_utc(as_of) if as_of is not None else None,
                 ).allowed
             )
+
+        search_turns = getattr(self.storage, "search_turn_keys", None)
+        if context_selection == "coverage" and search_turns is not None:
+            # Turns matched individually reach evidence buried in long conversations.
+            # They pass the same scope, time, trust and confidence checks as any
+            # other candidate, and carry the same citation fields.
+            threshold = float(min_confidence or 0.0)
+            hits = []
+            for hit in search_turns(query, repo_id=repo_id, limit=BRIEF_TURN_KEYS):
+                confidence = memory_confidence(hit["memory"])
+                if (confidence is not None and confidence >= threshold
+                        and eligible_memory(hit["memory"])):
+                    hits.append(hit)
+            candidates = [*candidates, *(
+                memory_item(passage, memory_confidence(passage))
+                for passage in key_passages(hits, candidates)
+            )]
 
         unknowns = []
         if not intent:

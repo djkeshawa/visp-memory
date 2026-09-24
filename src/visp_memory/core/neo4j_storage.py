@@ -17,6 +17,7 @@ from visp_memory.core.embedding_binding import bind_embeddings
 from visp_memory.core.indexing import EmbeddingIndexReport, ReindexResult, ReindexScope
 from visp_memory.core.neo4j_feedback import Neo4jFeedback
 from visp_memory.core.neo4j_governance import Neo4jGovernance
+from visp_memory.core.neo4j_turn_keys import Neo4jTurnKeys
 from visp_memory.core.ranking import (
     clamp_score,
     rank_memory_results,
@@ -53,7 +54,7 @@ def _normalize_relationship_type(relationship: str) -> str:
     return rel_type
 
 
-class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, BaseStorage):
+class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, Neo4jTurnKeys, BaseStorage):
     """
     Storage implementation using Neo4j for both structured data and vector embeddings.
     """
@@ -151,6 +152,7 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, BaseStorage):
         password: str = None,
         embedding_fn=None,
         embedding_dimension: int = None,
+        turn_keys: bool = False,
     ):
         """Initialize Neo4j driver."""
         if GraphDatabase is None:
@@ -172,6 +174,7 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, BaseStorage):
             self._embedding_dimension, self._embedding_space
         )
         self._uses_noop_embeddings = binding.is_noop
+        self._turn_keys_enabled = turn_keys
         self._upgrade_session_schema_marker = False
 
         try:
@@ -276,6 +279,10 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, BaseStorage):
                         "Could not create vector index "
                         f"(might be already present or incompatible version): {e}"
                     )
+                try:
+                    self._ensure_turn_key_index(session)
+                except Exception as e:
+                    logger.warning(f"Could not create turn-key vector index: {e}")
 
     def _ensure_schema_version(self) -> None:
         with self.driver.session() as session:
@@ -938,7 +945,9 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, BaseStorage):
                     logger.warning(
                         "Failed to update vector property for memory %s: %s", memory_id, exc
                     )
-            return updated
+        if updated and content is not None:
+            self._index_turn_keys(memory_id)
+        return updated
 
     def inspect_embedding_index(
         self,
@@ -1091,6 +1100,10 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, BaseStorage):
                 except Exception as exc:
                     errors.append({"id": memory["id"], "error": exc.__class__.__name__})
 
+        if self._turn_keys_available():
+            for memory in candidates:
+                self._index_turn_keys(memory["id"])
+
         failed = len(errors)
         return ReindexResult(
             dry_run=False,
@@ -1115,6 +1128,7 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, BaseStorage):
             session.run(
                 "MATCH (e:RecallFeedback {memory_id: $id}) DETACH DELETE e", id=memory_id,
             ).consume()
+            self._remove_turn_keys_tx(session, memory_id)
             session.run(
                 "MATCH (m:Memory) WHERE $id IN m.source_ids "
                 "SET m.source_ids = [x IN m.source_ids WHERE x <> $id]",
@@ -1742,6 +1756,7 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, BaseStorage):
                         "OR n:DreamDismissal OR n:RecallFeedback) DETACH DELETE n",
                         id=repo_id,
                     ).consume()
+                session.run("MATCH (k:MemoryKey {repo_id: $id}) DETACH DELETE k", id=repo_id)
                 session.run("MATCH (i:Intent {repo_id: $id}) DETACH DELETE i", id=repo_id)
                 session.run("MATCH (s:Session {repo_id: $id}) DETACH DELETE s", id=repo_id)
                 session.run(
