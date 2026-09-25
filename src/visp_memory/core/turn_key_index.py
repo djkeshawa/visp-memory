@@ -94,8 +94,12 @@ class ChromaTurnKeyIndex:
             logger.debug("Turn-key search failed: %s", exc)
             return []
         hits = []
+        parents: dict[str, dict[str, Any] | None] = {}  # many keys share one memory
         for index, metadata in enumerate((result.get("metadatas") or [[]])[0]):
-            parent = self._storage._get_memory_row(metadata["parent_id"], track_access=False)
+            parent_id = metadata["parent_id"]
+            if parent_id not in parents:
+                parents[parent_id] = self._storage._get_memory_row(parent_id, track_access=False)
+            parent = parents[parent_id]
             if parent is None or parent.get("repo_id") != repo_id or (
                 status != "all" and parent.get("status") != status
             ):
