@@ -95,6 +95,7 @@ python3 scripts/evaluate_poisoning.py --json
 python3 scripts/evaluate_agent_ab.py --json
 python3 scripts/evaluate_hallucination.py --json
 python3 scripts/evaluate_memory_intelligence.py --json
+python3 scripts/evaluate_context_compiler.py --json
 python3 scripts/benchmark_memory.py --items 100 --json
 python3 -m pytest --cov=visp_memory --cov-report=term-missing
 ```
