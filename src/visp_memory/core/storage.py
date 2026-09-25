@@ -42,6 +42,7 @@ from visp_memory.core.ranking import (
     utility_rank_adjustment,
 )
 from visp_memory.core.turn_key_index import ChromaTurnKeyIndex
+from visp_memory.core.turn_keys import BRIEF_TURN_KEYS
 from visp_memory.quality.secrets import SecretBearingContentError, redact_for_storage
 
 try:
@@ -707,7 +708,8 @@ class BaseStorage(ABC):
         pass
 
     def search_turn_keys(
-        self, query: str, *, repo_id: str = None, limit: int = 10, status: str = "active"
+        self, query: str, *, repo_id: str = None, limit: int = BRIEF_TURN_KEYS,
+        status: str = "active",
     ) -> List[Dict[str, Any]]:
         """Best-matching conversation turns as ``{memory, span, similarity}`` hits.
 
@@ -4204,7 +4206,8 @@ class LocalStorage(BaseStorage):
             )
 
     def search_turn_keys(
-        self, query: str, *, repo_id: str = None, limit: int = 10, status: str = "active"
+        self, query: str, *, repo_id: str = None, limit: int = BRIEF_TURN_KEYS,
+        status: str = "active",
     ) -> List[Dict[str, Any]]:
         if self._turn_keys is None or not self._turn_keys.available():
             return []

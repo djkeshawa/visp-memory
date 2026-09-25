@@ -12,7 +12,13 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List
 
-from visp_memory.core.turn_keys import KEY_LAYERS, conversation_keys, key_id, key_text
+from visp_memory.core.turn_keys import (
+    BRIEF_TURN_KEYS,
+    KEY_LAYERS,
+    conversation_keys,
+    key_id,
+    key_text,
+)
 from visp_memory.quality.secrets import redact_for_storage
 
 logger = logging.getLogger(__name__)
@@ -98,7 +104,8 @@ class Neo4jTurnKeys:
             return None
 
     def search_turn_keys(
-        self, query: str, *, repo_id: str = None, limit: int = 10, status: str = "active"
+        self, query: str, *, repo_id: str = None, limit: int = BRIEF_TURN_KEYS,
+        status: str = "active",
     ) -> List[Dict[str, Any]]:
         # Missing project scope never grants a global read.
         if not self._turn_keys_available() or limit <= 0 or not repo_id:

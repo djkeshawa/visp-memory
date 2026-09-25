@@ -146,7 +146,7 @@ Context compilation and task briefs accept `context_selection`:
   chosen by query-term coverage, relevance, and incremental token cost.
 
 With [turn keys](../guides/STORAGE.md#turn-keys-experimental) enabled, coverage briefs
-also add up to ten individually matched conversation turns as cited passages, ranked
+also add up to thirty individually matched conversation turns as cited passages, ranked
 as equals of the existing candidates rather than automatic winners.
 
 Use `brief --context-selection coverage`, or the `context_selection` field on
