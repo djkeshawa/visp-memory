@@ -53,8 +53,10 @@ Focused security and Evidence checks include:
 
 ```bash
 python3 -m pytest -q tests/core/test_evidence_contract.py tests/core/test_memory_import_export_evidence.py
-python3 -m pytest tests/server/test_auth.py tests/server/test_collaboration.py
 ```
+
+The authentication and collaboration tests are part of the
+[release gate](RELEASING.md#before-tagging).
 
 Backend unit tests may mock a driver; they do not prove that a real service works.
 Use the existing [CI workflow](../../.github/workflows/ci.yml) and
@@ -77,6 +79,8 @@ SQLite remains covered by the default full suite.
 
 Initialize a disposable project and test `decision`, `warn`, `recall`, `brief`, `preview` and `audit` with
 known inputs. Maintenance commands should run only against disposable data.
+`scripts/demo.sh <repo>` runs `init`, `preview` and `audit` against a scratch clone of
+any git repository without modifying it.
 
 For assistant integration, follow [MCP.md](../guides/MCP.md): install the integration,
 check `doctor`, capture a known decision and retrieve it in a fresh session.
@@ -89,18 +93,20 @@ access tests in the gate even if a local visual smoke disables auth on loopback.
 
 ## Evaluations and coverage
 
+The published evaluations and their reproduction commands are in
+[benchmarks](../reference/BENCHMARK.md#reproduce-the-measurements). CI also runs these checks, which
+publish no figures:
+
 ```bash
-python3 scripts/evaluate_oracle_gap.py --json
-python3 scripts/evaluate_poisoning.py --json
 python3 scripts/evaluate_agent_ab.py --json
 python3 scripts/evaluate_hallucination.py --json
-python3 scripts/evaluate_memory_intelligence.py --json
+python3 scripts/evaluate_task_brief.py
+python3 scripts/evaluate_hybrid_retrieval.py
 python3 scripts/evaluate_context_compiler.py --json
 python3 scripts/benchmark_memory.py --items 100 --json
 python3 -m pytest --cov=visp_memory --cov-report=term-missing
 ```
-
-Selection and poisoning results are documented in [benchmarks](../reference/BENCHMARK.md). `evaluate_agent_ab.py` uses scripted responses, not a
+ `evaluate_agent_ab.py` uses scripted responses, not a
 live coding agent; its fixture success gap cannot establish coding benefit.
 Performance timings depend on the machine. Use the benchmark script instead of
 brittle elapsed-time assertions in unit tests.

@@ -27,8 +27,8 @@ Memories, Evidence, workflow and dreaming journals")]
 ```
 
 Local CLI and stdio MCP use project configuration directly. Remote clients call
-an authenticated server, which owns storage and provider configuration. The
-SQLite is the default; Neo4j is an opt-in beta with native vectors.
+an authenticated server, which owns storage and provider configuration. Neo4j is
+an opt-in beta alternative to SQLite, with native vectors.
 [Backend limits and backup requirements](../guides/STORAGE.md#choose-a-backend) are explicit.
 
 ## What is stored
@@ -79,9 +79,9 @@ Capture requires an explicitly configured host model and does not run in retriev
 
 Explicit search and automatic prompt injection have different purposes. Search
 lets a user inspect candidates, including quarantined records within their scope.
-Task briefs and automatic prompt context apply additional trust and budget checks.
-The lower-level query context compiler remains an inspection surface unless its
-caller supplies a trust filter; see [the trust boundary](TRUST.md).
+Task briefs and automatic prompt context apply additional trust and budget checks;
+the lower-level context compiler is an
+[inspection surface](TRUST.md#provenance-and-quarantine).
 
 ```mermaid
 flowchart TD
@@ -146,8 +146,8 @@ Context compilation and task briefs accept `context_selection`:
   chosen by query-term coverage, relevance, and incremental token cost.
 
 With [turn keys](../guides/STORAGE.md#turn-keys-experimental) enabled, coverage briefs
-also add up to thirty individually matched conversation turns as cited passages, ranked
-as equals of the existing candidates rather than automatic winners.
+also add individually matched conversation turns as cited passages, ranked as equals
+of the existing candidates rather than automatic winners.
 
 Use `brief --context-selection coverage`, or the `context_selection` field on
 `memory_prepare_task`, query-based `memory_context`, and the HTTP context endpoints.

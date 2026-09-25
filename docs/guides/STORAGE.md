@@ -74,8 +74,10 @@ available providers and can fall back to keyword search. Cloud providers can
 receive memory text and queries; see [provider boundaries](../reference/TRUST.md#provider-boundaries).
 
 Do not mix vectors from different models. Back up before changing providers or
-models, then rebuild/reindex existing content for the chosen model. Settings in
-the dashboard describe connection status; they do not themselves rebuild an index.
+models, then rebuild the index for existing content. Changing the provider setting
+does not rebuild anything by itself: use **Settings → embedding diagnostics** in the
+dashboard to preview and run the rebuild, then confirm the scoped records are indexed
+before relying on paraphrase recall.
 `visp-memory doctor` and the Operations page help distinguish fallback from semantic search.
 
 With `nomic-embed-text`, documents are embedded with the `search_document:` prefix
@@ -151,19 +153,19 @@ Use native backup tools for shared database backends.
 portable memory graph, not the complete server installation. Full backups also
 preserve account and operational data that graph exports do not replace.
 
-Format 2.0 includes evidence, memories, intents, and relationships. It validates
-hashes and same-project references, and refuses malformed graphs or secret-bearing
-legacy records. Each record kind has a 10,000-record export ceiling; overflow is
-refused rather than truncated. See [export contracts](../reference/CONTRACTS.md#export-and-import).
+Exports contain Evidence, memories, intents, and relationships, with a 10,000-record
+ceiling per record kind; overflow is refused rather than truncated. Which backends can
+export and import, and what import validates, are in the
+[export contract](../reference/CONTRACTS.md#export-and-import).
 
 ## Choose a backend
 
-| Backend | Status and search | Graph export / atomic import |
+| Backend | Status and search | Backup and portability |
 |---|---|---|
-| SQLite | Supported; keyword or optional Chroma | Yes / Yes |
-| ArcadeDB | Frozen; embedded runtime, keyword search only | Yes / No |
-| Neo4j | Opt-in beta; Evidence graph, native vectors or keyword search | Neo4j backup / empty-store restore; portable packs unavailable |
-| Remote/HTTP | Uses the server's backend and access policy | No / No |
+| SQLite | Supported; keyword or optional Chroma | Portable export and import |
+| ArcadeDB | Frozen; embedded runtime, keyword search only | Export only |
+| Neo4j | Opt-in beta; Evidence graph, native vectors or keyword search | [Native backup and restore](#backup-restore-and-legacy-migration); no portable export |
+| Remote/HTTP | Uses the server's backend and access policy | Through the server |
 
 For remote access, keep the actual backend setting and select client mode:
 

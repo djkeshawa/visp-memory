@@ -10,7 +10,7 @@ Use a small pull request with a clear description and relevant verification.
   particular are calibrated against measurements, not preference — see
   [injection policy](docs/reference/ARCHITECTURE.md#injection-policy).
 - **A feature that would widen scope**: check
-  [docs/FEATURE_STATUS.md](docs/reference/FEATURE_STATUS.md) first. Several areas are deliberately
+  [feature status](docs/reference/FEATURE_STATUS.md) first. Several areas are deliberately
   frozen, and a PR reviving one is likely to be declined on maintenance grounds rather
   than merit.
 
@@ -62,6 +62,16 @@ tools. Add optional provider or storage extras when working on those integration
 
 On Windows, activate with `.venv\Scripts\Activate.ps1` in PowerShell. For the
 dashboard, install its locked dependencies with `npm ci --prefix visp-memory-dashboard`.
+
+To build distributions (Node/npm is needed as well as Python), build the dashboard
+first so the wheel includes its assets. The helper runs `npm ci` before each build:
+
+```bash
+python3 build_frontend.py
+python3 -m build
+```
+
+For a standalone bundle, run `./build_standalone.sh` on the target platform.
 
 ## Before you open a pull request
 

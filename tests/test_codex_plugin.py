@@ -25,12 +25,9 @@ def test_codex_plugin_declares_mcp_server():
     server = mcp_config["mcpServers"]["visp-memory"]
     assert server["command"] == "python3"
     assert server["args"] == ["-m", "visp_memory.interfaces.mcp"]
-    assert server["env"]["VISP_MEMORY_STORAGE_MODE"] == "client"
-    # Must match the server's default port (8000) used by config / `serve` /
-    # the Codex adapter default, so the plugin connects out of the box.
-    assert server["env"]["VISP_MEMORY_STORAGE_SERVER_URL"] == "http://127.0.0.1:8000"
-    assert server["env"]["VISP_MEMORY_REPO_ID"] == "visp-memory"
-    assert server["env"]["VISP_MEMORY_EMBEDDING_PROVIDER"] == "noop"
+    # Direct local mode: the project's own config supplies its ID and store. Pinning
+    # a repository ID or a server here would point every user at one project.
+    assert server["env"] == {"VISP_MEMORY_EMBEDDING_PROVIDER": "noop"}
 
 
 def test_codex_plugin_skills_cover_required_workflows():

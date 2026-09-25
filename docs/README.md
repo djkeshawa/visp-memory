@@ -38,5 +38,3 @@ docs/
 - [Releasing](development/RELEASING.md): maintainer build and publication procedure.
 
 Release notes and downloads live on [GitHub Releases](https://github.com/djkeshawa/visp-memory/releases).
-Update an existing page rather than adding a new one, and keep this index as the
-route to every topic.

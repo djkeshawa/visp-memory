@@ -29,7 +29,7 @@ For unattended setup, provide `VISP_MEMORY_BOOTSTRAP_ADMIN_USERNAME` and
 `VISP_MEMORY_BOOTSTRAP_ADMIN_PASSWORD` through your deployment's secret settings.
 The initial account is created only when the store has no accounts.
 
-Administrators manage further accounts in **Users & Teams**. Passwords are stored
+Administrators manage further accounts on the **Users** page. Passwords are stored
 as Argon2id hashes. Browser sessions use HttpOnly cookies and hashed server-side
 IDs, expire after 12 idle hours or 7 days, and require CSRF and origin checks for
 changes. Passwords and access tokens are not stored in browser local storage.

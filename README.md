@@ -56,9 +56,8 @@ visp-memory brief "implement local storage"
 
 `init` creates project configuration and imports selected Git history. Connect
 your assistant separately using the [MCP and hooks guide](docs/guides/MCP.md).
-Use `visp-memory doctor` to inspect configuration and integration problems.
-To see what memory would and would not say about an existing repository without
-changing it, run `scripts/demo.sh <path-to-repo>` from a source checkout.
+Use `visp-memory doctor` to inspect configuration and integration problems. To
+try capture and recall without touching your project, run `visp-memory demo`.
 
 ## What you can do
 
