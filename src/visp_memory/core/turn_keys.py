@@ -24,9 +24,10 @@ MIN_KEY_CHARS = 20
 # where people state the fact they then elaborate on.
 MAX_KEY_CHARS = 1500
 MAX_KEYS_PER_MEMORY = 64
-# How many matching turns a brief adds to its candidate pool; 10 is the only
-# value evaluated so far.
-BRIEF_TURN_KEYS = 10
+# How many matching turns a brief adds to its candidate pool. 30 recovered more
+# evidence than 10 or 20 on held-out conversations without losing any elsewhere;
+# larger candidate pools crowded other evidence out of the budget.
+BRIEF_TURN_KEYS = 30
 
 
 def conversation_keys(content: str) -> list[tuple[int, int]]:

@@ -95,7 +95,7 @@ A conversation memory's single embedding is dominated by what most of its turns
 discuss, so a fact mentioned once in passing can be hard to retrieve. Turn keys
 also embed each substantive user turn separately, pointing back to the memory and
 the exact span of that turn. Coverage briefs (`context_selection="coverage"`) then
-add up to ten best-matching turns as cited passages. Each passes the same scope,
+add up to thirty best-matching turns as cited passages. Each passes the same scope,
 time and trust checks as any other candidate.
 
 ```yaml
