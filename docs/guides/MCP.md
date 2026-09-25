@@ -74,10 +74,9 @@ unknowns. Reuse its fingerprint to avoid repeating an unchanged brief. The
 [architecture guide](../reference/ARCHITECTURE.md#search-and-task-context) explains selection.
 
 For CLI direction, use `visp-memory goal`, `visp-memory focus`, and
-`visp-memory working`. `visp-memory done` records an advisory outcome. These
-intents are direction, not permission. Generic `complete` operations are also advisory. To mirror an
-actual task status change, send an explicit [workflow report](WORKFLOW_REPORTS.md).
-Installing the integration does not make every assistant send these reports automatically.
+`visp-memory working`. These intents are direction, not permission, and
+`visp-memory done` or a generic `complete` records an advisory outcome; see [workflow reports](WORKFLOW_REPORTS.md) for how an
+actual status change is recorded.
 
 ## Hooks and project guidance
 
@@ -91,7 +90,8 @@ is deduplicated within the session. Hook failures do not block the assistant;
 the returned memory is context, never a permission decision.
 
 Codex, Cursor, Aider, and generic integration support varies; see
-[feature status](../reference/FEATURE_STATUS.md). Review generated project instructions.
+[feature status](../reference/FEATURE_STATUS.md). Codex users can also install the
+bundled [Codex plugin](../../plugins/visp-memory/README.md). Review generated project instructions.
 Use the installed command's help for adapter-specific options:
 
 ```bash
@@ -133,11 +133,10 @@ than silently applying them to its legacy project summary. Omitted options keep 
 defaults. The [architecture guide](../reference/ARCHITECTURE.md#ranking-strategies)
 describes each option; hybrid modes examine more candidates and can add latency.
 
-For context supplied automatically to an assistant, prefer `memory_prepare_task`:
-it filters quarantined records. Query-based `memory_context` is a lower-level
-inspection surface and can return them with provenance tags in JSON. Ranking and
-coverage selection do not add trust filtering to that surface. See
-[trust policies](../reference/TRUST.md#provenance-and-quarantine) for the distinction.
+For context supplied automatically to an assistant, prefer `memory_prepare_task`;
+query-based `memory_context` is an
+[inspection surface](../reference/TRUST.md#provenance-and-quarantine) that can
+return quarantined records.
 
 ## Verify the connection
 

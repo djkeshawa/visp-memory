@@ -133,8 +133,9 @@ migration is available; they are never version-bumped without transformation.
 
 ### Export and import
 
-Export format 2.0 contains Evidence, beliefs/memories, intents, and the complete
-relationship graph. Stable IDs, content hashes, lifecycle state, lineage,
+Exports are written in format 3.0: Evidence, beliefs/memories, intents, the complete
+relationship graph, and authority attestations. Format 2.0 files still import; their
+beliefs are quarantined conservatively because they carry no attestations. Stable IDs, content hashes, lifecycle state, lineage,
 relationship IDs, and relationship evidence are data, not regeneration hints.
 Import validates repository ownership and references, stores Evidence first,
 then beliefs, then relationships, and refuses malformed or dangling graphs.
@@ -158,7 +159,7 @@ Backend portability is capability-gated:
 Unsupported export is refused before storage reads or destination-file writes.
 Unsupported import is refused before backend writes. ArcadeDB can provide a
 complete, ceiling-checked graph export, but it does not currently expose the
-single-transaction graph import needed by format 2.0. Remote/HTTP list endpoints
+single-transaction graph import that portable formats require. Remote/HTTP list endpoints
 are paginated and do not expose every portable field, so the client does not
 claim a complete export. Neo4j uses a separate native graph backup/restore command;
 portable memory packs remain unavailable.

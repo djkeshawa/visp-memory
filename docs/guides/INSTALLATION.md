@@ -67,26 +67,19 @@ Explicit `-f` arguments disable automatic override loading. If you use a custom
 volume override, insert `-f docker-compose.override.yml` between the base file
 and Ollama overlay. Omitting it can open a different, empty data volume.
 
-A provider alone does not create a vector index. The Ollama overlay adds the
-`ollama,chroma` extras automatically when building from source. For other SQLite
-semantic-search deployments, include `chroma` and the provider alongside `api,mcp`
-in `VISP_MEMORY_EXTRAS`. The published image excludes Chroma and local transformer
-models; an overlay without `--build` does not add missing packages to that image.
-After enabling or changing a model, use Settings → embedding diagnostics to
-preview and rebuild embeddings for existing memories. Confirm the index is
-available and the scoped records are indexed before relying on paraphrase recall.
-
-SQLite uses Nomic's documented `search_document:` and `search_query:` prefixes
-when `nomic-embed-text` is selected. These vectors use separate versioned
-collections so they cannot be mixed with earlier unprefixed vectors. Existing
-SQLite notes are retained; rebuild the active index when upgrading this setup.
+The Ollama overlay adds the `ollama,chroma` extras when building from source. For
+other SQLite semantic-search deployments, include `chroma` and the provider alongside
+`api,mcp` in `VISP_MEMORY_EXTRAS`. The published image excludes Chroma and local
+transformer models; an overlay without `--build` does not add them. Read
+[how embeddings work](STORAGE.md#how-embeddings-work) before rebuilding an index for
+existing memories.
 
 The optional `arcadedb` profile is [frozen](../reference/FEATURE_STATUS.md).
 
 ### Neo4j beta
 
 The separate Compose file keeps Neo4j optional and leaves the SQLite deployment intact.
-Available starting with 0.7.0. Build from this checkout or set
+Build from this checkout or set
 `VISP_MEMORY_IMAGE=ghcr.io/djkeshawa/visp-memory:0.7.9` and omit `--build`.
 Set `NEO4J_PASSWORD` to a unique database password in your local environment, then run:
 
@@ -100,9 +93,10 @@ do not fall back to SQLite. To evaluate it alongside an app already using port 8
 set `VISP_MEMORY_PORT=8001` for this command.
 
 Two named volumes persist the graph and application accounts/journals. Keep both for
-a complete backup. For graph backup or legacy migration, stop only the application
-service, leave Neo4j running, and run the [administration commands](STORAGE.md#backup-restore-and-legacy-migration)
-inside a one-off application container. For example:
+a complete backup. For graph backup, restore or legacy migration, stop only the
+application service, leave Neo4j running, and run the
+[administration commands](STORAGE.md#backup-restore-and-legacy-migration) inside a
+one-off application container:
 
 ```bash
 docker compose -f docker-compose.neo4j.yml stop visp-memory-neo4j
@@ -116,9 +110,7 @@ Copy backups off the data volume as part of your normal backup process.
 ## Python package
 
 ```bash
-pip install "visp-memory[mcp,capture]"
-# Add the API and dashboard:
-pip install "visp-memory[api,mcp]"
+pip install "visp-memory[api,mcp,capture]"
 visp-memory serve
 ```
 
@@ -133,22 +125,9 @@ Extract the archive for your OS and architecture, then run `start-server.sh`
 [standalone instructions](../../standalone/README-STANDALONE.md). These bundles
 exclude MCP, local transformer models, and the ArcadeDB/JVM runtime.
 
-## Build and troubleshoot
+## Troubleshoot
 
-Source builds need Node/npm as well as Python:
-
-```bash
-pip install -e ".[api,mcp,capture,dev]"
-python3 build_frontend.py
-python3 -m build
-```
-
-Build the frontend first so the wheel includes dashboard assets. For a standalone
-build, use `./build_standalone.sh` on the target platform. Maintainers should follow
-[Releasing](../development/RELEASING.md) for checks and publication.
-
-The frontend helper runs `npm ci` before each build, synchronizing dependencies
-with `package-lock.json` even when `node_modules` already exists.
+To build from source, follow [Contributing](../../CONTRIBUTING.md#development-setup).
 
 | Symptom | Next step |
 |---|---|

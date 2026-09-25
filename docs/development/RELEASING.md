@@ -1,17 +1,17 @@
 # Releasing
 
-This is the single release procedure and checklist. Build details live in
-[PACKAGING.md](../guides/INSTALLATION.md); the executable source of the pipeline is
-[build-release.yml](../../.github/workflows/build-release.yml).
-Publication is an owner-authorized action. Preparing and testing artifacts does
-not authorize tagging, pushing or publishing.
+This is the single release procedure and checklist. Build commands are in
+[Contributing](../../CONTRIBUTING.md#development-setup); the executable source of the
+pipeline is [build-release.yml](../../.github/workflows/build-release.yml).
+Only maintainers with release access tag and publish.
 
 ## Version and artifacts
 
 Published versions are immutable. Check PyPI and GitHub for used versions before
 choosing a new one. Update `pyproject.toml`, the fallback version in
-`src/visp_memory/__init__.py`, and the project entry in `uv.lock`; use a matching
-`vX.Y.Z` tag. Record the source commit and
+`src/visp_memory/__init__.py`, the project entry in `uv.lock`, and the pinned image
+tags and screenshot URL in `README.md` and `docs/guides/INSTALLATION.md`; use a
+matching `vX.Y.Z` tag. Record the source commit and
 artifact hashes; a version string alone is insufficient identity.
 
 Release outputs include:
@@ -65,11 +65,10 @@ For a packaged HTTP smoke, use
 `--with-browser-smoke` for the Chromium check or `--with-docker-build` for a
 container build. These options require their respective local tooling.
 
-## Publish after authorization
+## Publish
 
-Commit only the intended changes, then create and push the matching tag after
-authorization. Keep unrelated work and local configuration out of the release.
-Use this procedure for version updates and publication.
+Commit only the intended changes, then create and push the matching tag. Keep
+unrelated work and local configuration out of the release.
 
 ```bash
 git tag -a vX.Y.Z -m "Release X.Y.Z"
@@ -127,4 +126,4 @@ Do not delete or move a published tag, replace an existing version or describe a
 partial publish as a rollback. The workflow's `skip-existing` allows already
 uploaded PyPI files to be skipped on retry; it does not replace them. Changed
 code or artifacts require a new version. Record partial destination failures and
-recover through the authorized release procedure.
+recover through this release procedure.
