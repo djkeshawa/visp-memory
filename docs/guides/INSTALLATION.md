@@ -15,7 +15,7 @@ docker run -d --name visp-memory \
   -p 127.0.0.1:8000:8000 \
   -v visp-memory-data:/data \
   -e VISP_MEMORY_EMBEDDING_PROVIDER=noop \
-  ghcr.io/djkeshawa/visp-memory:0.7.9
+  ghcr.io/djkeshawa/visp-memory:0.7.10
 ```
 
 Open [the dashboard](http://127.0.0.1:8000/dashboard). Read `docker logs visp-memory`
@@ -80,7 +80,7 @@ The optional `arcadedb` profile is [frozen](../reference/FEATURE_STATUS.md).
 
 The separate Compose file keeps Neo4j optional and leaves the SQLite deployment intact.
 Build from this checkout or set
-`VISP_MEMORY_IMAGE=ghcr.io/djkeshawa/visp-memory:0.7.9` and omit `--build`.
+`VISP_MEMORY_IMAGE=ghcr.io/djkeshawa/visp-memory:0.7.10` and omit `--build`.
 Set `NEO4J_PASSWORD` to a unique database password in your local environment, then run:
 
 ```bash
