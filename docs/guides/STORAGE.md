@@ -52,6 +52,10 @@ If the filesystem prevents creating or locking these files, a warning is logged
 and startup continues without protection. `VISP_MEMORY_STORAGE_WRITER_GUARD=off`
 also disables the guard and is unsafe for a store shared with a server.
 
+Library code should close a `Memory` (`memory.close()` or `with Memory(...)`)
+before deleting its data directory: on Windows an open lock file cannot be
+removed.
+
 ## How embeddings work
 
 An embedding provider converts text into a numeric vector. With SQLite, Chroma

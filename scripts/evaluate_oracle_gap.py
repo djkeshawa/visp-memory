@@ -38,6 +38,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import tempfile
 from dataclasses import dataclass, field
@@ -315,8 +316,11 @@ def _score(
 def run(policy: Optional[InjectionPolicy] = None) -> dict[str, Any]:
     policy = policy or InjectionPolicy()
 
-    with tempfile.TemporaryDirectory() as raw_tmp:
+    with tempfile.TemporaryDirectory() as raw_tmp, contextlib.ExitStack() as stack:
         memory, id_to_key = _build_store(Path(raw_tmp))
+        # Close the store before the directory goes: on Windows an open
+        # writer-lock file cannot be deleted, so cleanup would fail.
+        stack.callback(memory.close)
         corpus_size = len(SEEDS)
 
         oracle = Outcome("oracle")
