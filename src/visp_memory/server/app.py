@@ -38,6 +38,7 @@ from visp_memory.core.reporting import MemoryIntelligenceReporter
 from visp_memory.core.storage import LocalStorage
 from visp_memory.core.writer_lock import acquire_writer_lock
 from visp_memory.recall.graph import GraphRecall
+from visp_memory.server.attribution_middleware import AttributionMiddleware
 from visp_memory.server.auth import UserContext, get_current_user, security
 from visp_memory.server.auth_store import AuthStore
 from visp_memory.server.authorization import (
@@ -406,6 +407,8 @@ async def request_context_middleware(request: Request, call_next):
         duration_ms,
     )
     return response
+
+app.add_middleware(AttributionMiddleware)
 
 # CORS configuration
 app.add_middleware(

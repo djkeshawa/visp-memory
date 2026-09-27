@@ -141,6 +141,9 @@ def _ensure_process_session() -> str:
 
 def _writer_for_call(server) -> WriterIdentity | None:
     """Resolve writer labels from process configuration and MCP client info."""
+    request_writer = current_mcp_request_context().writer
+    if request_writer is not None:
+        return request_writer
     try:
         request_context = getattr(server, "request_context", None)
         session = getattr(request_context, "session", None)
@@ -171,12 +174,13 @@ VALID_INTENT_STATUSES = frozenset({"active", "completed", "closed"})
 
 @dataclass(frozen=True)
 class MCPRequestContext:
-    """Transport and principal metadata for one MCP request."""
+    """Transport, principal, and writer metadata for one MCP request."""
 
     transport: str = "stdio"
     principal: UserContext | None = None
     request_id: str | None = None
     require_explicit_scope: bool = False
+    writer: WriterIdentity | None = None
 
 
 _request_context: ContextVar[MCPRequestContext] = ContextVar(
