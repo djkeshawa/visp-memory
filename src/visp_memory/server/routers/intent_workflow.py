@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from visp_memory.core.intent_workflow import IntentWorkflowReport
+from visp_memory.core.trust import LOCAL_WORKFLOW_ACTOR
 from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import (
     has_admin_privileges,
@@ -22,7 +23,7 @@ async def report_workflow_status(
     payload: IntentWorkflowReport,
     user: UserContext = Depends(get_current_user),
 ):
-    if user.auth_type not in {"session", "pat", "jwt", "api_key"}:
+    if user.auth_type not in {"session", "pat", "jwt", "api_key"} and not user.is_local_owner:
         raise HTTPException(403, "Workflow reports require an authenticated account or API token")
     storage = request.app.state.storage
     intent = require_scoped_record_access(
@@ -34,11 +35,12 @@ async def report_workflow_status(
     )
     require_repo_writable(storage, intent["repo_id"], user)
     author = (intent.get("context") or {}).get("author_id")
-    if not has_admin_privileges(user) and author != user.user_id:
+    if not user.is_local_owner and not has_admin_privileges(user) and author != user.user_id:
         raise HTTPException(403, "Only the intent owner can connect a workflow reporter")
+    actor_id = LOCAL_WORKFLOW_ACTOR if user.is_local_owner else user.user_id
     try:
         result = storage.report_intent_workflow(
-            intent_id, payload.model_dump(mode="json"), actor_id=user.user_id, channel="rest"
+            intent_id, payload.model_dump(mode="json"), actor_id=actor_id, channel="rest"
         )
     except NotImplementedError as error:
         raise HTTPException(501, str(error)) from error
@@ -50,7 +52,7 @@ async def report_workflow_status(
         append_audit_event(
             storage,
             event_type="intent.workflow_status_reported",
-            actor_id=user.user_id,
+            actor_id=actor_id,
             repo_id=intent["repo_id"],
             target_type="intent",
             target_id=intent_id,

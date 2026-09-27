@@ -3,6 +3,7 @@ from pydantic import ValidationError
 
 from visp_memory.core.intent_workflow import IntentWorkflowReport
 from visp_memory.core.storage import LocalStorage
+from visp_memory.core.trust import LOCAL_WORKFLOW_ACTOR
 
 
 def report(**changes):
@@ -63,6 +64,22 @@ def test_other_actor_and_context_edit_cannot_replace_workflow_report(tmp_path):
     storage.update_intent(intent, context={"external_workflow": {"source": "fake"}})
     saved = storage.get_active_intents(status="all")[0]
     assert saved["context"]["external_workflow"]["source"] == "assistant"
+
+
+def test_legacy_anonymous_report_binding_matches_local_workflow_actor(tmp_path):
+    storage = LocalStorage(tmp_path)
+    intent = storage.set_intent("Deliver login", repo_id="sample")
+    storage.report_intent_workflow(intent, report(), actor_id="anonymous", channel="rest")
+
+    updated = storage.report_intent_workflow(
+        intent,
+        report(revision=2, event_id="event-2", summary="Updated"),
+        actor_id=LOCAL_WORKFLOW_ACTOR,
+        channel="rest",
+    )
+
+    assert updated["applied"] is True
+    assert updated["report"]["reported_by"] == LOCAL_WORKFLOW_ACTOR
 
 
 @pytest.mark.parametrize(

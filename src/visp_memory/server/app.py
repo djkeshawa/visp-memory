@@ -34,6 +34,7 @@ from visp_memory.core.intent_evaluator import IntentEvaluator
 from visp_memory.core.lifecycle import MemoryLifecycleManager
 from visp_memory.core.model_router import ModelRouter
 from visp_memory.core.neo4j_storage import Neo4jStorage
+from visp_memory.core.owner_token import OWNER_TOKEN_FILE_ENV
 from visp_memory.core.reporting import MemoryIntelligenceReporter
 from visp_memory.core.storage import LocalStorage
 from visp_memory.recall.graph import GraphRecall
@@ -43,6 +44,10 @@ from visp_memory.server.authorization import (
     can_access_scoped_record,
     has_admin_privileges,
     require_repo_scope_access,
+)
+from visp_memory.server.owner_token import (
+    cleanup_owner_token_files,
+    create_owner_token_files,
 )
 from visp_memory.server.request_scope import request_repo_id
 from visp_memory.server.routers import (
@@ -328,11 +333,34 @@ async def lifespan(app: FastAPI):
     """
     stop = asyncio.Event()
     task = None
+    owner_files = None
+    previous_owner_token_file = os.environ.get(OWNER_TOKEN_FILE_ENV)
+    previous_owner_token = getattr(app.state, "owner_maintenance_token", None)
+    previous_owner_token_path = getattr(app.state, "owner_maintenance_token_file", None)
     app.state.dream_last_activity = time.monotonic()
     if isinstance(app.state.storage, (LocalStorage, Neo4jStorage)):
         app.state.dreaming = Dreaming(app.state.storage)
         task = asyncio.create_task(dreaming_loop(app, stop))
     try:
+        if config.server.local_owner_mode:
+            host = config.server.host
+            if ":" in host and not host.startswith("["):
+                host = f"[{host}]"
+            port = config.server.port
+            # App startup also covers `serve --shared` and direct ASGI startup;
+            # CLI arguments are copied into ServerConfig before Uvicorn imports us.
+            owner_files = create_owner_token_files(
+                port=port,
+                url=f"http://{host}:{port}",
+                data_dir=config.storage.data_dir,
+            )
+            app.state.owner_maintenance_token = owner_files.token_path.read_text(
+                encoding="utf-8"
+            )
+            app.state.owner_maintenance_token_file = str(owner_files.token_path)
+            # The environment points to the cached secret's file; it never holds
+            # the secret value itself.
+            os.environ[OWNER_TOKEN_FILE_ENV] = str(owner_files.token_path)
         yield
     finally:
         stop.set()
@@ -346,6 +374,14 @@ async def lifespan(app: FastAPI):
                     storage.close()
                 except Exception as e:  # pragma: no cover - shutdown must not raise
                     logger.error(f"Error closing storage on shutdown: {e}")
+            if owner_files is not None:
+                cleanup_owner_token_files(owner_files)
+            if previous_owner_token_file is None:
+                os.environ.pop(OWNER_TOKEN_FILE_ENV, None)
+            else:
+                os.environ[OWNER_TOKEN_FILE_ENV] = previous_owner_token_file
+            app.state.owner_maintenance_token = previous_owner_token
+            app.state.owner_maintenance_token_file = previous_owner_token_path
 
 
 # Initialize App

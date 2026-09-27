@@ -47,8 +47,23 @@ curl http://127.0.0.1:8000/memories \
 
 Set `VISP_MEMORY_TOKEN` in your client environment to the issued token. The API
 example uses it as a shell variable, not as a server configuration setting.
-Dreaming endpoints require administrator access and the `admin` token scope;
-workflow reports need `intent:write` and access to the target intent/project.
+On authenticated deployments, dreaming endpoints require administrator access
+and the `admin` token scope. Workflow reports need `intent:write` and access to
+the target intent/project.
+
+## Owner maintenance on a local server
+
+When `visp-memory serve` starts in open local-owner mode, it writes a random
+maintenance token to `~/.visp-memory/run/owner-<port>.token` with owner-only
+permissions on POSIX systems. On Windows, the file lives under the current
+user's profile. Local clients such as `RemoteStorage` can read the file as the
+same OS user and send it to the loopback server. Loopback by itself
+does not prove ownership, because other OS users on the machine can connect to
+`127.0.0.1` too. The server removes the token and its discovery record on clean
+shutdown.
+
+The dashboard runs in a browser and cannot read this protected file or send its
+token, so dashboard maintenance still requires an administrator account.
 
 ## Server deployment
 

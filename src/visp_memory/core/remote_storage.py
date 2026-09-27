@@ -19,6 +19,11 @@ from visp_memory.core.api_limits import MAX_QUERY_LIMIT
 from visp_memory.core.beliefs import normalize_belief_type
 from visp_memory.core.remote import RemoteAdminMixin, RemoteRecallMixin
 from visp_memory.core.remote.errors import RemoteStorageError
+from visp_memory.core.remote.owner_auth import (
+    OWNER_TOKEN_HEADER,
+    owner_token_path_for_request,
+    read_owner_token,
+)
 from visp_memory.core.storage import (
     BaseStorage,
     EvidenceImmutableError,
@@ -186,14 +191,33 @@ class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, BaseStorage):
             raise self._write_error("attach evidence", e) from e
 
     def _install_request_guard(self) -> None:
-        """Inject a default timeout and centralized failure logging into the session."""
+        """Add owner proof, default timeouts, and centralized failure logging."""
         original_request = self.session.request
         timeout = self.timeout
 
         def guarded_request(method, url, **kwargs):
             kwargs.setdefault("timeout", timeout)
+            token_path = owner_token_path_for_request(self.server_url, url)
+            token = read_owner_token(token_path) if token_path else None
+            if token:
+                headers = dict(kwargs.get("headers") or {})
+                headers[OWNER_TOKEN_HEADER] = token
+                kwargs["headers"] = headers
+                # Requests carries custom headers across redirects. The token is
+                # proof for this loopback origin only, so do not forward it.
+                kwargs["allow_redirects"] = False
             try:
                 response = original_request(method, url, **kwargs)
+                if response.status_code == 403 and token_path and token:
+                    refreshed_token = read_owner_token(token_path)
+                    retry_kwargs = dict(kwargs)
+                    retry_headers = dict(retry_kwargs.get("headers") or {})
+                    if refreshed_token:
+                        retry_headers[OWNER_TOKEN_HEADER] = refreshed_token
+                    else:
+                        retry_headers.pop(OWNER_TOKEN_HEADER, None)
+                    retry_kwargs["headers"] = retry_headers
+                    response = original_request(method, url, **retry_kwargs)
             except requests.RequestException as exc:
                 logger.warning("Remote request %s %s failed: %s", method, url, exc)
                 raise

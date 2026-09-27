@@ -8,7 +8,7 @@ from starlette.concurrency import run_in_threadpool
 
 from visp_memory.core.dreaming import Dreaming
 from visp_memory.server.auth import UserContext, get_current_user
-from visp_memory.server.authorization import has_admin_privileges, require_repo_writable
+from visp_memory.server.authorization import require_owner_or_admin, require_repo_writable
 
 router = APIRouter(prefix="/dreaming", tags=["dreaming"])
 
@@ -25,8 +25,7 @@ class Review(BaseModel):
 
 
 def service(request, repo_id, user):
-    if not has_admin_privileges(user):
-        raise HTTPException(403, "Dreaming controls require an administrator")
+    require_owner_or_admin(user)
     require_repo_writable(request.app.state.storage, repo_id, user)
     try:
         return Dreaming(request.app.state.storage)

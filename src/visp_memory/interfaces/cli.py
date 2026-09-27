@@ -62,12 +62,14 @@ from visp_memory.core.embedding_status import (
 )
 from visp_memory.core.intent_usage import STATUS_NEVER_USED, check_intent_usage
 from visp_memory.core.lexical_ranking import RANKING_STRATEGIES
+from visp_memory.core.paths import run_dir
 from visp_memory.core.ranking import projected_importance
 from visp_memory.core.reporting import MemoryIntelligenceReporter
 from visp_memory.core.storage import LocalStorage
 from visp_memory.core.trust import LOCAL_USER_ACTOR, LOCAL_WORKFLOW_ACTOR, WriteChannel
 from visp_memory.hooks.reachability import ReachabilityReport, check_reachability
 from visp_memory.interfaces.maintenance import app as maintenance_app
+from visp_memory.interfaces.serve_environment import server_environment
 from visp_memory.interfaces.shared_server import configure_shared_server
 
 console = Console()
@@ -3300,12 +3302,15 @@ def serve(
     if shared:
         configure_shared_server(data_dir)
     _ensure_serveable_auth_config(host)
-
-    console.print(f"[green]Starting Central Memory Server at http://{host}:{port}[/green]")
+    owner_token_file = None
+    if getattr(load_config().server, "local_owner_mode", False):
+        owner_token_file = run_dir() / f"owner-{port}.token"
     try:
-        import uvicorn
+        with server_environment(host, port, owner_token_file):
+            console.print(f"[green]Starting Central Memory Server at http://{host}:{port}[/green]")
+            import uvicorn
 
-        uvicorn.run("visp_memory.server.app:app", host=host, port=port, reload=reload)
+            uvicorn.run("visp_memory.server.app:app", host=host, port=port, reload=reload)
     except ImportError:
         console.print("[red]uvicorn not installed.[/red]")
         console.print("Install with: [bold]pip install visp-memory[api][/bold]")

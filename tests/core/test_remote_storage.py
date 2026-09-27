@@ -6,6 +6,7 @@ import requests
 
 from visp_memory import Memory, MemoryConfig
 from visp_memory.core.hybrid_retrieval import HybridRetriever
+from visp_memory.core.owner_token import OWNER_TOKEN_HEADER
 from visp_memory.core.recall_candidates import recall_candidates
 from visp_memory.core.remote_storage import RemoteStorage, RemoteStorageError
 from visp_memory.core.storage import EvidenceImmutableError, SessionCompletionStatus
@@ -698,7 +699,13 @@ class _ProbeSession:
         self.calls.append((method, url, kwargs))
         if self.error is not None:
             raise self.error
-        return self.response
+        if hasattr(self, "responses") and self.responses:
+            response = self.responses.pop(0)
+        else:
+            response = self.response
+        if hasattr(self, "on_response"):
+            self.on_response(response)
+        return response
 
     def get(self, url, params=None):
         return self.request("GET", url, params=params)
@@ -753,6 +760,62 @@ def test_remote_constructor_survives_best_effort_probe_transport_failure(monkeyp
     assert storage.session is session
     assert "Remote request GET https://memory.example/ failed" in caplog.text
     assert session.calls[0][2]["timeout"] == 30.0
+
+
+def test_remote_storage_sends_owner_token_only_to_loopback_with_token_file(
+    monkeypatch, tmp_path
+):
+    import visp_memory.core.remote_storage as remote_module
+
+    token_dir = tmp_path / "run"
+    token_dir.mkdir()
+    (token_dir / "owner-8765.token").write_text("same-user-token", encoding="utf-8")
+    monkeypatch.setattr("visp_memory.core.remote.owner_auth.run_dir", lambda: token_dir)
+    sessions = []
+
+    def create_session():
+        session = _ProbeSession(FakeResponse(200, {}))
+        sessions.append(session)
+        return session
+
+    monkeypatch.setattr(remote_module.requests, "Session", create_session)
+
+    RemoteStorage("http://127.0.0.1:8765")
+    RemoteStorage("http://memory.example:8765")
+    RemoteStorage("http://127.0.0.1:8766")
+
+    assert sessions[0].calls[0][2]["headers"][OWNER_TOKEN_HEADER] == "same-user-token"
+    assert "headers" not in sessions[1].calls[0][2]
+    assert "headers" not in sessions[2].calls[0][2]
+
+
+def test_remote_storage_rereads_owner_token_and_retries_one_forbidden_request(
+    monkeypatch, tmp_path
+):
+    import visp_memory.core.remote_storage as remote_module
+
+    token_dir = tmp_path / "run"
+    token_dir.mkdir()
+    token_path = token_dir / "owner-8765.token"
+    token_path.write_text("old-token", encoding="utf-8")
+    monkeypatch.setattr("visp_memory.core.remote.owner_auth.run_dir", lambda: token_dir)
+    session = _ProbeSession(FakeResponse(200, {}))
+    monkeypatch.setattr(remote_module.requests, "Session", lambda: session)
+    storage = RemoteStorage("http://localhost:8765")
+    session.responses = [FakeResponse(403, {}), FakeResponse(200, {})]
+    session.on_response = lambda response: (
+        token_path.write_text("new-token", encoding="utf-8")
+        if response.status_code == 403
+        else None
+    )
+
+    response = storage.session.get("http://localhost:8765/maintenance/verify")
+
+    assert response.status_code == 200
+    assert session.calls[-2][2]["headers"][OWNER_TOKEN_HEADER] == "old-token"
+    assert session.calls[-1][2]["headers"][OWNER_TOKEN_HEADER] == "new-token"
+    assert session.calls[-1][2]["timeout"] == storage.timeout
+    assert len(session.calls) == 3
 
 
 @pytest.mark.parametrize(

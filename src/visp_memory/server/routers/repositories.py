@@ -16,7 +16,7 @@ from visp_memory.core.storage import iter_repository_memories
 from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import (
     can_access_scoped_record,
-    require_admin,
+    require_owner_or_admin,
     require_repo_scope_access,
 )
 from visp_memory.server.repository_access import AuthorizedRepositoryManager
@@ -115,7 +115,7 @@ async def archive_repository(
     repo_id: str,
     user: UserContext = Depends(get_current_user),
 ):
-    require_admin(user)
+    require_owner_or_admin(user)
     manager = AuthorizedRepositoryManager(request.app.state.storage, user)
     repository = manager.require(repo_id)
     if repository.status != "archived" and not manager.archive(repo_id):
@@ -137,7 +137,7 @@ async def restore_repository(
     repo_id: str,
     user: UserContext = Depends(get_current_user),
 ):
-    require_admin(user)
+    require_owner_or_admin(user)
     manager = AuthorizedRepositoryManager(request.app.state.storage, user)
     manager.require(repo_id)
     if not manager.restore(repo_id):
@@ -174,7 +174,7 @@ async def preview_repository_purge(
     repo_id: str,
     user: UserContext = Depends(get_current_user),
 ):
-    require_admin(user)
+    require_owner_or_admin(user)
     AuthorizedRepositoryManager(request.app.state.storage, user).require(repo_id)
     return _repository_purge_preview(request.app.state.storage, repo_id)
 
@@ -229,7 +229,7 @@ async def purge_repository(
     confirmation: str,
     user: UserContext = Depends(get_current_user),
 ):
-    require_admin(user)
+    require_owner_or_admin(user)
     if confirmation != repo_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

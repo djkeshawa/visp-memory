@@ -2,6 +2,8 @@
 Authentication and Authorization for Visp Memory Server.
 """
 
+import hmac
+import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -12,6 +14,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 from visp_memory.config import load_config
+from visp_memory.core.owner_token import OWNER_TOKEN_FILE_ENV, OWNER_TOKEN_HEADER
 
 # Security schemes
 security = HTTPBearer(auto_error=False)
@@ -36,10 +39,16 @@ class UserContext(BaseModel):
 
     #: This request came from the machine holding the store, in open local mode.
     #: It reads the store as its owner -- the same view `visp-memory recall` has
-    #: of the same file -- and nothing more: it is not an admin, so every
-    #: administrative surface refuses it exactly as it refuses any other
-    #: non-admin. Never set from a token, a session, or a network request.
+    #: of the same file. It is not an admin; only maintenance routes that also
+    #: require `owner_maintenance` accept a separate proof of OS-user access.
+    #: Never set from a token, a session, or a non-loopback request.
     is_local_owner: bool = False
+
+    #: This request proved it can read the local owner's token file. It allows
+    #: only the local maintenance routes that explicitly check this capability;
+    #: it does not make the principal an admin or grant account, team, provider,
+    #: routing, or broader tenant access.
+    owner_maintenance: bool = False
 
     def allows(self, scope: str) -> bool:
         return (
@@ -72,6 +81,28 @@ def is_local_owner_request(request: Request, config) -> bool:
         return False
     client = getattr(request, "client", None)
     return client is not None and client.host in LOOPBACK_CLIENT_HOSTS
+
+
+def _has_owner_maintenance_proof(request: Request) -> bool:
+    """Match a supplied token against the secret cached when this app started."""
+    configured_path = os.environ.get(OWNER_TOKEN_FILE_ENV)
+    if not configured_path:
+        return False
+    app_state = getattr(getattr(request, "app", None), "state", None)
+    cached_path = getattr(app_state, "owner_maintenance_token_file", None)
+    token = getattr(app_state, "owner_maintenance_token", None)
+    if not cached_path or not token:
+        return False
+    try:
+        if os.path.abspath(configured_path) != os.path.abspath(cached_path):
+            return False
+    except (OSError, TypeError):
+        return False
+    supplied = request.headers.get(OWNER_TOKEN_HEADER, "")
+    try:
+        return bool(supplied) and hmac.compare_digest(supplied, token)
+    except TypeError:
+        return False
 
 
 def _authorize_pat_request(request: Request, user: UserContext) -> UserContext:
@@ -176,7 +207,8 @@ async def get_current_user(
                     detail="Invalid or expired personal access token",
                 )
             return _authorize_pat_request(
-                request, UserContext(**principal, auth_type="pat")
+                request,
+                UserContext(**{**principal, "auth_type": "pat", "owner_maintenance": False}),
             )
 
         if not config.server.jwt_secret:
@@ -244,6 +276,7 @@ async def get_current_user(
             username="anonymous",
             team_id=config.server.default_team,
             is_local_owner=local_owner,
+            owner_maintenance=(local_owner and _has_owner_maintenance_proof(request)),
         )
 
     # 5. Fail if no auth
