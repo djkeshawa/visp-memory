@@ -36,6 +36,7 @@ from visp_memory.server.authorization import (
     require_repo_writable,
     require_scoped_record_access,
 )
+from visp_memory.server.request_scope import request_repo_id
 from visp_memory.server.routers.platform import append_audit_event
 from visp_memory.server.schemas import (
     EvidenceAttachRequest,
@@ -187,7 +188,7 @@ async def remember_latest_memory(
     """Recall the newest visible memory for the current repository scope."""
     storage = request.app.state.storage
     config = load_config()
-    memory_repo_id = repo_id or config.repo_id
+    memory_repo_id = request_repo_id(repo_id, config)
     require_repo_scope_access(storage, memory_repo_id, user)
     latest = _latest_visible_memory(
         storage,
@@ -217,7 +218,7 @@ async def list_memories(
 ):
     storage = request.app.state.storage
     config = load_config()
-    memory_repo_id = repo_id or config.repo_id
+    memory_repo_id = request_repo_id(repo_id, config)
     require_repo_scope_access(storage, memory_repo_id, user)
     # Filter authorization before applying the caller's visible offset/limit.
     # Backend pages stay bounded while internal keyset consumers may request up
@@ -267,7 +268,7 @@ async def create_memory(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
-    memory_repo_id = memory.repo_id or config.repo_id
+    memory_repo_id = request_repo_id(memory.repo_id, config)
     require_repo_writable(storage, memory_repo_id, user)
     if memory.layer == "semantic" and not memory.evidence_ids:
         raise HTTPException(
@@ -964,7 +965,7 @@ async def recall(
 ):
     storage = request.app.state.storage
     config = load_config()
-    recall_repo_id = query.repo_id or config.repo_id
+    recall_repo_id = request_repo_id(query.repo_id, config)
     require_repo_scope_access(storage, recall_repo_id, user)
 
     def rank_candidates(candidates):
@@ -1010,7 +1011,7 @@ async def get_graph_data(
     """Get memory graph (nodes and edges)."""
     storage = request.app.state.storage
     config = load_config()
-    graph_repo_id = repo_id or config.repo_id
+    graph_repo_id = request_repo_id(repo_id, config)
     require_repo_scope_access(storage, graph_repo_id, user)
     memories = storage.list_memories(limit=200, repo_id=graph_repo_id)
     memories = [

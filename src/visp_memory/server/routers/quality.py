@@ -8,6 +8,7 @@ from visp_memory.config import load_config
 from visp_memory.core.clock import parse_utc, utc_now
 from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import can_access_scoped_record, require_repo_scope_access
+from visp_memory.server.request_scope import request_repo_id
 from visp_memory.server.schemas import (
     DecayPreviewItem,
     DecayPreviewResponse,
@@ -86,7 +87,7 @@ async def list_duplicate_candidates(
     """Return deterministic exact-content duplicate candidates for review."""
     storage = request.app.state.storage
     config = load_config()
-    memory_repo_id = repo_id or config.repo_id
+    memory_repo_id = request_repo_id(repo_id, config)
     require_repo_scope_access(storage, memory_repo_id, user)
     limit = max(1, min(limit, 100))
 
@@ -153,7 +154,7 @@ async def list_decay_preview(
     """Preview which memories would lose strength during decay without mutating storage."""
     storage = request.app.state.storage
     config = load_config()
-    memory_repo_id = repo_id or config.repo_id
+    memory_repo_id = request_repo_id(repo_id, config)
     require_repo_scope_access(storage, memory_repo_id, user)
     limit = max(1, min(limit, 100))
     effective_halflife_days = max(1, halflife_days or config.decay_halflife_days)
