@@ -2,6 +2,7 @@ import json
 
 from typer.testing import CliRunner
 
+from tests.core.test_writer_lock_processes import spawned_role
 from visp_memory.core.storage import LocalStorage
 from visp_memory.interfaces.cli import app, get_memory
 
@@ -37,3 +38,20 @@ def test_cli_reports_explicit_completion(cli_env):
     assert result.exit_code == 0, result.output
     assert memory._storage.get_active_intents(repo_id="demo") == []
     assert memory._storage.get_active_intents(status="completed")[0]["id"] == intent_id
+
+
+def test_offline_backup_refused_while_server_is_running(cli_env):
+    source = cli_env / "data"
+    store = LocalStorage(source)
+    store.close()
+    destination = cli_env / "backup"
+    with spawned_role(source, "server") as (child, conflict):
+        assert conflict is None
+        holder_pid = child.pid
+        result = CliRunner().invoke(app, [
+            "storage", "backup", str(destination), "--data-dir", str(source), "--offline",
+        ])
+    assert result.exit_code != 0
+    assert "stop the server" in result.output.lower()
+    assert str(holder_pid) in result.output
+    assert not destination.exists()

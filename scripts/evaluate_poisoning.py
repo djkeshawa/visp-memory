@@ -34,6 +34,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import tempfile
 from dataclasses import dataclass
@@ -189,8 +190,11 @@ def _build_store(tmp: Path) -> tuple[Memory, set[str], dict[str, str]]:
 
 
 def run() -> dict[str, Any]:
-    with tempfile.TemporaryDirectory() as raw_tmp:
+    with tempfile.TemporaryDirectory() as raw_tmp, contextlib.ExitStack() as stack:
         memory, poisoned_ids, safe_ids = _build_store(Path(raw_tmp))
+        # Close the store before the directory goes: on Windows an open
+        # writer-lock file cannot be deleted, so cleanup would fail.
+        stack.callback(memory.close)
         corpus_size = BENIGN_COUNT + POISON_COUNT + len(safe_ids)
 
         undefended_hits = undefended_total = 0
