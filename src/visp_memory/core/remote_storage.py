@@ -17,7 +17,7 @@ except ImportError:
 
 from visp_memory.core.api_limits import MAX_QUERY_LIMIT
 from visp_memory.core.beliefs import normalize_belief_type
-from visp_memory.core.remote import RemoteAdminMixin, RemoteRecallMixin
+from visp_memory.core.remote import RemoteAdminMixin, RemotePortabilityMixin, RemoteRecallMixin
 from visp_memory.core.remote.errors import RemoteStorageError
 from visp_memory.core.remote.owner_auth import (
     OWNER_TOKEN_HEADER,
@@ -35,7 +35,7 @@ from visp_memory.quality.secrets import SecretBearingContentError, redact_for_st
 logger = logging.getLogger(__name__)
 
 
-class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, BaseStorage):
+class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, RemotePortabilityMixin, BaseStorage):
     """Storage client that connects to a remote Central Memory Server."""
 
     def __init__(

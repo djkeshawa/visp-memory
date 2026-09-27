@@ -1,3 +1,5 @@
+import json
+from dataclasses import asdict
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -6,6 +8,8 @@ import requests
 
 from visp_memory import Memory, MemoryConfig
 from visp_memory.core.hybrid_retrieval import HybridRetriever
+from visp_memory.core.indexing import EmbeddingIndexReport, ReindexResult, ReindexScope
+from visp_memory.core.memory_import_export import export_memory
 from visp_memory.core.owner_token import OWNER_TOKEN_HEADER
 from visp_memory.core.recall_candidates import recall_candidates
 from visp_memory.core.remote_storage import RemoteStorage, RemoteStorageError
@@ -14,6 +18,119 @@ from visp_memory.layers.episodic import EpisodicMemory
 from visp_memory.layers.semantic import SemanticMemory
 from visp_memory.recall.graph import GraphRecall
 from visp_memory.recall.proactive import ProactiveRecall
+
+
+def test_remote_graph_export_uses_one_server_export_and_writes_the_file(tmp_path):
+    payload = {"version": "3.0", "memories": {"episodic": [{"id": "last-record"}]}}
+    storage = remote_storage_with(FakeResponse(payload=payload))
+    from visp_memory.core.storage import StorageCapabilities
+
+    storage._capabilities_cache = StorageCapabilities(complete_graph_export=True)
+    config = MemoryConfig(repo_id="repo-a")
+    config.storage.data_dir = tmp_path
+    config.storage.api_key = "private-api-key"
+    memory = SimpleNamespace(_storage=storage, config=config)
+    path = tmp_path / "export.json"
+
+    result = export_memory(memory, path)
+
+    assert result["memories"] == payload["memories"]
+    assert json.loads(path.read_text())["memories"] == payload["memories"]
+    assert "private-api-key" not in path.read_text()
+    assert storage.session.get_calls == [("http://memory.example/repos/repo-a/export", None)]
+
+
+def test_remote_import_graph_sends_document_to_explicit_destination():
+    result = {"status": "completed", "memories": 1, "evidence": 0}
+    storage = remote_storage_with(FakeResponse(payload=result))
+    data = {"version": "3.0", "memories": {"episodic": []}}
+
+    assert storage.import_graph(data, default_repo_id="repo-c") == result
+    assert storage.session.post_calls == [("http://memory.example/repos/repo-c/import", data)]
+
+
+def test_remote_attestation_uses_client_scope_and_preserves_absence():
+    attestation = {"belief_id": "belief-1", "envelope": "signed-envelope"}
+    storage = remote_storage_with(FakeResponse(payload=attestation))
+    assert storage.get_authority_attestation("belief-1") == attestation
+    assert storage.session.last_get_url == "http://memory.example/memories/belief-1/attestation"
+    assert storage.session.last_get_params == {"repo_id": "repo-a"}
+    storage.session.response = FakeResponse(404)
+    assert storage.get_authority_attestation("missing") is None
+
+
+def test_remote_index_inspection_deserializes_server_dataclass():
+    report = EmbeddingIndexReport(
+        storage_backend="sqlite", provider="noop", effective_provider="noop", model=None,
+        dimension=None, status="disabled", message="Disabled on server",
+        scope={"repo_id": "repo-b", "layer": "semantic"}, matched_memories=7,
+        active_collections=["semantic"],
+    )
+    storage = remote_storage_with(FakeResponse(payload=asdict(report)))
+
+    result = storage.inspect_embedding_index(
+        storage_backend="client", provider="local", effective_provider="local",
+        scope=ReindexScope(repo_id="repo-b", layer="semantic"),
+    )
+
+    assert result == report
+    assert isinstance(result, EmbeddingIndexReport)
+    assert storage.session.last_get_url == "http://memory.example/diagnostics/embedding-index"
+    assert storage.session.last_get_params == report.scope
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_remote_reindex_deserializes_result_and_forwards_scope(dry_run):
+    report = ReindexResult(
+        dry_run=dry_run, status="ready", message="Dry run complete",
+        scope={"repo_id": "repo-b", "category": "fact"}, matched_memories=7,
+        errors=[{"id": "failed", "error": "provider"}],
+    )
+    storage = remote_storage_with(FakeResponse(payload=asdict(report)))
+    result = storage.rebuild_embedding_index(
+        scope=ReindexScope(repo_id="repo-b", category="fact"), dry_run=dry_run,
+    )
+    assert result == report
+    assert isinstance(result, ReindexResult)
+    assert storage.session.last_post_url == (
+        "http://memory.example/diagnostics/embedding-index/reindex"
+    )
+    assert storage.session.last_post_json == {**report.scope, "dry_run": dry_run}
+
+
+def test_remote_audit_listing_matches_local_signature_and_forwards_filters():
+    rows = [{"id": "audit-1", "event_type": "memory.purged"}]
+    storage = remote_storage_with(FakeResponse(payload=rows))
+    assert storage.list_audit_logs("owner", "repo-b", "memory.purged", 25) == rows
+    assert storage.session.last_get_url == "http://memory.example/platform/audit-log"
+    assert storage.session.last_get_params == {
+        "actor_id": "owner", "repo_id": "repo-b", "event_type": "memory.purged", "limit": 25,
+    }
+
+
+@pytest.mark.parametrize("method,kwargs", [
+    ("export_graph", {}),
+    ("import_graph", {"data": {}, "default_repo_id": "repo-a"}),
+    ("get_authority_attestation", {"belief_id": "belief-1"}),
+    ("inspect_embedding_index", {"storage_backend": "client", "provider": "noop"}),
+    ("rebuild_embedding_index", {}),
+    ("list_audit_logs", {}),
+])
+@pytest.mark.parametrize("status_code", [403, 500])
+def test_remote_portability_and_admin_failures_are_not_empty_successes(method, kwargs, status_code):
+    storage = remote_storage_with(FakeResponse(status_code, {"detail": "refused"}))
+    with pytest.raises(RemoteStorageError, match=f"HTTP {status_code}"):
+        getattr(storage, method)(**kwargs)
+
+
+@pytest.mark.parametrize("method,kwargs", [
+    ("inspect_embedding_index", {"storage_backend": "client", "provider": "noop"}),
+    ("rebuild_embedding_index", {}),
+])
+def test_remote_index_reports_reject_malformed_dataclasses(method, kwargs):
+    storage = remote_storage_with(FakeResponse(payload={"unexpected": True}))
+    with pytest.raises(RemoteStorageError, match="invalid"):
+        getattr(storage, method)(**kwargs)
 
 
 class FakeResponse:
