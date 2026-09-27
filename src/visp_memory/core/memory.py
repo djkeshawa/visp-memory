@@ -15,6 +15,7 @@ from typing import Any, Dict, List
 
 from visp_memory.config import MemoryConfig
 from visp_memory.core.arcadedb_storage import ArcadeDbStorage
+from visp_memory.core.attribution import WRITTEN_BY_KEY
 from visp_memory.core.compression import MemoryCompressor, create_llm_compressor
 from visp_memory.core.eligibility import (
     EligibilityFilterResult,
@@ -1110,7 +1111,15 @@ class Memory:
         factors: Dict[str, Dict[str, Any]] = {}
 
         session_id = context.get("session_id")
-        if session_id and self._context_value_matches(text, session_id):
+        metadata = memory.get("metadata") or {}
+        written_by = metadata.get(WRITTEN_BY_KEY) if isinstance(metadata, dict) else None
+        writer_session = (
+            written_by.get("session") if isinstance(written_by, dict) else None
+        )
+        if session_id and (
+            writer_session == session_id
+            or self._context_value_matches(text, session_id)
+        ):
             factors["session"] = {"score": 1.0, "reason": f"matched session {session_id}"}
 
         task = context.get("task")
@@ -1189,6 +1198,10 @@ class Memory:
         ]
         for field in ("metadata", "tags", "source_ids"):
             value = memory.get(field)
+            if field == "metadata" and isinstance(value, dict):
+                value = {
+                    key: item for key, item in value.items() if key != WRITTEN_BY_KEY
+                }
             if value:
                 parts.append(json.dumps(value, sort_keys=True, default=str))
         return " ".join(str(part) for part in parts if part).lower().replace("\\", "/")

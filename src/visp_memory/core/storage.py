@@ -22,6 +22,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Literal, Optional
 
+from visp_memory.core.attribution import stamp_written_by
 from visp_memory.core.beliefs import (
     HYPOTHESIS_TTL_DAYS,
     migrate_legacy_belief_fields,
@@ -3276,7 +3277,7 @@ class LocalStorage(BaseStorage):
                 repo_id=repo_id,
                 evidence_type=evidence_type,
                 provenance=provenance,
-                metadata=metadata or {},
+                metadata=stamp_written_by(metadata),
                 evidence_id=evidence_id,
                 created_at=created_at,
                 compare_created_at=compare_created_at,
@@ -3469,7 +3470,7 @@ class LocalStorage(BaseStorage):
         memory_id = memory_id or self._generate_id(content)
         repo_id = repo_id or UNSCOPED_REPO_ID
         tags = tags or []
-        metadata = metadata or {}
+        metadata = stamp_written_by(metadata)
         source_ids = source_ids or []
         evidence_ids = evidence_ids or []
         quality_flags = quality_flags or []
@@ -4312,6 +4313,7 @@ class LocalStorage(BaseStorage):
         intent_id = self._generate_id(description)
         context = {key: value for key, value in (context or {}).items()
                    if key not in WORKFLOW_CONTEXT_KEYS}
+        context = stamp_written_by(context)
         # Intents must obey the same scope invariant as memories: never NULL.
         #
         # `store_memory` has applied this default since the column existed, and

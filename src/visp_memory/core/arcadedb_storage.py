@@ -8,6 +8,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, Iterable, List, Optional
 
+from visp_memory.core.attribution import stamp_written_by
 from visp_memory.core.authority import (
     ProhibitionAuthorityError,
     verify_prohibition_attestation,
@@ -917,7 +918,7 @@ class ArcadeDbStorage(BaseStorage):
             "repo_id": repo_id,
             "evidence_type": evidence_type,
             "provenance": provenance,
-            "metadata": metadata or {},
+            "metadata": stamp_written_by(metadata),
             "created_at": created_at,
         }
         with self._database() as db:
@@ -1197,7 +1198,7 @@ class ArcadeDbStorage(BaseStorage):
         memory_id = memory_id or self._generate_id(content)
         repo_id = repo_id or UNSCOPED_REPO_ID
         tags = tags or []
-        metadata = metadata or {}
+        metadata = stamp_written_by(metadata)
         source_ids = source_ids or []
         evidence_ids = evidence_ids or []
         quality_flags = quality_flags or []
@@ -1667,7 +1668,7 @@ class ArcadeDbStorage(BaseStorage):
                 "id": intent_id,
                 "description": description,
                 "priority": priority,
-                "context": context or {},
+                "context": stamp_written_by(context),
                 "repo_id": repo_id,
                 "status": "active",
                 "created_at": now,

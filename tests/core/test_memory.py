@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from visp_memory import Memory, MemoryConfig
+from visp_memory.core.attribution import WriterIdentity, bind_writer
 from visp_memory.core.indexing import ReindexScope
 from visp_memory.core.storage import (
     CHROMADB_AVAILABLE,
@@ -53,6 +54,49 @@ def test_direct_facade_writes_default_to_unknown_and_replace_self_claims(memory)
         assert provenance_of(stored) is Provenance.UNKNOWN
         assert provenance_tag(Provenance.AUTHORED) not in stored["tags"]
         assert assess(stored).injectable is False
+
+
+def test_memory_and_evidence_writes_record_the_bound_writer(memory):
+    identity = WriterIdentity("codex", "session-a", "Codex/1")
+
+    with bind_writer(identity):
+        recorded_id = memory.record("Attributed event")
+        learned_id = memory.learn("Attributed knowledge")
+        evidence_id = memory._storage.store_evidence(
+            "Attributed evidence", repo_id="repo-a"
+        )
+        intent_id = memory.goal("Attributed intent")
+        memory.intent.record_outcome(intent_id, "completed", actor_id="host")
+
+    assert memory._storage.get_memory(recorded_id)["metadata"]["written_by"] == {
+        "agent": "codex",
+        "session": "session-a",
+        "client": "Codex/1",
+    }
+    assert memory._storage.get_memory(learned_id)["metadata"]["written_by"] == {
+        "agent": "codex",
+        "session": "session-a",
+        "client": "Codex/1",
+    }
+    assert memory._storage.get_evidence(evidence_id)["metadata"]["written_by"] == {
+        "agent": "codex",
+        "session": "session-a",
+        "client": "Codex/1",
+    }
+    stored_intent = memory._storage.get_active_intents(repo_id="repo-a")[0]
+    assert stored_intent["id"] == intent_id
+    assert stored_intent["context"]["written_by"] == {
+        "agent": "codex",
+        "session": "session-a",
+        "client": "Codex/1",
+    }
+    outcome = stored_intent["context"]["outcome_history"][-1]
+    assert outcome["actor_id"] == "host"
+    assert outcome["written_by"] == {
+        "agent": "codex",
+        "session": "session-a",
+        "client": "Codex/1",
+    }
 
 
 def test_direct_layer_writes_default_to_unknown_and_replace_self_claims(memory):
@@ -1078,6 +1122,40 @@ class TestSearch:
         }
         assert any("file" in item for item in results[0]["ranking_explanation"])
 
+    def test_writer_agent_does_not_add_task_or_session_factors(self, memory):
+        attributed = {
+            "content": "Unrelated stored fact",
+            "layer": "episodic",
+            "category": "note",
+            "repo_id": "repo-a",
+            "metadata": {"written_by": {"agent": "codex"}},
+        }
+
+        factors = memory._recall_ranking_factors(
+            attributed, {"task": "codex", "session_id": "codex"}
+        )
+
+        assert "task" not in factors
+        assert "session" not in factors
+
+    def test_explicit_writer_session_adds_session_factor(self, memory):
+        attributed = {
+            "content": "Unrelated stored fact",
+            "layer": "episodic",
+            "category": "note",
+            "repo_id": "repo-a",
+            "metadata": {"written_by": {"session": "session-a"}},
+        }
+
+        factors = memory._recall_ranking_factors(
+            attributed, {"session_id": "session-a"}
+        )
+
+        assert factors["session"] == {
+            "score": 1.0,
+            "reason": "matched session session-a",
+        }
+
     def test_proactive_file_recall_exposes_file_ranking_factor(self, memory):
         """Proactive recall annotates surfaced memories with context factors."""
         from visp_memory.recall.proactive import ProactiveRecall
@@ -1314,6 +1392,33 @@ class TestImportExport:
         assert [m["content"] for m in exported["memories"]["episodic"]] == ["Event in repo A"]
         assert [m["content"] for m in exported["memories"]["semantic"]] == ["Knowledge in repo A"]
         assert [i["description"] for i in exported["intents"]] == ["Goal in repo A"]
+
+    def test_import_preserves_original_writer_under_a_different_binding(self, tmp_path):
+        source_config = MemoryConfig(project_name="writer-export", repo_id="repo-a")
+        source_config.storage.data_dir = tmp_path / "source"
+        source_config.embedding.provider = "noop"
+        source = Memory(config=source_config)
+        original_writer = WriterIdentity("claude-code", "session-original", None)
+        with bind_writer(original_writer):
+            source.record("Exported attributed event")
+
+        exported = source.export()
+        exported["version"] = "1.0"
+        export_file = tmp_path / "writer-export.json"
+        export_file.write_text(json.dumps(exported, default=str))
+
+        target_config = MemoryConfig(project_name="writer-import", repo_id="repo-a")
+        target_config.storage.data_dir = tmp_path / "target"
+        target_config.embedding.provider = "noop"
+        target = Memory(config=target_config)
+        with bind_writer(WriterIdentity("codex", "session-import", None)):
+            target.import_memories(export_file)
+
+        imported = target._storage.list_memories(layer="episodic", repo_id="repo-a")[0]
+        assert imported["metadata"]["written_by"] == {
+            "agent": "claude-code",
+            "session": "session-original",
+        }
 
     def test_export_redacts_config_secrets(self, tmp_path):
         config = MemoryConfig(project_name="export-test", repo_id="repo-a")

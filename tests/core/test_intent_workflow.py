@@ -37,6 +37,26 @@ def test_external_completion_is_visible_and_duplicate_report_is_idempotent(tmp_p
     assert storage.get_active_intents(repo_id="sample")[0]["id"] == intent
 
 
+def test_workflow_binding_does_not_change_under_different_writer_identities(tmp_path):
+    from visp_memory.core.attribution import WriterIdentity, bind_writer
+
+    storage = LocalStorage(tmp_path)
+    intent = storage.set_intent("Deliver login", repo_id="sample")
+    with bind_writer(WriterIdentity("codex", "session-a", None)):
+        first = storage.report_intent_workflow(
+            intent, report(), actor_id="host", channel="cli"
+        )
+    with bind_writer(WriterIdentity("claude-code", "session-b", None)):
+        duplicate = storage.report_intent_workflow(
+            intent, report(), actor_id="host", channel="cli"
+        )
+
+    assert first["applied"] is True
+    assert duplicate["applied"] is False
+    saved = storage.get_active_intents(repo_id="sample", status="completed")[0]
+    assert saved["context"]["workflow_history"][0]["reported_by"] == "host"
+
+
 @pytest.mark.parametrize(
     "change",
     [

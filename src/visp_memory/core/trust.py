@@ -48,6 +48,9 @@ from typing import Any, Iterable, Mapping, Optional
 from visp_memory.core.clock import parse_utc, utc_now
 
 PROVENANCE_TAG_PREFIX = "provenance:"
+RESERVED_METADATA_KEYS = frozenset(
+    {"author_id", "team_id", "write_channel", "written_by"}
+)
 
 
 class Provenance(str, Enum):

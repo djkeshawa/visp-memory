@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from visp_memory.config import load_config
+from visp_memory.core.attribution import WRITTEN_BY_KEY
 from visp_memory.core.authority import ProhibitionAuthorityError
 from visp_memory.core.clock import utc_now
 from visp_memory.core.eligibility import (
@@ -21,6 +22,7 @@ from visp_memory.core.storage import (
     SemanticMemoryImmutableError,
 )
 from visp_memory.core.trust import (
+    RESERVED_METADATA_KEYS,
     WriteChannel,
     channel_policy,
     filter_unsolicited,
@@ -54,6 +56,26 @@ from visp_memory.server.schemas import (
 
 # No prefix to maintain backward compatibility for /recall and /relationships
 router = APIRouter(tags=["memories"])
+
+
+def _preserve_metadata_keys(
+    metadata: Dict[str, Any], existing: Dict[str, Any], keys
+) -> None:
+    """Keep server-owned metadata from the stored record during metadata updates."""
+    for key in keys:
+        if key in existing:
+            metadata[key] = existing[key]
+        else:
+            metadata.pop(key, None)
+
+
+def _preserve_written_by(metadata: Dict[str, Any], existing: Dict[str, Any]) -> None:
+    """Keep the original writer when a REST request replaces record metadata."""
+    if WRITTEN_BY_KEY in existing:
+        metadata[WRITTEN_BY_KEY] = existing[WRITTEN_BY_KEY]
+    else:
+        metadata.pop(WRITTEN_BY_KEY, None)
+
 
 PROVENANCE_FIELDS = (
     "title",
@@ -284,7 +306,11 @@ async def create_memory(
         )
 
     # Add author attribution to metadata
-    metadata = dict(memory.metadata or {})
+    metadata = {
+        key: value
+        for key, value in (memory.metadata or {}).items()
+        if key not in RESERVED_METADATA_KEYS
+    }
     metadata["author_id"] = user.user_id
     metadata["write_channel"] = WriteChannel.HTTP.value
     if user.team_id:
@@ -346,7 +372,7 @@ async def create_evidence(
     metadata = {
         key: value
         for key, value in evidence.metadata.items()
-        if key not in {"author_id", "team_id", "write_channel"}
+        if key not in RESERVED_METADATA_KEYS
     }
     metadata.update({"author_id": user.user_id, "write_channel": "http"})
     if user.team_id:
@@ -834,13 +860,14 @@ async def revise_memory(
         )
 
     metadata = dict(revision.metadata or {})
+    metadata.pop(WRITTEN_BY_KEY, None)
     if not has_admin_privileges(user):
         existing_metadata = existing.get("metadata") or {}
-        for reserved_key in ("author_id", "team_id", "environment", "task_type"):
-            if reserved_key in existing_metadata:
-                metadata[reserved_key] = existing_metadata[reserved_key]
-            else:
-                metadata.pop(reserved_key, None)
+        _preserve_metadata_keys(
+            metadata,
+            existing_metadata,
+            RESERVED_METADATA_KEYS | {"environment", "task_type"},
+        )
 
     try:
         content, quality_flags = redact_for_storage(
@@ -922,18 +949,20 @@ async def update_memory(
         update_data["content"] = sanitized_content
         if sanitized_content != original_content:
             update_data["quality_flags"] = redaction_flags
-    if "metadata" in update_data and not has_admin_privileges(user):
+    if "metadata" in update_data:
         metadata = dict(update_data["metadata"] or {})
         existing_metadata = mem.get("metadata") or {}
+        _preserve_written_by(metadata, existing_metadata)
         # Non-admins may never set ownership/scope fields. Pin them to the record's
         # existing values, and strip them entirely when absent so a caller cannot
         # introduce a team_id/author_id (which drives record visibility) on a record
         # that derived its scope from the repo.
-        for reserved_key in ("author_id", "team_id", "environment", "task_type"):
-            if reserved_key in existing_metadata:
-                metadata[reserved_key] = existing_metadata[reserved_key]
-            else:
-                metadata.pop(reserved_key, None)
+        if not has_admin_privileges(user):
+            _preserve_metadata_keys(
+                metadata,
+                existing_metadata,
+                RESERVED_METADATA_KEYS | {"environment", "task_type"},
+            )
         update_data["metadata"] = metadata
     if update_data.get("status") == "active" and mem.get("status") == "pending":
         update_data["approved_by"] = user.user_id

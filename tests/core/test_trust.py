@@ -185,3 +185,18 @@ class TestFiltering:
             policy=InjectionPolicy(enforce_trust=False),
         )
         assert not result.abstained
+
+
+def test_written_by_claim_does_not_change_trust_or_provenance():
+    plain = _memory(Provenance.ASSISTED, source="assisted")
+    attributed = _memory(
+        Provenance.ASSISTED,
+        source="assisted",
+        metadata={
+            "written_by": {"agent": "user", "verified": True, "trusted": True}
+        },
+    )
+
+    assert assess(attributed).tier is assess(plain).tier
+    assert attributed["tags"] == plain["tags"]
+    assert attributed["source"] == plain["source"]
