@@ -1,0 +1,223 @@
+"""Keep served stores separate from local processes using crash-released OS locks."""
+
+import errno
+import json
+import logging
+import os
+import threading
+import uuid
+from contextlib import suppress
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+_mutex = threading.RLock()
+_registry = {}
+
+
+class WriterLockConflict(RuntimeError):  # noqa: N818 - public conflict name
+    """A live process owns an incompatible role for this store."""
+
+    def __init__(self, data_dir: Path, local_pids=()):
+        if local_pids:
+            detail = (
+                f"live local writers (pids: {', '.join(sorted(set(local_pids)))})"
+                "; stop those processes before serving or maintaining the store"
+            )
+        else:
+            metadata = {}
+            with suppress(OSError, ValueError):
+                value = json.loads((data_dir / ".locks/server.json").read_text())
+                if isinstance(value, dict):
+                    metadata = value
+            url = metadata.get("url") or "<server-url>"
+            detail = (
+                f"a server or offline maintenance process (pid: {metadata.get('pid', 'unknown')}); "
+                f"this store is served by {url}; set `storage.mode: client` and "
+                f"`storage.server_url: {url}` in visp-memory.yaml "
+                "(or run `visp-memory connect` once available)"
+            )
+        super().__init__(f"Storage writer conflict for {data_dir}: {detail}")
+
+
+@dataclass
+class _HeldLock:
+    path: Path
+    fd: int
+    references: int = 1
+
+
+class WriterLockHandle:
+    """Each handle releases only its own reference, including when discarded."""
+
+    def __init__(self, key=None, held=None):
+        self._key = key
+        self._held = held
+
+    def release(self):
+        with _mutex:
+            held, self._held = self._held, None
+            if held is None or _registry.get(self._key) is not held:
+                return
+            held.references -= 1
+            if held.references:
+                return
+            del _registry[self._key]
+            if self._key[1] == "server":
+                with suppress(OSError):
+                    held.path.with_suffix(".json").unlink()
+            os.close(held.fd)
+            if self._key[1] == "local":
+                with suppress(OSError):
+                    held.path.unlink()  # Windows requires closing before unlinking.
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.release()
+
+    def __del__(self):
+        self.release()
+
+
+def _try_lock(fd):
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError as error:
+        if error.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+            return False
+        raise
+
+
+def _open_locked(path, data_dir):
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        if not _try_lock(fd):
+            raise WriterLockConflict(data_dir)
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _local_is_live(path):
+    try:
+        fd = os.open(path, os.O_RDWR)
+        try:
+            if not _try_lock(fd):
+                return True
+        finally:
+            os.close(fd)
+        path.unlink()
+    except FileNotFoundError:
+        pass  # A local process finished while we scanned.
+    except PermissionError:
+        return True
+    return False
+
+
+def _check_locals(data_dir):
+    own = _registry.get((data_dir, "local"))
+    live = []
+    try:
+        with os.scandir(data_dir / ".locks") as entries:
+            for entry in entries:
+                if not (entry.name.startswith("local-") and entry.name.endswith(".lock")):
+                    continue
+                path = Path(entry.path)
+                if (own is None or own.path != path) and _local_is_live(path):
+                    live.append(entry.name.split("-", 2)[1])
+    except OSError:
+        if not live:
+            raise
+    if live:
+        raise WriterLockConflict(data_dir, live)
+
+
+def _write_metadata(data_dir, url):
+    try:
+        (data_dir / ".locks/server.json").write_text(json.dumps({
+            "pid": os.getpid(), "url": url,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }), encoding="utf-8")
+    except OSError as error:
+        logger.warning("Cannot write server metadata for %s: %s", data_dir, error)
+
+
+def _acquire(data_dir, role, url):
+    locks = data_dir / ".locks"
+    locks.mkdir(parents=True, exist_ok=True)
+    path = locks / (
+        f"local-{os.getpid()}-{uuid.uuid4().hex}.lock" if role == "local" else "server.lock"
+    )
+    fd = _open_locked(path, data_dir)
+    try:
+        if role == "server":
+            _check_locals(data_dir)
+            _write_metadata(data_dir, url)
+        elif (data_dir, "server") not in _registry:
+            server_fd = _open_locked(locks / "server.lock", data_dir)
+            try:
+                # A server can scan between our create and lock. Repair its stale
+                # cleanup while holding the gate, before allowing another scan.
+                if not path.exists():
+                    os.close(fd)
+                    fd = None
+                    fd = _open_locked(path, data_dir)
+            finally:
+                os.close(server_fd)
+        return _HeldLock(path, fd)
+    except BaseException:
+        if fd is not None:
+            os.close(fd)
+        if role == "local":
+            with suppress(OSError):
+                path.unlink()
+        raise
+
+
+def acquire_writer_lock(data_dir: Path, role: str = "local", *, url: str | None = None):
+    """Announce before checking the other role so concurrent starts cannot both win."""
+    if role not in {"local", "server"}:
+        raise ValueError(f"Unknown storage writer role: {role}")
+    if os.environ.get("VISP_MEMORY_STORAGE_WRITER_GUARD", "").lower() == "off":
+        return WriterLockHandle()
+    try:
+        data_dir = Path(data_dir).resolve()
+        with _mutex:
+            key = (data_dir, role)
+            if key in _registry:
+                held = _registry[key]
+                held.references += 1
+            else:
+                held = _registry[key] = _acquire(data_dir, role, url)
+            return WriterLockHandle(key, held)
+    except OSError as error:
+        logger.warning(
+            "Storage writer guard unavailable for %s; continuing unguarded: %s", data_dir, error
+        )
+        return WriterLockHandle()
+
+
+def _after_fork():
+    global _mutex
+    # Closing inherited descriptors must not explicitly unlock the parent's flock.
+    for held in _registry.values():
+        os.close(held.fd)
+    _registry.clear()
+    _mutex = threading.RLock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_after_fork)
