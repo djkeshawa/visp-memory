@@ -145,6 +145,7 @@ class Memory:
                 server_url=self.config.storage.server_url,
                 api_key=self.config.storage.api_key,
                 jwt_token=self.config.storage.jwt_token,
+                repo_id=self.config.repo_id,
             )
         elif self.config.storage.backend == "neo4j":
             self._storage = Neo4jStorage(

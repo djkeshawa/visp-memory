@@ -35,6 +35,7 @@ class FakeSession:
     def __init__(self, response):
         self.response = response
         self.last_get_params = None
+        self.get_calls = []
         self.last_post_url = None
         self.last_post_json = None
         self.post_calls = []
@@ -43,6 +44,7 @@ class FakeSession:
         self.last_get_url = None
         self.last_delete_url = None
         self.last_delete_params = None
+        self.delete_calls = []
         self.closed = False
 
     def post(self, url, json=None):
@@ -54,6 +56,7 @@ class FakeSession:
     def get(self, url, params=None):
         self.last_get_url = url
         self.last_get_params = params
+        self.get_calls.append((url, params))
         return self.response
 
     def patch(self, url, json=None):
@@ -64,6 +67,7 @@ class FakeSession:
     def delete(self, url, params=None):
         self.last_delete_url = url
         self.last_delete_params = params
+        self.delete_calls.append((url, params))
         return self.response
 
     def close(self):
@@ -73,6 +77,7 @@ class FakeSession:
 def remote_storage_with(response):
     storage = RemoteStorage.__new__(RemoteStorage)
     storage.server_url = "http://memory.example"
+    storage.repo_id = "repo-a"
     storage.session = FakeSession(response)
     return storage
 
@@ -938,3 +943,190 @@ def test_remote_capabilities_and_collection_contract_are_explicit():
     assert storage.get_capabilities().vector_search is False
     assert storage.get_capabilities().audit_log is False
     assert storage.get_collection("semantic") is None
+
+
+def test_remote_storage_peek_uses_client_scope_without_counting_an_access():
+    memory = {
+        "id": "memory-1",
+        "repo_id": "repo-a",
+        "content": "Scoped memory",
+        "access_count": 0,
+    }
+    storage = remote_storage_with(FakeResponse(200, memory))
+
+    assert storage.peek_memory("memory-1") == memory
+    assert storage.session.last_get_url == (
+        "http://memory.example/memories/memory-1/peek"
+    )
+    assert storage.session.last_get_params == {"repo_id": "repo-a"}
+
+    storage = remote_storage_with(FakeResponse(404, {"detail": "Memory not found"}))
+    assert storage.peek_memory("other-repo-memory") is None
+
+
+def test_remote_storage_recall_utility_methods_preserve_local_shapes():
+    storage = remote_storage_with(FakeResponse(200, {"id": "event-1"}))
+
+    assert storage.log_recall_event(
+        "memory-1",
+        "used",
+        repo_id="repo-a",
+        query="private query",
+        task_id="task-1",
+        outcome="helpful",
+        metadata={"source": "test"},
+    ) == "event-1"
+    assert storage.session.last_post_url == "http://memory.example/recall-events"
+    assert storage.session.last_post_json == {
+        "memory_id": "memory-1",
+        "event_type": "used",
+        "repo_id": "repo-a",
+        "query": "private query",
+        "task_id": "task-1",
+        "outcome": "helpful",
+        "metadata": {"source": "test"},
+    }
+
+    report = {
+        "summary": {"total_events": 1, "by_event_type": {"used": 1}, "memories": 1},
+        "signals": [{"memory_id": "memory-1", "repo_id": "repo-a"}],
+        "events": [{"id": "event-1", "memory_id": "memory-1", "repo_id": "repo-a"}],
+        "verification": {
+            "valid": True,
+            "checked_events": 1,
+            "cross_repository_events": 0,
+            "violations": [],
+        },
+    }
+    storage = remote_storage_with(FakeResponse(200, report))
+    assert storage.inspect_recall_utility(
+        memory_id="memory-1", repo_id="repo-a", event_type="used", limit=7
+    ) == report
+    assert storage.session.last_get_url == (
+        "http://memory.example/recall-events/utility"
+    )
+    assert storage.session.last_get_params == {
+        "memory_id": "memory-1",
+        "repo_id": "repo-a",
+        "event_type": "used",
+        "limit": 7,
+    }
+
+    verification = report["verification"]
+    storage = remote_storage_with(FakeResponse(200, verification))
+    assert storage.verify_recall_utility(
+        memory_id="memory-1", repo_id="repo-a", event_type="used"
+    ) == verification
+    assert storage.session.last_get_url == (
+        "http://memory.example/recall-events/verify"
+    )
+    assert storage.session.last_get_params == {
+        "memory_id": "memory-1",
+        "repo_id": "repo-a",
+        "event_type": "used",
+    }
+
+    storage = remote_storage_with(FakeResponse(200, {"deleted": 3}))
+    assert storage.reset_recall_utility(
+        memory_id="memory-1", repo_id="repo-a", event_type="used"
+    ) == 3
+    assert storage.session.last_delete_url == "http://memory.example/recall-events"
+    assert storage.session.last_delete_params == {
+        "memory_id": "memory-1",
+        "repo_id": "repo-a",
+        "event_type": "used",
+    }
+
+
+def test_remote_storage_recall_reads_default_to_the_client_repository():
+    storage = remote_storage_with(FakeResponse(200, {"deleted": 0}))
+
+    assert storage.reset_recall_utility() == 0
+    assert storage.session.last_delete_params == {"repo_id": "repo-a"}
+
+
+def test_remote_storage_searches_turn_keys_in_the_requested_repository():
+    hits = [
+        {
+            "memory": {"id": "memory-1", "repo_id": "repo-a"},
+            "span": "A useful turn",
+            "similarity": 0.9,
+        }
+    ]
+    storage = remote_storage_with(FakeResponse(200, hits))
+
+    assert storage.search_turn_keys(
+        "useful", repo_id="repo-a", limit=4, status="active"
+    ) == hits
+    assert storage.session.last_post_url == "http://memory.example/turn-keys/search"
+    assert storage.session.last_post_json == {
+        "query": "useful",
+        "repo_id": "repo-a",
+        "limit": 4,
+        "status": "active",
+    }
+
+
+def test_remote_storage_reads_scoped_intent_and_registration_inspections():
+    usage = {
+        "exists": True,
+        "memories": 2,
+        "active_intents": 1,
+        "total_intents": 1,
+    }
+    storage = remote_storage_with(FakeResponse(200, usage))
+
+    assert storage.inspect_intent_usage() == usage
+    assert storage.session.last_get_url == "http://memory.example/intents/usage"
+    assert storage.session.last_get_params == {"repo_id": "repo-a"}
+
+    registration = {
+        "exists": True,
+        "project_scopes": ["repo-a"],
+        "unregistered_scopes": [],
+    }
+    storage = remote_storage_with(FakeResponse(200, registration))
+
+    assert storage.inspect_repository_registration() == registration
+    assert storage.session.last_get_url == (
+        "http://memory.example/repos/repo-a/registration"
+    )
+
+
+def test_remote_capabilities_are_loaded_once_and_keep_server_flags():
+    server_capabilities = {
+        "graph": False,
+        "vector_search": True,
+        "repositories": False,
+        "teams": False,
+        "sessions": False,
+        "audit_log": True,
+        "reindex": True,
+        "complete_graph_export": True,
+        "atomic_graph_import": True,
+    }
+    storage = remote_storage_with(FakeResponse(200, server_capabilities))
+
+    first = storage.get_capabilities()
+    second = storage.get_capabilities()
+
+    assert first is second
+    assert first.to_dict() == server_capabilities
+    assert storage.session.get_calls == [
+        ("http://memory.example/diagnostics/capabilities", None)
+    ]
+
+
+def test_remote_capabilities_cache_the_legacy_404_fallback():
+    storage = remote_storage_with(FakeResponse(404, {"detail": "Not found"}))
+
+    first = storage.get_capabilities()
+    second = storage.get_capabilities()
+
+    assert first is second
+    assert first.vector_search is False
+    assert first.audit_log is False
+    assert first.reindex is False
+    assert storage.session.get_calls == [
+        ("http://memory.example/diagnostics/capabilities", None)
+    ]
