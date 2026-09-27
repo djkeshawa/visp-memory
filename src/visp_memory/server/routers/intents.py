@@ -15,6 +15,7 @@ from visp_memory.server.authorization import (
     require_repo_writable,
     require_scoped_record_access,
 )
+from visp_memory.server.request_scope import request_repo_id
 from visp_memory.server.routers.platform import append_audit_event
 from visp_memory.server.schemas import (
     IntentCreate,
@@ -69,7 +70,7 @@ async def list_intents(
 ):
     storage = request.app.state.storage
     config = load_config()
-    intent_repo_id = repo_id or config.repo_id
+    intent_repo_id = request_repo_id(repo_id, config)
     require_repo_scope_access(storage, intent_repo_id, user)
     if status not in {"active", "completed", "closed", "all"}:
         raise HTTPException(status_code=422, detail="Invalid intent status")
@@ -87,7 +88,7 @@ async def create_intent(
 ):
     storage = request.app.state.storage
     config = load_config()
-    intent_repo_id = intent.repo_id or config.repo_id
+    intent_repo_id = request_repo_id(intent.repo_id, config)
     require_repo_writable(storage, intent_repo_id, user)
 
     # Add author attribution
@@ -332,7 +333,7 @@ async def list_completion_suggestions(
 ):
     storage = request.app.state.storage
     config = load_config()
-    target_repo_id = repo_id or config.repo_id
+    target_repo_id = request_repo_id(repo_id, config)
     require_repo_scope_access(storage, target_repo_id, user)
     suggestions = []
     for intent in storage.get_active_intents(repo_id=target_repo_id, status="active"):

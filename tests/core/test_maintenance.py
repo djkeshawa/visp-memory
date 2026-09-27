@@ -84,3 +84,17 @@ def test_failed_backup_preserves_source_and_removes_partial_copy(tmp_path, monke
         backup_storage(source, tmp_path / "partial")
     assert not (tmp_path / "partial").exists()
     assert store.get_memory(memory_id)["content"] == "Keep this knowledge"
+
+
+def test_backup_excludes_process_lock_files(tmp_path):
+    source = tmp_path / "data"
+    LocalStorage(source).close()
+    locks = source / ".locks"
+    locks.mkdir()
+    (locks / "server.lock").touch()
+    (locks / "server.json").write_text('{"pid": 123}')
+    destination = tmp_path / "backup"
+    backup_storage(source, destination)
+    assert not (destination / ".locks").exists()
+    manifest = json.loads((destination / "manifest.json").read_text())
+    assert all(not f["path"].startswith(".locks/") for f in manifest["files"])

@@ -11,6 +11,7 @@ from visp_memory.server.authorization import (
     can_access_scoped_record,
     require_context_repo_scope,
 )
+from visp_memory.server.request_scope import request_repo_id
 from visp_memory.server.schemas import ContextCompileRequest, TaskMemoryBriefRequest
 
 router = APIRouter(prefix="/context", tags=["context"])
@@ -24,7 +25,9 @@ async def compile_context(
 ):
     storage = request.app.state.storage
     config = load_config()
-    repo_id = require_context_repo_scope(storage, payload.repo_id or config.repo_id, user)
+    repo_id = require_context_repo_scope(
+        storage, request_repo_id(payload.repo_id, config), user
+    )
     compiler = ContextCompiler(storage, code_graph=graph_for_repo(config, repo_id))
     return compiler.compile(
         payload.query,
@@ -53,7 +56,9 @@ async def prepare_task_brief(
 ):
     storage = request.app.state.storage
     config = load_config()
-    repo_id = require_context_repo_scope(storage, payload.repo_id or config.repo_id, user)
+    repo_id = require_context_repo_scope(
+        storage, request_repo_id(payload.repo_id, config), user
+    )
     compiler = TaskMemoryBriefCompiler(storage, code_graph=graph_for_repo(config, repo_id))
     return compiler.prepare(
         payload.task,

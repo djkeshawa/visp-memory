@@ -96,7 +96,7 @@ from visp_memory.core.embedding_status import (
 )
 from visp_memory.core.model_router import ModelUnavailableError
 from visp_memory.core.ranking import projected_importance
-from visp_memory.core.trust import WriteChannel
+from visp_memory.core.trust import LOCAL_WORKFLOW_ACTOR, MCP_CLIENT_ACTOR, WriteChannel
 
 # The advertised tool surface (definitions, profiles, and their env resolution)
 # lives in mcp_tools; re-exported here because this module is the public MCP
@@ -1513,6 +1513,35 @@ def _refuse_unscoped_write(name: str, args: dict[str, Any], memory: Memory) -> s
     )
 
 
+def _refuse_stdio_repo_override(args: dict[str, Any], memory: Memory) -> str | None:
+    """Keep a project-pinned stdio process inside its configured repository."""
+    if current_mcp_request_context().transport != "stdio":
+        return None
+    configured = memory.config.repo_id
+    requested = args.get("repo_id")
+    if not (
+        isinstance(configured, str)
+        and configured.strip()
+        and isinstance(requested, str)
+        and requested.strip()
+    ):
+        return None
+    if requested.strip() == configured.strip():
+        return None
+    if os.environ.get("VISP_MEMORY_MCP_ALLOW_REPO_OVERRIDE", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return None
+    return (
+        "Refused: this stdio MCP process is pinned to repo_id "
+        f"{configured!r}, but the tool requested {requested!r}. Set "
+        "VISP_MEMORY_MCP_ALLOW_REPO_OVERRIDE=true to allow an intentional override."
+    )
+
+
 def _handle_recording(name: str, args: dict[str, Any], memory: Memory) -> str:
     """Handle recording tools."""
     if name == "memory_record":
@@ -1598,7 +1627,7 @@ def _handle_intent(name: str, args: dict[str, Any], memory: Memory) -> str:
 
     elif name == "memory_done":
         recorded = memory.done(
-            repo_id=args.get("repo_id"), actor_id="mcp-client", channel=WriteChannel.MCP
+            repo_id=args.get("repo_id"), actor_id=MCP_CLIENT_ACTOR, channel=WriteChannel.MCP
         )
         return f"Recorded {recorded} task outcome(s); intent status unchanged"
 
@@ -1622,7 +1651,8 @@ def _handle_intent(name: str, args: dict[str, Any], memory: Memory) -> str:
                     raise _http_refusal("Only the intent owner can connect a workflow reporter")
             result = memory._storage.report_intent_workflow(
                 args["intent_id"], args["workflow_report"],
-                actor_id=principal.user_id if principal else "local-workflow", channel="mcp",
+                actor_id=principal.user_id if principal else LOCAL_WORKFLOW_ACTOR,
+                channel="mcp",
             )
             return json.dumps(result)
         status = args.get("status")
@@ -1641,7 +1671,7 @@ def _handle_intent(name: str, args: dict[str, Any], memory: Memory) -> str:
         updated = memory.intent.update(
             args["intent_id"],
             **update_data,
-            actor_id="mcp-client",
+            actor_id=MCP_CLIENT_ACTOR,
             channel=WriteChannel.MCP,
         )
         if not updated:
@@ -1656,7 +1686,7 @@ def _handle_intent(name: str, args: dict[str, Any], memory: Memory) -> str:
     elif name == "memory_close_intent":
         closed = memory.intent.close(
             args["intent_id"],
-            actor_id="mcp-client",
+            actor_id=MCP_CLIENT_ACTOR,
             channel=WriteChannel.MCP,
         )
         if not closed:
@@ -1823,7 +1853,7 @@ def _handle_maintenance(name: str, args: dict[str, Any], memory: Memory) -> str:
         if not args.get("confirm", False):
             return "Set confirm=true to record outcomes for all active goals."
         recorded = memory.intent.clear_all(
-            actor_id="mcp-client",
+            actor_id=MCP_CLIENT_ACTOR,
             channel=WriteChannel.MCP,
         )
         return f"Recorded {recorded} goal outcomes; intent status unchanged."
@@ -1849,6 +1879,24 @@ def _dispatch_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
 
     _http_preflight(name, args, memory)
 
+    refusal = _refuse_stdio_repo_override(args, memory)
+    if refusal is not None:
+        return refusal
+
+    # Every write tool is checked once here, before dispatch. Workflow handlers
+    # mix reads and writes, so a position in the dispatch order cannot define the
+    # boundary; `memory_after_work` once slipped past it that way.
+    #
+    # Without this, `memory_record` in a project that never ran `init` returned
+    # "Recorded event (ID: ...)" for a row the engine had quarantined, and the
+    # matching `memory_recall` raised. An agent has even less chance than a
+    # human of noticing: it gets an id back and moves on, and the memory it
+    # believes it saved is one nothing will ever return. The refusal names the
+    # repair because the model is the one that has to act on it.
+    refusal = _refuse_unscoped_write(name, args, memory)
+    if refusal is not None:
+        return refusal
+
     # Context
     if name == "memory_prepare_task":
         return _handle_task_brief(args, memory)
@@ -1870,18 +1918,6 @@ def _dispatch_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
     # Codex workflow
     if name in ["memory_session_start", "memory_before_change", "memory_after_work"]:
         return _handle_workflow(name, args, memory)
-
-    # Every tool below this point WRITES, so each one is checked once here.
-    #
-    # Without this, `memory_record` in a project that never ran `init` returned
-    # "Recorded event (ID: ...)" for a row the engine had quarantined, and the
-    # matching `memory_recall` raised. An agent has even less chance than a
-    # human of noticing: it gets an id back and moves on, and the memory it
-    # believes it saved is one nothing will ever return. The refusal names the
-    # repair because the model is the one that has to act on it.
-    refusal = _refuse_unscoped_write(name, args, memory)
-    if refusal is not None:
-        return refusal
 
     # Recording
     if name in ["memory_record", "memory_decision"]:

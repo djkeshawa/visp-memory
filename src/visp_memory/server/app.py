@@ -36,6 +36,7 @@ from visp_memory.core.model_router import ModelRouter
 from visp_memory.core.neo4j_storage import Neo4jStorage
 from visp_memory.core.reporting import MemoryIntelligenceReporter
 from visp_memory.core.storage import LocalStorage
+from visp_memory.core.writer_lock import acquire_writer_lock
 from visp_memory.recall.graph import GraphRecall
 from visp_memory.server.auth import UserContext, get_current_user, security
 from visp_memory.server.auth_store import AuthStore
@@ -44,6 +45,7 @@ from visp_memory.server.authorization import (
     has_admin_privileges,
     require_repo_scope_access,
 )
+from visp_memory.server.request_scope import request_repo_id
 from visp_memory.server.routers import (
     ai,
     authentication,
@@ -260,27 +262,37 @@ def initialize_storage(config, embedding_fn=None, embedding_provider=None):
                 "fallback mode (%s)",
                 last_error.__class__.__name__,
             )
-            fallback = LocalStorage(
+        else:
+            raise RuntimeError(
+                "Neo4j storage is unavailable and fallback is disabled"
+            ) from last_error
+
+    host = config.server.host
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    writer_lock = acquire_writer_lock(
+        config.storage.data_dir, "server", url=f"http://{host}:{config.server.port}",
+    )
+    try:
+        if config.storage.backend == "arcadedb":
+            storage = ArcadeDbStorage(
+                config.storage.data_dir,
+                embedding_fn=embedding_fn,
+                embedding_dimension=getattr(embedding_provider, "dimension", None),
+            )
+            logger.info("Initialized ArcadeDB Storage")
+            backend = "arcadedb"
+        else:
+            storage = LocalStorage(
                 config.storage.data_dir, embedding_fn=embedding_fn,
                 turn_keys=config.embedding.turn_keys,
             )
-            return fallback, "sqlite-fallback"
-
-        raise RuntimeError("Neo4j storage is unavailable and fallback is disabled") from last_error
-
-    if config.storage.backend == "arcadedb":
-        storage = ArcadeDbStorage(
-            config.storage.data_dir,
-            embedding_fn=embedding_fn,
-            embedding_dimension=getattr(embedding_provider, "dimension", None),
-        )
-        logger.info("Initialized ArcadeDB Storage")
-        return storage, "arcadedb"
-
-    storage = LocalStorage(
-        config.storage.data_dir, embedding_fn=embedding_fn, turn_keys=config.embedding.turn_keys
-    )
-    return storage, "sqlite"
+            backend = "sqlite-fallback" if config.storage.backend == "neo4j" else "sqlite"
+    except BaseException:
+        writer_lock.release()
+        raise
+    app.state.writer_lock = writer_lock
+    return storage, backend
 
 
 cors_options = get_cors_options(config)
@@ -326,10 +338,10 @@ async def lifespan(app: FastAPI):
     stop = asyncio.Event()
     task = None
     app.state.dream_last_activity = time.monotonic()
-    if isinstance(app.state.storage, (LocalStorage, Neo4jStorage)):
-        app.state.dreaming = Dreaming(app.state.storage)
-        task = asyncio.create_task(dreaming_loop(app, stop))
     try:
+        if isinstance(app.state.storage, (LocalStorage, Neo4jStorage)):
+            app.state.dreaming = Dreaming(app.state.storage)
+            task = asyncio.create_task(dreaming_loop(app, stop))
         yield
     finally:
         stop.set()
@@ -337,12 +349,17 @@ async def lifespan(app: FastAPI):
             if task:
                 await task
         finally:
-            storage = getattr(app.state, "storage", None)
-            if storage is not None:
-                try:
-                    storage.close()
-                except Exception as e:  # pragma: no cover - shutdown must not raise
-                    logger.error(f"Error closing storage on shutdown: {e}")
+            try:
+                storage = getattr(app.state, "storage", None)
+                if storage is not None:
+                    try:
+                        storage.close()
+                    except Exception as e:  # pragma: no cover - shutdown must not raise
+                        logger.error(f"Error closing storage on shutdown: {e}")
+            finally:
+                writer_lock = getattr(app.state, "writer_lock", None)
+                if writer_lock is not None:
+                    writer_lock.release()
 
 
 # Initialize App
@@ -508,19 +525,20 @@ def _get_scoped_stats(repo_id: str | None, user: UserContext) -> dict:
 def _system_status(repo_id: str | None, user: UserContext) -> dict:
     """Build the authenticated, tenant-scoped status and statistics payload.
 
-    An unscoped request is answered, not refused. There is no repository to gate
-    when no scope was named, and the per-record visibility filter already decides
-    what this principal may count — so an admin gets the whole store, a team user
-    gets their team's rows, and a principal entitled to nothing gets zeroes,
-    without a repo gate having to invent a verdict.
+    An unscoped request to a non-shared server is answered, not refused. There is
+    no repository to gate when no scope was named, and the per-record visibility
+    filter already decides what this principal may count — so an admin gets the
+    whole store, a team user gets their team's rows, and a principal entitled to
+    nothing gets zeroes, without a repo gate having to invent a verdict. A shared
+    server requires the request to select a repository, just like its other routes.
 
     Refusing instead is how this endpoint stayed broken: it answered 400 to the
     URL `serve` advertises, and answering 403 there instead would have handed the
     dashboard the same blank cards for any store with no configured repo_id —
     which is the shape of the defect this change exists to remove.
     """
-    target_repo_id = repo_id or config.repo_id
-    if target_repo_id:
+    target_repo_id = request_repo_id(repo_id, config)
+    if target_repo_id or config.server.shared:
         require_repo_scope_access(app.state.storage, target_repo_id, user)
     stats_status = "ok"
     try:
@@ -645,7 +663,7 @@ def _filter_graph_recall_result(result, user: UserContext):
 
 
 def _require_graph_repo_access(repo_id: str | None, user: UserContext) -> str | None:
-    graph_repo_id = repo_id or config.repo_id
+    graph_repo_id = request_repo_id(repo_id, config)
     require_repo_scope_access(app.state.storage, graph_repo_id, user)
     return graph_repo_id
 

@@ -51,6 +51,9 @@ PROVENANCE_TAG_PREFIX = "provenance:"
 RESERVED_METADATA_KEYS = frozenset(
     {"author_id", "team_id", "write_channel", "written_by"}
 )
+MCP_CLIENT_ACTOR = "mcp-client"
+LOCAL_WORKFLOW_ACTOR = "local-workflow"
+LOCAL_USER_ACTOR = "local-user"
 
 
 class Provenance(str, Enum):

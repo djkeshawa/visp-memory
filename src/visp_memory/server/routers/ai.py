@@ -19,6 +19,7 @@ from visp_memory.server.authorization import (
     require_repo_scope_access,
     require_repo_writable,
 )
+from visp_memory.server.request_scope import request_repo_id
 from visp_memory.server.schemas import (
     AskMemoryCitation,
     AskMemoryRequest,
@@ -68,7 +69,7 @@ async def ask_memory(
     """Answer from scoped memory retrieval with exact citations."""
     storage = request.app.state.storage
     config = load_config()
-    repo_id = payload.repo_id or config.repo_id
+    repo_id = request_repo_id(payload.repo_id, config)
     require_repo_scope_access(storage, repo_id, user)
 
     layers = payload.layers or ["episodic", "semantic", "intent"]

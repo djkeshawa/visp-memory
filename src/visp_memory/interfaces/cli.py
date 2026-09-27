@@ -65,9 +65,10 @@ from visp_memory.core.lexical_ranking import RANKING_STRATEGIES
 from visp_memory.core.ranking import projected_importance
 from visp_memory.core.reporting import MemoryIntelligenceReporter
 from visp_memory.core.storage import LocalStorage
-from visp_memory.core.trust import WriteChannel
+from visp_memory.core.trust import LOCAL_USER_ACTOR, LOCAL_WORKFLOW_ACTOR, WriteChannel
 from visp_memory.hooks.reachability import ReachabilityReport, check_reachability
 from visp_memory.interfaces.maintenance import app as maintenance_app
+from visp_memory.interfaces.shared_server import configure_shared_server
 
 console = Console()
 
@@ -1246,7 +1247,7 @@ def working(
 def done():
     """Record a task completion outcome without changing intent status."""
     memory = get_memory()
-    recorded = memory.done(actor_id="local-user", channel=WriteChannel.CLI)
+    recorded = memory.done(actor_id=LOCAL_USER_ACTOR, channel=WriteChannel.CLI)
     console.print(
         f"[green]Recorded {recorded} task outcome(s); intent status unchanged[/green]"
     )
@@ -1328,7 +1329,7 @@ def intent_update(
         description=description,
         priority=priority,
         status=status,
-        actor_id="local-user",
+        actor_id=LOCAL_USER_ACTOR,
         channel=WriteChannel.CLI,
     )
     if not updated:
@@ -1356,7 +1357,10 @@ def intent_report(
 
     report = IntentWorkflowReport.model_validate_json(report_file.read_text())
     result = get_memory()._storage.report_intent_workflow(
-        intent_id, report.model_dump(mode="json"), actor_id="local-workflow", channel="cli"
+        intent_id,
+        report.model_dump(mode="json"),
+        actor_id=LOCAL_WORKFLOW_ACTOR,
+        channel="cli",
     )
     console.print(json.dumps(result))
 
@@ -1367,7 +1371,7 @@ def intent_complete(intent_id: str = typer.Argument(..., help="Intent ID to comp
     memory = get_memory()
     completed = memory.intent.complete(
         intent_id,
-        actor_id="local-user",
+        actor_id=LOCAL_USER_ACTOR,
         channel=WriteChannel.CLI,
     )
     if not completed:
@@ -1385,7 +1389,7 @@ def intent_close(intent_id: str = typer.Argument(..., help="Intent ID to close")
     memory = get_memory()
     closed = memory.intent.close(
         intent_id,
-        actor_id="local-user",
+        actor_id=LOCAL_USER_ACTOR,
         channel=WriteChannel.CLI,
     )
     if not closed:
@@ -3282,12 +3286,19 @@ def serve(
     host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind"),
     port: int = typer.Option(8000, "--port", "-p", help="Port to bind"),
     reload: bool = typer.Option(False, "--reload", help="Enable auto-reload"),
+    shared: bool = typer.Option(False, "--shared", help="Serve one project-neutral local store"),
+    data_dir: Optional[Path] = typer.Option(None, "--data-dir", help="Shared store data path"),
 ):
     """Run the Central Memory Server (FastAPI REST API).
 
     This serves the HTTP API and dashboard. To run the MCP stdio server for an
     assistant, use the separate ``visp-memory-mcp`` console script instead.
     """
+    if data_dir is not None and not shared:
+        console.print("[red]--data-dir applies only with --shared.[/red]")
+        raise typer.Exit(2)
+    if shared:
+        configure_shared_server(data_dir)
     _ensure_serveable_auth_config(host)
 
     console.print(f"[green]Starting Central Memory Server at http://{host}:{port}[/green]")

@@ -29,7 +29,7 @@ def backup_storage(data_dir: Path, destination: Path) -> dict:
     try:
         for path in source.rglob("*"):
             relative = path.relative_to(source)
-            if "backups" in relative.parts or path.is_dir():
+            if "backups" in relative.parts or ".locks" in relative.parts or path.is_dir():
                 continue
             if path.name.endswith(("-wal", "-shm", "-journal")):
                 continue

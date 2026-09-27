@@ -8,6 +8,7 @@ import typer
 
 from visp_memory.config import load_config
 from visp_memory.core.maintenance import backup_storage, upgrade_storage
+from visp_memory.core.writer_lock import WriterLockConflict, acquire_writer_lock
 
 app = typer.Typer(help="Back up and upgrade a stopped SQLite store.", no_args_is_help=True)
 
@@ -19,7 +20,12 @@ def _run(operation, destination: Path, data_dir: Path | None, stopped: bool):
     if config.storage.backend != "sqlite":
         raise typer.BadParameter("These commands support SQLite storage only")
     try:
-        result = operation(data_dir or config.storage.data_dir, destination)
+        source = data_dir or config.storage.data_dir
+        with acquire_writer_lock(source, "server"):
+            result = operation(source, destination)
+    except WriterLockConflict as error:
+        typer.echo(f"Stop the server and other writers first. {error}", err=True)
+        raise typer.Exit(1) from error
     except (ValueError, OSError, sqlite3.Error) as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(1) from error
