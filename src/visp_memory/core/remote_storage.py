@@ -17,23 +17,20 @@ except ImportError:
 
 from visp_memory.core.api_limits import MAX_QUERY_LIMIT
 from visp_memory.core.beliefs import normalize_belief_type
+from visp_memory.core.remote import RemoteAdminMixin, RemoteRecallMixin
+from visp_memory.core.remote.errors import RemoteStorageError
 from visp_memory.core.storage import (
     BaseStorage,
     EvidenceImmutableError,
     MemoryLayer,
     SessionCompletionStatus,
-    StorageCapabilities,
 )
 from visp_memory.quality.secrets import SecretBearingContentError, redact_for_storage
 
 logger = logging.getLogger(__name__)
 
 
-class RemoteStorageError(RuntimeError):
-    """Raised when the remote server cannot complete a write operation."""
-
-
-class RemoteStorage(BaseStorage):
+class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, BaseStorage):
     """Storage client that connects to a remote Central Memory Server."""
 
     def __init__(
@@ -42,6 +39,7 @@ class RemoteStorage(BaseStorage):
         api_key: str = None,
         jwt_token: str = None,
         timeout: float = 30.0,
+        repo_id: str = None,
     ):
         """
         Initialize remote storage client.
@@ -52,6 +50,7 @@ class RemoteStorage(BaseStorage):
             jwt_token: Optional JWT token for Bearer authentication (takes precedence)
             timeout: Per-request timeout (seconds) applied to every call so a
                 hung endpoint cannot stall the client indefinitely.
+            repo_id: Default repository scope for reads without an explicit scope.
         """
         if not REQUESTS_AVAILABLE:
             raise ImportError(
@@ -62,6 +61,8 @@ class RemoteStorage(BaseStorage):
         self.api_key = api_key
         self.jwt_token = jwt_token
         self.timeout = timeout
+        self.repo_id = repo_id
+        self._capabilities_cache = None
         self.session = requests.Session()
 
         # Set authentication headers
@@ -106,9 +107,6 @@ class RemoteStorage(BaseStorage):
         if session is not None:
             session.close()
             self.session = None
-
-    def get_capabilities(self) -> StorageCapabilities:
-        return StorageCapabilities(audit_log=False, reindex=False, vector_search=False)
 
     def get_schema_status(self) -> Dict[str, Any]:
         try:

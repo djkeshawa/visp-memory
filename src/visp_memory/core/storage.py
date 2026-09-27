@@ -1535,7 +1535,9 @@ class LocalStorage(BaseStorage):
         return sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True, timeout=30.0)
 
     @classmethod
-    def inspect_intent_usage(cls, data_dir: Path) -> Dict[str, Any]:
+    def inspect_intent_usage(
+        cls, data_dir: Path, *, repo_id: str = None
+    ) -> Dict[str, Any]:
         """Count active memories and intents without opening or creating the store.
 
         ``total_intents`` counts every row, not only active ones: an intent whose
@@ -1546,14 +1548,21 @@ class LocalStorage(BaseStorage):
         if conn is None:
             return {"exists": False, "memories": 0, "active_intents": 0, "total_intents": 0}
 
+        scope_clause = " AND repo_id = ?" if repo_id is not None else ""
+        scope_params = (repo_id,) if repo_id is not None else ()
         try:
             memories = conn.execute(
-                "SELECT COUNT(*) FROM memories WHERE status = 'active'"
+                f"SELECT COUNT(*) FROM memories WHERE status = 'active'{scope_clause}",
+                scope_params,
             ).fetchone()[0]
             active_intents = conn.execute(
-                "SELECT COUNT(*) FROM intents WHERE status = 'active'"
+                f"SELECT COUNT(*) FROM intents WHERE status = 'active'{scope_clause}",
+                scope_params,
             ).fetchone()[0]
-            total_intents = conn.execute("SELECT COUNT(*) FROM intents").fetchone()[0]
+            total_intents = conn.execute(
+                f"SELECT COUNT(*) FROM intents WHERE 1=1{scope_clause}",
+                scope_params,
+            ).fetchone()[0]
         finally:
             conn.close()
 
@@ -1565,7 +1574,9 @@ class LocalStorage(BaseStorage):
         }
 
     @classmethod
-    def inspect_repository_registration(cls, data_dir: Path) -> Dict[str, Any]:
+    def inspect_repository_registration(
+        cls, data_dir: Path, *, repo_id: str = None
+    ) -> Dict[str, Any]:
         """Report project scopes holding records that have no repositories row.
 
         Deliberately a classmethod over the file rather than a method on an open
@@ -1589,6 +1600,8 @@ class LocalStorage(BaseStorage):
                 )
                 if row[0] and row[0] != UNSCOPED_REPO_ID
             ]
+            if repo_id is not None:
+                scopes = [scope for scope in scopes if scope == repo_id]
             registered = {row[0] for row in conn.execute("SELECT id FROM repositories")}
         finally:
             conn.close()
