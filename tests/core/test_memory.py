@@ -102,7 +102,7 @@ def test_direct_layer_convenience_methods_thread_package_channel(memory):
 
 
 def test_memory_uses_arcadedb_storage_when_configured(tmp_path, monkeypatch):
-    import visp_memory.core.memory as memory_module
+    import visp_memory.core.storage_factory as storage_factory
 
     created = {}
 
@@ -111,7 +111,7 @@ def test_memory_uses_arcadedb_storage_when_configured(tmp_path, monkeypatch):
             created["data_dir"] = data_dir
             created["embedding_fn"] = embedding_fn
 
-    monkeypatch.setattr(memory_module, "ArcadeDbStorage", FakeArcadeDbStorage)
+    monkeypatch.setattr(storage_factory, "ArcadeDbStorage", FakeArcadeDbStorage)
 
     config = MemoryConfig()
     config.storage.backend = "arcadedb"

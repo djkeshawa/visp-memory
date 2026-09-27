@@ -31,10 +31,30 @@ Environment overrides apply after loading the file.
 | `VISP_MEMORY_EMBEDDING_MODEL` | Model for the selected provider |
 | `VISP_MEMORY_STORAGE_MODE` | `local`, `client`, or `server` |
 | `VISP_MEMORY_STORAGE_SERVER_URL` | API endpoint in client mode |
+| `VISP_MEMORY_STORAGE_WRITER_GUARD` | `off` disables the process guard (unsafe) |
 
 Use [config.py](../../src/visp_memory/config.py) for the complete settings schema.
 Missing project scope never grants a global read. Legacy unscoped records stay
 quarantined for administrative inspection.
+
+For a store shared by agents, run one `visp-memory serve` process and configure
+each agent with `storage.mode: client` and `storage.server_url` pointing to it.
+While the server holds a SQLite or ArcadeDB data directory, other processes
+cannot open that directory in local mode. A server also refuses to start while
+local writers are active. Multiple local-mode processes may still coexist for
+existing stdio MCP and hook workflows; this does not make the vector indexes
+safe for concurrent writes. Neo4j and HTTP clients do not take a local store guard.
+
+The guard uses OS locks in `<data_dir>/.locks`, released on exit or crash.
+`server.json` records the holder's PID, URL, and start time for diagnostics only;
+it does not determine whether a process is alive. Do not delete active lock files.
+If the filesystem prevents creating or locking these files, a warning is logged
+and startup continues without protection. `VISP_MEMORY_STORAGE_WRITER_GUARD=off`
+also disables the guard and is unsafe for a store shared with a server.
+
+Library code should close a `Memory` (`memory.close()` or `with Memory(...)`)
+before deleting its data directory: on Windows an open lock file cannot be
+removed.
 
 ## How embeddings work
 
@@ -125,10 +145,12 @@ visp-memory storage upgrade --data-dir /data --backup-dir /backups/schema-upgrad
 ```
 
 Use real paths appropriate to your installation. Each backup destination must be
-new and outside the data root. `--offline` confirms writers are stopped; the command
-does not stop them. Backups include SQLite databases, accounts, lifecycle/dreaming
+new and outside the data root. `--offline` acknowledges that writers are stopped;
+the command also holds the server guard for the whole operation and refuses a
+live server or local writer in another process. It does not stop them.
+Backups include SQLite databases, accounts, lifecycle/dreaming
 history, and local indexes, with file hashes in a manifest. SQLite's backup API
-includes committed WAL data; sidecars and nested `backups` directories are excluded.
+includes committed WAL data; sidecars, `.locks`, and nested `backups` directories are excluded.
 Symbolic links are refused. Retain the matching configuration separately.
 
 The upgrade command takes a full backup before migrating supported schemas 2, 3,

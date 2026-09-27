@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from visp_memory.config import MemoryConfig
-from visp_memory.core.arcadedb_storage import ArcadeDbStorage
 from visp_memory.core.compression import MemoryCompressor, create_llm_compressor
 from visp_memory.core.eligibility import (
     EligibilityFilterResult,
@@ -30,13 +29,13 @@ from visp_memory.core.embedding_status import (
 )
 from visp_memory.core.memory_context import build_context, format_context_text
 from visp_memory.core.memory_import_export import export_memory, import_memories
-from visp_memory.core.neo4j_storage import Neo4jStorage
 from visp_memory.core.ranking import DEFAULT_RECALL_MIN_SCORE, rank_memory_results, text_similarity
 from visp_memory.core.recall_candidates import recall_candidates
 from visp_memory.core.remote_storage import RemoteStorage
 from visp_memory.core.repository import RepositoryManager
 from visp_memory.core.source_support import source_support
-from visp_memory.core.storage import UNSCOPED_REPO_ID, LocalStorage
+from visp_memory.core.storage import UNSCOPED_REPO_ID
+from visp_memory.core.storage_factory import open_local_storage
 from visp_memory.core.team import TeamManager
 from visp_memory.core.trust import (
     TrustFilterResult,
@@ -147,25 +146,8 @@ class Memory:
                 jwt_token=self.config.storage.jwt_token,
                 repo_id=self.config.repo_id,
             )
-        elif self.config.storage.backend == "neo4j":
-            self._storage = Neo4jStorage(
-                uri=self.config.storage.neo4j_uri,
-                user=self.config.storage.neo4j_user,
-                password=self.config.storage.neo4j_password,
-                embedding_fn=embedding_fn,
-                turn_keys=self.config.embedding.turn_keys,
-            )
-        elif self.config.storage.backend == "arcadedb":
-            self._storage = ArcadeDbStorage(
-                self.config.storage.data_dir,
-                embedding_fn=embedding_fn,
-            )
         else:
-            self._storage = LocalStorage(
-                self.config.storage.data_dir,
-                embedding_fn=embedding_fn,
-                turn_keys=self.config.embedding.turn_keys,
-            )
+            self._storage, self._writer_lock = open_local_storage(self.config, embedding_fn)
 
         # Initialize layers
         self.episodic = EpisodicMemory(self._storage)
@@ -215,14 +197,18 @@ class Memory:
         )
 
     def close(self) -> None:
-        """Release storage resources (e.g. the Neo4j driver connection pool).
-
-        Idempotent: safe to call more than once, since the underlying backend
-        ``close()`` implementations are idempotent.
-        """
-        storage = getattr(self, "_storage", None)
-        if storage is not None:
-            storage.close()
+        """Close the backend before releasing this instance's writer guard, once."""
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+        try:
+            storage = getattr(self, "_storage", None)
+            if storage is not None:
+                storage.close()
+        finally:
+            handle = getattr(self, "_writer_lock", None)
+            if handle is not None:
+                handle.release()
 
     def __enter__(self):
         return self
