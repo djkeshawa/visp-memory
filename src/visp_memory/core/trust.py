@@ -48,6 +48,9 @@ from typing import Any, Iterable, Mapping, Optional
 from visp_memory.core.clock import parse_utc, utc_now
 
 PROVENANCE_TAG_PREFIX = "provenance:"
+MCP_CLIENT_ACTOR = "mcp-client"
+LOCAL_WORKFLOW_ACTOR = "local-workflow"
+LOCAL_USER_ACTOR = "local-user"
 
 
 class Provenance(str, Enum):

@@ -11,10 +11,103 @@ import json
 import os
 import warnings
 from pathlib import Path
-from typing import Annotated, Any, List, Literal, Optional
+from types import UnionType
+from typing import Annotated, Any, List, Literal, Optional, Union, get_args, get_origin
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+ENV_OVERRIDES: dict[str, tuple[str, ...]] = {
+    "VISP_MEMORY_REPO_ID": ("repo_id",),
+    "VISP_MEMORY_STORAGE_DATA_DIR": ("storage", "data_dir"),
+    "VISP_MEMORY_STORAGE_BACKEND": ("storage", "backend"),
+    "VISP_MEMORY_STORAGE_MODE": ("storage", "mode"),
+    "VISP_MEMORY_STORAGE_ALLOW_FALLBACK": ("storage", "allow_fallback"),
+    "VISP_MEMORY_STORAGE_CONNECT_TIMEOUT_SECONDS": (
+        "storage",
+        "connect_timeout_seconds",
+    ),
+    "VISP_MEMORY_STORAGE_SERVER_URL": ("storage", "server_url"),
+    "VISP_MEMORY_API_KEY": ("storage", "api_key"),
+    "VISP_MEMORY_JWT_TOKEN": ("storage", "jwt_token"),
+    "NEO4J_URI": ("storage", "neo4j_uri"),
+    "NEO4J_USER": ("storage", "neo4j_user"),
+    "NEO4J_PASSWORD": ("storage", "neo4j_password"),
+    "VISP_MEMORY_EMBEDDING_PROVIDER": ("embedding", "provider"),
+    "VISP_MEMORY_EMBEDDING_MODEL": ("embedding", "model"),
+    "EMBEDDING_API_KEY": ("embedding", "api_key"),
+    "EMBEDDING_API_BASE": ("embedding", "api_base"),
+    "VISP_MEMORY_SERVER_AUTH_ENABLED": ("server", "auth_enabled"),
+    "VISP_MEMORY_BIND_HOST": ("server", "host"),
+    "VISP_MEMORY_JWT_SECRET": ("server", "jwt_secret"),
+    "VISP_MEMORY_SERVER_CORS_ORIGINS": ("server", "cors_origins"),
+    "VISP_MEMORY_SERVER_CORS_ALLOW_CREDENTIALS": (
+        "server",
+        "cors_allow_credentials",
+    ),
+    "VISP_MEMORY_SERVER_API_KEYS": ("server", "api_keys"),
+    "VISP_MEMORY_SERVER_ALLOW_ANONYMOUS": ("server", "allow_anonymous"),
+    "VISP_MEMORY_SERVER_DEFAULT_TEAM": ("server", "default_team"),
+    "VISP_MEMORY_SERVER_LOCAL_OWNER_MODE": ("server", "local_owner_mode"),
+    "VISP_MEMORY_SERVER_SHARED": ("server", "shared"),
+    "VISP_MEMORY_SERVER_JWT_EXPIRY_HOURS": ("server", "jwt_expiry_hours"),
+    "VISP_MEMORY_LLM_PROVIDER": ("llm", "provider"),
+    "VISP_MEMORY_LLM_MODEL": ("llm", "model"),
+    "VISP_MEMORY_LLM_API_KEY": ("llm", "api_key"),
+    "VISP_MEMORY_LLM_BASE_URL": ("llm", "base_url"),
+    "VISP_MEMORY_LLM_TIMEOUT_SECONDS": ("llm", "timeout_seconds"),
+    "VISP_MEMORY_LLM_MAX_OUTPUT_TOKENS": ("llm", "max_output_tokens"),
+    "VISP_MEMORY_LLM_INTENT_AUTO_COMPLETE": ("llm", "intent_auto_complete"),
+    "VISP_MEMORY_LLM_INTENT_COMPLETION_THRESHOLD": (
+        "llm",
+        "intent_completion_threshold",
+    ),
+    "VISP_MEMORY_LLM_INTENT_SUGGESTION_THRESHOLD": (
+        "llm",
+        "intent_suggestion_threshold",
+    ),
+    "VISP_MEMORY_SERVER_SESSION_IDLE_HOURS": ("server", "session_idle_hours"),
+    "VISP_MEMORY_SERVER_SESSION_MAX_DAYS": ("server", "session_max_days"),
+    "VISP_MEMORY_SERVER_SESSION_COOKIE_SECURE": (
+        "server",
+        "session_cookie_secure",
+    ),
+    "VISP_MEMORY_BOOTSTRAP_ADMIN_USERNAME": (
+        "server",
+        "bootstrap_admin_username",
+    ),
+    "VISP_MEMORY_BOOTSTRAP_ADMIN_PASSWORD": (
+        "server",
+        "bootstrap_admin_password",
+    ),
+    "VISP_MEMORY_CODE_GRAPH_INTEL_PROJECTION_PATH": (
+        "code_graph",
+        "intel_projection_path",
+    ),
+}
+
+
+def _unwrap_optional(annotation: Any) -> Any:
+    """Return the value type from an Optional annotation."""
+    if get_origin(annotation) in (Union, UnionType):
+        value_types = [item for item in get_args(annotation) if item is not type(None)]
+        if len(value_types) == 1:
+            return value_types[0]
+    return annotation
+
+
+def _coerce_env_value(target: BaseSettings, attr: str, value: str) -> Any:
+    """Coerce one override from the destination field's declared type."""
+    annotation = _unwrap_optional(type(target).model_fields[attr].annotation)
+    if annotation is bool:
+        return value.lower() in {"1", "true", "yes", "on"}
+    if annotation is int:
+        return int(value)
+    if annotation is float:
+        return float(value)
+    if annotation is Path:
+        return Path(value)
+    return value
 
 
 class EmbeddingConfig(BaseSettings):
@@ -278,6 +371,7 @@ class ServerConfig(BaseSettings):
     #: loopback bind. Setting it by hand on a public bind grants nothing, because
     #: the peer address is checked again on every request.
     local_owner_mode: bool = False
+    shared: bool = False
 
     @field_validator("cors_origins", "api_keys", mode="before")
     @classmethod
@@ -346,6 +440,21 @@ class MemoryConfig(BaseSettings):
     @classmethod
     def find_and_load(cls, start_dir: Path = None) -> "MemoryConfig":
         """Find config file by walking up directory tree."""
+        explicit_path = os.environ.get("VISP_MEMORY_CONFIG")
+        if explicit_path:
+            config_path = Path(explicit_path).expanduser()
+            if not config_path.is_absolute():
+                config_path = Path.cwd() / config_path
+            config_path = config_path.resolve()
+            if not config_path.is_file():
+                raise FileNotFoundError(
+                    f"VISP_MEMORY_CONFIG points to a missing file: {config_path}"
+                )
+            config = cls.from_file(config_path)
+            if not config.storage.data_dir.is_absolute():
+                config.storage.data_dir = (config_path.parent / config.storage.data_dir).resolve()
+            return config
+
         start_dir = start_dir or Path.cwd()
 
         for parent in [start_dir] + list(start_dir.parents):
@@ -355,7 +464,9 @@ class MemoryConfig(BaseSettings):
                     config = cls.from_file(config_path)
                     # Set data_dir relative to config location
                     if not config.storage.data_dir.is_absolute():
-                        config.storage.data_dir = parent / config.storage.data_dir
+                        config.storage.data_dir = (
+                            config_path.parent / config.storage.data_dir
+                        ).resolve()
                     return config
 
         config = cls()
@@ -364,75 +475,7 @@ class MemoryConfig(BaseSettings):
 
     def apply_env_overrides(self):
         """Apply deployment environment overrides after file-based config loading."""
-        env_overrides = {
-            "VISP_MEMORY_REPO_ID": ("repo_id",),
-            "VISP_MEMORY_STORAGE_DATA_DIR": ("storage", "data_dir"),
-            "VISP_MEMORY_STORAGE_BACKEND": ("storage", "backend"),
-            "VISP_MEMORY_STORAGE_MODE": ("storage", "mode"),
-            "VISP_MEMORY_STORAGE_ALLOW_FALLBACK": ("storage", "allow_fallback"),
-            "VISP_MEMORY_STORAGE_CONNECT_TIMEOUT_SECONDS": (
-                "storage",
-                "connect_timeout_seconds",
-            ),
-            "VISP_MEMORY_STORAGE_SERVER_URL": ("storage", "server_url"),
-            "VISP_MEMORY_API_KEY": ("storage", "api_key"),
-            "VISP_MEMORY_JWT_TOKEN": ("storage", "jwt_token"),
-            "NEO4J_URI": ("storage", "neo4j_uri"),
-            "NEO4J_USER": ("storage", "neo4j_user"),
-            "NEO4J_PASSWORD": ("storage", "neo4j_password"),
-            "VISP_MEMORY_EMBEDDING_PROVIDER": ("embedding", "provider"),
-            "VISP_MEMORY_EMBEDDING_MODEL": ("embedding", "model"),
-            "EMBEDDING_API_KEY": ("embedding", "api_key"),
-            "EMBEDDING_API_BASE": ("embedding", "api_base"),
-            "VISP_MEMORY_SERVER_AUTH_ENABLED": ("server", "auth_enabled"),
-            "VISP_MEMORY_BIND_HOST": ("server", "host"),
-            "VISP_MEMORY_JWT_SECRET": ("server", "jwt_secret"),
-            "VISP_MEMORY_SERVER_CORS_ORIGINS": ("server", "cors_origins"),
-            "VISP_MEMORY_SERVER_CORS_ALLOW_CREDENTIALS": (
-                "server",
-                "cors_allow_credentials",
-            ),
-            "VISP_MEMORY_SERVER_API_KEYS": ("server", "api_keys"),
-            "VISP_MEMORY_SERVER_ALLOW_ANONYMOUS": ("server", "allow_anonymous"),
-            "VISP_MEMORY_SERVER_DEFAULT_TEAM": ("server", "default_team"),
-            "VISP_MEMORY_SERVER_LOCAL_OWNER_MODE": ("server", "local_owner_mode"),
-            "VISP_MEMORY_SERVER_JWT_EXPIRY_HOURS": ("server", "jwt_expiry_hours"),
-            "VISP_MEMORY_LLM_PROVIDER": ("llm", "provider"),
-            "VISP_MEMORY_LLM_MODEL": ("llm", "model"),
-            "VISP_MEMORY_LLM_API_KEY": ("llm", "api_key"),
-            "VISP_MEMORY_LLM_BASE_URL": ("llm", "base_url"),
-            "VISP_MEMORY_LLM_TIMEOUT_SECONDS": ("llm", "timeout_seconds"),
-            "VISP_MEMORY_LLM_MAX_OUTPUT_TOKENS": ("llm", "max_output_tokens"),
-            "VISP_MEMORY_LLM_INTENT_AUTO_COMPLETE": ("llm", "intent_auto_complete"),
-            "VISP_MEMORY_LLM_INTENT_COMPLETION_THRESHOLD": (
-                "llm",
-                "intent_completion_threshold",
-            ),
-            "VISP_MEMORY_LLM_INTENT_SUGGESTION_THRESHOLD": (
-                "llm",
-                "intent_suggestion_threshold",
-            ),
-            "VISP_MEMORY_SERVER_SESSION_IDLE_HOURS": ("server", "session_idle_hours"),
-            "VISP_MEMORY_SERVER_SESSION_MAX_DAYS": ("server", "session_max_days"),
-            "VISP_MEMORY_SERVER_SESSION_COOKIE_SECURE": (
-                "server",
-                "session_cookie_secure",
-            ),
-            "VISP_MEMORY_BOOTSTRAP_ADMIN_USERNAME": (
-                "server",
-                "bootstrap_admin_username",
-            ),
-            "VISP_MEMORY_BOOTSTRAP_ADMIN_PASSWORD": (
-                "server",
-                "bootstrap_admin_password",
-            ),
-            "VISP_MEMORY_CODE_GRAPH_INTEL_PROJECTION_PATH": (
-                "code_graph",
-                "intel_projection_path",
-            ),
-        }
-
-        for env_name, path in env_overrides.items():
+        for env_name, path in ENV_OVERRIDES.items():
             if env_name not in os.environ:
                 continue
 
@@ -440,40 +483,12 @@ class MemoryConfig(BaseSettings):
             for attr in path[:-1]:
                 target = getattr(target, attr)
             value = os.environ[env_name]
-            if path in {
-                ("storage", "data_dir"),
-                ("code_graph", "intel_projection_path"),
-            }:
-                value = Path(value)
-            elif path in {
-                ("server", "auth_enabled"),
-                ("server", "cors_allow_credentials"),
-                ("server", "allow_anonymous"),
-                ("server", "session_cookie_secure"),
-                ("storage", "allow_fallback"),
-                ("llm", "intent_auto_complete"),
-            }:
-                value = value.lower() in {"1", "true", "yes", "on"}
-            elif path in {
-                ("server", "jwt_expiry_hours"),
-                ("server", "session_idle_hours"),
-                ("server", "session_max_days"),
-            }:
-                value = int(value)
-            elif path == ("storage", "connect_timeout_seconds"):
-                value = float(value)
-            elif path in {
-                ("llm", "timeout_seconds"),
-                ("llm", "intent_completion_threshold"),
-                ("llm", "intent_suggestion_threshold"),
-            }:
-                value = float(value)
-            elif path == ("llm", "max_output_tokens"):
-                value = int(value)
-            elif path == ("server", "cors_origins"):
+            if path == ("server", "cors_origins"):
                 value = ServerConfig.parse_cors_origins(value)
             elif path == ("server", "api_keys"):
                 value = ServerConfig.parse_cors_origins(value)
+            else:
+                value = _coerce_env_value(target, path[-1], value)
             setattr(target, path[-1], value)
 
     def save(self, path: Path):

@@ -23,7 +23,13 @@ import tempfile
 import pytest
 
 from visp_memory import Memory, MemoryConfig
-from visp_memory.interfaces.mcp import _WRITE_TOOLS, _refuse_unscoped_write
+from visp_memory.interfaces.mcp import (
+    _WRITE_TOOLS,
+    MCPRequestContext,
+    _refuse_unscoped_write,
+    bind_mcp_request_context,
+    handle_tool,
+)
 
 # Minimal valid arguments per write tool — enough to reach the guard.
 WRITE_TOOL_ARGS = {
@@ -143,3 +149,54 @@ def test_read_tools_are_untouched():
         assert _refuse_unscoped_write(tool, {}, _memory(None)) is None, (
             f"{tool} is a read and must not be caught by the write guard"
         )
+
+
+@pytest.mark.asyncio
+async def test_memory_after_work_is_refused_before_any_unscoped_write():
+    memory = _memory(None)
+
+    result = await handle_tool(
+        "memory_after_work",
+        {
+            "summary": "finished without a scope",
+            "decisions": ["keep the boundary"],
+            "bugs_fixed": ["closed the bypass"],
+        },
+        memory,
+    )
+
+    assert result.startswith("Refused:")
+    assert memory._storage.list_memories(limit=50) == []
+
+
+@pytest.mark.asyncio
+async def test_stdio_refuses_a_repo_argument_different_from_the_pinned_config():
+    memory = _memory("repo-a")
+
+    with bind_mcp_request_context(MCPRequestContext(transport="stdio")):
+        result = await handle_tool(
+            "memory_record",
+            {"event": "must not cross projects", "repo_id": "repo-b"},
+            memory,
+        )
+
+    assert result.startswith("Refused:")
+    assert "VISP_MEMORY_MCP_ALLOW_REPO_OVERRIDE" in result
+    assert memory._storage.list_memories(limit=50) == []
+
+
+@pytest.mark.asyncio
+async def test_stdio_repo_override_can_be_explicitly_enabled(monkeypatch):
+    memory = _memory("repo-a")
+    monkeypatch.setenv("VISP_MEMORY_MCP_ALLOW_REPO_OVERRIDE", "yes")
+
+    with bind_mcp_request_context(MCPRequestContext(transport="stdio")):
+        result = await handle_tool(
+            "memory_record",
+            {"event": "intentional cross-project write", "repo_id": "repo-b"},
+            memory,
+        )
+
+    assert result.startswith("Recorded event")
+    stored = memory._storage.list_memories(limit=50, repo_id="repo-b")
+    assert [item["content"] for item in stored] == ["intentional cross-project write"]
