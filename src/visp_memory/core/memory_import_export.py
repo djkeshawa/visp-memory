@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from visp_memory.capture.git import CaptureManifest
+from visp_memory.core.attribution import suppress_attribution
 from visp_memory.core.beliefs import migrate_legacy_belief_fields
 from visp_memory.core.clock import parse_utc, utc_now
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID
@@ -222,6 +223,12 @@ def _validate_import_data(data: Any) -> Dict[str, Any]:
 
 def import_memories(memory: Any, path: Path) -> None:
     """Import memories from a JSON export into a Memory instance."""
+    with suppress_attribution():
+        return _import_memories(memory, path)
+
+
+def _import_memories(memory: Any, path: Path) -> None:
+    """Run import writes without replacing attribution carried by the export."""
     data = _validate_import_data(json.loads(Path(path).read_text(encoding="utf-8")))
     version = data.get("version")
     if version not in (None, "1.0", "2.0", "3.0"):
