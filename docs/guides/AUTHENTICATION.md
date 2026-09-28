@@ -1,5 +1,7 @@
 # Accounts and tokens
 
+For same-user maintenance and project-scoped clients, see the [shared server guide](SHARED_SERVER.md).
+
 Authentication is enabled by default. The dashboard sends unauthenticated users
 to sign-in; API data requires credentials. Public images contain no default password.
 

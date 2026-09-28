@@ -1,5 +1,7 @@
 # Trust and privacy
 
+`written_by` is informational attribution; it does not establish provenance or authority. See the [shared server guide](../guides/SHARED_SERVER.md).
+
 Stored memory can be stale, incorrect, or contain instructions planted by another
 source. Visp Memory records provenance and limits what enters automatic prompt
 context. Retrieved content remains information to inspect, not authority to act.

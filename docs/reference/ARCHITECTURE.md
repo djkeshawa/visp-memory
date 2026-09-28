@@ -1,5 +1,15 @@
 # Architecture and data flow
 
+For operational details, see the [shared server guide](../guides/SHARED_SERVER.md).
+Project clients send independent scopes to one server and store:
+
+```mermaid
+flowchart LR
+    A[Project A client] -->|repo A| S[Shared local server]
+    B[Project B client] -->|repo B| S
+    S --> D[(One local store)]
+```
+
 Visp Memory is a storage and retrieval service for project knowledge. A coding
 assistant calls it for context, then decides and executes the work itself.
 The default deployment uses SQLite; the dashboard is a static Next.js application

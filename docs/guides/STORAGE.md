@@ -1,5 +1,7 @@
 # Storage and embeddings
 
+For a local server shared by project clients, see the [shared server guide](SHARED_SERVER.md).
+
 SQLite is the default store. Each project has a repository ID, and governed
 retrieval stays within that scope. The configured data directory contains
 `memories.db`, account and lifecycle databases when used, and optional local indexes.
