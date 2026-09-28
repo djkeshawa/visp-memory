@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from visp_memory.capture.git import CaptureManifest
+from visp_memory.core.attribution import suppress_attribution
 from visp_memory.core.beliefs import migrate_legacy_belief_fields
 from visp_memory.core.clock import parse_utc, utc_now
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID
@@ -250,7 +251,18 @@ def import_memories(memory: Any, path: Path) -> None:
 def import_memory_data(
     storage: Any, data: Dict[str, Any], *, default_repo_id: str
 ) -> Dict[str, Any] | None:
-    """Share version handling and trust policy between file and server imports."""
+    """Share version handling and trust policy between file and server imports.
+
+    Both paths run with attribution suppressed: an imported record keeps the
+    ``written_by`` its export carried instead of taking the importer's.
+    """
+    with suppress_attribution():
+        return _import_memory_data(storage, data, default_repo_id=default_repo_id)
+
+
+def _import_memory_data(
+    storage: Any, data: Dict[str, Any], *, default_repo_id: str
+) -> Dict[str, Any] | None:
     data = _validate_import_data(data)
     version = data.get("version")
     if version not in (None, "1.0", "2.0", "3.0"):

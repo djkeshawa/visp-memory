@@ -34,6 +34,8 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
+from visp_memory.core.attribution import WriterIdentity, bind_writer
+
 logger = logging.getLogger(__name__)
 
 HOOK_COMMAND_PREFIX = "visp-memory hook"
@@ -69,7 +71,10 @@ def handle_session_start(payload: dict[str, Any], memory=None) -> Optional[dict[
 
         from visp_memory.core.injection import build_session_brief
 
-        brief = build_session_brief(memory, max_chars=SESSION_CONTEXT_MAX_CHARS)
+        with bind_writer(
+            WriterIdentity(agent="claude-code", session=payload.get("session_id"))
+        ):
+            brief = build_session_brief(memory, max_chars=SESSION_CONTEXT_MAX_CHARS)
         if not brief.strip():
             return None
         return {
@@ -110,12 +115,15 @@ def handle_pre_tool_use(payload: dict[str, Any], memory=None) -> Optional[dict[s
             inject_for_task,
         )
 
-        result = inject_for_task(
-            memory,
-            task=f"working on {normalized}",
-            files=[normalized],
-            policy=InjectionPolicy(max_chars=FILE_CONTEXT_MAX_CHARS),
-        )
+        with bind_writer(
+            WriterIdentity(agent="claude-code", session=payload.get("session_id"))
+        ):
+            result = inject_for_task(
+                memory,
+                task=f"working on {normalized}",
+                files=[normalized],
+                policy=InjectionPolicy(max_chars=FILE_CONTEXT_MAX_CHARS),
+            )
         # Always mark the file as seen so empty lookups are not repeated either.
         _save_injected(state_path, injected + [normalized])
         if result.abstained:

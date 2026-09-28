@@ -13,6 +13,7 @@ It's the shortest-term memory but most influential.
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from visp_memory.core.attribution import current_writer
 from visp_memory.core.clock import utc_now
 from visp_memory.core.storage import BaseStorage
 from visp_memory.core.trust import WriteChannel, channel_policy, parse_write_channel
@@ -189,6 +190,8 @@ class IntentMemory(BaseMemoryLayer):
         """
         parsed_channel = parse_write_channel(channel)
         policy = channel_policy(parsed_channel)
+        writer = current_writer()
+        writer_metadata = writer.to_metadata() if writer else None
         entry = {
             "outcome": outcome,
             "recorded_at": utc_now().isoformat(),
@@ -201,6 +204,8 @@ class IntentMemory(BaseMemoryLayer):
             "authoritative": False,
             "status_changed": False,
         }
+        if writer_metadata:
+            entry["written_by"] = writer_metadata
         return self.storage.append_intent_outcome(intent_id, entry)
 
     def complete(

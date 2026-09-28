@@ -48,6 +48,25 @@ class TestSessionStartHandler:
         output = handle_session_start({}, memory=memory)
         assert "permissionDecision" not in json.dumps(output)
 
+    def test_session_identity_is_bound_during_memory_use(self, memory, monkeypatch):
+        from visp_memory.core.injection import build_session_brief
+
+        def write_during_brief(target, **kwargs):
+            target.record("Written by hook")
+            return build_session_brief(target, **kwargs)
+
+        monkeypatch.setattr(
+            "visp_memory.core.injection.build_session_brief", write_during_brief
+        )
+
+        handle_session_start({"session_id": "claude-session"}, memory=memory)
+
+        stored = memory._storage.list_memories(layer="episodic", repo_id="repo-a")[0]
+        assert stored["metadata"]["written_by"] == {
+            "agent": "claude-code",
+            "session": "claude-session",
+        }
+
     def test_fails_open_when_memory_unavailable(self):
         class Broken:
             def context(self, **kwargs):
