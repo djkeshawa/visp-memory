@@ -295,6 +295,7 @@ class TestCLIBasicCommands:
         )
         assert "SessionStart" in settings["hooks"]
         assert "PreToolUse" in settings["hooks"]
+        assert not (temp_dir / ".mcp.json").exists()
 
         uninstall = runner.invoke(app, ["hooks", "uninstall", "claude-code"])
         assert uninstall.exit_code == 0
@@ -302,6 +303,18 @@ class TestCLIBasicCommands:
             (temp_dir / ".claude" / "settings.json").read_text(encoding="utf-8")
         )
         assert "hooks" not in settings_after or not settings_after["hooks"]
+
+    def test_hooks_install_claude_code_with_mcp_writes_project_server(self, cli_env):
+        runner.invoke(app, ["init", "--type", "code"])
+
+        result = runner.invoke(app, ["hooks", "install", "claude-code", "--mcp"])
+
+        assert result.exit_code == 0, result.output
+        mcp = json.loads(Path(".mcp.json").read_text(encoding="utf-8"))
+        assert mcp["mcpServers"]["visp-memory"] == {
+            "command": "visp-memory-mcp",
+            "env": {"VISP_MEMORY_AGENT": "claude-code"},
+        }
 
     def test_ingest_instructions_command(self, cli_env, temp_dir):
         """ingest-instructions imports CLAUDE.md sections idempotently."""
@@ -494,9 +507,44 @@ class TestCLIBasicCommands:
         assert "Before changing code" in Path("AGENTS.md").read_text()
         config = config_path.read_text()
         assert "[mcp_servers.visp-memory]" in config
-        assert 'VISP_MEMORY_STORAGE_SERVER_URL = "http://127.0.0.1:8001"' in config
-        assert 'VISP_MEMORY_REPO_ID = "repo-a"' in config
+        assert 'VISP_MEMORY_AGENT = "codex"' in config
+        assert "VISP_MEMORY_STORAGE_SERVER_URL" not in config
+        assert "VISP_MEMORY_REPO_ID" not in config
+        assert "VISP_MEMORY_STORAGE_MODE" not in config
+        assert "cwd =" not in config
         assert "VISP_MEMORY_EMBEDDING_PROVIDER" not in config
+
+    def test_codex_hook_replaces_old_pinned_block_with_migration_note(self, cli_env):
+        config_path = cli_env / "codex" / "config.toml"
+        config_path.parent.mkdir()
+        config_path.write_text(
+            "# BEGIN LLM-MEMORY CODEX MCP\n"
+            "[mcp_servers.visp-memory]\n"
+            'command = "visp-memory-mcp"\n'
+            "args = []\n"
+            f'cwd = "{cli_env}"\n'
+            "env = { VISP_MEMORY_STORAGE_MODE = \"client\", "
+            "VISP_MEMORY_STORAGE_SERVER_URL = \"http://127.0.0.1:8001\", "
+            "VISP_MEMORY_REPO_ID = \"repo-a\", "
+            "VISP_MEMORY_EMBEDDING_PROVIDER = \"noop\" }\n"
+            "# END LLM-MEMORY CODEX MCP\n",
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            app,
+            ["hooks", "install", "codex", "--config-path", str(config_path)],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "now reads per-project settings from visp-memory.yaml" in result.output
+        rewritten = config_path.read_text(encoding="utf-8")
+        assert "VISP_MEMORY_REPO_ID" not in rewritten
+        assert "VISP_MEMORY_STORAGE_MODE" not in rewritten
+        assert "VISP_MEMORY_STORAGE_SERVER_URL" not in rewritten
+        assert "cwd =" not in rewritten
+        assert 'VISP_MEMORY_AGENT = "codex"' in rewritten
+        assert 'VISP_MEMORY_EMBEDDING_PROVIDER = "noop"' in rewritten
 
     def test_codex_hook_dry_run_does_not_write(self, cli_env):
         """Dry-run prints the Codex MCP block without mutating files."""

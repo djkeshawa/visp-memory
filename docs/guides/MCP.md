@@ -10,19 +10,22 @@ pip install "visp-memory[mcp,capture]"
 visp-memory init
 ```
 
-Run commands in the project whose memory you want to use. For Codex connected to
-a running Visp Memory server:
+Run commands in the project whose memory you want to use. To connect it to a
+running shared server and install Codex integration:
 
 ```bash
-visp-memory hooks install codex \
-  --server-url http://127.0.0.1:8000 \
-  --repo-id my-project
+visp-memory connect --agent-config codex
 ```
 
-The installer writes managed MCP configuration and project-level `AGENTS.md`
-guidance. Restart the assistant to load the new configuration. Configure server
-credentials and project access as described in [authentication](AUTHENTICATION.md).
-In client mode, storage and embedding generation happen on the server.
+The installer writes project-level `AGENTS.md` guidance and a global managed MCP
+entry that contains only the command and `VISP_MEMORY_AGENT=codex`. It does not
+pin a working directory, repository, storage mode, or server URL; Codex starts
+the MCP server in the active session directory, where it discovers that
+project's `visp-memory.yaml`. Repeating the command from another project leaves
+the global block unchanged. Restart the assistant after changing MCP
+configuration. Configure server credentials and project access as described in
+[authentication](AUTHENTICATION.md). In client mode, storage and embedding
+generation happen on the server.
 
 ### Other MCP clients
 
@@ -35,9 +38,7 @@ configuration can use the following shape; working-directory support varies by c
     "visp-memory": {
       "command": "visp-memory-mcp",
       "env": {
-        "VISP_MEMORY_REPO_ID": "my-project",
-        "VISP_MEMORY_STORAGE_DATA_DIR": "/absolute/path/to/project/.visp-memory/data",
-        "VISP_MEMORY_EMBEDDING_PROVIDER": "noop",
+        "VISP_MEMORY_AGENT": "your-client-name",
         "VISP_MEMORY_MCP_PROFILE": "core"
       }
     }
@@ -45,8 +46,9 @@ configuration can use the following shape; working-directory support varies by c
 }
 ```
 
-Use absolute paths and the same project ID as your store. The command must be on
-the client's PATH. Check the client's own configuration format when adapting this example.
+The command must be on the client's PATH and the client must launch it with the
+project as its working directory so normal `visp-memory.yaml` discovery works.
+Check the client's own configuration format when adapting this example.
 
 ## The everyday workflow
 
@@ -88,6 +90,18 @@ Claude Code integration installs `SessionStart` context and `PreToolUse` context
 for Read/Edit/Write events in the project's `.claude/settings.json`. File context
 is deduplicated within the session. Hook failures do not block the assistant;
 the returned memory is context, never a permission decision.
+
+Add `--mcp` to merge a `visp-memory` server into the project's `.mcp.json`
+without replacing other servers, or run both shared-server connection and agent
+setup together:
+
+```bash
+visp-memory hooks install claude-code --mcp
+visp-memory connect --agent-config claude-code
+```
+
+Without `--mcp`, the existing Claude Code hook installation behavior is
+unchanged.
 
 Codex, Cursor, Aider, and generic integration support varies; see
 [feature status](../reference/FEATURE_STATUS.md). Codex users can also install the

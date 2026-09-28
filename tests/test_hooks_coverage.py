@@ -147,7 +147,12 @@ def test_codex_install_update_uninstall_and_existing_file_backup(tmp_path):
     result = adapter.install()
     assert result == {"agents_instructions": True, "codex_mcp_config": True}
     assert "visp-memory goal" in (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
-    assert "VISP_MEMORY_REPO_ID = \"hook-repo\"" in config_path.read_text(encoding="utf-8")
+    config = config_path.read_text(encoding="utf-8")
+    assert 'VISP_MEMORY_AGENT = "codex"' in config
+    assert "VISP_MEMORY_REPO_ID" not in config
+    assert "VISP_MEMORY_STORAGE_MODE" not in config
+    assert "VISP_MEMORY_STORAGE_SERVER_URL" not in config
+    assert "cwd =" not in config
     assert adapter.update_context(task="codex task") is True
     assert "STUBBED CONTEXT" in (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
 
@@ -197,6 +202,57 @@ def test_codex_dry_run_is_side_effect_free_for_install_and_remove(tmp_path):
     assert adapter.uninstall() == {"agents_instructions": True, "codex_mcp_config": True}
     assert not (tmp_path / "AGENTS.md").exists()
     assert not config_path.exists()
+
+
+def test_codex_managed_block_is_identical_across_projects(tmp_path):
+    config_path = tmp_path / "codex.toml"
+    first_root = tmp_path / "one"
+    second_root = tmp_path / "two"
+    first_root.mkdir()
+    second_root.mkdir()
+
+    first = CodexAdapter(
+        _memory(repo_id="repo-one"), project_root=first_root, config_path=config_path
+    )
+    second = CodexAdapter(
+        _memory(repo_id="repo-two"), project_root=second_root, config_path=config_path
+    )
+
+    assert first.install()["codex_mcp_config"] is True
+    installed_once = config_path.read_text(encoding="utf-8")
+    assert second.install()["codex_mcp_config"] is True
+    assert config_path.read_text(encoding="utf-8") == installed_once
+
+
+def test_claude_code_mcp_merge_preserves_foreign_servers_and_is_idempotent(tmp_path):
+    config_path = tmp_path / ".mcp.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "foreign": {"command": "foreign-mcp", "args": ["--safe"]}
+                },
+                "custom": {"preserve": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    adapter = ClaudeCodeAdapter(_memory(), project_root=tmp_path)
+
+    assert adapter.install_mcp_config() is True
+    installed_once = config_path.read_bytes()
+    assert adapter.install_mcp_config() is True
+    assert config_path.read_bytes() == installed_once
+    merged = json.loads(config_path.read_text(encoding="utf-8"))
+    assert merged["custom"] == {"preserve": True}
+    assert merged["mcpServers"]["foreign"] == {
+        "command": "foreign-mcp",
+        "args": ["--safe"],
+    }
+    assert merged["mcpServers"]["visp-memory"] == {
+        "command": "visp-memory-mcp",
+        "env": {"VISP_MEMORY_AGENT": "claude-code"},
+    }
 
 
 def test_adapter_factory_rejects_unknown_tools():

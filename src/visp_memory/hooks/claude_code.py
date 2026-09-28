@@ -6,6 +6,7 @@ Integrates with Claude Code by:
 2. (Future) Setting up Claude Code hooks for auto-update
 """
 
+import json
 from pathlib import Path
 from typing import Dict
 
@@ -70,6 +71,43 @@ class ClaudeCodeAdapter(GenericAdapter):
 
         results.update(super().install())
         return results
+
+    def install_mcp_config(self) -> bool:
+        """Merge the project MCP entry without disturbing another integration."""
+        config_path = self.project_root / ".mcp.json"
+        if config_path.exists():
+            try:
+                config = json.loads(config_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as error:
+                raise ValueError(f"{config_path} is not valid JSON: {error}") from error
+            if not isinstance(config, dict):
+                raise ValueError(f"{config_path} must contain a JSON object")
+        else:
+            config = {}
+
+        servers = config.get("mcpServers")
+        if servers is None:
+            servers = {}
+        if not isinstance(servers, dict):
+            raise ValueError(f"{config_path} field 'mcpServers' must be a JSON object")
+
+        merged = dict(config)
+        merged_servers = dict(servers)
+        merged_servers["visp-memory"] = {
+            "command": "visp-memory-mcp",
+            "env": {"VISP_MEMORY_AGENT": "claude-code"},
+        }
+        merged["mcpServers"] = merged_servers
+        content = json.dumps(merged, indent=2) + "\n"
+        existing = config_path.read_text(encoding="utf-8") if config_path.exists() else None
+        if existing == content or self.dry_run:
+            return True
+
+        self._ensure_directory(config_path)
+        if config_path.exists():
+            self._backup_file(config_path)
+        config_path.write_text(content, encoding="utf-8")
+        return True
 
     def _initial_instructions(self) -> str:
         """Render the starter CLAUDE.md from the one canonical verb catalogue."""
