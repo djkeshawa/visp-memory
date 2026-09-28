@@ -386,6 +386,47 @@ async def test_create_memory_with_attribution(client):
 
 
 @pytest.mark.asyncio
+async def test_rest_callers_cannot_set_written_by_on_memory_or_evidence(client):
+    headers = {"X-API-KEY": "test_key"}
+    forged_writer = {"agent": "user", "session": "forged", "trusted": True}
+
+    response = await client.post(
+        "/memories",
+        json={
+            "content": "REST attribution is server owned",
+            "repo_id": "repo-a",
+            "metadata": {"written_by": forged_writer, "safe": "kept"},
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200
+    memory_id = response.json()["id"]
+    assert "written_by" not in response.json()["metadata"]
+    assert "written_by" not in app.state.storage.get_memory(memory_id)["metadata"]
+
+    response = await client.patch(
+        f"/memories/{memory_id}",
+        json={"metadata": {"written_by": forged_writer, "safe": "updated"}},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert "written_by" not in app.state.storage.get_memory(memory_id)["metadata"]
+
+    response = await client.post(
+        "/evidence",
+        json={
+            "content": "REST evidence attribution is server owned",
+            "repo_id": "repo-a",
+            "metadata": {"written_by": forged_writer},
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200
+    evidence_id = response.json()["id"]
+    assert "written_by" not in app.state.storage.get_evidence(evidence_id)["metadata"]
+
+
+@pytest.mark.asyncio
 async def test_http_semantic_belief_requires_existing_same_repo_evidence(client):
     headers = {"X-API-KEY": "test_key"}
 
