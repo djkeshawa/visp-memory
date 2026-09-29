@@ -37,8 +37,35 @@ Use [config.py](../../src/visp_memory/config.py) for the complete settings schem
 Missing project scope never grants a global read. Legacy unscoped records stay
 quarantined for administrative inspection.
 
-For a store shared by agents, run one `visp-memory serve` process and configure
-each agent with `storage.mode: client` and `storage.server_url` pointing to it.
+For a store shared by agents, run one shared server and connect each project to
+it:
+
+```bash
+visp-memory serve --shared
+cd /path/to/project
+visp-memory connect
+```
+
+`connect` discovers the newest responsive local shared-server record and falls
+back to `http://127.0.0.1:8000`. Use `--server-url` for another endpoint and
+`--repo` to override the existing config or Git top-level directory name. It
+merges `repo_id`, `storage.mode: client`, and `storage.server_url` into the
+project's `visp-memory.yaml` without replacing unrelated settings, then registers
+the repository on the server.
+
+To copy records from the project's previous local store, add
+`--migrate-local`. The import goes through the server and the old data directory
+is left untouched. Never point that option at the shared server's own data
+directory.
+
+Agent setup can be included in the same command. `--agent-config` is a
+repeatable option:
+
+```bash
+visp-memory connect --agent-config codex --agent-config claude-code
+```
+
+The resulting client configuration is what each agent reads from the project.
 While the server holds a SQLite or ArcadeDB data directory, other processes
 cannot open that directory in local mode. A server also refuses to start while
 local writers are active. Multiple local-mode processes may still coexist for

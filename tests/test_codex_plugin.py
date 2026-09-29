@@ -27,7 +27,10 @@ def test_codex_plugin_declares_mcp_server():
     assert server["args"] == ["-m", "visp_memory.interfaces.mcp"]
     # Direct local mode: the project's own config supplies its ID and store. Pinning
     # a repository ID or a server here would point every user at one project.
-    assert server["env"] == {"VISP_MEMORY_EMBEDDING_PROVIDER": "noop"}
+    assert server["env"] == {
+        "VISP_MEMORY_EMBEDDING_PROVIDER": "noop",
+        "VISP_MEMORY_AGENT": "codex",
+    }
 
 
 def test_codex_plugin_skills_cover_required_workflows():

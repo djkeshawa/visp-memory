@@ -79,6 +79,11 @@ console = Console()
 # value instead of the usage error (exit 2) every other bad option produces.
 RankingStrategy = Enum("RankingStrategy", {name: name for name in RANKING_STRATEGIES}, type=str)
 ContextSelection = Enum("ContextSelection", {name: name for name in CONTEXT_SELECTIONS}, type=str)
+AgentConfig = Enum(
+    "AgentConfig",
+    {"claude_code": "claude-code", "codex": "codex"},
+    type=str,
+)
 
 
 class _RefusalBoundary(TyperGroup):
@@ -957,6 +962,55 @@ def init(
     # first — by an agent that has to be told the commands exist.
     console.print()
     _print_reachability(check_reachability(Path.cwd()).as_dict())
+
+
+@app.command()
+def connect(
+    server_url: str = typer.Option(
+        None,
+        "--server-url",
+        help="Shared server URL; otherwise discover a running local shared server",
+    ),
+    repo: str = typer.Option(None, "--repo", "-r", help="Repository/project ID"),
+    migrate_local: bool = typer.Option(
+        False,
+        "--migrate-local",
+        help="Copy this project's existing local records through the shared server",
+    ),
+    agent_config: List[AgentConfig] = typer.Option(
+        None,
+        "--agent-config",
+        help="Install an agent integration; repeat for both claude-code and codex",
+    ),
+):
+    """Connect this project to a shared local Visp Memory server."""
+    from visp_memory.interfaces.connect import ConnectError, connect_project
+
+    try:
+        result = connect_project(
+            server_url=server_url,
+            repo_id=repo,
+            migrate_local=migrate_local,
+            agent_configs=agent_config or (),
+        )
+    except (ConnectError, OSError, UnicodeError) as error:
+        console.print(f"[red]Error:[/red] {error}")
+        raise typer.Exit(1)
+
+    console.print(f"[green]Connected {result.repo_id} to {result.server_url}[/green]")
+    console.print(f"Config: {result.config_path}", soft_wrap=True)
+    if result.repository_registered:
+        console.print("Registered repository on the shared server.")
+    if migrate_local and result.local_data_dir is not None:
+        console.print(f"Migrated {result.migrated_records} local records.")
+        console.print(
+            f"Local data left untouched at: {result.local_data_dir}",
+            soft_wrap=True,
+        )
+    for target in result.agent_configs:
+        console.print(f"Installed {target} integration.")
+    for note in result.notes:
+        console.print(f"[yellow]{note}[/yellow]")
 
 
 # =============================================================================
@@ -3104,6 +3158,11 @@ def hooks_install(
             ".claude/settings.json so memory is injected automatically"
         ),
     ),
+    mcp: bool = typer.Option(
+        False,
+        "--mcp",
+        help="claude-code only: merge visp-memory into the project .mcp.json",
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview installation without writing"),
 ):
     """
@@ -3111,6 +3170,10 @@ def hooks_install(
 
     Installs context injection for the specified tool.
     """
+    if mcp and tool.lower() != "claude-code":
+        console.print("[red]--mcp is supported only for claude-code.[/red]")
+        raise typer.Exit(2)
+
     memory = None if dry_run else get_memory()
 
     try:
@@ -3123,6 +3186,8 @@ def hooks_install(
 
     try:
         results = adapter.install()
+        if tool.lower() == "claude-code" and mcp:
+            results["claude_mcp_config"] = adapter.install_mcp_config()
     except (OSError, UnicodeError) as e:
         console.print(f"[red]Error:[/red] failed to install {tool} integration: {e}")
         raise typer.Exit(1)
@@ -3158,6 +3223,10 @@ def hooks_install(
     console.print(f"Context file: {adapter.get_context_file_path()}")
     if tool.lower() == "codex":
         console.print(f"Codex config: {adapter.config_path}")
+        if getattr(adapter, "replaced_pinned_config", False):
+            from visp_memory.hooks.codex import CODEX_MIGRATION_NOTE
+
+            console.print(f"[yellow]{CODEX_MIGRATION_NOTE}[/yellow]")
         if dry_run:
             console.print("\n[dim]Managed MCP config block:[/dim]")
             console.print(adapter.config_block(), markup=False)

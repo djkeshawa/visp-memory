@@ -4,7 +4,8 @@
       "command": "python3",
       "args": ["-m", "visp_memory.interfaces.mcp"],
       "env": {
-        "VISP_MEMORY_EMBEDDING_PROVIDER": "noop"
+        "VISP_MEMORY_EMBEDDING_PROVIDER": "noop",
+        "VISP_MEMORY_AGENT": "codex"
       }
     }
   }
