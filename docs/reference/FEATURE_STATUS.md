@@ -28,7 +28,7 @@ features need more field use. Frozen features are retained but not actively exte
 | Neo4j backend | Beta | Optional Evidence graph, workflow reports, dreaming, and graph backup. Requires an external service; SQLite remains default. |
 | Shared local server (client mode, many agents) | Beta | One server with project-scoped clients. See [guide](../guides/SHARED_SERVER.md). |
 | Agent attribution (`written_by`) | Experimental | Informational labels; no trust or authority. |
-| Single-writer guard | Beta | Refuses a local-mode process on a store a server owns, and a server on a store local writers hold. |
+| Single-writer guard | Beta | Refuses a local-mode process on a store a server owns, and a server on a store local writers hold. Held by the serving process (so `serve --reload` works); one server process per store, `--workers` above 1 unsupported. |
 | Teams, users, JWT auth | Frozen | Multi-user server features. |
 | Cross-repo aggregation | Frozen | Depends on the team server. |
 

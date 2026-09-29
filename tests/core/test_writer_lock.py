@@ -109,24 +109,45 @@ def test_environment_off_creates_no_files(tmp_path, monkeypatch, role):
     assert not (tmp_path / ".locks").exists()
 
 
-@pytest.mark.parametrize("metadata", ["bad json", "[]", '{"pid": 123, "url": "http://x:8000"}'])
-def test_busy_server_is_closed_with_actionable_message(tmp_path, metadata):
+def conflict_message(tmp_path, metadata):
     locks = tmp_path / ".locks"
     locks.mkdir()
     (locks / "server.json").write_text(metadata)
     with raw_lock(locks / "server.lock"):
         with pytest.raises(WriterLockConflict) as caught:
             acquire_writer_lock(tmp_path, "local")
-    message = str(caught.value)
-    assert str(tmp_path) in message
+    assert not list(locks.glob("local-*.lock"))
+    assert str(tmp_path) in str(caught.value)
+    return str(caught.value)
+
+
+@pytest.mark.parametrize("metadata", ["bad json", "[]"])
+def test_unidentified_holder_names_both_possibilities(tmp_path, metadata):
+    message = conflict_message(tmp_path, metadata)
     assert "storage.mode: client" in message
-    assert "storage.server_url:" in message
+    assert "storage.server_url: <server-url>" in message
     assert "visp-memory.yaml" in message
     assert "visp-memory connect" in message
-    if metadata.startswith('{'):
-        assert "123" in message
-        assert "this store is served by http://x:8000" in message
-    assert not list(locks.glob("local-*.lock"))
+    assert "otherwise wait" in message
+
+
+def test_busy_server_is_closed_with_actionable_message(tmp_path):
+    message = conflict_message(tmp_path, '{"pid": 123, "url": "http://x:8000"}')
+    assert "a server (pid: 123) is serving this store at http://x:8000" in message
+    assert "storage.mode: client" in message
+    assert "storage.server_url: http://x:8000" in message
+    assert "visp-memory.yaml" in message
+    assert "visp-memory connect" in message
+    assert "once available" not in message
+
+
+def test_offline_maintenance_is_not_described_as_a_server(tmp_path):
+    message = conflict_message(tmp_path, '{"pid": 456, "url": null}')
+    assert "offline maintenance command (pid: 456)" in message
+    assert "wait for it to finish" in message
+    assert "served" not in message
+    assert "storage.mode" not in message
+    assert "once available" not in message
 
 
 def test_stale_file_that_cannot_be_unlinked_is_treated_as_live(tmp_path, monkeypatch):
