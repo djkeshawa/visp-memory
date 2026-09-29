@@ -462,11 +462,13 @@ class MemoryConfig(BaseSettings):
                 config_path = parent / name
                 if config_path.exists():
                     config = cls.from_file(config_path)
-                    # Set data_dir relative to config location
+                    # Relative to the directory being walked, not to the config file:
+                    # the default ".visp-memory/data" is written for a project root,
+                    # so a file inside ".visp-memory/" must not nest it a second time
+                    # (that silently opened a fresh empty store). Only an explicit
+                    # VISP_MEMORY_CONFIG resolves against the file's own directory.
                     if not config.storage.data_dir.is_absolute():
-                        config.storage.data_dir = (
-                            config_path.parent / config.storage.data_dir
-                        ).resolve()
+                        config.storage.data_dir = (parent / config.storage.data_dir).resolve()
                     return config
 
         config = cls()

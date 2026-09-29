@@ -10,7 +10,7 @@ from pathlib import Path
 
 from visp_memory.core.clock import utc_now
 from visp_memory.core.owner_token import OWNER_TOKEN_FILE_ENV
-from visp_memory.core.paths import run_dir
+from visp_memory.core.paths import ensure_private_dir, run_dir
 
 __all__ = [
     "OWNER_TOKEN_FILE_ENV",
@@ -31,7 +31,7 @@ class OwnerTokenFiles:
 
 def _atomic_write(path: Path, content: str) -> None:
     """Replace a file in place so readers never see a partial token or record."""
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    ensure_private_dir(path.parent)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp")
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
