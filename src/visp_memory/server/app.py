@@ -63,6 +63,7 @@ from visp_memory.server.routers import (
     memories,
     memory_inspection,
     platform,
+    portability,
     quality,
     recall_utility,
     relationships,
@@ -489,6 +490,7 @@ app.include_router(intent_workflow.router)
 app.include_router(context.router)
 app.include_router(recall_utility.router)
 app.include_router(memory_inspection.router)
+app.include_router(portability.router)
 app.include_router(memories.router)
 app.include_router(intents.router)
 app.include_router(ai.router)
