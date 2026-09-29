@@ -67,6 +67,18 @@ shutdown.
 The dashboard runs in a browser and cannot read this protected file or send its
 token, so dashboard maintenance still requires an administrator account.
 
+The same token is required to report an intent's workflow status
+(`POST /intents/{id}/workflow-status`) as the local owner; an anonymous loopback
+caller without it is refused.
+
+In local-owner mode the server also refuses requests whose `Host` is not
+`localhost`, `127.0.0.1` or `[::1]` (HTTP 421), and refuses a cross-origin
+`POST`/`PUT`/`PATCH`/`DELETE` whose `Origin` is not a loopback page that is this
+server's own dashboard or a configured CORS origin (HTTP 403). This stops a
+web page that rebinds its hostname to `127.0.0.1` from reading or changing your
+memories. Clients that send no `Origin` (the CLI, `RemoteStorage`, MCP) are not
+affected, and neither are servers that are not in local-owner mode.
+
 ## Server deployment
 
 Persist the complete storage directory, including accounts and sessions. Set

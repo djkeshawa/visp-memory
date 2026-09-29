@@ -14,6 +14,7 @@ from visp_memory.server.routers.intents import _find_intent
 from visp_memory.server.routers.platform import append_audit_event
 
 router = APIRouter(prefix="/intents", tags=["intents"])
+AUTHENTICATED_TYPES = frozenset({"session", "pat", "jwt", "api_key"})
 
 
 @router.post("/{intent_id}/workflow-status")
@@ -23,8 +24,16 @@ async def report_workflow_status(
     payload: IntentWorkflowReport,
     user: UserContext = Depends(get_current_user),
 ):
-    if user.auth_type not in {"session", "pat", "jwt", "api_key"} and not user.is_local_owner:
-        raise HTTPException(403, "Workflow reports require an authenticated account or API token")
+    # A loopback peer is not proof of the owner (any local process, other OS user
+    # or DNS-rebinding page has one), and an intent's status belongs to the
+    # external workflow authority. An anonymous caller therefore has to present
+    # the owner token, exactly as the other local maintenance routes require.
+    if user.auth_type not in AUTHENTICATED_TYPES and not user.owner_maintenance:
+        raise HTTPException(
+            403,
+            "Workflow reports require an authenticated account, an API token, "
+            "or the local owner token",
+        )
     storage = request.app.state.storage
     intent = require_scoped_record_access(
         storage,
