@@ -18,7 +18,7 @@ def test_client_export_import_preserves_content_and_writer(client_memory, tmp_pa
     source = client_memory("proj-a")
     other = client_memory("proj-b")
     target = client_memory("proj-c")
-    # Attribution comes from the bound writer, never from a payload key.
+    # Attribution comes from the bound writer; the client forwards it as headers.
     with bind_writer(WriterIdentity(agent="writer-a", session="s-a")):
         memory_id = source._storage.store_memory(
             "Original portable content", repo_id="proj-a",
