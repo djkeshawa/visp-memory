@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import threading
+import time
 import uuid
 from contextlib import suppress
 from dataclasses import dataclass
@@ -26,19 +27,42 @@ class WriterLockConflict(RuntimeError):  # noqa: N818 - public conflict name
                 "; stop those processes before serving or maintaining the store"
             )
         else:
-            metadata = {}
-            with suppress(OSError, ValueError):
-                value = json.loads((data_dir / ".locks/server.json").read_text())
-                if isinstance(value, dict):
-                    metadata = value
-            url = metadata.get("url") or "<server-url>"
-            detail = (
-                f"a server or offline maintenance process (pid: {metadata.get('pid', 'unknown')}); "
-                f"this store is served by {url}; set `storage.mode: client` and "
-                f"`storage.server_url: {url}` in visp-memory.yaml "
-                "(or run `visp-memory connect` once available)"
-            )
+            detail = _holder_detail(read_server_metadata(data_dir))
         super().__init__(f"Storage writer conflict for {data_dir}: {detail}")
+
+
+def read_server_metadata(data_dir: Path) -> dict:
+    """What the current server.lock holder recorded about itself; empty if unreadable."""
+    with suppress(OSError, ValueError):
+        value = json.loads((Path(data_dir) / ".locks/server.json").read_text())
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _holder_detail(metadata):
+    """Word the conflict by what holds server.lock: a server or offline maintenance.
+
+    Maintenance writes metadata with no url, so a url is what marks a server.
+    """
+    pid = metadata.get("pid", "unknown")
+    url = metadata.get("url")
+    client_hint = (
+        "set `storage.mode: client` and `storage.server_url: {}` in visp-memory.yaml "
+        "(or run `visp-memory connect`)"
+    )
+    if url:
+        return f"a server (pid: {pid}) is serving this store at {url}; {client_hint.format(url)}"
+    if metadata.get("pid") is not None:
+        return (
+            f"an offline maintenance command (pid: {pid}) is using this store; "
+            "wait for it to finish and retry"
+        )
+    return (
+        "another process holds the server role (pid: unknown); if it is a server, "
+        + client_hint.format("<server-url>")
+        + ", otherwise wait for it to finish"
+    )
 
 
 @dataclass
@@ -100,12 +124,21 @@ def _try_lock(fd):
         raise
 
 
+# Local writers take server.lock only as a momentary gate, so a busy gate is not
+# evidence of a server until it stays busy. A real server holds it far longer.
+_GATE_ATTEMPTS = 5
+_GATE_PAUSE_SECONDS = 0.01
+
+
 def _open_locked(path, data_dir):
     fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        if not _try_lock(fd):
-            raise WriterLockConflict(data_dir)
-        return fd
+        for attempt in range(_GATE_ATTEMPTS if path.name == "server.lock" else 1):
+            if attempt:
+                time.sleep(_GATE_PAUSE_SECONDS)
+            if _try_lock(fd):
+                return fd
+        raise WriterLockConflict(data_dir)
     except BaseException:
         os.close(fd)
         raise
@@ -148,7 +181,7 @@ def _check_locals(data_dir):
 def _write_metadata(data_dir, url):
     try:
         (data_dir / ".locks/server.json").write_text(json.dumps({
-            "pid": os.getpid(), "url": url,
+            "pid": os.getpid(), "ppid": os.getppid(), "url": url,
             "started_at": datetime.now(timezone.utc).isoformat(),
         }), encoding="utf-8")
     except OSError as error:
