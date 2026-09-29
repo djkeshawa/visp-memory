@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
 from visp_memory.core.clock import utc_now_iso
+from visp_memory.core.trust import LOCAL_WORKFLOW_ACTOR
 
 WORKFLOW_CONTEXT_KEYS = ("external_workflow", "workflow_history")
 
@@ -58,7 +59,9 @@ def reduce_workflow_report(
     payload = report.model_dump(mode="json")
     if previous:
         binding = (previous["source"], previous["task_id"], previous["reported_by"])
-        if binding != (report.source, report.task_id, actor_id):
+        if binding[:2] != (report.source, report.task_id) or not _same_workflow_reporter(
+            binding[2], actor_id
+        ):
             raise ValueError("This intent is already linked to a different workflow or reporter")
         if report.revision <= previous["revision"]:
             same = all(previous.get(key) == value for key, value in payload.items())
@@ -81,6 +84,13 @@ def reduce_workflow_report(
     context["external_workflow"] = stored
     context.pop("completion_evaluation", None)
     return context, {"status": report.status, "applied": True, "report": stored}
+
+
+def _same_workflow_reporter(existing_actor: str, new_actor: str) -> bool:
+    """Keep old anonymous REST bindings compatible with the local workflow actor."""
+    return existing_actor == new_actor or (
+        existing_actor == "anonymous" and new_actor == LOCAL_WORKFLOW_ACTOR
+    )
 
 
 def apply_workflow_report(connection, intent_id, report, actor_id, channel):

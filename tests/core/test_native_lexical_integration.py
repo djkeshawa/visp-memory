@@ -1,5 +1,7 @@
 """Lexical recall improvements must cooperate with native graph context."""
 
+from datetime import datetime
+
 import pytest
 
 from visp_memory.core.code_graph import FileGraph
@@ -92,8 +94,18 @@ def test_explicit_default_keeps_existing_graph_results(linked_candidates):
     )
 
 
-def test_lexical_ranking_preserves_structural_admissions(linked_candidates):
+def test_lexical_ranking_preserves_structural_admissions(linked_candidates, monkeypatch):
     storage, _, _, _ = linked_candidates
+    # Recency scores read the wall clock; two retrievals on a slow runner would otherwise
+    # differ in the last rounded digit of graph_score. Freeze it so only structure varies.
+    frozen = datetime.now().astimezone()
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen.astimezone(tz)
+
+    monkeypatch.setattr("visp_memory.core.ranking.datetime", FrozenDateTime)
     nearby = storage.store_memory(
         "A nearby module owns wheelchair reservations.", repo_id="repo", auto_link=False,
         tags=["provenance:authored"], metadata={"files": ["src/venue.py"]},

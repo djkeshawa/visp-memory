@@ -15,6 +15,9 @@ SHARED_ENV_NAMES = (
     "VISP_MEMORY_SERVER_SHARED",
     "VISP_MEMORY_SERVER_ALLOW_ANONYMOUS",
     "VISP_MEMORY_SERVER_LOCAL_OWNER_MODE",
+    "VISP_MEMORY_SERVER_OWNER_TOKEN_FILE",
+    "VISP_MEMORY_SERVER_PORT",
+    "VISP_MEMORY_BIND_HOST",
 )
 
 
@@ -65,6 +68,32 @@ def test_serve_shared_sets_inherited_env_and_uses_default_data_dir(
     assert (root / "config.yaml").is_file()
     assert (root / "data").is_dir()
     assert len(calls) == 1
+
+
+def test_serve_passes_the_selected_owner_token_path_to_uvicorn(cli_env, monkeypatch):
+    import visp_memory.core.paths as paths
+    import visp_memory.interfaces.shared_server as shared_server
+
+    _clear_shared_env(monkeypatch)
+    root = cli_env / "shared-root"
+    monkeypatch.setattr(shared_server, "shared_root", lambda: root)
+    monkeypatch.setattr(paths, "shared_root", lambda: root)
+    observed_token_files = []
+    monkeypatch.setitem(
+        sys.modules,
+        "uvicorn",
+        types.SimpleNamespace(
+            run=lambda *args, **kwargs: observed_token_files.append(
+                os.environ.get("VISP_MEMORY_SERVER_OWNER_TOKEN_FILE")
+            )
+        ),
+    )
+
+    result = runner.invoke(app, ["serve", "--shared", "--port", "8765"])
+
+    assert result.exit_code == 0
+    assert observed_token_files == [str(root / "run" / "owner-8765.token")]
+    assert os.environ.get("VISP_MEMORY_SERVER_OWNER_TOKEN_FILE") is None
 
 
 def test_serve_shared_ignores_a_project_config_in_the_working_directory(

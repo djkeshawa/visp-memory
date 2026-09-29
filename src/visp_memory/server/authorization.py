@@ -60,6 +60,19 @@ def require_admin(user: UserContext) -> None:
         )
 
 
+def require_owner_or_admin(user: UserContext) -> None:
+    """Require admin access or the local owner's narrowly scoped proof.
+
+    The token capability is intentionally checked only by owner-maintenance
+    endpoints. It does not change ``is_admin`` or authorize general admin APIs.
+    """
+    if not (has_admin_privileges(user) or user.owner_maintenance):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator or local owner maintenance access is required",
+        )
+
+
 def require_repo_scope_access(
     storage: Any,
     repo_id: Optional[str],

@@ -33,7 +33,7 @@ from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import (
     can_access_scoped_record,
     has_admin_privileges,
-    require_admin,
+    require_owner_or_admin,
     require_repo_scope_access,
     require_repo_writable,
     require_scoped_record_access,
@@ -738,7 +738,7 @@ async def preview_memory_purge(
     payload: MemoryPurgeRequest,
     user: UserContext = Depends(get_current_user),
 ):
-    require_admin(user)
+    require_owner_or_admin(user)
     return request.app.state.memory_lifecycle.purge_preview(payload.memory_ids)
 
 
@@ -749,7 +749,7 @@ async def purge_memory(
     confirmation: str,
     user: UserContext = Depends(get_current_user),
 ):
-    require_admin(user)
+    require_owner_or_admin(user)
     if confirmation != memory_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -781,7 +781,7 @@ async def retention_preview(
     retention_days: int = 30,
     user: UserContext = Depends(get_current_user),
 ):
-    require_admin(user)
+    require_owner_or_admin(user)
     return request.app.state.memory_lifecycle.retention_preview(
         repo_id, retention_days=retention_days
     )
@@ -795,7 +795,7 @@ async def execute_retention(
     retention_days: int = 30,
     user: UserContext = Depends(get_current_user),
 ):
-    require_admin(user)
+    require_owner_or_admin(user)
     if confirmation != repo_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -825,7 +825,7 @@ async def verify_memory_consistency(
     repo_id: str = None,
     user: UserContext = Depends(get_current_user),
 ):
-    require_admin(user)
+    require_owner_or_admin(user)
     return request.app.state.memory_lifecycle.verify_consistency(repo_id)
 
 

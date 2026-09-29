@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from visp_memory.core.attribution import stamp_written_by
 from visp_memory.core.clock import utc_now
 from visp_memory.server.auth import UserContext, get_current_user
+from visp_memory.server.authorization import require_owner_or_admin
 from visp_memory.server.schemas import AuditLogEntry
 
 router = APIRouter(prefix="/platform", tags=["platform"])
@@ -52,11 +53,7 @@ async def list_audit_log(
     user: UserContext = Depends(get_current_user),
 ):
     """List non-secret audit events for admin review."""
-    if not user.is_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Audit log access requires an admin user",
-        )
+    require_owner_or_admin(user)
     storage = request.app.state.storage
     capabilities = storage.get_capabilities() if hasattr(storage, "get_capabilities") else None
     if not (
