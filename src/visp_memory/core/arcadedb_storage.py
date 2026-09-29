@@ -8,7 +8,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, Iterable, List, Optional
 
-from visp_memory.core.attribution import stamp_written_by
+from visp_memory.core.attribution import metadata_matches, stamp_written_by
 from visp_memory.core.authority import (
     ProhibitionAuthorityError,
     verify_prohibition_attestation,
@@ -931,7 +931,11 @@ class ArcadeDbStorage(BaseStorage):
                     comparable_fields = set(record) - {"created_at"}
                     if compare_created_at:
                         comparable_fields.add("created_at")
-                    if any(
+                    # Attribution is first-write-wins and never part of identity.
+                    comparable_fields.discard("metadata")
+                    if not metadata_matches(
+                        existing.get("metadata"), record["metadata"]
+                    ) or any(
                         existing.get(field) != record[field]
                         for field in comparable_fields
                     ):
@@ -1354,7 +1358,7 @@ class ArcadeDbStorage(BaseStorage):
                                 and existing.get("repo_id") == repo_id
                                 and existing.get("belief_type") == belief_type
                                 and existing.get("epistemic_status") == epistemic_status
-                                and existing.get("metadata") == metadata
+                                and metadata_matches(existing.get("metadata"), metadata)
                                 and existing.get("status") == status
                                 and existing_evidence == sorted(resolved_evidence_ids)
                             ):
