@@ -166,3 +166,42 @@ def test_serve_shared_refuses_a_configured_repo_before_uvicorn(cli_env, monkeypa
     assert "repo_id" in result.output
     assert os.environ["VISP_MEMORY_CONFIG"] == str((root / "config.yaml").resolve())
     assert calls == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
+def test_serve_shared_makes_existing_root_and_data_dir_private(cli_env, monkeypatch):
+    import stat
+
+    import visp_memory.interfaces.shared_server as shared_server
+
+    _clear_shared_env(monkeypatch)
+    root = cli_env / "shared-root"
+    (root / "data").mkdir(parents=True)
+    root.chmod(0o775)
+    (root / "data").chmod(0o755)
+    monkeypatch.setattr(shared_server, "shared_root", lambda: root)
+    _mock_uvicorn(monkeypatch)
+
+    result = runner.invoke(app, ["serve", "--shared"])
+
+    assert result.exit_code == 0
+    assert stat.S_IMODE(root.stat().st_mode) == 0o700
+    assert stat.S_IMODE((root / "data").stat().st_mode) == 0o700
+
+
+def test_serve_shared_config_alone_still_lands_on_root_data_dir(cli_env, monkeypatch):
+    """The walk-up fix must not move the shared store: the explicit config wins."""
+    import visp_memory.interfaces.shared_server as shared_server
+    from visp_memory.config import load_config
+
+    _clear_shared_env(monkeypatch)
+    root = cli_env / "shared-root"
+    monkeypatch.setattr(shared_server, "shared_root", lambda: root)
+    _mock_uvicorn(monkeypatch)
+
+    result = runner.invoke(app, ["serve", "--shared"])
+    assert result.exit_code == 0
+    # Drop the env override so only the config file decides the path.
+    monkeypatch.delenv("VISP_MEMORY_STORAGE_DATA_DIR")
+
+    assert load_config().storage.data_dir == (root / "data").resolve()
