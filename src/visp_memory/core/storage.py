@@ -22,7 +22,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Literal, Optional
 
-from visp_memory.core.attribution import stamp_written_by
+from visp_memory.core.attribution import metadata_matches, stamp_written_by
 from visp_memory.core.beliefs import (
     HYPOTHESIS_TTL_DAYS,
     migrate_legacy_belief_fields,
@@ -3233,11 +3233,14 @@ class LocalStorage(BaseStorage):
                 "repo_id": repo_id,
                 "evidence_type": evidence_type,
                 "provenance": provenance,
-                "metadata": cls._json_serialize(metadata),
             }
             if compare_created_at:
                 comparable["created_at"] = created_at
-            if any(existing[key] != value for key, value in comparable.items()):
+            # written_by is first-write-wins attribution, never identity: a retry from
+            # another agent, or against a pre-attribution row, is still the same write.
+            if not metadata_matches(existing["metadata"], metadata) or any(
+                existing[key] != value for key, value in comparable.items()
+            ):
                 raise EvidenceImmutableError(
                     f"Evidence ID collision would mutate immutable record {evidence_id!r}"
                 )
@@ -3585,7 +3588,7 @@ class LocalStorage(BaseStorage):
                         and existing["repo_id"] == repo_id
                         and existing["belief_type"] == belief_type
                         and existing["epistemic_status"] == epistemic_status
-                        and existing["metadata"] == self._json_serialize(metadata)
+                        and metadata_matches(existing["metadata"], metadata)
                         and existing["status"] == status
                         and existing_evidence == resolved_evidence_ids
                     ):

@@ -1596,3 +1596,79 @@ def test_real_arcadedb_memory_listing_supports_offsets(tmp_path):
     )
 
     assert [item["id"] for item in page] == memory_ids[1:]
+
+
+def test_arcadedb_evidence_retry_ignores_attribution_and_keeps_first_writer(
+    fake_arcadedb, tmp_path
+):
+    from visp_memory.core.attribution import WriterIdentity, bind_writer
+
+    storage = ArcadeDbStorage(tmp_path)
+    with bind_writer(WriterIdentity("alice", "s-1", None)):
+        storage.store_evidence("output", "repo-a", evidence_id="ev-1")
+    with bind_writer(WriterIdentity("bob", "s-2", None)):
+        assert storage.store_evidence("output", "repo-a", evidence_id="ev-1") == "ev-1"
+        with pytest.raises(EvidenceImmutableError):
+            storage.store_evidence("changed", "repo-a", evidence_id="ev-1")
+        with pytest.raises(EvidenceImmutableError):
+            storage.store_evidence("output", "repo-a", metadata={"k": 1}, evidence_id="ev-1")
+
+    assert storage.get_evidence("ev-1")["metadata"]["written_by"]["agent"] == "alice"
+
+
+def test_arcadedb_signed_prohibition_replay_from_another_agent(
+    fake_arcadedb, tmp_path, monkeypatch
+):
+    from visp_memory.core.attribution import WriterIdentity, bind_writer
+
+    now = datetime(2026, 8, 2, 6, tzinfo=timezone.utc)
+    private_key = Ed25519PrivateKey.generate()
+    encoding = serialization.Encoding.Raw
+    private_raw = private_key.private_bytes(
+        encoding, serialization.PrivateFormat.Raw, serialization.NoEncryption()
+    )
+    public_raw = private_key.public_key().public_bytes(
+        encoding, serialization.PublicFormat.Raw
+    )
+    monkeypatch.setenv(
+        PROHIBITION_AUTHORITY_KEYS_ENV,
+        json.dumps({"owner-2026": base64.b64encode(public_raw).decode("ascii")}),
+    )
+    monkeypatch.setattr("visp_memory.core.authority.utc_now", lambda: now)
+    storage = ArcadeDbStorage(tmp_path)
+    content = "Never bypass review"
+    evidence_id = storage.store_evidence(content, repo_id="repo-a")
+    envelope = sign_prohibition_attestation(
+        build_prohibition_claim(
+            content=content,
+            repo_id="repo-a",
+            evidence=[
+                {
+                    "id": evidence_id,
+                    "content_hash": storage.get_evidence(evidence_id)["content_hash"],
+                }
+            ],
+        ),
+        key_id="owner-2026",
+        private_key=base64.b64encode(private_raw).decode("ascii"),
+        nonce="nonce-1",
+        issued_at=now,
+    )
+
+    def write(agent, text=content):
+        with bind_writer(WriterIdentity(agent, None, None)):
+            return storage.store_memory(
+                text,
+                layer="semantic",
+                category="prohibition",
+                repo_id="repo-a",
+                evidence_ids=[evidence_id],
+                authority_attestation=envelope,
+                auto_link=False,
+            )
+
+    belief_id = write("alice")
+    assert write("bob") == belief_id
+    assert storage.get_memory(belief_id)["metadata"]["written_by"]["agent"] == "alice"
+    with pytest.raises(ProhibitionAuthorityError):
+        write("bob", text="Never bypass review, ever")
