@@ -44,6 +44,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
+import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -80,6 +82,11 @@ except ImportError:
     MCP_AVAILABLE = False
 
 from visp_memory import Memory
+from visp_memory.core.attribution import (
+    WriterIdentity,
+    bind_writer,
+    sanitize_label,
+)
 from visp_memory.core.clock import parse_utc, utc_now
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID, require_repo_id
 from visp_memory.core.embedding_status import (
@@ -113,6 +120,47 @@ if TYPE_CHECKING:
     from visp_memory.server.auth import UserContext
 
 logger = logging.getLogger("visp-memory-mcp")
+_PROCESS_SESSION: str | None = None
+_PROCESS_SESSION_LOCK = threading.Lock()
+
+
+def _ensure_process_session() -> str:
+    """Create one stable fallback session ID for this stdio server process."""
+    global _PROCESS_SESSION
+    configured = os.environ.get("VISP_MEMORY_SESSION")
+    if configured:
+        return configured
+    with _PROCESS_SESSION_LOCK:
+        configured = os.environ.get("VISP_MEMORY_SESSION")
+        if configured:
+            return configured
+        if _PROCESS_SESSION is None:
+            _PROCESS_SESSION = uuid.uuid4().hex
+        return _PROCESS_SESSION
+
+
+def _writer_for_call(server) -> WriterIdentity | None:
+    """Resolve writer labels from process configuration and MCP client info."""
+    try:
+        request_context = getattr(server, "request_context", None)
+        session = getattr(request_context, "session", None)
+        client_params = getattr(session, "client_params", None)
+        client_info = getattr(client_params, "clientInfo", None)
+    except Exception:
+        client_info = None
+    client_name = sanitize_label(getattr(client_info, "name", None))
+    client_version = sanitize_label(getattr(client_info, "version", None))
+    identity = WriterIdentity(
+        agent=sanitize_label(os.environ.get("VISP_MEMORY_AGENT")) or client_name,
+        session=sanitize_label(os.environ.get("VISP_MEMORY_SESSION"))
+        or sanitize_label(_ensure_process_session()),
+        client=(
+            sanitize_label(f"{client_name}/{client_version}")
+            if client_name and client_version
+            else None
+        ),
+    )
+    return identity if identity.to_metadata() else None
 
 # MCP schema enums are advisory-only in this SDK: a client can send any value
 # regardless of the declared enum. Validation therefore has to happen server-side
@@ -316,6 +364,7 @@ def create_mcp_server() -> "Server":
     if not MCP_AVAILABLE:
         raise ImportError("MCP package not installed. Install with: pip install visp-memory[mcp]")
 
+    _ensure_process_session()
     server = Server("visp-memory")
     memory = Memory()
     # The HTTP wrapper needs the same Memory config to select the credential
@@ -392,15 +441,16 @@ def create_mcp_server() -> "Server":
                 max_tokens = max(64, min(int(arguments.get("max_tokens", 800)), 4000))
                 if not prompt:
                     raise ValueError("prompt is required")
-                session = server.request_context.session
-                client_params = session.client_params
+                request_context = getattr(server, "request_context", None)
+                session = getattr(request_context, "session", None)
+                client_params = getattr(session, "client_params", None)
+                capabilities = getattr(client_params, "capabilities", None)
+                create_message = getattr(session, "create_message", None)
                 supports_sampling = bool(
-                    client_params
-                    and client_params.capabilities
-                    and client_params.capabilities.sampling
+                    getattr(capabilities, "sampling", None) and callable(create_message)
                 )
                 if supports_sampling:
-                    sampled = await session.create_message(
+                    sampled = await create_message(
                         [
                             SamplingMessage(
                                 role="user",
@@ -438,7 +488,8 @@ def create_mcp_server() -> "Server":
                         )
                     )
                 return [TextContent(type="text", text=json.dumps(result, indent=2))]
-            result = await handle_tool(name, arguments, memory)
+            with bind_writer(_writer_for_call(server)):
+                result = await handle_tool(name, arguments, memory)
             return [TextContent(type="text", text=result)]
         except MCPAuthorizationError as error:
             logger.warning(

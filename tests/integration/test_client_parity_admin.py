@@ -6,9 +6,11 @@ from urllib.parse import urlsplit
 import pytest
 import requests
 
+from visp_memory.core.attribution import WriterIdentity, bind_writer
 from visp_memory.core.indexing import EmbeddingIndexReport, ReindexResult, ReindexScope
 from visp_memory.core.remote.owner_auth import owner_token_path_for_request
 from visp_memory.core.remote_storage import RemoteStorageError
+from visp_memory.server.app import app
 
 pytest_plugins = ["tests.integration.shared_server"]
 
@@ -17,9 +19,12 @@ def test_client_export_import_preserves_content_and_writer(client_memory, tmp_pa
     source = client_memory("proj-a")
     other = client_memory("proj-b")
     target = client_memory("proj-c")
-    memory_id = source._storage.store_memory(
-        "Original portable content", repo_id="proj-a", metadata={"written_by": "writer-a"},
-    )
+    # Attribution comes from the bound writer, never from a payload key, and the
+    # client does not forward it yet, so bind it around the served storage.
+    with bind_writer(WriterIdentity(agent="writer-a")):
+        memory_id = app.state.storage.store_memory(
+            "Original portable content", repo_id="proj-a"
+        )
     other.record("Keep project B private")
     export_path = tmp_path / "export.json"
     exported = source.export(export_path)
@@ -43,7 +48,7 @@ def test_client_export_import_preserves_content_and_writer(client_memory, tmp_pa
     imported = target._storage.peek_memory(memory_id)
     assert imported["repo_id"] == "proj-c"
     assert imported["content"] == "Original portable content"
-    assert imported["metadata"]["written_by"] == "writer-a"
+    assert imported["metadata"]["written_by"] == {"agent": "writer-a"}
     assert target._storage.list_evidence(repo_id="proj-c")
     assert other._storage.list_memories(repo_id="proj-b")[0]["content"] == "Keep project B private"
 
