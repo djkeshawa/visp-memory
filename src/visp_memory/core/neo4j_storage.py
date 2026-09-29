@@ -13,6 +13,7 @@ except ImportError:  # pragma: no cover - exercised only when optional extra is 
     GraphDatabase = None
 
 from visp_memory.config import load_config
+from visp_memory.core.attribution import stamp_written_by
 from visp_memory.core.embedding_binding import bind_embeddings
 from visp_memory.core.indexing import EmbeddingIndexReport, ReindexResult, ReindexScope
 from visp_memory.core.neo4j_feedback import Neo4jFeedback
@@ -1163,6 +1164,7 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, Neo4jTurnKeys, BaseStorage):
         from visp_memory.core.intent_workflow import WORKFLOW_CONTEXT_KEYS
 
         context = {k: v for k, v in (context or {}).items() if k not in WORKFLOW_CONTEXT_KEYS}
+        context = stamp_written_by(context)
         repo_id = repo_id or UNSCOPED_REPO_ID
 
         with self.driver.session() as session:

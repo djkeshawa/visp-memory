@@ -3,6 +3,7 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from visp_memory.core.attribution import stamp_written_by
 from visp_memory.core.clock import utc_now
 from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import require_owner_or_admin
@@ -32,7 +33,7 @@ def append_audit_event(
             repo_id=repo_id,
             target_type=target_type,
             target_id=target_id,
-            metadata=metadata or {},
+            metadata=stamp_written_by(metadata),
         )
 
 

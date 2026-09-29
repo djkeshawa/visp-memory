@@ -110,6 +110,71 @@ class TestStatelessTransport:
         assert "Recorded event" in _result_text(response)
 
     @pytest.mark.asyncio
+    async def test_request_headers_attribute_mcp_writes(self, tmp_path):
+        app = _build_app(tmp_path)
+        async with _Client(app) as client:
+            response = await client.post(
+                "/mcp",
+                json=_tool_call(
+                    "memory_record",
+                    {"event": "header attributed", "repo_id": "http-repo"},
+                ),
+                headers={
+                    **HEADERS,
+                    "X-Visp-Agent": "codex",
+                    "X-Visp-Session": "session-1",
+                    "X-Visp-Client": "visp-sdk",
+                },
+            )
+
+        assert response.status_code == 200
+        memory = app._manager.app._visp_memory
+        stored = next(
+            row
+            for row in memory._storage.list_memories(repo_id="http-repo")
+            if row["content"] == "header attributed"
+        )
+        assert stored["metadata"]["written_by"] == {
+            "agent": "codex",
+            "session": "session-1",
+            "client": "visp-sdk",
+        }
+
+    @pytest.mark.asyncio
+    async def test_authenticated_principal_is_default_mcp_agent(self, tmp_path):
+        store = AuthStore(tmp_path / "auth.db")
+        account = store.create_account(
+            username="writer-agent",
+            password="a-secure-password-123",
+            user_id="writer-user",
+        )
+        _, token = store.create_token(
+            user_id=account["id"],
+            name="writer",
+            scopes=["memory:read", "memory:write"],
+            repo_ids=["http-repo"],
+        )
+        app = _build_app(tmp_path, auth_store=store)
+        async with _Client(app) as client:
+            response = await client.post(
+                "/mcp",
+                json=_tool_call(
+                    "memory_record",
+                    {"event": "principal attributed", "repo_id": "http-repo"},
+                ),
+                headers={**HEADERS, "authorization": f"Bearer {token}"},
+            )
+
+        assert response.status_code == 200
+        memory = app._manager.app._visp_memory
+        stored = next(
+            row
+            for row in memory._storage.list_memories(repo_id="http-repo")
+            if row["content"] == "principal attributed"
+        )
+        assert stored["metadata"]["written_by"] == {"agent": "writer-agent"}
+
+    @pytest.mark.asyncio
     async def test_consecutive_requests_share_nothing_but_the_store(self, tmp_path):
         app = _build_app(tmp_path)
         async with _Client(app) as client:

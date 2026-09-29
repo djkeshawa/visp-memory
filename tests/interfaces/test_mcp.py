@@ -37,6 +37,111 @@ class TestMCPServer:
         except ImportError:
             pytest.skip("MCP not installed")
 
+    def test_writer_identity_falls_back_to_client_info(self, monkeypatch):
+        from visp_memory.core.attribution import WriterIdentity
+        from visp_memory.interfaces.mcp import MCP_AVAILABLE, _writer_for_call
+
+        if not MCP_AVAILABLE:
+            pytest.skip("MCP not installed")
+        monkeypatch.delenv("VISP_MEMORY_AGENT", raising=False)
+        monkeypatch.setenv("VISP_MEMORY_SESSION", "session-a")
+        server = SimpleNamespace(
+            request_context=SimpleNamespace(
+                session=SimpleNamespace(
+                    client_params=SimpleNamespace(
+                        clientInfo=SimpleNamespace(name="Codex", version="2.1")
+                    )
+                )
+            )
+        )
+
+        assert _writer_for_call(server) == WriterIdentity(
+            "Codex", "session-a", "Codex/2.1"
+        )
+
+    def test_writer_identity_environment_agent_beats_client_info(self, monkeypatch):
+        from visp_memory.core.attribution import WriterIdentity
+        from visp_memory.interfaces.mcp import MCP_AVAILABLE, _writer_for_call
+
+        if not MCP_AVAILABLE:
+            pytest.skip("MCP not installed")
+        monkeypatch.setenv("VISP_MEMORY_AGENT", "codex-cli")
+        monkeypatch.setenv("VISP_MEMORY_SESSION", "session-env")
+        server = SimpleNamespace(
+            request_context=SimpleNamespace(
+                session=SimpleNamespace(
+                    client_params=SimpleNamespace(
+                        clientInfo=SimpleNamespace(name="ClaudeDesktop", version="1.0")
+                    )
+                )
+            )
+        )
+
+        assert _writer_for_call(server) == WriterIdentity(
+            "codex-cli", "session-env", "ClaudeDesktop/1.0"
+        )
+
+    def test_writer_identity_uses_one_generated_session_for_the_process(
+        self, monkeypatch
+    ):
+        from visp_memory.interfaces.mcp import (
+            MCP_AVAILABLE,
+            _ensure_process_session,
+            _writer_for_call,
+        )
+
+        if not MCP_AVAILABLE:
+            pytest.skip("MCP not installed")
+        monkeypatch.delenv("VISP_MEMORY_AGENT", raising=False)
+        monkeypatch.delenv("VISP_MEMORY_SESSION", raising=False)
+        _ensure_process_session()
+        server = SimpleNamespace()
+
+        first = _writer_for_call(server)
+        second = _writer_for_call(server)
+
+        assert first.session
+        assert first.session == second.session
+        assert len(first.session) == 32
+
+    @pytest.mark.asyncio
+    async def test_mcp_dispatch_binds_the_writer_for_tool_execution(
+        self, tmp_path, monkeypatch
+    ):
+        from mcp.types import CallToolRequest, CallToolRequestParams
+
+        from visp_memory.core.attribution import WriterIdentity, current_writer
+        from visp_memory.interfaces import mcp as mcp_module
+
+        if not mcp_module.MCP_AVAILABLE:
+            pytest.skip("MCP not installed")
+        config = MemoryConfig(repo_id="repo-a")
+        config.storage.data_dir = tmp_path
+        config.embedding.provider = "noop"
+        memory = Memory(config=config)
+        monkeypatch.setenv("VISP_MEMORY_MCP_PROFILE", "full")
+        monkeypatch.setenv("VISP_MEMORY_AGENT", "codex")
+        monkeypatch.setenv("VISP_MEMORY_SESSION", "dispatch-session")
+        with mock.patch.object(mcp_module, "Memory", return_value=memory):
+            server = mcp_module.create_mcp_server()
+        captured = []
+
+        async def capture_writer(_name, _arguments, _memory):
+            captured.append(current_writer())
+            return "ok"
+
+        monkeypatch.setattr(mcp_module, "handle_tool", capture_writer)
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="memory_record", arguments={"event": "dispatch event"}
+            ),
+        )
+
+        await server.request_handlers[CallToolRequest](request)
+
+        assert captured == [WriterIdentity("codex", "dispatch-session", None)]
+
     @pytest.mark.asyncio
     async def test_mcp_learn_schema_is_closed_and_has_no_signing_surface(
         self, tmp_path, monkeypatch
