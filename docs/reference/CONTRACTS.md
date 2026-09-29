@@ -1,6 +1,6 @@
 # Machine and storage contracts
 
-`written_by` is reserved metadata for informational writer attribution. See the [shared server guide](../guides/SHARED_SERVER.md).
+`written_by` is reserved metadata for informational writer attribution; see the [`written_by` contract](#written_by-contract) below and the [shared server guide](../guides/SHARED_SERVER.md).
 
 `visp-memory contract ...` is the versioned surface a coordinator speaks. Every
 command in it prints one JSON object on stdout, always carrying `contractVersion`
@@ -155,13 +155,37 @@ Backend portability is capability-gated:
 | --- | --- | --- |
 | SQLite `LocalStorage` | Yes | Yes |
 | ArcadeDB | Yes | No |
-| Remote/HTTP | No | No |
+| Remote/HTTP | Server's backend | Server's backend |
 | Neo4j | No | No |
 
 Unsupported export is refused before storage reads or destination-file writes.
 Unsupported import is refused before backend writes. ArcadeDB can provide a
 complete, ceiling-checked graph export, but it does not currently expose the
-single-transaction graph import that portable formats require. Remote/HTTP list endpoints
-are paginated and do not expose every portable field, so the client does not
-claim a complete export. Neo4j uses a separate native graph backup/restore command;
-portable memory packs remain unavailable.
+single-transaction graph import that portable formats require. Remote/HTTP
+supports complete export and atomic import through `GET /repos/{id}/export` and
+`POST /repos/{id}/import`; import requires the owner or an administrator. The
+client reads the server's `/diagnostics/capabilities`, so a server on a backend
+without graph export or import refuses as in the table above. Neo4j uses a
+separate native graph backup/restore command; portable memory packs remain
+unavailable.
+
+### `written_by` contract
+
+`written_by` is informational attribution of who wrote a record. It is not
+provenance and grants no trust or authority.
+
+- **Shape:** `{agent, session, client}`; each field is optional, and a value with
+  no populated field is not stored.
+- **Where:** in `metadata` on memories and evidence, in `context` on intents, and
+  in intent outcome entries and audit-log event metadata.
+- **Labels:** each value matches `[A-Za-z0-9._:@/+-]{1,64}`. Anything else is
+  dropped rather than stored.
+- **Set by the writer's environment, not the payload:** the server (or local
+  process) stamps it from request headers or process settings; see
+  [writers and attribution](../guides/SHARED_SERVER.md#writers-and-attribution).
+  A client cannot set it in a payload; the key is stripped from request
+  metadata, and a metadata replacement keeps the stored value.
+- **Imports** keep the value the export carried instead of taking the
+  importer's.
+- **Ranking:** a `written_by.session` equal to the query's session ID adds a
+  "matched session" recall factor, so a label can affect relevance but not trust.

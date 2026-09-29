@@ -75,7 +75,9 @@ data and are visible only through the administrator-gated dreaming endpoints.
 
 ## API
 
-All routes require an administrator with access to the selected active project.
+All routes require an administrator with access to the selected active project
+(or, on a server in [open local-owner mode](AUTHENTICATION.md#open-local-owner-mode),
+the local owner's `X-Visp-Owner-Token`).
 Personal access tokens also need the `admin` scope. Browser mutations use the existing
 session and CSRF protections. Unsupported backends return HTTP 501; stale review actions
 return HTTP 409.

@@ -1,7 +1,9 @@
 # Architecture and data flow
 
 For operational details, see the [shared server guide](../guides/SHARED_SERVER.md).
-Project clients send independent scopes to one server and store:
+Project clients each send their own repository scope to one server and store.
+This is scoping, not access control: on a single-user open local server, any local
+caller can name any project.
 
 ```mermaid
 flowchart LR

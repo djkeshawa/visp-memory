@@ -1,6 +1,6 @@
 # Trust and privacy
 
-`written_by` is informational attribution; it does not establish provenance or authority. See the [shared server guide](../guides/SHARED_SERVER.md).
+`written_by` is informational attribution. It grants no trust or authority and does not establish provenance, but the session label is a relevance factor in proactive recall. See the [shared server guide](../guides/SHARED_SERVER.md#writers-and-attribution).
 
 Stored memory can be stale, incorrect, or contain instructions planted by another
 source. Visp Memory records provenance and limits what enters automatic prompt
@@ -24,11 +24,11 @@ make itself trusted by claiming an author or adding a provenance tag.
 
 | Tier | Source channel | Eligible for automatic context? |
 |---|---|---|
-| `authored` | Local CLI writes | Yes, subject to trust and relevance checks |
+| `authored` | Local-mode CLI writes | Yes, subject to trust and relevance checks |
 | `derived` | Package Git/test capture, bootstrap, and workflow adapters | Yes, subject to checks |
 | `assisted` | MCP, conversation capture, compression, or reflection | Yes, subject to checks |
 | `unknown` | Direct library writes, missing or malformed provenance | No; quarantined |
-| `external` | HTTP/REST, imports, and instruction-file ingestion | No; quarantined |
+| `external` | HTTP/REST (including every client-mode write), imports, and instruction-file ingestion | No; quarantined |
 
 Trust decays with age, with bounded reinforcement from positive use. Repeated
 exposure alone does not keep a stale memory permanently eligible. Quarantine and
@@ -50,20 +50,26 @@ interchangeable with a task brief for automatic prompt injection. The legacy
 
 Dashboard writes use HTTP, including writes by signed-in administrators. They
 remain searchable in Recall but are excluded from task briefs and automatic
-context. Setting a pending note to active records a review; it does not change
-the note's provenance or make it eligible for automatic context.
+context. The same holds for every write from a project connected to a
+[shared server](../guides/SHARED_SERVER.md) (client mode): CLI, MCP, hooks and
+dashboard writes are all stored as `external` and are not auto-injected.
+Setting a pending note to active records a review; it does not change the note's
+provenance or make it eligible for automatic context.
 
 To use a conclusion you have personally checked, inspect the original source,
 then record your own reviewed conclusion through the local CLI in the **same
-project and data store**, including a source reference:
+project and data store**, including a source reference. This works only against
+a local-mode store: in client mode the CLI write is stored as `external` too, so
+to record an authored conclusion use a local-mode store. That is a known
+limitation of client mode, with the decision on it pending:
 
 ```bash
 visp-memory record "Verified: session cookies use HttpOnly; source: src/auth.py" --repo my-project
 ```
 
-For a Docker-hosted store, run that CLI command inside the application container
-using `docker exec`; a host CLI with a different data directory writes to a
-different store. The original HTTP note keeps its provenance. Do not blindly
+A host CLI with a different data directory writes to a different store, and a
+running server owns its data directory, so a local-mode CLI cannot open the
+server's store while the server runs. The original HTTP note keeps its provenance. Do not blindly
 copy external instructions or relabel an external record as trusted. A CLI note
 still has to pass relevance, scope, freshness, and other eligibility checks.
 

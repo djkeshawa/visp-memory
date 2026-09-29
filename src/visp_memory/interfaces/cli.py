@@ -3144,7 +3144,7 @@ def hooks_install(
     server_url: str = typer.Option(
         "http://127.0.0.1:8000",
         "--server-url",
-        help="Memory server URL for Codex client-mode MCP config",
+        help="Ignored: the Codex MCP block pins no server URL; use `visp-memory connect`",
     ),
     repo_id: str = typer.Option(None, "--repo-id", help="Repository ID for Codex memory scope"),
     config_path: Path = typer.Option(

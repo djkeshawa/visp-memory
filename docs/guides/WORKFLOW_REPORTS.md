@@ -54,7 +54,9 @@ Choose one transport:
 - **CLI:** `visp-memory intent report INTENT_ID --file report.json`.
 - **REST:** POST that JSON to `/intents/INTENT_ID/workflow-status` using the intent owner's
   authenticated session or token (with `intent:write` and access to the project).
-  An administrator can also establish the initial reporting connection.
+  An administrator can also establish the initial reporting connection. On a
+  server in [open local-owner mode](AUTHENTICATION.md#open-local-owner-mode), send
+  the owner token in an `X-Visp-Owner-Token` header instead.
 
 The first accepted report binds the intent to its source, task ID, and authenticated
 reporter. Keep that identity stable. Local CLI and stdio MCP share the `local-workflow`
