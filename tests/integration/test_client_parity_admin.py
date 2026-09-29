@@ -10,7 +10,6 @@ from visp_memory.core.attribution import WriterIdentity, bind_writer
 from visp_memory.core.indexing import EmbeddingIndexReport, ReindexResult, ReindexScope
 from visp_memory.core.remote.owner_auth import owner_token_path_for_request
 from visp_memory.core.remote_storage import RemoteStorageError
-from visp_memory.server.app import app
 
 pytest_plugins = ["tests.integration.shared_server"]
 
@@ -19,11 +18,11 @@ def test_client_export_import_preserves_content_and_writer(client_memory, tmp_pa
     source = client_memory("proj-a")
     other = client_memory("proj-b")
     target = client_memory("proj-c")
-    # Attribution comes from the bound writer, never from a payload key, and the
-    # client does not forward it yet, so bind it around the served storage.
-    with bind_writer(WriterIdentity(agent="writer-a")):
-        memory_id = app.state.storage.store_memory(
-            "Original portable content", repo_id="proj-a"
+    # Attribution comes from the bound writer; the client forwards it as headers.
+    with bind_writer(WriterIdentity(agent="writer-a", session="s-a")):
+        memory_id = source._storage.store_memory(
+            "Original portable content", repo_id="proj-a",
+            metadata={"written_by": {"agent": "forged"}},
         )
     other.record("Keep project B private")
     export_path = tmp_path / "export.json"
@@ -44,11 +43,13 @@ def test_client_export_import_preserves_content_and_writer(client_memory, tmp_pa
     for row in portable["intents"]:
         row.pop("repo_id", None)
     export_path.write_text(json.dumps(portable, default=str))
-    target.import_memories(export_path)
+    # A different agent imports; the record keeps the writer its export carried.
+    with bind_writer(WriterIdentity(agent="importer", session="s-c")):
+        target.import_memories(export_path)
     imported = target._storage.peek_memory(memory_id)
     assert imported["repo_id"] == "proj-c"
     assert imported["content"] == "Original portable content"
-    assert imported["metadata"]["written_by"] == {"agent": "writer-a"}
+    assert imported["metadata"]["written_by"] == {"agent": "writer-a", "session": "s-a"}
     assert target._storage.list_evidence(repo_id="proj-c")
     assert other._storage.list_memories(repo_id="proj-b")[0]["content"] == "Keep project B private"
 
