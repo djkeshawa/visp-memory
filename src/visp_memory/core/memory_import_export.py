@@ -253,8 +253,8 @@ def import_memory_data(
 ) -> Dict[str, Any] | None:
     """Share version handling and trust policy between file and server imports.
 
-    Runs without replacing attribution so imported records keep the writer
-    already carried by the export, for file imports and server imports alike.
+    Both paths run with attribution suppressed: an imported record keeps the
+    ``written_by`` its export carried instead of taking the importer's.
     """
     with suppress_attribution():
         return _import_memory_data(storage, data, default_repo_id=default_repo_id)

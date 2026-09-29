@@ -24,6 +24,9 @@ def test_client_export_import_preserves_content_and_writer(client_memory, tmp_pa
             "Original portable content", repo_id="proj-a",
             metadata={"written_by": {"agent": "forged"}},
         )
+    assert source._storage.peek_memory(memory_id)["metadata"]["written_by"] == {
+        "agent": "writer-a", "session": "s-a",
+    }
     other.record("Keep project B private")
     export_path = tmp_path / "export.json"
     exported = source.export(export_path)

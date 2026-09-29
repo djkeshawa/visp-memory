@@ -1,5 +1,7 @@
 # Connect an assistant
 
+For multi-project local clients using one server, see the [shared server guide](SHARED_SERVER.md).
+
 MCP lets an assistant call Visp Memory tools. Hooks provide additional context at
 supported session/file events. Initializing a store does not install either integration.
 

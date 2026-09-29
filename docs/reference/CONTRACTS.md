@@ -1,5 +1,7 @@
 # Machine and storage contracts
 
+`written_by` is reserved metadata for informational writer attribution. See the [shared server guide](../guides/SHARED_SERVER.md).
+
 `visp-memory contract ...` is the versioned surface a coordinator speaks. Every
 command in it prints one JSON object on stdout, always carrying `contractVersion`
 and `success`, and reports failure as a `success: false` envelope rather than a
