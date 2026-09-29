@@ -16,6 +16,11 @@ except ImportError:
     REQUESTS_AVAILABLE = False
 
 from visp_memory.core.api_limits import MAX_QUERY_LIMIT
+from visp_memory.core.attribution import (
+    WRITTEN_BY_KEY,
+    current_writer,
+    identity_headers,
+)
 from visp_memory.core.beliefs import normalize_belief_type
 from visp_memory.core.remote import RemoteAdminMixin, RemoteRecallMixin
 from visp_memory.core.remote.errors import RemoteStorageError
@@ -28,6 +33,25 @@ from visp_memory.core.storage import (
 from visp_memory.quality.secrets import SecretBearingContentError, redact_for_storage
 
 logger = logging.getLogger(__name__)
+
+
+def _prepare_request_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy per-call transport data, adding identity and removing payload claims."""
+    prepared = dict(kwargs)
+    writer_headers = identity_headers(current_writer())
+    if writer_headers:
+        prepared["headers"] = {
+            **dict(prepared.get("headers") or {}),
+            **writer_headers,
+        }
+
+    payload = prepared.get("json")
+    metadata = payload.get("metadata") if isinstance(payload, dict) else None
+    if isinstance(metadata, dict) and WRITTEN_BY_KEY in metadata:
+        sanitized_metadata = dict(metadata)
+        sanitized_metadata.pop(WRITTEN_BY_KEY, None)
+        prepared["json"] = {**payload, "metadata": sanitized_metadata}
+    return prepared
 
 
 class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, BaseStorage):
@@ -191,6 +215,7 @@ class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, BaseStorage):
         timeout = self.timeout
 
         def guarded_request(method, url, **kwargs):
+            kwargs = _prepare_request_kwargs(kwargs)
             kwargs.setdefault("timeout", timeout)
             try:
                 response = original_request(method, url, **kwargs)

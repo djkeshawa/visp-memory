@@ -43,6 +43,11 @@ from typing import TYPE_CHECKING
 
 import anyio
 
+from visp_memory.core.attribution import (
+    WriterIdentity,
+    bind_writer,
+    identity_from_headers,
+)
 from visp_memory.interfaces.mcp import (
     MCP_AVAILABLE,
     MCPRequestContext,
@@ -138,13 +143,17 @@ class StatelessMCPApp:
                 )
                 return
 
+            writer_identity = _request_writer_identity(scope, principal)
+            # The SDK can dispatch tool work through its lifespan task group, so
+            # the handler uses this context field to rebind at the storage boundary.
             request_context = MCPRequestContext(
                 transport="http",
                 principal=principal,
                 request_id=request_id,
                 require_explicit_scope=True,
+                writer=writer_identity,
             )
-            with bind_mcp_request_context(request_context):
+            with bind_mcp_request_context(request_context), bind_writer(writer_identity):
                 response_started = False
                 content_type = b""
 
@@ -246,6 +255,22 @@ class StatelessMCPApp:
                     await lifespan.__aexit__(None, None, None)
                 await send({"type": "lifespan.shutdown.complete"})
                 return
+
+
+def _request_writer_identity(scope, principal) -> WriterIdentity:
+    """Use sanitized request labels, defaulting the agent to the principal name."""
+    headers = {}
+    for name, value in scope.get("headers", []):
+        try:
+            headers[name.decode("latin-1")] = value.decode("latin-1")
+        except AttributeError:
+            continue
+    supplied = identity_from_headers(headers)
+    return WriterIdentity(
+        agent=(supplied.agent if supplied else None) or principal.username,
+        session=supplied.session if supplied else None,
+        client=supplied.client if supplied else None,
+    )
 
 
 def _transport_error(code: str, message: str, request_id: str) -> bytes:

@@ -5,6 +5,7 @@ import pytest
 import requests
 
 from visp_memory import Memory, MemoryConfig
+from visp_memory.core.attribution import WriterIdentity, bind_writer
 from visp_memory.core.hybrid_retrieval import HybridRetriever
 from visp_memory.core.recall_candidates import recall_candidates
 from visp_memory.core.remote_storage import RemoteStorage, RemoteStorageError
@@ -703,6 +704,9 @@ class _ProbeSession:
     def get(self, url, params=None):
         return self.request("GET", url, params=params)
 
+    def post(self, url, json=None):
+        return self.request("POST", url, json=json)
+
     def close(self):
         self.closed = True
 
@@ -753,6 +757,40 @@ def test_remote_constructor_survives_best_effort_probe_transport_failure(monkeyp
     assert storage.session is session
     assert "Remote request GET https://memory.example/ failed" in caplog.text
     assert session.calls[0][2]["timeout"] == 30.0
+
+
+def test_remote_requests_use_each_current_writer_and_strip_payload_identity(monkeypatch):
+    import visp_memory.core.remote_storage as remote_module
+
+    monkeypatch.delenv("VISP_MEMORY_AGENT", raising=False)
+    monkeypatch.delenv("VISP_MEMORY_SESSION", raising=False)
+    session = _ProbeSession(FakeResponse(200, {"id": "memory-1"}))
+    monkeypatch.setattr(remote_module.requests, "Session", lambda: session)
+    storage = RemoteStorage("https://memory.example")
+    caller_metadata = {
+        "written_by": {"agent": "forged"},
+        "safe": "kept",
+    }
+
+    with bind_writer(WriterIdentity("codex", "session-1", "visp-sdk")):
+        storage.store_memory("first", metadata=caller_metadata)
+    with bind_writer(WriterIdentity("claude-code", "session-2", None)):
+        storage.store_memory("second")
+    storage.get_memory("memory-1")
+
+    assert "headers" not in session.calls[0][2]
+    assert session.calls[1][2]["headers"] == {
+        "X-Visp-Agent": "codex",
+        "X-Visp-Session": "session-1",
+        "X-Visp-Client": "visp-sdk",
+    }
+    assert session.calls[2][2]["headers"] == {
+        "X-Visp-Agent": "claude-code",
+        "X-Visp-Session": "session-2",
+    }
+    assert "headers" not in session.calls[3][2]
+    assert session.calls[1][2]["json"]["metadata"] == {"safe": "kept"}
+    assert caller_metadata["written_by"] == {"agent": "forged"}
 
 
 @pytest.mark.parametrize(
