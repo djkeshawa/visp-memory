@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Callable
 
 import requests
 
 from visp_memory.core.paths import run_dir
+from visp_memory.core.process_liveness import pid_is_alive
 from visp_memory.interfaces.connect_models import ConnectError, ServerRecord
 
 
@@ -18,19 +18,6 @@ def normalize_server_url(url: str) -> str:
     if not normalized:
         raise ConnectError("Server URL cannot be empty")
     return normalized
-
-
-def _pid_is_alive(pid: int | None) -> bool:
-    """Reject known-dead processes while treating unavailable checks as inconclusive."""
-    if not isinstance(pid, int) or pid <= 0:
-        return True
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except (PermissionError, OSError):
-        return True
-    return True
 
 
 def probe_server(url: str) -> bool:
@@ -82,7 +69,7 @@ def server_records(directory: Path | None = None) -> list[ServerRecord]:
     records = []
     for path in paths:
         record = _read_server_record(path)
-        if record is not None and _pid_is_alive(record.pid):
+        if record is not None and pid_is_alive(record.pid):
             records.append(record)
     return records
 
