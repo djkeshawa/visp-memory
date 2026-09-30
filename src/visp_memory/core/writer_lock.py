@@ -21,9 +21,11 @@ class WriterLockConflict(RuntimeError):  # noqa: N818 - public conflict name
     """A live process owns an incompatible role for this store."""
 
     def __init__(self, data_dir: Path, local_pids=()):
+        # Kept so a caller can word its refusal by holder: local writers, not a server.
+        self.local_pids = tuple(sorted(set(local_pids)))
         if local_pids:
             detail = (
-                f"live local writers (pids: {', '.join(sorted(set(local_pids)))})"
+                f"live local writers (pids: {', '.join(self.local_pids)})"
                 "; stop those processes before serving or maintaining the store"
             )
         else:
@@ -126,16 +128,18 @@ def _try_lock(fd):
 
 # Local writers take server.lock only as a momentary gate, so a busy gate is not
 # evidence of a server until it stays busy. A real server holds it far longer.
-_GATE_ATTEMPTS = 5
-_GATE_PAUSE_SECONDS = 0.01
+# A loaded machine can deschedule a local writer mid-gate: Windows CI outlasted a
+# flat 50 ms budget. The pauses grow from 5 ms to a 50 ms cap, about 0.46 s in
+# all, so a real server is still reported well within a second.
+_GATE_PAUSES = tuple(min(0.005 * 1.3**step, 0.05) for step in range(15))
 
 
 def _open_locked(path, data_dir):
     fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        for attempt in range(_GATE_ATTEMPTS if path.name == "server.lock" else 1):
-            if attempt:
-                time.sleep(_GATE_PAUSE_SECONDS)
+        for pause in (0, *(_GATE_PAUSES if path.name == "server.lock" else ())):
+            if pause:
+                time.sleep(pause)
             if _try_lock(fd):
                 return fd
         raise WriterLockConflict(data_dir)

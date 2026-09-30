@@ -1,6 +1,7 @@
 """The serving process, not the importing one, holds the role for the backend lifetime."""
 
 import json
+import os
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -53,6 +54,44 @@ def test_initialization_only_checks_the_role_and_never_keeps_it(
     with raw_lock(tmp_path / ".locks/server.lock"):
         pass
     assert not (tmp_path / ".locks/server.json").exists()
+
+
+def test_import_time_writes_run_with_the_role_held_then_release_it(tmp_path, monkeypatch):
+    """Migration, auth.db and the first administrator must not race another process.
+
+    uvicorn's supervisor imports too, so the role is released once they are done.
+    """
+    config = memory_config(tmp_path)
+    refusals = {}
+
+    def probing_auth_store(path):
+        # The last store written at import: another process must be refused here.
+        for role in ("server", "local"):
+            with spawned_role(tmp_path, role) as (_, conflict):
+                refusals[role] = conflict
+        return Mock(bootstrap_admin=Mock(return_value=None))
+
+    monkeypatch.setattr(server_app, "AuthStore", probing_auth_store)
+    application = SimpleNamespace(state=SimpleNamespace())
+    server_app.initialize_app_state(application, config, None, {})
+    try:
+        assert refusals["server"] and str(os.getpid()) in refusals["server"]
+        assert refusals["local"] and str(os.getpid()) in refusals["local"]
+        with raw_lock(tmp_path / ".locks/server.lock"):
+            pass
+        assert not (tmp_path / ".locks/server.json").exists()
+    finally:
+        application.state.storage.close()
+
+
+def test_failed_import_time_initialization_releases_the_role(tmp_path, monkeypatch):
+    monkeypatch.setattr(server_app, "AuthStore", Mock(side_effect=RuntimeError("auth.db")))
+    application = SimpleNamespace(state=SimpleNamespace())
+    with pytest.raises(RuntimeError, match="auth.db"):
+        server_app.initialize_app_state(application, memory_config(tmp_path), None, {})
+    application.state.storage.close()
+    with raw_lock(tmp_path / ".locks/server.lock"):
+        pass
 
 
 def test_initialization_is_refused_while_another_process_serves(tmp_path, monkeypatch):
@@ -126,3 +165,26 @@ async def test_failed_lifespan_startup_releases_guard(served_dir, monkeypatch):
     with raw_lock(served_dir / ".locks/server.lock"):
         pass
     application.state.storage.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_refusal_by_local_writers_names_them_not_a_second_server(served_dir, caplog):
+    with spawned_role(served_dir, "local") as (child, _):
+        pid = str(child.pid)
+        with pytest.raises(WriterLockConflict, match=pid) as refused:
+            async with server_app.lifespan(fake_app()):
+                pytest.fail("a server must not start over live local writers")
+    assert refused.value.local_pids == (pid,)
+    logged = caplog.text
+    assert "second server" not in logged
+    assert f"pids: {pid}" in logged
+    assert "visp-memory connect" in logged
+
+
+@pytest.mark.asyncio
+async def test_refusal_by_another_server_still_says_one_process(served_dir, caplog):
+    with spawned_role(served_dir, "server"):
+        with pytest.raises(WriterLockConflict):
+            async with server_app.lifespan(fake_app()):
+                pytest.fail("a second server must not start")
+    assert "a second server on the same data directory is refused" in caplog.text

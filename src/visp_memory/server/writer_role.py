@@ -27,7 +27,11 @@ _SIBLING_WORKER = (
     "`--workers` greater than 1 is not supported because one process owns the store. "
     "Restart with a single worker."
 )
-
+_LOCAL_WRITERS = (
+    "Local processes (pids: {pids}) hold this store, such as a Claude Code or Codex "
+    "stdio MCP session. Close them, or switch them to client mode with "
+    "`visp-memory connect`, before serving."
+)
 
 
 def server_url(server_config) -> str:
@@ -42,24 +46,36 @@ def _acquire_or_explain(config):
         return acquire_writer_lock(
             config.storage.data_dir, "server", url=server_url(config.server)
         )
-    except WriterLockConflict:
-        # A diagnostic only. Nothing here may act on the parent: a shared parent is
-        # also what two unrelated servers started from one shell look like.
-        sibling = _holder_is_sibling(config.storage.data_dir)
-        logger.error(_SIBLING_WORKER if sibling else _ONE_PROCESS)
+    except WriterLockConflict as conflict:
+        logger.error(_explain(conflict, config.storage.data_dir))
         raise
 
 
-def preflight_server_role(config) -> None:
+def _explain(conflict, data_dir) -> str:
+    """Word the refusal by what holds the store: local writers, a sibling, or a server."""
+    if conflict.local_pids:
+        return _LOCAL_WRITERS.format(pids=", ".join(conflict.local_pids))
+    # A diagnostic only. Nothing here may act on the parent: a shared parent is
+    # also what two unrelated servers started from one shell look like.
+    return _SIBLING_WORKER if _holder_is_sibling(data_dir) else _ONE_PROCESS
+
+
+def preflight_server_role(config, hold=None) -> None:
     """Refuse at import while another process owns the store, before touching it.
 
-    Storage is still built at import, and building it migrates the schema and
-    bootstraps accounts. Claiming and releasing the role here keeps those writes
-    from racing a live server or an offline upgrade, without letting the importing
-    supervisor keep a lock that belongs to the serving process. This is a fail-fast
-    check; the lifespan claim is what excludes other processes.
+    Storage is still built at import, which migrates the schema, and the stores
+    beside it create auth.db and lifecycle.db and bootstrap the first account. Pass
+    the ``ExitStack`` that spans those writes as ``hold`` and the role stays held
+    until it closes, so they cannot race a live server, offline maintenance or a
+    local writer. It must close at the end of import: uvicorn's supervisor imports
+    too, and a role it kept would lock the serving process out. Without ``hold``
+    this is only a check. The lifespan claim is what holds the role while serving.
     """
-    _acquire_or_explain(config).release()
+    handle = _acquire_or_explain(config)
+    if hold is None:
+        handle.release()
+    else:
+        hold.callback(handle.release)
 
 
 def claim_server_role(config):

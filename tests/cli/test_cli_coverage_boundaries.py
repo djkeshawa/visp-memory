@@ -459,7 +459,7 @@ def _propose_against(monkeypatch, store):
     memory = SimpleNamespace(
         config=SimpleNamespace(repo_id="repo-a"), _storage=store, record=store.record
     )
-    monkeypatch.setattr(cli_module, "get_memory", lambda: memory)
+    monkeypatch.setattr(cli_module, "_open_memory", lambda: memory)
     return runner.invoke(app, ["contract", "propose", "unreviewed proposal"])
 
 
