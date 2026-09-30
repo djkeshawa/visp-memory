@@ -28,7 +28,9 @@ from visp_memory.core.remote.owner_auth import (
     OWNER_TOKEN_HEADER,
     owner_token_path_for_request,
     read_owner_token,
+    resend_with_rotated_token,
 )
+from visp_memory.core.remote.scope import scoped_repo_id
 from visp_memory.core.storage import (
     BaseStorage,
     EvidenceImmutableError,
@@ -234,15 +236,12 @@ class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, RemotePortabilityMixin,
             try:
                 response = original_request(method, url, **kwargs)
                 if response.status_code == 403 and token_path and token:
-                    refreshed_token = read_owner_token(token_path)
-                    retry_kwargs = dict(kwargs)
-                    retry_headers = dict(retry_kwargs.get("headers") or {})
-                    if refreshed_token:
-                        retry_headers[OWNER_TOKEN_HEADER] = refreshed_token
-                    else:
-                        retry_headers.pop(OWNER_TOKEN_HEADER, None)
-                    retry_kwargs["headers"] = retry_headers
-                    response = original_request(method, url, **retry_kwargs)
+                    retried = resend_with_rotated_token(
+                        original_request, method, url, kwargs, token_path, token
+                    )
+                    # Not `or`: a Response is falsy on 4xx/5xx, and a refused retry
+                    # is still the answer to report.
+                    response = retried if retried is not None else response
             except requests.RequestException as exc:
                 logger.warning("Remote request %s %s failed: %s", method, url, exc)
                 raise
@@ -261,6 +260,7 @@ class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, RemotePortabilityMixin,
         self, content: str, layer: MemoryLayer = "episodic", repo_id: str = None, **kwargs
     ) -> str:
         """Store a memory remotely."""
+        repo_id = scoped_repo_id(self, repo_id)
         try:
             content, quality_flags = redact_for_storage(
                 content,
@@ -329,6 +329,7 @@ class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, RemotePortabilityMixin,
 
     def search_memories(self, query: str, repo_id: str = None, **kwargs) -> List[Dict[str, Any]]:
         """Search across memories."""
+        repo_id = scoped_repo_id(self, repo_id)
         try:
             query, _ = redact_for_storage(query, None)
             filters = {
@@ -365,6 +366,7 @@ class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, RemotePortabilityMixin,
 
     def list_memories(self, repo_id: str = None, **kwargs) -> List[Dict[str, Any]]:
         """List memories with optional filtering."""
+        repo_id = scoped_repo_id(self, repo_id)
         try:
             params = {
                 key: value
@@ -519,8 +521,10 @@ class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, RemotePortabilityMixin,
 
     def _write_error(self, operation: str, error: Any) -> RemoteStorageError:
         detail = str(error)
+        status_code = response_detail = None
         response = getattr(error, "response", None)
         if response is not None:
+            status_code = response.status_code
             try:
                 body = response.json()
                 response_detail = body.get("detail") if isinstance(body, dict) else None
@@ -532,7 +536,15 @@ class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, RemotePortabilityMixin,
             else:
                 detail = f"HTTP {response.status_code}"
 
-        return RemoteStorageError(f"Failed to {operation} on remote memory server: {detail}")
+        return RemoteStorageError(
+            f"Failed to {operation} on remote memory server: {detail}",
+            server_url=self.server_url,
+            status_code=status_code,
+            detail=str(response_detail) if response_detail else None,
+            # ConnectTimeout is a ConnectionError too; a ReadTimeout is not — that
+            # server is up, just slow, and "start it" would be the wrong advice.
+            unreachable=isinstance(error, requests.ConnectionError),
+        )
 
     # Intent Operations
     def set_intent(
@@ -542,6 +554,7 @@ class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, RemotePortabilityMixin,
         context: Dict[str, Any] = None,
         repo_id: str = None,
     ) -> str:
+        repo_id = scoped_repo_id(self, repo_id)
         try:
             payload = {
                 "description": description,
@@ -559,6 +572,7 @@ class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, RemotePortabilityMixin,
         self, repo_id: str = None, status: str = "active"
     ) -> List[Dict[str, Any]]:
         """Get intents filtered by status."""
+        repo_id = scoped_repo_id(self, repo_id)
         try:
             params = {"status": status}
             if repo_id:
@@ -677,6 +691,7 @@ class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, RemotePortabilityMixin,
 
     def get_all_relationships(self, repo_id: str = None) -> List[Dict[str, Any]]:
         """Get all relationships."""
+        repo_id = scoped_repo_id(self, repo_id)
         try:
             params = {}
             if repo_id:
@@ -709,8 +724,9 @@ class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, RemotePortabilityMixin,
         team_id: str = None,
         repo_id: str = None,
     ) -> str:
+        del owner_id, team_id
+        repo_id = scoped_repo_id(self, repo_id)
         try:
-            del owner_id, team_id
             response = self.session.post(
                 f"{self.server_url}/sessions", json={"repo_id": repo_id}
             )
@@ -749,6 +765,7 @@ class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, RemotePortabilityMixin,
     # Stats
     def get_stats(self, repo_id: str = None) -> Dict[str, Any]:
         """Get server stats."""
+        repo_id = scoped_repo_id(self, repo_id)
         try:
             params = {"repo_id": repo_id} if repo_id else None
             response = self.session.get(f"{self.server_url}/", params=params)

@@ -7,7 +7,12 @@ from urllib.parse import urlsplit
 from visp_memory.core.owner_token import OWNER_TOKEN_HEADER
 from visp_memory.core.paths import run_dir
 
-__all__ = ["OWNER_TOKEN_HEADER", "owner_token_path_for_request", "read_owner_token"]
+__all__ = [
+    "OWNER_TOKEN_HEADER",
+    "owner_token_path_for_request",
+    "read_owner_token",
+    "resend_with_rotated_token",
+]
 
 
 def _is_loopback(host: str | None) -> bool:
@@ -51,3 +56,23 @@ def read_owner_token(path: Path) -> str | None:
     except OSError:
         return None
     return token or None
+
+
+def resend_with_rotated_token(
+    send, method: str, url: str, kwargs: dict, token_path: Path, sent_token: str
+):
+    """Resend a refused owner request once, and only if the token on disk changed.
+
+    A changed token means the server restarted and minted new proof. An unchanged
+    one means the refusal is real: resending cannot change the answer and would
+    send every legitimately refused write twice. Returns None when not resent.
+    """
+    current = read_owner_token(token_path)
+    if current == sent_token:
+        return None
+    headers = dict(kwargs.get("headers") or {})
+    if current:
+        headers[OWNER_TOKEN_HEADER] = current
+    else:
+        headers.pop(OWNER_TOKEN_HEADER, None)
+    return send(method, url, **{**kwargs, "headers": headers})
