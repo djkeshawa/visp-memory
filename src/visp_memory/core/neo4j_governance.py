@@ -9,6 +9,7 @@ from visp_memory.core.attribution import metadata_matches, stamp_written_by
 from visp_memory.core.belief_write import prepare_belief
 from visp_memory.core.clock import utc_now_iso
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID
+from visp_memory.core.json_text import to_json_text
 from visp_memory.core.storage import (
     EvidenceImmutableError,
     EvidenceReferenceError,
@@ -120,7 +121,7 @@ class Neo4jGovernance:
             repo_id=repo_id,
             evidence_type=evidence_type,
             provenance="unknown" if repo_id == UNSCOPED_REPO_ID else provenance,
-            metadata=json.dumps(stamp_written_by(metadata)),
+            metadata=to_json_text(stamp_written_by(metadata)),
             content_hash=LocalStorage._evidence_hash(content),
             created_at=created_at or utc_now_iso(),
         )
@@ -269,7 +270,7 @@ class Neo4jGovernance:
             epistemic_status=epistemic_status,
             importance=importance,
             tags=tags or [],
-            metadata=json.dumps(metadata),
+            metadata=to_json_text(metadata),
             source_ids=source_ids or [],
             status=status,
             source=source,

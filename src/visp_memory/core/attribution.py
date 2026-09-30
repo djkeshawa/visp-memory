@@ -10,6 +10,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Iterator, Mapping
 
+from visp_memory.core.json_text import to_json_text
+
 WRITTEN_BY_KEY = "written_by"
 AGENT_HEADER = "X-Visp-Agent"
 SESSION_HEADER = "X-Visp-Session"
@@ -127,18 +129,36 @@ def _as_metadata_dict(value: object) -> object:
     return value
 
 
+def _canonical_json(metadata: Mapping[str, object] | None) -> str | None:
+    """The persisted JSON value of metadata minus attribution, or None if unstorable.
+
+    Python equality is the wrong test for "same write": ``True == 1 == 1.0`` although
+    JSON stores ``true``, ``1`` and ``1.0``, while ``(1, 2) != [1, 2]`` and
+    ``{1: "x"} != {"1": "x"}`` although JSON stores them identically. So encode with
+    the storage serializer, read it back as the store would, and re-encode with
+    sorted keys: key order is not part of what a record is.
+    """
+    try:
+        persisted = json.loads(to_json_text(without_written_by(metadata)))
+    except (TypeError, ValueError):
+        return None
+    return json.dumps(persisted, sort_keys=True)
+
+
 def metadata_matches(stored: object, incoming: object) -> bool:
     """Compare stored and incoming metadata for an idempotent retry, ignoring attribution.
 
     Either side may be a dict, ``None`` or a JSON string (SQLite and Neo4j persist text).
     The stored record keeps the first writer's ``written_by``; a retry never replaces it.
+    Metadata that cannot be serialized could never have been stored, so it matches nothing.
     """
     stored, incoming = _as_metadata_dict(stored), _as_metadata_dict(incoming)
     if not (isinstance(stored, Mapping) or stored is None) or not (
         isinstance(incoming, Mapping) or incoming is None
     ):
         return stored == incoming
-    return without_written_by(stored) == without_written_by(incoming)
+    stored_json = _canonical_json(stored)
+    return stored_json is not None and stored_json == _canonical_json(incoming)
 
 
 def identity_headers(identity: WriterIdentity | None) -> dict[str, str]:

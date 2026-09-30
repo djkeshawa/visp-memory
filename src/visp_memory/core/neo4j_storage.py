@@ -16,6 +16,7 @@ from visp_memory.config import load_config
 from visp_memory.core.attribution import stamp_written_by
 from visp_memory.core.embedding_binding import bind_embeddings
 from visp_memory.core.indexing import EmbeddingIndexReport, ReindexResult, ReindexScope
+from visp_memory.core.json_text import to_json_text
 from visp_memory.core.neo4j_feedback import Neo4jFeedback
 from visp_memory.core.neo4j_governance import Neo4jGovernance
 from visp_memory.core.neo4j_turn_keys import Neo4jTurnKeys
@@ -385,7 +386,7 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, Neo4jTurnKeys, BaseStorage):
 
     @staticmethod
     def _json_serialize(data: Any) -> str:
-        return json.dumps(data)
+        return to_json_text(data)
 
     @staticmethod
     def _json_deserialize(data: str) -> Any:
