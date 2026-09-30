@@ -7,7 +7,7 @@ import logging
 import os
 import time
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
 
 from visp_memory.core.clock import utc_now
@@ -237,8 +237,12 @@ def get_runtime_status(config, embedding_provider=None, embedding_status=None):
     return status
 
 
-def initialize_storage(config, embedding_fn=None, embedding_provider=None):
-    """Initialize the configured server storage backend."""
+def initialize_storage(config, embedding_fn=None, embedding_provider=None, hold=None):
+    """Initialize the configured server storage backend.
+
+    ``hold`` keeps the server role held until that ``ExitStack`` closes; see
+    ``preflight_server_role``. Neo4j keeps its own concurrency control.
+    """
     if config.storage.backend == "neo4j":
         deadline = time.monotonic() + config.storage.connect_timeout_seconds
         last_error = None
@@ -277,9 +281,7 @@ def initialize_storage(config, embedding_fn=None, embedding_provider=None):
                 "Neo4j storage is unavailable and fallback is disabled"
             ) from last_error
 
-    # Only checked here: the serving process holds the role from its lifespan (see
-    # writer_role), because this runs in uvicorn's supervisor too.
-    preflight_server_role(config)
+    preflight_server_role(config, hold)
     if config.storage.backend == "arcadedb":
         storage = ArcadeDbStorage(
             config.storage.data_dir,
@@ -295,6 +297,40 @@ def initialize_storage(config, embedding_fn=None, embedding_provider=None):
         )
         backend = "sqlite-fallback" if config.storage.backend == "neo4j" else "sqlite"
     return storage, backend
+
+
+def initialize_app_state(application, config, embedding_provider, embedding_runtime_status):
+    """Build storage and the stores beside it, then the first administrator.
+
+    Every step writes the data directory, so the server role is held across all of
+    them and released on return: this runs in uvicorn's supervisor too, and the
+    serving process claims the role again in its lifespan.
+    """
+    embedding_fn = embedding_provider.embed if embedding_provider is not None else None
+    with ExitStack() as import_role:
+        storage, backend = initialize_storage(config, embedding_fn, embedding_provider, import_role)
+        state = application.state
+        state.storage = storage
+        state.storage_backend = backend
+        state.embedding_provider = embedding_provider
+        state.embedding_runtime_status = embedding_runtime_status
+        state.auth_store = AuthStore(config.storage.data_dir / "auth.db")
+        state.memory_lifecycle = MemoryLifecycleManager(
+            storage, config.storage.data_dir / "lifecycle.db"
+        )
+        state.model_router = ModelRouter(config.llm)
+        state.intent_evaluator = IntentEvaluator(storage, state.model_router, config.llm)
+        bootstrapped = state.auth_store.bootstrap_admin(
+            config.server.bootstrap_admin_username,
+            config.server.bootstrap_admin_password,
+        )
+        if bootstrapped:
+            logger.info("Bootstrapped the initial administrator account")
+        elif config.server.auth_enabled and not state.auth_store.has_accounts():
+            setup_code = state.auth_store.get_setup_token()
+            logger.warning(
+                "First-time setup: open /dashboard/auth#setup=%s on this server", setup_code
+            )
 
 
 cors_options = get_cors_options(config)
@@ -457,29 +493,7 @@ app.add_middleware(LocalOwnerGuardMiddleware)
 
 # Initialize Storage
 embedding_provider, embedding_runtime_status = get_server_embedding_runtime(config)
-embedding_fn = embedding_provider.embed if embedding_provider is not None else None
-storage, effective_storage_backend = initialize_storage(config, embedding_fn, embedding_provider)
-
-# Save storage to app state for access in routers
-app.state.storage = storage
-app.state.storage_backend = effective_storage_backend
-app.state.embedding_provider = embedding_provider
-app.state.embedding_runtime_status = embedding_runtime_status
-app.state.auth_store = AuthStore(config.storage.data_dir / "auth.db")
-app.state.memory_lifecycle = MemoryLifecycleManager(
-    storage, config.storage.data_dir / "lifecycle.db"
-)
-app.state.model_router = ModelRouter(config.llm)
-app.state.intent_evaluator = IntentEvaluator(storage, app.state.model_router, config.llm)
-bootstrapped_account = app.state.auth_store.bootstrap_admin(
-    config.server.bootstrap_admin_username,
-    config.server.bootstrap_admin_password,
-)
-if bootstrapped_account:
-    logger.info("Bootstrapped the initial administrator account")
-elif config.server.auth_enabled and not app.state.auth_store.has_accounts():
-    setup_code = app.state.auth_store.get_setup_token()
-    logger.warning("First-time setup: open /dashboard/auth#setup=%s on this server", setup_code)
+initialize_app_state(app, config, embedding_provider, embedding_runtime_status)
 
 
 # Include Routers

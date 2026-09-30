@@ -21,9 +21,11 @@ class WriterLockConflict(RuntimeError):  # noqa: N818 - public conflict name
     """A live process owns an incompatible role for this store."""
 
     def __init__(self, data_dir: Path, local_pids=()):
+        # Kept so a caller can word its refusal by holder: local writers, not a server.
+        self.local_pids = tuple(sorted(set(local_pids)))
         if local_pids:
             detail = (
-                f"live local writers (pids: {', '.join(sorted(set(local_pids)))})"
+                f"live local writers (pids: {', '.join(self.local_pids)})"
                 "; stop those processes before serving or maintaining the store"
             )
         else:

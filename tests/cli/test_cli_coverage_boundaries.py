@@ -445,7 +445,7 @@ def test_contract_propose_reports_failed_quarantine_and_cleans_up(monkeypatch, c
         _storage=storage,
         record=lambda *args, **kwargs: "proposal-1",
     )
-    monkeypatch.setattr(cli_module, "get_memory", lambda: memory)
+    monkeypatch.setattr(cli_module, "_open_memory", lambda: memory)
     result = runner.invoke(app, ["contract", "propose", "unsafe proposal"])
 
     assert result.exit_code == 1

@@ -67,6 +67,7 @@ from visp_memory.core.ranking import projected_importance
 from visp_memory.core.reporting import MemoryIntelligenceReporter
 from visp_memory.core.storage import LocalStorage
 from visp_memory.core.trust import LOCAL_USER_ACTOR, LOCAL_WORKFLOW_ACTOR, WriteChannel
+from visp_memory.core.writer_lock import WriterLockConflict
 from visp_memory.hooks.reachability import ReachabilityReport, check_reachability
 from visp_memory.interfaces.maintenance import app as maintenance_app
 from visp_memory.interfaces.serve_environment import server_environment
@@ -168,12 +169,35 @@ def cli_root(
     """Human-inspired memory system for LLMs."""
 
 
-def get_memory() -> Memory:
-    """Get or create memory instance."""
+def _open_memory() -> Memory:
+    """Get or create the memory instance; a writer conflict propagates.
+
+    The `contract` commands call this directly because they report every failure,
+    this one included, as a JSON envelope rather than as text for a person.
+    """
     global _memory
     if _memory is None:
         _memory = Memory()
     return _memory
+
+
+def _refuse_writer_conflict(error: WriterLockConflict):
+    """End the command with the conflict's own guidance instead of a traceback.
+
+    The message already names the owner and what to do, so a traceback only
+    buries it. Plain stderr, not the Rich console: the message holds paths and
+    config keys that Rich would read as markup.
+    """
+    typer.echo(str(error), err=True)
+    raise typer.Exit(1) from error
+
+
+def get_memory() -> Memory:
+    """Get or create memory instance, refusing cleanly while another role owns the store."""
+    try:
+        return _open_memory()
+    except WriterLockConflict as error:
+        _refuse_writer_conflict(error)
 
 
 def _intents_matching(memory: Memory, query: str, repo: str = None) -> int:
@@ -922,7 +946,10 @@ def init(
     config.save(config_path)
 
     # Initialize memory to create tables
-    memory = Memory(config=config)
+    try:
+        memory = Memory(config=config)
+    except WriterLockConflict as error:
+        _refuse_writer_conflict(error)
 
     console.print(f"[green]Initialized Visp Memory in {config_path}[/green]")
     console.print(f"Data directory: {config.storage.data_dir}")
@@ -3650,7 +3677,7 @@ def contract_recall(
     """
     del endpoint, json_output
     try:
-        memory = get_memory()
+        memory = _open_memory()
         outcome = recall_for_task(
             memory,
             query,
@@ -3739,7 +3766,7 @@ def contract_propose(
     """Record a QUARANTINED proposal — durable only after the reviewed lifecycle accepts it."""
     del endpoint, json_output
     try:
-        memory = get_memory()
+        memory = _open_memory()
         scope = _repo_scope(memory, repo)
         memory_id = memory.record(
             content,
