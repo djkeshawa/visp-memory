@@ -106,7 +106,7 @@ async def owner_client(monkeypatch, request):
         ):
             try:
                 async with httpx.AsyncClient(
-                    transport=transport, base_url="http://testserver"
+                    transport=transport, base_url="http://127.0.0.1:8765"
                 ) as client:
                     yield client
             finally:
@@ -206,25 +206,31 @@ async def test_pat_and_session_cannot_gain_owner_maintenance_from_the_header(own
     assert session_response.status_code == 403
 
 
-@pytest.mark.asyncio
-async def test_local_owner_can_report_workflow_status_without_maintenance_token(owner_client):
-    app = server_app.app
-    intent_id = app.state.storage.set_intent(
-        "Finish local owner workflow",
-        repo_id=REPO_ID,
-        context={"author_id": "agent-user"},
+WORKFLOW_REPORT = {
+    "source": "assistant",
+    "task_id": "task-1",
+    "event_id": "event-1",
+    "revision": 1,
+    "status": "completed",
+    "summary": "Work completed",
+    "evidence": [{"description": "Acceptance check passed"}],
+}
+
+
+def _intent(name):
+    return server_app.app.state.storage.set_intent(
+        name, repo_id=REPO_ID, context={"author_id": "agent-user"}
     )
+
+
+@pytest.mark.asyncio
+async def test_local_owner_with_the_token_can_report_workflow_status(owner_client):
+    app = server_app.app
+    intent_id = _intent("Finish local owner workflow")
     response = await owner_client.post(
         f"/intents/{intent_id}/workflow-status",
-        json={
-            "source": "assistant",
-            "task_id": "task-1",
-            "event_id": "event-1",
-            "revision": 1,
-            "status": "completed",
-            "summary": "Work completed",
-            "evidence": [{"description": "Acceptance check passed"}],
-        },
+        json=WORKFLOW_REPORT,
+        headers={OWNER_TOKEN_HEADER: OWNER_TOKEN},
     )
     assert response.status_code == 200, response.text
     report = app.state.storage.get_active_intents(
@@ -234,29 +240,48 @@ async def test_local_owner_can_report_workflow_status_without_maintenance_token(
     assert report["channel"] == "rest"
 
 
+@pytest.mark.parametrize("owner_token", [None, "wrong-token"])
+@pytest.mark.asyncio
+async def test_loopback_caller_without_the_token_cannot_close_an_intent(
+    owner_client, owner_token
+):
+    # A loopback peer is not proof of the owner: any local process, other OS
+    # user or DNS-rebinding page has one. Intent status belongs to the external
+    # workflow authority, so the token is required, not just the peer address.
+    intent_id = _intent("Anonymous loopback caller is refused")
+    headers = {} if owner_token is None else {OWNER_TOKEN_HEADER: owner_token}
+    response = await owner_client.post(
+        f"/intents/{intent_id}/workflow-status", json=WORKFLOW_REPORT, headers=headers
+    )
+    assert response.status_code == 403
+    active = server_app.app.state.storage.get_active_intents(repo_id=REPO_ID)
+    assert [row["id"] for row in active] == [intent_id]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner_client", [(REMOTE_PEER, True)], indirect=True)
+async def test_the_token_does_not_help_a_remote_peer_report(owner_client):
+    intent_id = _intent("Remote peer with the token is refused")
+    response = await owner_client.post(
+        f"/intents/{intent_id}/workflow-status",
+        json=WORKFLOW_REPORT,
+        headers={OWNER_TOKEN_HEADER: OWNER_TOKEN},
+    )
+    assert response.status_code == 403
+
+
 @pytest.mark.asyncio
 async def test_local_workflow_binding_accepts_a_rest_report(owner_client):
     app = server_app.app
-    intent_id = app.state.storage.set_intent(
-        "Finish existing local workflow",
-        repo_id=REPO_ID,
-        context={"author_id": "agent-user"},
-    )
-    first = {
-        "source": "assistant",
-        "task_id": "task-1",
-        "event_id": "event-1",
-        "revision": 1,
-        "status": "active",
-        "summary": "Started",
-        "evidence": [],
-    }
+    intent_id = _intent("Finish existing local workflow")
+    first = {**WORKFLOW_REPORT, "status": "active", "summary": "Started", "evidence": []}
     app.state.storage.report_intent_workflow(
         intent_id, first, actor_id=LOCAL_WORKFLOW_ACTOR, channel="cli"
     )
     response = await owner_client.post(
         f"/intents/{intent_id}/workflow-status",
         json={**first, "event_id": "event-2", "revision": 2, "summary": "Updated"},
+        headers={OWNER_TOKEN_HEADER: OWNER_TOKEN},
     )
     assert response.status_code == 200, response.text
     assert response.json()["applied"] is True

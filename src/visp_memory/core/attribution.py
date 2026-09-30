@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from contextlib import contextmanager
@@ -106,6 +107,38 @@ def stamp_written_by(metadata: dict | None) -> dict:
     if writer_metadata:
         result[WRITTEN_BY_KEY] = writer_metadata
     return result
+
+
+def without_written_by(metadata: Mapping[str, object] | None) -> dict:
+    """Copy metadata minus the informational writer stamp.
+
+    Attribution says who wrote a record first; it is not part of what the record *is*.
+    Anything that decides "is this the same write?" must compare through this.
+    """
+    return {key: value for key, value in (metadata or {}).items() if key != WRITTEN_BY_KEY}
+
+
+def _as_metadata_dict(value: object) -> object:
+    if isinstance(value, (str, bytes)):
+        try:
+            value = json.loads(value) if value else {}
+        except ValueError:
+            return value
+    return value
+
+
+def metadata_matches(stored: object, incoming: object) -> bool:
+    """Compare stored and incoming metadata for an idempotent retry, ignoring attribution.
+
+    Either side may be a dict, ``None`` or a JSON string (SQLite and Neo4j persist text).
+    The stored record keeps the first writer's ``written_by``; a retry never replaces it.
+    """
+    stored, incoming = _as_metadata_dict(stored), _as_metadata_dict(incoming)
+    if not (isinstance(stored, Mapping) or stored is None) or not (
+        isinstance(incoming, Mapping) or incoming is None
+    ):
+        return stored == incoming
+    return without_written_by(stored) == without_written_by(incoming)
 
 
 def identity_headers(identity: WriterIdentity | None) -> dict[str, str]:

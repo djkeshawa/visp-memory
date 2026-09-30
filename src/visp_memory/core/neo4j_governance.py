@@ -5,7 +5,7 @@ import logging
 import uuid
 from contextlib import contextmanager
 
-from visp_memory.core.attribution import stamp_written_by
+from visp_memory.core.attribution import metadata_matches, stamp_written_by
 from visp_memory.core.belief_write import prepare_belief
 from visp_memory.core.clock import utc_now_iso
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID
@@ -89,8 +89,12 @@ class Neo4jGovernance:
         existing = Neo4jGovernance._evidence(tx, record["id"])
         if existing:
             expected = LocalStorage._evidence_row_to_dict(record)
-            keys = set(expected) - ({"created_at"} if not compare_created_at else set())
-            if any(existing.get(key) != expected[key] for key in keys):
+            # "metadata" is compared apart: attribution is first-write-wins, not identity.
+            skipped = {"metadata"} | (set() if compare_created_at else {"created_at"})
+            keys = set(expected) - skipped
+            if not metadata_matches(
+                existing.get("metadata"), expected.get("metadata")
+            ) or any(existing.get(key) != expected[key] for key in keys):
                 raise EvidenceImmutableError(f"Evidence {record['id']!r} is immutable")
         else:
             tx.run("CREATE (e:Evidence) SET e = $record", record=record).consume()
@@ -387,13 +391,13 @@ class Neo4jGovernance:
                 "repo_id",
                 "belief_type",
                 "epistemic_status",
-                "metadata",
                 "status",
             )
             if (
                 old["a"]["digest"] != verified.digest
                 or old["a"]["belief_id"] != record["id"]
                 or not row
+                or not metadata_matches(row["m"].get("metadata"), record["metadata"])
                 or any(row["m"].get(k) != record[k] for k in fields)
                 or row["m"].get("evidence_ids") != evidence_ids
             ):

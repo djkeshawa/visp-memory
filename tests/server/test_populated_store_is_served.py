@@ -79,7 +79,7 @@ async def served_store():
             mock.patch("visp_memory.server.app.config", config),
         ):
             async with httpx.AsyncClient(
-                transport=transport, base_url="http://testserver"
+                transport=transport, base_url="http://127.0.0.1:8765"
             ) as client:
                 yield client, memory_ids
 

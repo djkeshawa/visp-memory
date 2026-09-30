@@ -99,6 +99,12 @@ hold it. Local-mode processes may still share a directory with each other when
 no server owns it. Connect each project in client mode instead. The guard covers
 SQLite and ArcadeDB and uses OS file locks; NFS is unsupported.
 
+The process that serves holds the lock, so `visp-memory serve --reload` works: the
+reloader only imports the app, and the child it spawns takes the lock. One server
+process owns a store. `uvicorn --workers N` with N above 1 is not supported: the
+first worker serves and the others are refused with a message naming the sibling
+worker, and uvicorn keeps restarting them. Run a single worker.
+
 Every record can carry a `written_by` label of the form `{agent, session, client}`
 on memories and evidence (in `metadata`) and on intents (in `context`); see the
 [contract](../reference/CONTRACTS.md#written_by-contract). It is supplied by the

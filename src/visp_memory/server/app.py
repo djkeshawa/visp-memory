@@ -37,7 +37,6 @@ from visp_memory.core.neo4j_storage import Neo4jStorage
 from visp_memory.core.owner_token import OWNER_TOKEN_FILE_ENV
 from visp_memory.core.reporting import MemoryIntelligenceReporter
 from visp_memory.core.storage import LocalStorage
-from visp_memory.core.writer_lock import acquire_writer_lock
 from visp_memory.recall.graph import GraphRecall
 from visp_memory.server.attribution_middleware import AttributionMiddleware
 from visp_memory.server.auth import UserContext, get_current_user, security
@@ -47,6 +46,7 @@ from visp_memory.server.authorization import (
     has_admin_privileges,
     require_repo_scope_access,
 )
+from visp_memory.server.local_owner_guard import LocalOwnerGuardMiddleware
 from visp_memory.server.owner_token import (
     cleanup_owner_token_files,
     create_owner_token_files,
@@ -79,6 +79,7 @@ from visp_memory.server.schemas import (
     GraphWhyRelevantRequest,
     MemoryIntelligenceReportResponse,
 )
+from visp_memory.server.writer_role import claim_server_role, preflight_server_role, server_url
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -276,31 +277,23 @@ def initialize_storage(config, embedding_fn=None, embedding_provider=None):
                 "Neo4j storage is unavailable and fallback is disabled"
             ) from last_error
 
-    host = config.server.host
-    if ":" in host and not host.startswith("["):
-        host = f"[{host}]"
-    writer_lock = acquire_writer_lock(
-        config.storage.data_dir, "server", url=f"http://{host}:{config.server.port}",
-    )
-    try:
-        if config.storage.backend == "arcadedb":
-            storage = ArcadeDbStorage(
-                config.storage.data_dir,
-                embedding_fn=embedding_fn,
-                embedding_dimension=getattr(embedding_provider, "dimension", None),
-            )
-            logger.info("Initialized ArcadeDB Storage")
-            backend = "arcadedb"
-        else:
-            storage = LocalStorage(
-                config.storage.data_dir, embedding_fn=embedding_fn,
-                turn_keys=config.embedding.turn_keys,
-            )
-            backend = "sqlite-fallback" if config.storage.backend == "neo4j" else "sqlite"
-    except BaseException:
-        writer_lock.release()
-        raise
-    app.state.writer_lock = writer_lock
+    # Only checked here: the serving process holds the role from its lifespan (see
+    # writer_role), because this runs in uvicorn's supervisor too.
+    preflight_server_role(config)
+    if config.storage.backend == "arcadedb":
+        storage = ArcadeDbStorage(
+            config.storage.data_dir,
+            embedding_fn=embedding_fn,
+            embedding_dimension=getattr(embedding_provider, "dimension", None),
+        )
+        logger.info("Initialized ArcadeDB Storage")
+        backend = "arcadedb"
+    else:
+        storage = LocalStorage(
+            config.storage.data_dir, embedding_fn=embedding_fn,
+            turn_keys=config.embedding.turn_keys,
+        )
+        backend = "sqlite-fallback" if config.storage.backend == "neo4j" else "sqlite"
     return storage, backend
 
 
@@ -351,20 +344,24 @@ async def lifespan(app: FastAPI):
     previous_owner_token = getattr(app.state, "owner_maintenance_token", None)
     previous_owner_token_path = getattr(app.state, "owner_maintenance_token_file", None)
     app.state.dream_last_activity = time.monotonic()
+    # Claimed before anything else and outside the try: a refused claim owns nothing
+    # to clean up, and must not release the lock of the server that refused it. Neo4j
+    # keeps its own concurrency control and never used the file guard.
+    writer_lock = None
+    if getattr(app.state, "storage_backend", None) != "neo4j":
+        writer_lock = claim_server_role(config)
+        app.state.writer_lock = writer_lock
     try:
         if isinstance(app.state.storage, (LocalStorage, Neo4jStorage)):
             app.state.dreaming = Dreaming(app.state.storage)
             task = asyncio.create_task(dreaming_loop(app, stop))
         if config.server.local_owner_mode:
-            host = config.server.host
-            if ":" in host and not host.startswith("["):
-                host = f"[{host}]"
             port = config.server.port
             # App startup also covers `serve --shared` and direct ASGI startup;
             # CLI arguments are copied into ServerConfig before Uvicorn imports us.
             owner_files = create_owner_token_files(
                 port=port,
-                url=f"http://{host}:{port}",
+                url=server_url(config.server),
                 data_dir=config.storage.data_dir,
             )
             app.state.owner_maintenance_token = owner_files.token_path.read_text(
@@ -389,7 +386,6 @@ async def lifespan(app: FastAPI):
                     except Exception as e:  # pragma: no cover - shutdown must not raise
                         logger.error(f"Error closing storage on shutdown: {e}")
             finally:
-                writer_lock = getattr(app.state, "writer_lock", None)
                 if writer_lock is not None:
                     writer_lock.release()
                 if owner_files is not None:
@@ -455,6 +451,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Added last so it is outermost: a rebinding request is refused before CORS or
+# routing sees it. It decides per request and only in local-owner mode.
+app.add_middleware(LocalOwnerGuardMiddleware)
 
 # Initialize Storage
 embedding_provider, embedding_runtime_status = get_server_embedding_runtime(config)
