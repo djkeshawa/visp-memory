@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from visp_memory.config import load_config
 from visp_memory.core.owner_token import OWNER_TOKEN_FILE_ENV, OWNER_TOKEN_HEADER
+from visp_memory.server.pat_scopes import ADMIN, DENIED, OPEN, pat_scope_decision
 
 # Security schemes
 security = HTTPBearer(auto_error=False)
@@ -109,36 +110,21 @@ def _authorize_pat_request(request: Request, user: UserContext) -> UserContext:
     """Apply least-privilege scopes to personal access tokens."""
     if user.auth_type != "pat":
         return user
-    path = request.url.path
-    if path == "/auth/me":
+    decision = pat_scope_decision(request.method, request.url.path)
+    if decision.kind == OPEN:
         return user
-    if path.startswith("/auth/") and path != "/auth/me":
+    if decision.kind == DENIED:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=decision.detail)
+    if decision.kind == ADMIN:
+        holds_admin = user.is_admin and ("admin" in user.scopes or "*" in user.scopes)
+        missing = None if holds_admin else "admin"
+    else:
+        held = user.scopes
+        missing = next((s for s in decision.scopes if "*" not in held and s not in held), None)
+    if missing:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Dashboard session authentication is required for account and token management",
-        )
-    if path.startswith(("/platform", "/teams", "/diagnostics", "/dreaming")):
-        required_scope = "admin"
-    elif path.startswith("/intents"):
-        required_scope = "intent:read" if request.method == "GET" else "intent:write"
-    elif path.startswith(("/repos", "/sessions")):
-        required_scope = "project:read" if request.method == "GET" else "project:write"
-    elif path.startswith("/context") or path == "/recall":
-        required_scope = "memory:read"
-    elif path.startswith(
-        ("/memories", "/evidence", "/recall", "/graph", "/relationships", "/quality", "/ai")
-    ):
-        required_scope = "memory:read" if request.method == "GET" else "memory:write"
-    else:
-        required_scope = "project:read"
-    if required_scope == "admin":
-        allowed = user.is_admin and ("admin" in user.scopes or "*" in user.scopes)
-    else:
-        allowed = "*" in user.scopes or required_scope in user.scopes
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Token is missing required scope: {required_scope}",
+            detail=f"Token is missing required scope: {missing}",
         )
     return user
 
