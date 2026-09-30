@@ -91,6 +91,22 @@ For dashboard and release artifacts, use the
 packaged HTTP/browser smoke, metadata and license/NOTICE checks. Keep auth-enabled
 access tests in the gate even if a local visual smoke disables auth on loopback.
 
+`scripts/smoke_local_serve.py` covers the default quick start as a real process, which
+the other smokes (uvicorn with auth off) never reach. It starts
+`visp-memory serve --shared` on a free port with HOME/USERPROFILE redirected to a temp
+directory and checks the Host (421) and Origin (403) guards, the shared server's refusal
+of unscoped reads, the owner token file and owner-gated `/platform/audit-log`, the writer
+lock refusing a local-mode CLI on the served store, `connect` plus a client-mode `record`
+attributed by `VISP_MEMORY_AGENT`, and graceful stop (runtime files removed on POSIX).
+`--reload` also checks a reloading server starts. CI runs it on Ubuntu and Windows:
+
+```bash
+python3 scripts/smoke_local_serve.py --reload
+```
+
+Without a built dashboard `/readyz` is 503 on its dashboard check alone; the smoke accepts
+exactly that and still requires the storage check.
+
 ## Evaluations and coverage
 
 The published evaluations and their reproduction commands are in

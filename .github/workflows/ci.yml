@@ -207,6 +207,34 @@ jobs:
       - run: python build_frontend.py
       - run: python scripts/smoke_packaged_dashboard.py --browser
 
+  local-serve-smoke:
+    # The only job that runs the real `visp-memory serve --shared` quick start:
+    # local-owner mode, the Host/Origin guard, the owner token, the writer lock,
+    # and `connect` + client-mode writes. The other smokes run uvicorn with auth off.
+    name: Local serve smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - name: Install supported test profile
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[api,mcp,capture,analysis,arcadedb,neo4j,dev]"
+      - name: Smoke the served quick start
+        if: runner.os != 'Linux'
+        run: python scripts/smoke_local_serve.py
+      - name: Smoke the served quick start (with --reload)
+        if: runner.os == 'Linux'
+        run: python scripts/smoke_local_serve.py --reload
+
   docker-neo4j-smoke:
     name: Docker + Neo4j runtime smoke
     runs-on: ubuntu-latest
