@@ -4811,6 +4811,7 @@ name = "visp-memory"
 version = "0.7.10"
 source = { editable = "." }
 dependencies = [
+    { name = "click" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pydantic" },
@@ -4906,6 +4907,7 @@ requires-dist = [
     { name = "argon2-cffi", marker = "extra == 'api'", specifier = ">=23.1.0" },
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.3.0" },
     { name = "chromadb", marker = "extra == 'chroma'", specifier = ">=0.4.0" },
+    { name = "click", specifier = ">=8.1" },
     { name = "cryptography", marker = "extra == 'api'", specifier = ">=49.0.0" },
     { name = "defusedxml", marker = "extra == 'capture'", specifier = ">=0.7.1" },
     { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.139.0" },
