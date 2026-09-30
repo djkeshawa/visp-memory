@@ -12,6 +12,7 @@ import jwt
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
+from starlette.routing import get_route_path
 
 from visp_memory.config import load_config
 from visp_memory.core.owner_token import OWNER_TOKEN_FILE_ENV, OWNER_TOKEN_HEADER
@@ -106,11 +107,21 @@ def _has_owner_maintenance_proof(request: Request) -> bool:
         return False
 
 
+def routed_path(request: Request) -> str:
+    """The path the router matched, without any ``root_path`` prefix.
+
+    Behind ``--root-path`` or a prefix-stripping proxy ``request.url.path`` still
+    carries the prefix, so a decision keyed on it would match no rule while the
+    router serves the stripped path. Starlette's own helper keeps the two in step.
+    """
+    return get_route_path(request.scope) or "/"
+
+
 def _authorize_pat_request(request: Request, user: UserContext) -> UserContext:
     """Apply least-privilege scopes to personal access tokens."""
     if user.auth_type != "pat":
         return user
-    decision = pat_scope_decision(request.method, request.url.path)
+    decision = pat_scope_decision(request.method, routed_path(request))
     if decision.kind == OPEN:
         return user
     if decision.kind == DENIED:
