@@ -26,9 +26,9 @@ features need more field use. Frozen features are retained but not actively exte
 | [External workflow reports](../guides/WORKFLOW_REPORTS.md) | Beta | Explicit assistant/workflow status, evidence, and ordered history; SQLite and Neo4j. |
 | ArcadeDB backend | Frozen | Embedded graph storage. Use SQLite unless you need it. |
 | Neo4j backend | Beta | Optional Evidence graph, workflow reports, dreaming, and graph backup. Requires an external service; SQLite remains default. |
-| Shared local server (client mode, many agents) | Beta | One server with project-scoped clients. See [guide](../guides/SHARED_SERVER.md). |
-| Agent attribution (`written_by`) | Experimental | Informational labels; no trust or authority. |
-| Single-writer guard | Beta | Refuses a local-mode process on a store a server owns, and a server on a store local writers hold. Held by the serving process (so `serve --reload` works); one server process per store, `--workers` above 1 unsupported. |
+| Shared local server (client mode, many agents) | Beta | One single-user server with project-scoped clients; scoping is not access control, and client-mode writes are stored `external`. Depends on the Experimental REST API + dashboard. See [guide](../guides/SHARED_SERVER.md). |
+| Agent attribution (`written_by`) | Experimental | Informational labels; grants no trust or authority, but the session label is a relevance factor in proactive recall. |
+| Single-writer guard | Beta | Refuses a local-mode process on a store a server owns, and a server on a store local writers hold. Held by the serving process (so `serve --reload` works); one server process per store, `--workers` above 1 unsupported. SQLite/ArcadeDB only; Neo4j and HTTP clients are unguarded. |
 | Teams, users, JWT auth | Frozen | Multi-user server features. |
 | Cross-repo aggregation | Frozen | Depends on the team server. |
 

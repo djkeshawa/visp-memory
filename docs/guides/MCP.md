@@ -20,14 +20,23 @@ visp-memory connect --agent-config codex
 ```
 
 The installer writes project-level `AGENTS.md` guidance and a global managed MCP
-entry that contains only the command and `VISP_MEMORY_AGENT=codex`. It does not
-pin a working directory, repository, storage mode, or server URL; Codex starts
+entry in `~/.codex/config.toml` that contains only `command = "visp-memory-mcp"`,
+`args = []` and `env = { VISP_MEMORY_AGENT = "codex" }`. It does not pin a working
+directory, repository, storage mode, or server URL. Codex is expected to launch
 the MCP server in the active session directory, where it discovers that
-project's `visp-memory.yaml`. Repeating the command from another project leaves
-the global block unchanged. Restart the assistant after changing MCP
-configuration. Configure server credentials and project access as described in
-[authentication](AUTHENTICATION.md). In client mode, storage and embedding
-generation happen on the server.
+project's `visp-memory.yaml`; if your Codex version does not, project discovery
+will not work, so set `cwd` in the block or use per-project Codex config.
+Repeating the command from another project leaves the global block unchanged.
+
+Re-running this command, or `visp-memory hooks install codex`, over an older
+block that pinned `cwd`, `VISP_MEMORY_REPO_ID`, or the storage mode or URL
+rewrites it after saving a backup, and this changes behavior for every project
+that uses Codex. The command prints a migration note. An existing
+`VISP_MEMORY_EMBEDDING_PROVIDER = "noop"` entry is preserved.
+
+Restart the assistant after changing MCP configuration. Configure server
+credentials and project access as described in [authentication](AUTHENTICATION.md).
+In client mode, storage and embedding generation happen on the server.
 
 ### Other MCP clients
 
@@ -94,11 +103,13 @@ is deduplicated within the session. Hook failures do not block the assistant;
 the returned memory is context, never a permission decision.
 
 Add `--mcp` to merge a `visp-memory` server into the project's `.mcp.json`
-without replacing other servers, or run both shared-server connection and agent
-setup together:
+without replacing other servers. Use one of these two alternatives, not both:
 
 ```bash
+# Local mode
 visp-memory hooks install claude-code --mcp
+
+# Shared server (also installs the hooks and .mcp.json entry)
 visp-memory connect --agent-config claude-code
 ```
 

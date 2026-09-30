@@ -4,6 +4,8 @@ For same-user maintenance and project-scoped clients, see the [shared server gui
 
 Authentication is enabled by default. The dashboard sends unauthenticated users
 to sign-in; API data requires credentials. Public images contain no default password.
+The one exception is [open local-owner mode](#open-local-owner-mode), which a
+loopback `serve` enters when no credentials are configured.
 
 ## First-time browser setup
 
@@ -53,16 +55,56 @@ On authenticated deployments, dreaming endpoints require administrator access
 and the `admin` token scope. Workflow reports need `intent:write` and access to
 the target intent/project.
 
+## Open local-owner mode
+
+`visp-memory serve` enters open local-owner mode when authentication is enabled
+(the default), it binds a loopback host (`127.0.0.1`, `localhost` or `::1`), and
+no credentials are configured: no JWT secret, no API keys (`VISP_MEMORY_SERVER_API_KEYS`, `VISP_MEMORY_API_KEY` or
+`storage.api_key`), and the anonymous flag is off. It prints a warning, enables
+anonymous access and sets `VISP_MEMORY_SERVER_LOCAL_OWNER_MODE`. Binding a
+non-loopback host with no credentials is refused. The peer address is checked on
+every request, so setting the mode by hand on a public bind grants nothing.
+
+In this mode every request from the loopback interface is the local owner. The
+owner passes every repository check without a token: any local process that can
+reach the port can read or write any project by naming its `repo_id`. Repository
+scoping in [shared server](SHARED_SERVER.md) setups is a client convention, not
+access control. The server also rejects non-loopback `Host` headers in this mode
+to defend against DNS rebinding. This is a single-user, same-machine assumption;
+configure accounts, tokens or API keys if it does not hold.
+
+For a server that is not in open mode, clients send credentials from
+`VISP_MEMORY_API_KEY`, `VISP_MEMORY_JWT_TOKEN` or `storage.api_key`.
+
 ## Owner maintenance on a local server
 
-When `visp-memory serve` starts in open local-owner mode, it writes a random
-maintenance token to `~/.visp-memory/run/owner-<port>.token` with owner-only
-permissions on POSIX systems. On Windows, the file lives under the current
-user's profile. Local clients such as `RemoteStorage` can read the file as the
-same OS user and send it to the loopback server. Loopback by itself
-does not prove ownership, because other OS users on the machine can connect to
-`127.0.0.1` too. The server removes the token and its discovery record on clean
-shutdown.
+Only in open local-owner mode, `visp-memory serve` writes a random maintenance
+token to `~/.visp-memory/run/owner-<port>.token` with owner-only permissions on
+POSIX systems, and a discovery record `~/.visp-memory/run/server-<port>.json`.
+A server with credentials configured writes neither file, so `connect` finds no
+record there and falls back to `http://127.0.0.1:8000`; pass `--server-url` for
+any other address. On Windows, the files live under the current user's profile.
+Local clients such as `RemoteStorage` can read the token file as the same OS user
+and send it in the `X-Visp-Owner-Token` header. The server removes both files on
+clean shutdown.
+
+The token unlocks the maintenance routes and nothing else:
+
+- memory purge and repository archive, restore and purge (with their previews)
+- retention preview and execution, and the consistency check
+- embedding-index status and reindex
+- dreaming
+- graph import
+- the audit log
+
+It also authorizes workflow-status reports
+([workflow reports](WORKFLOW_REPORTS.md)). It does not make the caller an
+administrator and unlocks no account, team or provider settings.
+
+Loopback alone does not prove ownership for these maintenance routes, because other
+OS users on the machine can connect to `127.0.0.1` too; the token file is what
+proves same-user access. (For ordinary reads and writes, loopback is enough in
+this mode, as described above.)
 
 The dashboard runs in a browser and cannot read this protected file or send its
 token, so dashboard maintenance still requires an administrator account.

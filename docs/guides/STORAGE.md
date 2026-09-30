@@ -33,14 +33,24 @@ Environment overrides apply after loading the file.
 | `VISP_MEMORY_EMBEDDING_MODEL` | Model for the selected provider |
 | `VISP_MEMORY_STORAGE_MODE` | `local`, `client`, or `server` |
 | `VISP_MEMORY_STORAGE_SERVER_URL` | API endpoint in client mode |
-| `VISP_MEMORY_STORAGE_WRITER_GUARD` | `off` disables the process guard (unsafe) |
+
+Two variables are read directly rather than applied as overrides on the loaded
+file. `VISP_MEMORY_CONFIG` names an explicit config file, skipping the directory
+walk above; startup fails if that file does not exist (`visp-memory serve
+--shared` sets it). `VISP_MEMORY_STORAGE_WRITER_GUARD=off` disables the process
+guard described below (unsafe). Server-mode switches
+(`VISP_MEMORY_SERVER_SHARED`, `VISP_MEMORY_SERVER_LOCAL_OWNER_MODE`) are listed
+in the [shared server guide](SHARED_SERVER.md#environment-variables).
 
 Use [config.py](../../src/visp_memory/config.py) for the complete settings schema.
 Missing project scope never grants a global read. Legacy unscoped records stay
 quarantined for administrative inspection.
 
+## Connect a project to a shared server
+
 For a store shared by agents, run one shared server and connect each project to
-it:
+it. The server must already be running; otherwise `connect` fails with a hint to
+start it.
 
 ```bash
 visp-memory serve --shared
@@ -48,12 +58,23 @@ cd /path/to/project
 visp-memory connect
 ```
 
-`connect` discovers the newest responsive local shared-server record and falls
-back to `http://127.0.0.1:8000`. Use `--server-url` for another endpoint and
-`--repo` to override the existing config or Git top-level directory name. It
-merges `repo_id`, `storage.mode: client`, and `storage.server_url` into the
-project's `visp-memory.yaml` without replacing unrelated settings, then registers
-the repository on the server.
+Without `--server-url`, `connect` looks for a discovery record at
+`~/.visp-memory/run/server-<port>.json`. It takes the newest by modification
+time whose process ID is alive and whose URL answers `GET /` with a status below
+500, and otherwise falls back to `http://127.0.0.1:8000`. Only a server in
+[open local-owner mode](AUTHENTICATION.md#open-local-owner-mode) writes a record,
+so for a server with credentials pass `--server-url` (or accept the fallback).
+
+The repository ID is, in order: `--repo`, then `repo_id` in the project's
+existing `visp-memory.yaml`, then the project root's directory name. The project
+root is the nearest ancestor of the current directory that contains
+`visp-memory.yaml`; failing that, the Git top-level directory; failing that, the
+current directory.
+
+`connect` merges `repo_id`, `storage.mode: client`, and `storage.server_url` into
+that `visp-memory.yaml` without replacing unrelated settings, then registers the
+repository on the server. The file is rewritten from its parsed content, so
+comments in it are not preserved.
 
 To copy records from the project's previous local store, add
 `--migrate-local`. The import goes through the server and the old data directory
@@ -73,6 +94,10 @@ cannot open that directory in local mode. A server also refuses to start while
 local writers are active. Multiple local-mode processes may still coexist for
 existing stdio MCP and hook workflows; this does not make the vector indexes
 safe for concurrent writes. Neo4j and HTTP clients do not take a local store guard.
+
+In client mode, `visp-memory storage backup` and `storage upgrade` do not go
+through the server: stop the server and pass both `--offline` and
+`--data-dir <server data dir>`.
 
 The guard uses OS locks in `<data_dir>/.locks`, released on exit or crash.
 `server.json` records the holder's PID, URL, and start time for diagnostics only;

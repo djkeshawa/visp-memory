@@ -18,7 +18,7 @@ docs/
 | [Accounts and tokens](guides/AUTHENTICATION.md) | How do I sign in and connect an API client? |
 | [MCP and hooks](guides/MCP.md) | How does my assistant use project memory? |
 | [Storage and embeddings](guides/STORAGE.md) | Where is data stored, how does semantic search work, and how do I back it up? |
-| [Shared local server](guides/SHARED_SERVER.md) | How do project clients share one local store with isolated scopes? |
+| [Shared local server](guides/SHARED_SERVER.md) | How do project clients share one local store, each with its own scope? |
 | [Dreaming](guides/DREAMING.md) | What is merged automatically, what needs review, and how do I undo it? |
 | [Workflow reports](guides/WORKFLOW_REPORTS.md) | How do explicit assistant reports update intent status? |
 
