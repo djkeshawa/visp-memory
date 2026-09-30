@@ -426,28 +426,60 @@ def test_serve_command_starts_uvicorn_after_auth_preflight(monkeypatch, cli_env)
     ]
 
 
-def test_contract_propose_reports_failed_quarantine_and_cleans_up(monkeypatch, cli_env):
+class _ProposalStore:
+    """A store whose quarantine-by-update always fails, as a REST 422 did.
+
+    `accepts_quarantine` models whether the write path itself can create a
+    quarantined row; an older server could not.
+    """
+
+    def __init__(self, *, accepts_quarantine: bool):
+        self.accepts_quarantine = accepts_quarantine
+        self.rows = {}
+
+    def record(self, content, **kwargs):
+        status = kwargs.get("status", "active")
+        if status != "active" and not self.accepts_quarantine:
+            raise RuntimeError("HTTP 422: status is not accepted")
+        memory_id = f"proposal-{len(self.rows) + 1}"
+        self.rows[memory_id] = status
+        return memory_id
+
+    def update_memory(self, memory_id, **kwargs):
+        raise RuntimeError("HTTP 422: status is not accepted")
+
+    def delete_memory(self, memory_id):
+        self.rows.pop(memory_id, None)
+        return True
+
+
+def _propose_against(monkeypatch, store):
     import visp_memory.interfaces.cli as cli_module
 
-    class Storage:
-        def __init__(self):
-            self.deleted = []
-
-        def update_memory(self, memory_id, **kwargs):
-            return False
-
-        def delete_memory(self, memory_id):
-            self.deleted.append(memory_id)
-
-    storage = Storage()
     memory = SimpleNamespace(
-        config=SimpleNamespace(repo_id="repo-a"),
-        _storage=storage,
-        record=lambda *args, **kwargs: "proposal-1",
+        config=SimpleNamespace(repo_id="repo-a"), _storage=store, record=store.record
     )
     monkeypatch.setattr(cli_module, "_open_memory", lambda: memory)
-    result = runner.invoke(app, ["contract", "propose", "unsafe proposal"])
+    return runner.invoke(app, ["contract", "propose", "unreviewed proposal"])
+
+
+def test_contract_propose_never_has_an_active_proposal(monkeypatch, cli_env):
+    # Record-then-quarantine left the row active whenever the second step
+    # failed, and reported failure over the top of it. One write, born
+    # quarantined, has no such window.
+    store = _ProposalStore(accepts_quarantine=True)
+
+    result = _propose_against(monkeypatch, store)
+
+    assert result.exit_code == 0, result.output
+    assert list(store.rows.values()) == ["quarantined"]
+
+
+def test_contract_propose_failure_leaves_no_active_row(monkeypatch, cli_env):
+    store = _ProposalStore(accepts_quarantine=False)
+
+    result = _propose_against(monkeypatch, store)
 
     assert result.exit_code == 1
-    assert "could not be quarantined" in result.output
-    assert storage.deleted == ["proposal-1"]
+    assert "propose failed" in result.output
+    assert "active" not in store.rows.values()

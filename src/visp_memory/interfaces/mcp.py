@@ -96,7 +96,9 @@ from visp_memory.core.embedding_status import (
 )
 from visp_memory.core.model_router import ModelUnavailableError
 from visp_memory.core.ranking import projected_importance
+from visp_memory.core.remote.errors import RemoteStorageError
 from visp_memory.core.trust import LOCAL_WORKFLOW_ACTOR, MCP_CLIENT_ACTOR, WriteChannel
+from visp_memory.interfaces.mcp_remote_errors import MCPToolError, classify_remote_failure
 
 # The advertised tool surface (definitions, profiles, and their env resolution)
 # lives in mcp_tools; re-exported here because this module is the public MCP
@@ -221,6 +223,28 @@ def _mcp_error_payload(code: str, message: str, **extra: Any) -> dict[str, Any]:
 
 def _mcp_error_text(code: str, message: str, **extra: Any) -> str:
     return json.dumps(_mcp_error_payload(code, message, **extra))
+
+
+def _unexpected_tool_failure(name: str) -> list[TextContent]:
+    """Log the active exception in full and answer with no detail from it.
+
+    Exception text can contain provider responses, filesystem paths, SQL, or
+    credentials. Keep it in server logs only.
+    """
+    logger.exception(
+        "Error handling MCP tool request_id=%s tool=%s",
+        current_mcp_request_context().request_id,
+        name,
+    )
+    return [
+        TextContent(
+            type="text",
+            text=_mcp_error_text(
+                "request_failed",
+                "The server could not complete the request; check server logs.",
+            ),
+        )
+    ]
 
 
 def _requires_explicit_scope() -> bool:
@@ -528,23 +552,22 @@ def create_mcp_server() -> "Server":
                     ),
                 )
             ]
-        except Exception:
-            # Exception text can contain provider responses, filesystem paths, SQL,
-            # or credentials. Keep it in server logs only.
-            logger.exception(
-                "Error handling MCP tool request_id=%s tool=%s",
-                current_mcp_request_context().request_id,
-                name,
-            )
-            return [
-                TextContent(
-                    type="text",
-                    text=_mcp_error_text(
-                        "request_failed",
-                        "The server could not complete the request; check server logs.",
-                    ),
+        except RemoteStorageError as error:
+            failure = classify_remote_failure(error)
+            if failure is not None:
+                code, message, extra = failure
+                # One line: the cause is known, and a traceback per call buries it.
+                logger.warning(
+                    "MCP tool failed request_id=%s tool=%s code=%s: %s",
+                    current_mcp_request_context().request_id,
+                    name,
+                    code,
+                    message,
                 )
-            ]
+                raise MCPToolError(_mcp_error_text(code, message, **extra)) from None
+            return _unexpected_tool_failure(name)
+        except Exception:
+            return _unexpected_tool_failure(name)
 
     # =========================================================================
     # Resources

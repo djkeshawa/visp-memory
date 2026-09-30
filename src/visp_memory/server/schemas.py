@@ -18,6 +18,13 @@ from visp_memory.core.ranking import DEFAULT_RECALL_MIN_SCORE
 
 MemoryLayer = Literal["raw", "episodic", "semantic", "intent"]
 MemoryStatus = Literal["active", "pending", "archived", "superseded", "merged", "deleted"]
+# The reviewed lifecycle of `contract propose` / `review`. Neither status is
+# ever served by recall, which reads "active" only, so a caller that writes one
+# restricts its own row. They are storable, readable and settable — without
+# them client mode could not quarantine a proposal or review it — but deliberately
+# absent from SearchQuery: recall stays exactly as wide as it was.
+ReviewStatus = Literal["quarantined", "rejected"]
+StoredMemoryStatus = Literal[MemoryStatus, ReviewStatus]
 IntentStatus = Literal["active", "completed", "closed"]
 RelationshipConfidence = Literal["observed", "inferred", "ambiguous", "manual"]
 
@@ -55,7 +62,7 @@ class MemoryCreate(ScopedRequest):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     source_ids: List[str] = Field(default_factory=list)
     evidence_ids: List[str] = Field(default_factory=list)
-    status: MemoryStatus = "active"
+    status: StoredMemoryStatus = "active"
     source: Optional[str] = Field(
         default=None,
         deprecated=(
@@ -111,7 +118,7 @@ class MemoryResponse(BaseModel):
     repo_id: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    status: MemoryStatus = "active"
+    status: StoredMemoryStatus = "active"
     source: Optional[str] = None
     quality_flags: List[str] = Field(default_factory=list)
     evidence_ids: List[str] = Field(default_factory=list)
@@ -412,7 +419,7 @@ class MemoryUpdate(BaseModel):
     importance: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     tags: Optional[List[str]] = None
     metadata: Optional[Dict[str, Any]] = None
-    status: Optional[MemoryStatus] = None
+    status: Optional[StoredMemoryStatus] = None
     source: Optional[str] = None
     quality_flags: Optional[List[str]] = None
 

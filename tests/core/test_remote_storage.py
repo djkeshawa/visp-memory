@@ -673,11 +673,15 @@ def test_remote_storage_get_relationships_preserves_evidence_payload():
 def test_remote_storage_list_sends_supported_filters_without_none_values():
     storage = remote_storage_with(FakeResponse(200, []))
 
-    assert storage.list_memories(layer="semantic", category="negative", repo_id=None) == []
+    assert storage.list_memories(
+        layer="semantic", category="negative", tags=None, repo_id=None
+    ) == []
     assert storage.session.last_get_url == "http://memory.example/memories"
+    # An unscoped call takes the client's configured project, not "no scope".
     assert storage.session.last_get_params == {
         "layer": "semantic",
         "category": "negative",
+        "repo_id": "repo-a",
     }
 
 
