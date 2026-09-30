@@ -3741,15 +3741,15 @@ def contract_propose(
     try:
         memory = get_memory()
         scope = _repo_scope(memory, repo)
-        memory_id = memory.record(
-            content,
-            category="note",
-            importance=0.5,
-            repo_id=scope,
-        )
         # The proposal enters the reviewed lifecycle, not active service:
         # recall serves status="active" only, so a quarantined row is invisible
         # until a human resolution activates it.
+        #
+        # It is BORN quarantined, in the one write. Recording it active and
+        # quarantining it afterwards left an unreviewed row active — and served
+        # by recall — whenever the second step failed, which it always did in
+        # client mode (the REST schema refused the status). The command then
+        # reported failure over a live row, and every retry added another.
         #
         # ONLY status is set. Setting epistemic_status here was a defect that
         # bricked the whole store: `record` writes a non-semantic row, and the
@@ -3757,17 +3757,13 @@ def contract_propose(
         # belief fields — so every SUBSEQUENT read of the database failed, not
         # just this one. Quarantine is a lifecycle state; epistemic status
         # belongs to the semantic layer and this row is not entitled to it.
-        quarantined = memory._storage.update_memory(memory_id, status="quarantined")
-        if not quarantined:
-            _contract_print(
-                _contract_failure(
-                    "the proposal was stored but could not be quarantined; it was removed"
-                )
-            )
-            memory._storage.delete_memory(memory_id)
-            raise typer.Exit(1)
-    except typer.Exit:
-        raise
+        memory_id = memory.record(
+            content,
+            category="note",
+            importance=0.5,
+            repo_id=scope,
+            status="quarantined",
+        )
     except Exception as exc:  # noqa: BLE001 - the contract reports, never crashes
         _contract_print(_contract_failure(f"propose failed: {exc}"))
         raise typer.Exit(1)
