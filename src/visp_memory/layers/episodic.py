@@ -70,6 +70,7 @@ class EpisodicMemory(BaseMemoryLayer):
         context: Dict[str, Any] = None,
         tags: List[str] = None,
         *,
+        status: str = "active",
         _write_channel: WriteChannel | str = WriteChannel.LIBRARY,
     ) -> str:
         """
@@ -81,6 +82,9 @@ class EpisodicMemory(BaseMemoryLayer):
             importance: How important (0.0 to 1.0)
             context: Additional context (files involved, etc.)
             tags: Tags for organization
+            status: Initial lifecycle status. A reviewed proposal is written
+                "quarantined" in this same write, so it is never active, even
+                briefly, even when a later step would have failed.
 
         Returns:
             Memory ID
@@ -109,6 +113,7 @@ class EpisodicMemory(BaseMemoryLayer):
             importance=importance,
             tags=with_channel_provenance(tags, write_channel),
             metadata=metadata,
+            status=status,
             source=policy.source,
         )
 
