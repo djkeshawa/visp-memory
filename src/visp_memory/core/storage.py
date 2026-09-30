@@ -33,6 +33,7 @@ from visp_memory.core.clock import parse_utc, utc_now
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID
 from visp_memory.core.embedding_binding import bind_embeddings
 from visp_memory.core.indexing import EmbeddingIndexReport, ReindexResult, ReindexScope
+from visp_memory.core.json_text import to_json_text
 from visp_memory.core.ranking import (
     clamp_score,
     normalize_distance_score,
@@ -3181,7 +3182,7 @@ class LocalStorage(BaseStorage):
     @staticmethod
     def _json_serialize(data: Any) -> str:
         """Serialize data to JSON."""
-        return json.dumps(data)
+        return to_json_text(data)
 
     @staticmethod
     def _json_deserialize(data: str) -> Any:
