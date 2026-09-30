@@ -28,6 +28,9 @@ classifiers = [
 
 dependencies = [
     "typer>=0.21.0",
+    # cli.py imports click directly; typer stopped depending on it, so a fresh
+    # install without this line fails on `import click`.
+    "click>=8.1",
     "numpy>=1.26.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.14.2",
