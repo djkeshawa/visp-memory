@@ -87,6 +87,9 @@ _RULES = (
     _rule(r"/|/status", _scopes("project:read")),
     # Unauthenticated probes: they never look at the caller.
     _rule(r"/healthz|/readyz", _OPEN),
+    # The exported dashboard pages are static files served before any
+    # authentication; the data they show comes from the API routes above.
+    _rule(_prefix("dashboard"), _OPEN),
 )
 
 

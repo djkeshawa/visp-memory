@@ -10,7 +10,7 @@ import itertools
 import pytest
 
 from visp_memory.server.app import app
-from visp_memory.server.pat_scopes import DENIED, pat_scope_decision
+from visp_memory.server.pat_scopes import DENIED, OPEN, pat_scope_decision
 
 HEADERS = {"X-API-KEY": "test_key"}
 REPO = "repo-a"
@@ -184,3 +184,12 @@ async def test_the_api_key_admin_can_still_import(client):
         f"/repos/{REPO}/import", json={"version": "3.0"}, headers=HEADERS
     )
     assert response.status_code != 403, response.text
+
+
+@pytest.mark.parametrize(
+    "path", ["/dashboard", "/dashboard/", "/dashboard/auth", "/dashboard/settings"]
+)
+def test_dashboard_pages_are_explicitly_open(path):
+    """They exist only when the dashboard is built, so the route walk cannot see them in CI."""
+    decision = pat_scope_decision("GET", path)
+    assert decision.kind == OPEN and decision.explicit
