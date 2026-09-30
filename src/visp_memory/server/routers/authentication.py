@@ -12,6 +12,7 @@ from visp_memory.config import load_config
 from visp_memory.core.clock import parse_utc, utc_now
 from visp_memory.server.auth import SESSION_COOKIE_NAME, UserContext, get_current_user
 from visp_memory.server.authorization import require_admin
+from visp_memory.server.pat_scopes import AUTH_DENIED
 from visp_memory.server.routers.platform import append_audit_event
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
@@ -71,6 +72,18 @@ class TokenCreateRequest(BaseModel):
     scopes: list[str] = Field(default_factory=lambda: list(DEFAULT_TOKEN_SCOPES))
     repo_ids: list[str] = Field(default_factory=list)
     expires_at: Optional[datetime] = None
+
+
+async def get_account_manager(user: UserContext = Depends(get_current_user)) -> UserContext:
+    """The caller of an account or token route, which a token never is.
+
+    The scope table already denies ``/auth/*`` to a token; this refuses it again
+    here so that a path the table fails to match (a proxy prefix, a new route)
+    cannot let one token mint another or manage accounts.
+    """
+    if user.auth_type == "pat":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=AUTH_DENIED)
+    return user
 
 
 def _public_account(account: dict) -> dict:
@@ -150,7 +163,7 @@ async def login(request: Request, response: Response, credentials: LoginRequest)
 async def logout(
     request: Request,
     response: Response,
-    user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_account_manager),
 ):
     session_token = request.cookies.get(SESSION_COOKIE_NAME)
     if session_token:
@@ -192,7 +205,7 @@ async def current_account(request: Request, user: UserContext = Depends(get_curr
 
 
 @router.get("/users")
-async def list_accounts(request: Request, user: UserContext = Depends(get_current_user)):
+async def list_accounts(request: Request, user: UserContext = Depends(get_account_manager)):
     require_admin(user)
     return [_public_account(account) for account in request.app.state.auth_store.list_accounts()]
 
@@ -201,7 +214,7 @@ async def list_accounts(request: Request, user: UserContext = Depends(get_curren
 async def create_account(
     request: Request,
     payload: AccountCreateRequest,
-    user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_account_manager),
 ):
     require_admin(user)
     try:
@@ -224,7 +237,7 @@ async def update_account(
     request: Request,
     user_id: str,
     payload: AccountUpdateRequest,
-    user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_account_manager),
 ):
     require_admin(user)
     account = request.app.state.auth_store.update_account(
@@ -248,7 +261,7 @@ async def reset_password(
     request: Request,
     user_id: str,
     payload: PasswordResetRequest,
-    user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_account_manager),
 ):
     require_admin(user)
     try:
@@ -268,7 +281,7 @@ async def reset_password(
 
 
 @router.get("/tokens")
-async def list_tokens(request: Request, user: UserContext = Depends(get_current_user)):
+async def list_tokens(request: Request, user: UserContext = Depends(get_account_manager)):
     return request.app.state.auth_store.list_tokens(user.user_id)
 
 
@@ -276,7 +289,7 @@ async def list_tokens(request: Request, user: UserContext = Depends(get_current_
 async def create_token(
     request: Request,
     payload: TokenCreateRequest,
-    user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_account_manager),
 ):
     if not request.app.state.auth_store.get_account(user.user_id):
         raise HTTPException(
@@ -320,7 +333,7 @@ async def create_token(
 async def revoke_token(
     request: Request,
     token_id: str,
-    user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_account_manager),
 ):
     if not request.app.state.auth_store.revoke_token(token_id, user_id=user.user_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Token not found")

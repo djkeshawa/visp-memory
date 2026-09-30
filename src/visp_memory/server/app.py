@@ -39,7 +39,7 @@ from visp_memory.core.reporting import MemoryIntelligenceReporter
 from visp_memory.core.storage import LocalStorage
 from visp_memory.recall.graph import GraphRecall
 from visp_memory.server.attribution_middleware import AttributionMiddleware
-from visp_memory.server.auth import UserContext, get_current_user, security
+from visp_memory.server.auth import UserContext, get_current_user, routed_path, security
 from visp_memory.server.auth_store import AuthStore
 from visp_memory.server.authorization import (
     can_access_scoped_record,
@@ -413,7 +413,7 @@ async def request_context_middleware(request: Request, call_next):
     supplied_request_id = request.headers.get("X-Request-ID", "")
     request_id = supplied_request_id if 0 < len(supplied_request_id) <= 128 else uuid.uuid4().hex
     started_at = time.perf_counter()
-    if request.method != "GET" and not request.url.path.startswith("/dreaming"):
+    if request.method != "GET" and not routed_path(request).startswith("/dreaming"):
         app.state.dream_last_activity = time.monotonic()
     try:
         response = await call_next(request)

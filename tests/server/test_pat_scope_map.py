@@ -10,7 +10,7 @@ import itertools
 import pytest
 
 from visp_memory.server.app import app
-from visp_memory.server.pat_scopes import DENIED, OPEN, pat_scope_decision
+from visp_memory.server.pat_scopes import ADMIN, DENIED, OPEN, pat_scope_decision
 
 HEADERS = {"X-API-KEY": "test_key"}
 REPO = "repo-a"
@@ -193,3 +193,48 @@ def test_dashboard_pages_are_explicitly_open(path):
     """They exist only when the dashboard is built, so the route walk cannot see them in CI."""
     decision = pat_scope_decision("GET", path)
     assert decision.kind == OPEN and decision.explicit
+
+
+# Routes that only ever read, including their POSTs (a search body, a recall
+# query, a context compile). Every other single-decision rule serves a GET, and a
+# non-GET that reaches it must not be satisfied by the read scope.
+READ_ONLY_POSTS = ["/turn-keys/search", "/recall", "/context/compile", "/context/brief"]
+GET_ONLY_RULE_SAMPLES = [
+    "/auth/me",
+    "/repos/r/export",
+    "/memories/m/attestation",
+    "/intents/usage",
+    "/diagnostics/capabilities",
+    "/",
+    "/status",
+]
+WRITE_SCOPES = {"memory:write", "intent:write", "project:write"}
+
+
+@pytest.mark.parametrize("path", READ_ONLY_POSTS)
+def test_read_only_posts_keep_their_read_scope(path):
+    assert pat_scope_decision("POST", path) == pat_scope_decision("GET", path)
+    assert all(scope.endswith(":read") for scope in pat_scope_decision("POST", path).scopes)
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+@pytest.mark.parametrize("path", GET_ONLY_RULE_SAMPLES)
+def test_a_write_to_a_read_rule_needs_a_write_or_admin_scope(method, path):
+    decision = pat_scope_decision(method, path)
+    assert decision.kind in {ADMIN, DENIED} or WRITE_SCOPES & set(decision.scopes), decision
+
+
+def test_head_is_decided_like_get():
+    assert pat_scope_decision("HEAD", "/repos/r/export") == pat_scope_decision(
+        "GET", "/repos/r/export"
+    )
+
+
+@pytest.mark.asyncio
+async def test_patching_intents_usage_needs_intent_write(client):
+    # PATCH /intents/usage routes to PATCH /intents/{intent_id}.
+    response = await client.patch(
+        "/intents/usage", json={"status": "completed"}, headers=pat(["intent:read"])
+    )
+    assert response.status_code == 403, response.text
+    assert "intent:write" in response.json()["detail"]
