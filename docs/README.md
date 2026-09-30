@@ -38,4 +38,5 @@ docs/
 - [Testing](development/TESTING.md): test layout, required checks, and backend integration tests.
 - [Releasing](development/RELEASING.md): maintainer build and publication procedure.
 
-Release notes and downloads live on [GitHub Releases](https://github.com/djkeshawa/visp-memory/releases).
+Release notes are kept in the [changelog](../CHANGELOG.md); downloads live on
+[GitHub Releases](https://github.com/djkeshawa/visp-memory/releases).
