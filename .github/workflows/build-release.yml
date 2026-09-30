@@ -300,9 +300,15 @@ jobs:
           # release job down after PyPI had already published.
           pattern: "{python-package,standalone-*}"
 
+      - name: Release notes from CHANGELOG.md
+        # The tag's hand-written section (or Unreleased) becomes the release body;
+        # GitHub still appends its generated PR list after it.
+        run: python3 scripts/changelog_section.py "${GITHUB_REF_NAME}" > release-notes.md
+
       - name: Create Release
         uses: softprops/action-gh-release@v3
         with:
+          body_path: release-notes.md
           files: |
             python-package/*
             standalone-Linux/*

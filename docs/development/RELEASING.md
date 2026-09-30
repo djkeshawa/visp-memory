@@ -21,6 +21,20 @@ Release outputs include:
 - Platform standalone archives, with CLI/API/dashboard and no MCP.
 - A GHCR container image.
 
+## Release notes
+
+[CHANGELOG.md](../../CHANGELOG.md) holds the hand-written notes. Add each merged
+change under `## [Unreleased]` in the same pull request, and list anything users
+must act on under `### Upgrading`. When preparing a release, rename the heading to
+`## [X.Y.Z] - YYYY-MM-DD`, start a new empty `## [Unreleased]` above it, and update
+the compare links at the bottom.
+
+The release job runs [changelog_section.py](../../scripts/changelog_section.py) on
+the tag and publishes that section as the GitHub release body, followed by GitHub's
+generated list of pull requests. If the tag has no section it uses `Unreleased` and
+warns in the job log; if neither exists the release carries only the generated list.
+Check the published body after release.
+
 ## Before tagging
 
 1. Inspect `git status --short`; the release commit must contain only intended
@@ -112,7 +126,7 @@ own publisher/environment configuration; it is not a second production path.
 
 3. Verify dashboard assets and intended entry points from the installed artifact.
    Smoke standalone archives on their target platforms.
-4. Ensure release notes include installation, feature status, known advisories,
+4. Ensure the release notes (the CHANGELOG section) include installation, feature status, known advisories,
    migration/data-safety notes and the exact artifact identity.
 
 ## Failure recovery
