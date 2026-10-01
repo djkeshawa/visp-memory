@@ -81,6 +81,13 @@ _RULES = (
         _scopes("project:read", "memory:read", "intent:read"),
         _scopes("project:write"),
     ),
+    # These GETs expose memory content; classify writes explicitly as well.
+    _rule(
+        r"/remember|/reports/memory-intelligence(?:/text)?",
+        _scopes("memory:read"),
+        _scopes("memory:write"),
+    ),
+    _rule(r"/repos/[^/]+/context", _scopes("memory:read"), _scopes("memory:write")),
     _rule(r"/memories/[^/]+/attestation", _scopes("memory:read"), _scopes("memory:write")),
     # A POST, but it only searches: it reads memory content.
     _any_method(r"/turn-keys/search", _scopes("memory:read")),
