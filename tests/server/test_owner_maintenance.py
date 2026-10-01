@@ -237,7 +237,7 @@ async def test_local_owner_with_the_token_can_report_workflow_status(owner_clien
         repo_id=REPO_ID, status="completed"
     )[0]["context"]["external_workflow"]
     assert report["reported_by"] == LOCAL_WORKFLOW_ACTOR
-    assert report["channel"] == "rest"
+    assert report["channel"] == "local_owner"
 
 
 @pytest.mark.parametrize("owner_token", [None, "wrong-token"])

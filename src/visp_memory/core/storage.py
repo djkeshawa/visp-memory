@@ -43,6 +43,7 @@ from visp_memory.core.ranking import (
     text_similarity,
     utility_rank_adjustment,
 )
+from visp_memory.core.trust import WriteChannel, channel_policy, with_channel_provenance
 from visp_memory.core.turn_key_index import ChromaTurnKeyIndex
 from visp_memory.core.turn_keys import BRIEF_TURN_KEYS
 from visp_memory.quality.secrets import SecretBearingContentError, redact_for_storage
@@ -742,12 +743,15 @@ class BaseStorage(ABC):
         reason: str = None,
         importance: float = None,
         tags: List[str] = None,
+        channel: WriteChannel | str = None,
     ) -> str:
         """Create an evidence-backed successor for an immutable semantic belief.
 
         The implementation is deliberately expressed in terms of the portable storage
         contract so RemoteStorage and graph backends get the same governance behavior.
         Backends that cannot store governed Evidence fail through ``store_memory``.
+        A package-assigned channel replaces inherited provenance; without one,
+        existing local callers retain the original tags and source.
         """
         if not isinstance(content, str) or not content:
             raise ValueError("Revised semantic content must be a non-empty string")
@@ -809,19 +813,24 @@ class BaseStorage(ABC):
             **(metadata or {}),
             "revision_of": memory_id,
         }
+        successor_tags = list(existing.get("tags") or []) if tags is None else list(tags)
+        successor_source = existing.get("source")
+        if channel is not None:
+            successor_tags = with_channel_provenance(successor_tags, channel)
+            successor_source = channel_policy(channel).source
         successor_id = self.store_memory(
             sanitized_content,
             layer="semantic",
             repo_id=existing.get("repo_id"),
             category=belief_type,
             importance=revision_importance,
-            tags=list(existing.get("tags") or []) if tags is None else list(tags),
+            tags=successor_tags,
             metadata=successor_metadata,
             evidence_ids=resolved_evidence_ids,
             status="active",
             authority_attestation=authority_attestation,
             replaces_belief_id=memory_id if belief_type == "prohibition" else None,
-            source=existing.get("source"),
+            source=successor_source,
             quality_flags=sanitized_flags,
             auto_link=False,
         )

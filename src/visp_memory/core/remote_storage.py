@@ -411,8 +411,11 @@ class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, RemotePortabilityMixin,
         reason: str = None,
         importance: float = None,
         tags: List[str] = None,
+        channel: str = None,
     ) -> str:
         """Create a governed successor through the remote revision endpoint."""
+        # The server assigns its channel from authentication, never this argument.
+        del channel
         try:
             content, quality_flags = redact_for_storage(
                 content,
