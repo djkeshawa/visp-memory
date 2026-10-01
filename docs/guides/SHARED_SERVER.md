@@ -57,7 +57,8 @@ client before sending; memory sources become `external` and prior approvals are
 cleared. No `--yes` is required. Valid signed authority attestations remain intact
 because their signed content, scope and Evidence hashes do not change. To re-approve
 memories after owner review, use `PATCH /memories/{id}` to replace `provenance:*` tags
-with `provenance:authored` (keep other tags) and set `source` to `authored`.
+with `provenance:authored` (keep other tags) and set `source` to `authored`; only an
+administrator or the owner-token holder may change a tier.
 `visp-memory review accept` accepts pending proposals; it does not promote trust.
 Other import callers keep their existing behavior. Simple YAML keeps comments;
 complex YAML is backed up before rewriting, with a warning.

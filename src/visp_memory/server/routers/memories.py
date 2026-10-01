@@ -37,6 +37,7 @@ from visp_memory.server.authorization import (
     require_repo_writable,
     require_scoped_record_access,
 )
+from visp_memory.server.provenance_guard import pin_provenance
 from visp_memory.server.request_scope import request_repo_id
 from visp_memory.server.routers.platform import append_audit_event
 from visp_memory.server.schemas import (
@@ -962,6 +963,7 @@ async def update_memory(
                 RESERVED_METADATA_KEYS | {"environment", "task_type"},
             )
         update_data["metadata"] = metadata
+    pin_provenance(update_data, mem, user)
     if update_data.get("status") == "active" and mem.get("status") == "pending":
         update_data["approved_by"] = user.user_id
         update_data["approved_at"] = utc_now().isoformat()

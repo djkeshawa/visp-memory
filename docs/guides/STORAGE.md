@@ -122,8 +122,10 @@ External records are available to explicit recall but are never auto-injected.
 After owner review, re-approve a memory with `PATCH /memories/{id}`: replace its
 `provenance:*` tags with `provenance:authored` (preserve its other tags) and set
 `source` to `authored`. For a memory with no other tags, the JSON body is
-`{"tags": ["provenance:authored"], "source": "authored"}`. Use the configured
-server's normal authentication and repository scope. Evidence remains immutable.
+`{"tags": ["provenance:authored"], "source": "authored"}`. Only an administrator,
+or the local owner presenting the owner token (which `RemoteStorage` sends to its
+loopback server), may change a memory's tier this way; for anyone else the update
+keeps the stored tier and applies only the other tags. Evidence remains immutable.
 `visp-memory review accept` changes proposal status, not provenance.
 
 Agent setup can be included in the same command. `--agent-config` is a
