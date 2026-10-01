@@ -39,7 +39,9 @@ def repositories(client):
 @pytest.mark.parametrize("repo_id", ["same-team", "foreign"])
 @pytest.mark.parametrize("suffix", ["", "/context", "/dependencies"])
 async def test_repository_routes_enforce_token_allowlist(client, repositories, repo_id, suffix):
-    response = await client.get(f"/repos/{repo_id}{suffix}", headers=project_token())
+    response = await client.get(
+        f"/repos/{repo_id}{suffix}", headers=project_token(scopes=["project:read", "memory:read"])
+    )
     assert response.status_code == 404
 
 
@@ -60,7 +62,7 @@ async def test_context_filters_dependencies_and_record_tenancy(client, repositor
         metadata={"team_id": "beta"},
         auto_link=False,
     )
-    headers = project_token()
+    headers = project_token(scopes=["project:read", "memory:read"])
     response = await client.get("/repos/allowed/context", headers=headers)
     assert response.status_code == 200
     assert response.json()["monitored_repos"] == ["allowed"]
@@ -73,7 +75,7 @@ async def test_context_filters_dependencies_and_record_tenancy(client, repositor
 
 @pytest.mark.asyncio
 async def test_admin_account_without_admin_scope_still_obeys_team(client, repositories):
-    headers = project_token(repo_ids=[])
+    headers = project_token(scopes=["memory:read"], repo_ids=[])
     response = await client.get("/repos/foreign/context", headers=headers)
     assert response.status_code == 404
 
@@ -108,7 +110,7 @@ async def test_repository_context_forwards_time_and_scope_constraints(client, re
         metadata={"team_id": "alpha", "environment": "prod", "task_type": "deploy",
                   "valid_from": "2025-01-01T00:00:00Z"}, auto_link=False,
     )
-    headers = project_token()
+    headers = project_token(scopes=["project:read", "memory:read"])
     unscoped = await client.get("/repos/allowed/context", headers=headers)
     assert unscoped.json()["warnings"] == []
     scoped = await client.get(

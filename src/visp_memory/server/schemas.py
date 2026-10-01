@@ -56,7 +56,7 @@ class MemoryCreate(ScopedRequest):
     tags: List[str] = Field(
         default_factory=list,
         description=(
-            "Caller tags. Any provenance:* value is replaced by the server-owned HTTP tier."
+            "Caller tags. Any provenance:* value is replaced by the server-assigned write tier."
         ),
     )
     metadata: Dict[str, Any] = Field(default_factory=dict)
@@ -157,7 +157,7 @@ class EvidenceCreate(BaseModel):
     evidence_type: str = Field(default="observation", min_length=1)
     provenance: Optional[str] = Field(
         default=None,
-        deprecated="Accepted for compatibility but ignored; HTTP Evidence is external.",
+        deprecated="Accepted for compatibility but ignored; the server assigns provenance.",
     )
     metadata: Dict[str, Any] = Field(default_factory=dict)
 

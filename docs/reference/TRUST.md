@@ -26,9 +26,9 @@ make itself trusted by claiming an author or adding a provenance tag.
 |---|---|---|
 | `authored` | Local-mode CLI writes | Yes, subject to trust and relevance checks |
 | `derived` | Package Git/test capture, bootstrap, and workflow adapters | Yes, subject to checks |
-| `assisted` | MCP, conversation capture, compression, or reflection | Yes, subject to checks |
+| `assisted` | MCP, REST with validated local-owner proof, conversation capture, compression, or reflection | Yes, subject to checks |
 | `unknown` | Direct library writes, missing or malformed provenance | No; quarantined |
-| `external` | HTTP/REST (including every client-mode write), imports, and instruction-file ingestion | No; quarantined |
+| `external` | HTTP/REST without validated local-owner proof, imports, and instruction-file ingestion | No; quarantined |
 
 Trust decays with age, with bounded reinforcement from positive use. Repeated
 exposure alone does not keep a stale memory permanently eligible. Quarantine and
@@ -50,28 +50,42 @@ interchangeable with a task brief for automatic prompt injection. The legacy
 
 Dashboard writes use HTTP, including writes by signed-in administrators. They
 remain searchable in Recall but are excluded from task briefs and automatic
-context. The same holds for every write from a project connected to a
-[shared server](../guides/SHARED_SERVER.md) (client mode): CLI, MCP, hooks and
-dashboard writes are all stored as `external` and are not auto-injected.
-Setting a pending note to active records a review; it does not change the note's
-provenance or make it eligible for automatic context.
+context. Setting a pending note to active records a review; it does not change
+provenance or make the note eligible for automatic context.
+
+A [shared-server](../guides/SHARED_SERVER.md) client automatically sends
+`X-Visp-Owner-Token` to its own loopback server when the owner's token file is
+available. The server assigns the distinct `local_owner` channel only when its
+anonymous local-owner path validates the token with a constant-time comparison,
+local-owner mode is enabled, and the peer is loopback. This channel has the same
+`assisted` tags and source as stdio MCP; recording `metadata.write_channel` as
+`local_owner` keeps REST owner writes distinguishable from stdio MCP in audits.
+Accounts, PATs, JWTs, API keys, anonymous callers without valid proof, and
+non-loopback peers remain `external`, even if they supply the token or claim a
+trusted tier in the payload.
+
+This assignment covers memory creation, evidence creation, semantic revisions,
+and intent outcome routes (`complete`, `close`, `reopen`, and `outcomes`).
+Workflow-status reports also record the server-assigned channel; their `source`
+identifies the external workflow, not a memory trust tier. Intent creation and
+context updates do not assign a trust channel. Revisions assign the current
+request's tier instead of inheriting the original belief's tier. Historical
+records retain their provenance.
 
 To use a conclusion you have personally checked, inspect the original source,
-then record your own reviewed conclusion through the local CLI in the **same
-project and data store**, including a source reference. This works only against
-a local-mode store: in client mode the CLI write is stored as `external` too, so
-to record an authored conclusion use a local-mode store. That is a known
-limitation of client mode, with the decision on it pending:
+then record your reviewed conclusion in the same project and data store,
+including a source reference:
 
 ```bash
 visp-memory record "Verified: session cookies use HttpOnly; source: src/auth.py" --repo my-project
 ```
 
-A host CLI with a different data directory writes to a different store, and a
-running server owns its data directory, so a local-mode CLI cannot open the
-server's store while the server runs. The original HTTP note keeps its provenance. Do not blindly
-copy external instructions or relabel an external record as trusted. A CLI note
-still has to pass relevance, scope, freshness, and other eligibility checks.
+A local-mode CLI write is `authored`; a client-mode write with validated owner
+proof is `assisted`. Both remain subject to relevance, scope, freshness, and
+other eligibility checks. A host CLI with a different data directory writes to
+a different store, and a running server owns its data directory. The original
+HTTP note keeps its provenance. Do not blindly copy external instructions or
+relabel an external record as trusted.
 
 Inspect your store with:
 

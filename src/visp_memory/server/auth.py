@@ -47,9 +47,9 @@ class UserContext(BaseModel):
     is_local_owner: bool = False
 
     #: This request proved it can read the local owner's token file. It allows
-    #: only the local maintenance routes that explicitly check this capability;
-    #: it does not make the principal an admin or grant account, team, provider,
-    #: routing, or broader tenant access.
+    #: local maintenance routes that explicitly check this capability and assigns
+    #: assisted provenance to REST writes. It does not make the principal an admin
+    #: or grant account, team, provider, routing, or broader tenant access.
     owner_maintenance: bool = False
 
     def allows(self, scope: str) -> bool:
