@@ -65,6 +65,7 @@ from visp_memory.core.lexical_ranking import RANKING_STRATEGIES
 from visp_memory.core.owner_token import owner_token_paths
 from visp_memory.core.paths import run_dir
 from visp_memory.core.ranking import projected_importance
+from visp_memory.core.remote.diagnostics import inspect_remote
 from visp_memory.core.reporting import MemoryIntelligenceReporter
 from visp_memory.core.storage import LocalStorage
 from visp_memory.core.trust import LOCAL_USER_ACTOR, LOCAL_WORKFLOW_ACTOR, WriteChannel
@@ -633,7 +634,9 @@ def _storage_doctor_status(config: MemoryConfig) -> dict[str, Any]:
     if config.storage.mode == "client":
         status["connected"] = None
         status["status"] = "remote_mode_not_checked"
-        status["status_message"] = "Storage is client mode; diagnostics skip connectivity checks."
+        status["status_message"] = (
+            "Local data-directory checks are skipped; server inspections appear below."
+        )
         return status
 
     try:
@@ -658,11 +661,7 @@ def _repository_registration_status(config: MemoryConfig) -> dict[str, Any]:
     empty, which is not visible from any count. It is visible from here.
     """
     status: dict[str, Any] = {"project_scopes": [], "unregistered_scopes": []}
-    if config.storage.mode == "client":
-        status["status"] = "remote_mode_not_checked"
-        status["status_message"] = "Storage is client mode; registration is the server's."
-        return status
-    if config.storage.backend != "sqlite":
+    if config.storage.mode != "client" and config.storage.backend != "sqlite":
         status["status"] = "backend_not_checked"
         status["status_message"] = (
             f"Registration reporting covers the sqlite backend; this store is "
@@ -671,7 +670,11 @@ def _repository_registration_status(config: MemoryConfig) -> dict[str, Any]:
         return status
 
     try:
-        report = LocalStorage.inspect_repository_registration(config.storage.data_dir)
+        report = (
+            inspect_remote(config, "inspect_repository_registration")
+            if config.storage.mode == "client"
+            else LocalStorage.inspect_repository_registration(config.storage.data_dir)
+        )
     except Exception as exc:
         status["status"] = "unreadable"
         status["status_message"] = str(exc)
@@ -838,7 +841,7 @@ def doctor(
         "text", "--format", "-f", help="Output format: text or json"
     ),
 ):
-    """Run local diagnostics for storage and providers."""
+    """Run diagnostics for storage, repository scope, and providers."""
     payload = _doctor_payload(verify_providers=True)
     as_json = output_format.lower() == "json"
     _print_doctor_payload(payload, as_json=as_json)

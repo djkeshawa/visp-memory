@@ -201,3 +201,26 @@ async def test_pure_asgi_binding_reaches_async_and_sync_endpoints(monkeypatch):
     assert async_response.json() == WRITTEN_BY
     assert sync_response.json() == WRITTEN_BY
     assert unbound_response.json() == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("original_writer", [None, {"agent": "first-writer"}])
+async def test_metadata_replacement_preserves_only_the_existing_writer(client, original_writer):
+    from visp_memory.server.app import app
+
+    metadata = {} if original_writer is None else {"written_by": original_writer}
+    memory_id = app.state.storage.store_memory(
+        "Metadata replacement", repo_id="repo-a", metadata=metadata,
+    )
+    response = await client.patch(
+        f"/memories/{memory_id}",
+        json={"metadata": {"written_by": {"agent": "forged"}, "safe": "updated"}},
+        headers=WRITER_HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    result = app.state.storage.peek_memory(memory_id)["metadata"]
+    assert result["safe"] == "updated"
+    if original_writer is None:
+        assert "written_by" not in result
+    else:
+        assert result["written_by"] == original_writer

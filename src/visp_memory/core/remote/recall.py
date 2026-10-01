@@ -2,6 +2,7 @@ from typing import Any, Dict, List
 
 import requests
 
+from visp_memory.core.remote.compatibility import route_missing
 from visp_memory.core.remote.errors import RemoteStorageError
 from visp_memory.core.remote.scope import scoped_repo_id
 from visp_memory.core.storage import RecallEventType
@@ -127,6 +128,8 @@ class RemoteRecallMixin:
             response = self.session.post(
                 f"{self.server_url}/turn-keys/search", json=payload
             )
+            if route_missing(response):
+                return []
             response.raise_for_status()
             return self._response_json(response, "search turn keys", list)
         except requests.RequestException as error:
