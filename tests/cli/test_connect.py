@@ -1,6 +1,7 @@
 import json
 import os
 
+import pytest
 import yaml
 from typer.testing import CliRunner
 
@@ -8,6 +9,13 @@ from visp_memory.interfaces.cli import app
 from visp_memory.interfaces.connect import discover_shared_server
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def isolated_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    monkeypatch.delenv("VISP_MEMORY_CONFIG", raising=False)
 
 
 class _Response:

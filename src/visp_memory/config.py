@@ -17,6 +17,8 @@ from typing import Annotated, Any, List, Literal, Optional, Union, get_args, get
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from visp_memory.config_discovery import find_config_file
+
 ENV_OVERRIDES: dict[str, tuple[str, ...]] = {
     "VISP_MEMORY_REPO_ID": ("repo_id",),
     "VISP_MEMORY_STORAGE_DATA_DIR": ("storage", "data_dir"),
@@ -440,36 +442,13 @@ class MemoryConfig(BaseSettings):
     @classmethod
     def find_and_load(cls, start_dir: Path = None) -> "MemoryConfig":
         """Find config file by walking up directory tree."""
-        explicit_path = os.environ.get("VISP_MEMORY_CONFIG")
-        if explicit_path:
-            config_path = Path(explicit_path).expanduser()
-            if not config_path.is_absolute():
-                config_path = Path.cwd() / config_path
-            config_path = config_path.resolve()
-            if not config_path.is_file():
-                raise FileNotFoundError(
-                    f"VISP_MEMORY_CONFIG points to a missing file: {config_path}"
-                )
+        selected = find_config_file(start_dir)
+        if selected is not None:
+            config_path, data_base = selected
             config = cls.from_file(config_path)
             if not config.storage.data_dir.is_absolute():
-                config.storage.data_dir = (config_path.parent / config.storage.data_dir).resolve()
+                config.storage.data_dir = (data_base / config.storage.data_dir).resolve()
             return config
-
-        start_dir = start_dir or Path.cwd()
-
-        for parent in [start_dir] + list(start_dir.parents):
-            for name in ("visp-memory.yaml", "visp-memory.json", ".visp-memory/config.yaml"):
-                config_path = parent / name
-                if config_path.exists():
-                    config = cls.from_file(config_path)
-                    # Relative to the directory being walked, not to the config file:
-                    # the default ".visp-memory/data" is written for a project root,
-                    # so a file inside ".visp-memory/" must not nest it a second time
-                    # (that silently opened a fresh empty store). Only an explicit
-                    # VISP_MEMORY_CONFIG resolves against the file's own directory.
-                    if not config.storage.data_dir.is_absolute():
-                        config.storage.data_dir = (parent / config.storage.data_dir).resolve()
-                    return config
 
         config = cls()
         config.apply_env_overrides()

@@ -86,8 +86,8 @@ class RemoteAdminMixin:
         except requests.RequestException as error:
             raise self._write_error("list audit logs", error) from error
 
-    def peek_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
-        params = self._repo_params()
+    def peek_memory(self, memory_id: str, repo_id: str = None) -> Optional[Dict[str, Any]]:
+        params = self._repo_params(repo_id)
         try:
             response = self.session.get(
                 f"{self.server_url}/memories/{memory_id}/peek",

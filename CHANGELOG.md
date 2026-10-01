@@ -58,6 +58,14 @@ access tokens, or has Codex configured.
   accounts are unaffected.
 - **Shared servers refuse unscoped requests** with 400 `repo_id is required`. Give
   every client a `repo_id` (`visp-memory connect` writes one).
+- **`connect --migrate-local` imports memories and Evidence as `external`.**
+  The client replaces memory provenance tags and sources, clears prior approvals,
+  and downgrades Evidence provenance before sending. Source paths and original
+  tier counts are printed; `--yes` is no longer required. Content, scope and
+  Evidence hashes stay intact, preserving valid signed authority attestations.
+  After owner review, re-approve memories with `PATCH /memories/{id}` by replacing
+  provenance tags with `provenance:authored` and setting `source: authored`.
+  Other import callers retain their existing behavior; the local store is untouched.
 - **Codex:** `hooks install codex` now writes a `~/.codex/config.toml` block that no
   longer pins `cwd`, `VISP_MEMORY_REPO_ID`, `VISP_MEMORY_STORAGE_MODE` or
   `VISP_MEMORY_STORAGE_SERVER_URL`; each project's settings come from its
