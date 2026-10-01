@@ -42,6 +42,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 import anyio
+from starlette.routing import get_route_path
 
 from visp_memory.core.attribution import (
     WriterIdentity,
@@ -101,7 +102,7 @@ class StatelessMCPApp:
             require_explicit_scope=True,
         )
         with bind_mcp_request_context(base_context):
-            if scope.get("path", "").rstrip("/") != "/mcp":
+            if get_route_path(scope).rstrip("/") != "/mcp":
                 logger.info("MCP HTTP path not found request_id=%s", request_id)
                 await _send_json(
                     send,
