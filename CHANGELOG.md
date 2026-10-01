@@ -67,7 +67,8 @@ access tokens, or has Codex configured.
   tier counts are printed; `--yes` is no longer required. Content, scope and
   Evidence hashes stay intact, preserving valid signed authority attestations.
   After owner review, re-approve memories with `PATCH /memories/{id}` by replacing
-  provenance tags with `provenance:authored` and setting `source: authored`.
+  provenance tags with `provenance:authored` and setting `source: authored`
+  (administrator or owner token only).
   Other import callers retain their existing behavior; the local store is untouched.
 - **Codex:** `hooks install codex` now writes a `~/.codex/config.toml` block that no
   longer pins `cwd`, `VISP_MEMORY_REPO_ID`, `VISP_MEMORY_STORAGE_MODE` or
@@ -180,6 +181,11 @@ access tokens, or has Codex configured.
 
 ### Security
 
+- `PATCH /memories/{id}` can no longer change a memory's trust tier for ordinary
+  writers: `provenance:*` tags and `source` keep their stored values unless the caller
+  is an administrator or holds the local owner token. Before this, any principal with
+  write access could promote a record to `authored` and have it auto-injected. This
+  was also true in 0.7.10.
 - DNS-rebinding guard for open local-owner mode: `Host` and `Origin` checks, described
   under Upgrading.
 - Personal access token scopes come from one ordered table, and a test fails for any
