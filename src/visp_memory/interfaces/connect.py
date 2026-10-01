@@ -6,15 +6,16 @@ import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Iterable
+from typing import Callable, Iterable
 
 import requests
-import yaml
 
+from visp_memory.config_discovery import find_config_file
 from visp_memory.core.paths import run_dir
 from visp_memory.core.remote.errors import RemoteStorageError
 from visp_memory.core.remote_storage import RemoteStorage
 from visp_memory.core.storage import is_implicitly_registered
+from visp_memory.interfaces.connect_config import load_document, write_client_config
 from visp_memory.interfaces.connect_discovery import (
     discover_shared_server,
     matching_server_record,
@@ -28,6 +29,7 @@ from visp_memory.interfaces.connect_migration import (
 )
 from visp_memory.interfaces.connect_migration import (
     migrate_local_records,
+    prepare_local_records,
     refuse_served_source,
 )
 from visp_memory.interfaces.connect_models import ConnectError, ConnectResult
@@ -38,11 +40,11 @@ SUPPORTED_AGENT_CONFIGS = {"claude-code", "codex"}
 
 
 def find_project_root(start: Path | None = None) -> Path:
-    """Prefer the active YAML discovery root, then Git's top level, then cwd."""
+    """Prefer the active config root, then Git's top level, then cwd."""
     start = Path(start or Path.cwd()).expanduser().resolve()
-    for candidate in (start, *start.parents):
-        if (candidate / "visp-memory.yaml").is_file():
-            return candidate
+    selected = find_config_file(start)
+    if selected is not None:
+        return selected[1]
 
     try:
         completed = subprocess.run(
@@ -60,20 +62,6 @@ def find_project_root(start: Path | None = None) -> Path:
     return start
 
 
-def _load_yaml_document(path: Path) -> dict:
-    if not path.exists():
-        return {}
-    try:
-        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as error:
-        raise ConnectError(f"Cannot read {path}: {error}") from error
-    if loaded is None:
-        return {}
-    if not isinstance(loaded, dict):
-        raise ConnectError(f"{path} must contain a YAML object")
-    return loaded
-
-
 def _repo_id(document: dict, explicit: str | None, project_root: Path) -> str:
     candidate = explicit if explicit is not None else document.get("repo_id")
     if candidate is None:
@@ -88,11 +76,13 @@ def _storage_document(document: dict) -> dict:
     if storage is None:
         return {}
     if not isinstance(storage, dict):
-        raise ConnectError("visp-memory.yaml field 'storage' must be a YAML object")
+        raise ConnectError("Config field 'storage' must be an object")
     return storage
 
 
-def _remote_storage(storage: dict, server_url: str, repo_id: str) -> RemoteStorage:
+def _remote_storage(
+    storage: dict, server_url: str, repo_id: str, *, credentials_allowed: bool = True,
+) -> RemoteStorage:
     timeout = os.environ.get(
         "VISP_MEMORY_STORAGE_CONNECT_TIMEOUT_SECONDS",
         storage.get("connect_timeout_seconds", 15.0),
@@ -103,8 +93,10 @@ def _remote_storage(storage: dict, server_url: str, repo_id: str) -> RemoteStora
         raise ConnectError("storage.connect_timeout_seconds must be a number") from error
     return RemoteStorage(
         server_url=server_url,
-        api_key=os.environ.get("VISP_MEMORY_API_KEY") or storage.get("api_key"),
-        jwt_token=os.environ.get("VISP_MEMORY_JWT_TOKEN") or storage.get("jwt_token"),
+        api_key=(os.environ.get("VISP_MEMORY_API_KEY") or storage.get("api_key"))
+        if credentials_allowed else None,
+        jwt_token=(os.environ.get("VISP_MEMORY_JWT_TOKEN") or storage.get("jwt_token"))
+        if credentials_allowed else None,
         timeout=timeout,
         repo_id=repo_id,
     )
@@ -145,29 +137,6 @@ def _register_repository(remote: RemoteStorage, repo_id: str) -> bool:
         raise ConnectError(f"Could not register repository {repo_id!r}: {error}") from error
 
 
-def _write_client_config(
-    path: Path,
-    document: dict,
-    storage_document: dict,
-    repo_id: str,
-    server_url: str,
-) -> None:
-    merged = dict(document)
-    storage = dict(storage_document)
-    merged["repo_id"] = repo_id
-    storage["mode"] = "client"
-    storage["server_url"] = server_url
-    merged["storage"] = storage
-    content = yaml.safe_dump(merged, sort_keys=False)
-    try:
-        if path.exists() and path.read_text(encoding="utf-8") == content:
-            return
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-    except OSError as error:
-        raise ConnectError(f"Cannot write {path}: {error}") from error
-
-
 def install_agent_config(target: str, *, project_root: Path, repo_id: str) -> list[str]:
     """Run the same project integrations exposed by ``hooks install``."""
     memory = SimpleNamespace(config=SimpleNamespace(repo_id=repo_id))
@@ -203,13 +172,15 @@ def connect_project(
     server_url: str | None = None,
     repo_id: str | None = None,
     migrate_local: bool = False,
+    report: Callable[[str], None] = print,
     agent_configs: Iterable[str] = (),
     start_dir: Path | None = None,
 ) -> ConnectResult:
     """Validate a shared server, optionally migrate, then persist client mode."""
     project_root = find_project_root(start_dir)
-    config_path = project_root / "visp-memory.yaml"
-    document = _load_yaml_document(config_path)
+    selected = find_config_file(start_dir)
+    config_path = selected[0] if selected else project_root / "visp-memory.yaml"
+    document = load_document(config_path)
     storage = _storage_document(document)
     resolved_repo_id = _repo_id(document, repo_id, project_root)
     runtime_directory = run_dir()
@@ -233,9 +204,17 @@ def connect_project(
             f"Unknown agent config {unknown_agents[0]!r}; choose one of: {choices}"
         )
 
-    remote = _remote_storage(storage, resolved_url, resolved_repo_id)
+    configured_url = os.environ.get("VISP_MEMORY_STORAGE_SERVER_URL") or storage.get("server_url")
+    credentials_allowed = not (server_url is None and discovered is not None) or (
+        isinstance(configured_url, str)
+        and normalize_server_url(configured_url) == resolved_url
+    )
+    remote = _remote_storage(
+        storage, resolved_url, resolved_repo_id, credentials_allowed=credentials_allowed,
+    )
     local_data_dir = None
     migrated_records = 0
+    already_present_records = 0
     notes: list[str] = []
     try:
         capabilities = _check_server(remote, resolved_url, resolved_repo_id)
@@ -245,22 +224,28 @@ def connect_project(
         if migrate_local:
             local_data_dir = resolve_local_data_dir(storage, project_root)
             refuse_served_source(local_data_dir, resolved_url, discovered)
+            graph, local_data_dir = prepare_local_records(
+                storage, project_root, resolved_repo_id, report=report,
+            )
 
         repository_registered = _register_repository(remote, resolved_repo_id)
         if migrate_local:
-            migrated_records, local_data_dir = migrate_local_records(
-                storage,
-                project_root,
-                resolved_repo_id,
-                remote,
+            migrated_records, already_present_records = migrate_local_records(
+                graph, resolved_repo_id, remote,
             )
-        _write_client_config(
-            config_path,
-            document,
-            storage,
-            resolved_repo_id,
-            resolved_url,
-        )
+            report(
+                "Memories and evidence imported as external; to re-approve memories after owner "
+                "review, use PATCH /memories/{id} with source=authored and replace provenance:* "
+                "tags with provenance:authored (keep other tags)."
+            )
+            if graph.get("authority_attestations"):
+                report(
+                    "Signed authority attestations retained: the downgrade leaves signed content, "
+                    "scope and evidence hashes unchanged."
+                )
+        note = write_client_config(config_path, document, resolved_repo_id, resolved_url)
+        if note:
+            notes.append(note)
 
         for target in requested_agents:
             notes.extend(
@@ -279,6 +264,7 @@ def connect_project(
         server_url=resolved_url,
         repository_registered=repository_registered,
         migrated_records=migrated_records,
+        already_present_records=already_present_records,
         local_data_dir=local_data_dir,
         agent_configs=requested_agents,
         notes=tuple(notes),

@@ -48,10 +48,19 @@ visp-memory connect --agent-config codex
 ```
 
 `connect` selects the project repository ID and writes client storage settings
-to `visp-memory.yaml`. See [storage](STORAGE.md#connect-a-project-to-a-shared-server)
+to the active project config. See [storage](STORAGE.md#connect-a-project-to-a-shared-server)
 for how the ID, project root and server are resolved. Use `--migrate-local` to
 copy existing local records to the server before switching that project. The
-file is rewritten from its parsed content, so YAML comments are not preserved.
+command prints the local source and original trust-tier counts first. All migrated
+memories and Evidence receive the import channel's `external` provenance on the
+client before sending; memory sources become `external` and prior approvals are
+cleared. No `--yes` is required. Valid signed authority attestations remain intact
+because their signed content, scope and Evidence hashes do not change. To re-approve
+memories after owner review, use `PATCH /memories/{id}` to replace `provenance:*` tags
+with `provenance:authored` (keep other tags) and set `source` to `authored`.
+`visp-memory review accept` accepts pending proposals; it does not promote trust.
+Other import callers keep their existing behavior. Simple YAML keeps comments;
+complex YAML is backed up before rewriting, with a warning.
 `--agent-config` installs the matching project integration; review its generated
 files.
 
@@ -125,11 +134,15 @@ session" ranking boost.
 |---|---|
 | REST clients | `X-Visp-Agent`, `X-Visp-Session` and `X-Visp-Client` request headers |
 | Local CLI, hooks | `VISP_MEMORY_AGENT` and `VISP_MEMORY_SESSION` in the environment; the Claude Code hooks use agent `claude-code` and Claude's session ID |
-| stdio MCP | Agent from `VISP_MEMORY_AGENT`, else the MCP client's name; session from `VISP_MEMORY_SESSION`, else a per-process ID; client `name/version` |
+| stdio MCP | Agent from `VISP_MEMORY_AGENT`, else the MCP client's name; session from a valid `VISP_MEMORY_SESSION`, else a per-process ID; client `name/version` |
+| HTTP MCP | Request headers; agent defaults to the authenticated principal's username |
 
-Client mode (`RemoteStorage`) sends these as the headers above. When a request
-sends none of the headers, the server falls back to its own process's
-`VISP_MEMORY_AGENT` and `VISP_MEMORY_SESSION`. Invalid labels are dropped.
+Client mode (`RemoteStorage`) sends these as the headers above. REST requests use
+only the supplied valid labels: missing or invalid headers never fall back to the
+server's environment. Caller-supplied `written_by` in metadata or intent context
+is ignored; updates preserve the original writer. Privileged imports retain the
+historical attribution carried by the export. Invalid labels are dropped, and
+stdio MCP uses a stable per-process ID when its session environment value is invalid.
 
 ## Environment variables
 

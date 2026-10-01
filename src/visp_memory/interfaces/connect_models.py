@@ -26,6 +26,7 @@ class ConnectResult:
     server_url: str
     repository_registered: bool
     migrated_records: int = 0
+    already_present_records: int = 0
     local_data_dir: Path | None = None
     agent_configs: tuple[str, ...] = ()
     notes: tuple[str, ...] = field(default_factory=tuple)

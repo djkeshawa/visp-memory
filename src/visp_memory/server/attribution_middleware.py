@@ -17,5 +17,6 @@ class AttributionMiddleware:
             return
 
         identity = identity_from_headers(Headers(scope=scope))
+        # An unlabeled request must not inherit the shell that launched the server.
         with bind_writer(identity):
             await self.app(scope, receive, send)

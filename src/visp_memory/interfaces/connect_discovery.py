@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlsplit
 
 import requests
 
@@ -26,12 +28,34 @@ def probe_server(url: str) -> bool:
             f"{normalize_server_url(url)}/",
             headers={"Accept": "application/json"},
             timeout=1.0,
+            allow_redirects=False,
         )
     except requests.RequestException:
         return False
     # A shared server requires repo_id on this endpoint, so 400 still proves
     # that the expected HTTP process answered. The full health check is scoped.
     return response.status_code < 500
+
+
+def _discovered_url(url: str) -> str:
+    normalized = normalize_server_url(url)
+    parsed = urlsplit(normalized)
+    host = parsed.hostname
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not host
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("Discovery requires a loopback HTTP(S) origin")
+    # Accessing port also validates its syntax and range.
+    _ = parsed.port
+    if host.lower() != "localhost" and not ip_address(host).is_loopback:
+        raise ValueError("Discovery requires a loopback host")
+    return normalized
 
 
 def _read_server_record(path: Path) -> ServerRecord | None:
@@ -49,7 +73,7 @@ def _read_server_record(path: Path) -> ServerRecord | None:
         return ServerRecord(
             path=path,
             pid=pid if isinstance(pid, int) else None,
-            url=normalize_server_url(payload["url"]),
+            url=_discovered_url(payload["url"]),
             data_dir=data_dir,
             bind_host=(
                 payload["bind_host"] if isinstance(payload.get("bind_host"), str) else None

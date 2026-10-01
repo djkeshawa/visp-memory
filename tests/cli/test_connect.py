@@ -14,8 +14,9 @@ runner = CliRunner()
 
 @pytest.fixture(autouse=True)
 def isolated_home(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    monkeypatch.delenv("VISP_MEMORY_CONFIG", raising=False)
 
 
 class _Response:
