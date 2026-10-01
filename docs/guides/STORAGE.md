@@ -59,8 +59,9 @@ visp-memory connect
 ```
 
 Without `--server-url`, `connect` looks for a discovery record at
-`~/.visp-memory/run/server-<port>.json`. It takes the newest by modification
-time whose process ID is alive and whose URL answers `GET /` with a status below
+`~/.visp-memory/run/server-<host>-<port>.json` (IPv6 colons are percent
+encoded). Legacy `server-<port>.json` records are also read. It takes the newest
+by modification time whose process ID is alive and whose URL answers `GET /` with a status below
 500. Discovered URLs must be HTTP(S) loopback origins; redirects are not followed
 by the discovery probe. It otherwise falls back to `http://127.0.0.1:8000`.
 Only a server in
@@ -101,7 +102,9 @@ is retained. The command refuses if any local records belong to a different
 repository ID, names the source and target IDs, and leaves the config unchanged.
 Use `--repo <original-id>` for a store belonging to that repository; export/import
 repositories separately for a store containing multiple scopes. Never point
-migration at the shared server's own data directory.
+migration at the shared server's own data directory. The migration check probes
+the actual `server.lock`; a stale `.locks/server.json` left after a crash does not
+by itself mark a store as served, and a new server role holder rewrites it.
 
 Before importing, the command prints the source directory and record counts by
 original provenance tier. Migration replaces every memory's `provenance:*` tags

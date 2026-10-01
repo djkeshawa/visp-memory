@@ -10,6 +10,7 @@ from visp_memory import Memory, MemoryConfig
 from visp_memory.config import StorageConfig
 from visp_memory.core.remote.errors import RemoteStorageError
 from visp_memory.core.remote_storage import RemoteStorage
+from visp_memory.core.writer_lock import server_role_is_held
 from visp_memory.interfaces.connect_discovery import normalize_server_url
 from visp_memory.interfaces.connect_graph import record_ids, trust_counts
 from visp_memory.interfaces.connect_migration_trust import downgrade_for_migration
@@ -64,6 +65,8 @@ def _report_source(graph: dict, source: Path, report: Callable[[str], None]) -> 
 
 
 def _data_dir_claims_server(data_dir: Path, server_url: str) -> bool:
+    if not server_role_is_held(data_dir):
+        return False
     metadata_path = data_dir / ".locks" / "server.json"
     try:
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -86,6 +89,7 @@ def refuse_served_source(
         server_record is not None
         and server_record.data_dir is not None
         and source == server_record.data_dir
+        and server_role_is_held(source)
     )
     if same_recorded_dir or _data_dir_claims_server(source, server_url):
         raise ConnectError(

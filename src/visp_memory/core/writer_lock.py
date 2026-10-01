@@ -7,7 +7,7 @@ import os
 import threading
 import time
 import uuid
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -123,6 +123,50 @@ def _try_lock(fd):
     except OSError as error:
         if error.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
             return False
+        raise
+
+
+@contextmanager
+def exclusive_file_lock(path: Path):
+    """Serialize runtime record changes; keep the lock inode stable across cleanup."""
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        if not _try_lock(fd):
+            raise RuntimeError(f"Another server is updating runtime records at {path}")
+        yield
+    finally:
+        os.close(fd)
+
+
+def server_role_is_held(data_dir: Path) -> bool:
+    """Probe the OS lock without creating files or trusting stale server metadata."""
+    data_dir = Path(data_dir).resolve()
+    with _mutex:
+        if (data_dir, "server") in _registry:
+            return True
+        try:
+            fd = _open_locked_existing(data_dir)
+        except FileNotFoundError:
+            return False
+        except WriterLockConflict:
+            return True
+        except OSError:
+            return True  # An unavailable probe cannot certify safe migration.
+        os.close(fd)
+        return False
+
+
+def _open_locked_existing(data_dir):
+    fd = os.open(data_dir / ".locks/server.lock", os.O_RDWR)
+    try:
+        for pause in (0, *_GATE_PAUSES):
+            if pause:
+                time.sleep(pause)
+            if _try_lock(fd):
+                return fd
+        raise WriterLockConflict(data_dir)
+    except BaseException:
+        os.close(fd)
         raise
 
 

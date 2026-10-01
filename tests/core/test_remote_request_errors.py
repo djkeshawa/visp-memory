@@ -1,5 +1,7 @@
 """Remote failures carry the facts a caller needs, and a 403 is retried only for a new token."""
 
+import json
+
 import requests
 
 from tests.core.test_remote_storage import FakeResponse, _ProbeSession, remote_storage_with
@@ -14,6 +16,7 @@ def _owner_storage(monkeypatch, tmp_path, token):
     token_dir.mkdir()
     token_path = token_dir / "owner-8765.token"
     token_path.write_text(token, encoding="utf-8")
+    (token_dir / "server-8765.json").write_text(json.dumps({"url": "http://localhost:8765"}))
     monkeypatch.setattr("visp_memory.core.remote.owner_auth.run_dir", lambda: token_dir)
     session = _ProbeSession(FakeResponse(200, {}))
     monkeypatch.setattr(remote_module.requests, "Session", lambda: session)

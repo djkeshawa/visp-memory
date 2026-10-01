@@ -62,7 +62,8 @@ def test_client_admin_methods_use_discovered_owner_token(client_memory, shared_s
     storage = memory._storage
     token_path = owner_token_path_for_request(shared_server, shared_server)
     assert isinstance(token_path, Path) and token_path.is_file()
-    assert token_path.name == f"owner-{urlsplit(shared_server).port}.token"
+    origin = urlsplit(shared_server)
+    assert token_path.name == f"owner-{origin.hostname}-{origin.port}.token"
     memory_id = memory.record("Memory to inspect and purge")
     scope = ReindexScope(repo_id="proj-a")
     inspection = storage.inspect_embedding_index(

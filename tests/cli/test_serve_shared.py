@@ -92,7 +92,7 @@ def test_serve_passes_the_selected_owner_token_path_to_uvicorn(cli_env, monkeypa
     result = runner.invoke(app, ["serve", "--shared", "--port", "8765"])
 
     assert result.exit_code == 0
-    assert observed_token_files == [str(root / "run" / "owner-8765.token")]
+    assert observed_token_files == [str(root / "run" / "owner-127.0.0.1-8765.token")]
     assert os.environ.get("VISP_MEMORY_SERVER_OWNER_TOKEN_FILE") is None
 
 

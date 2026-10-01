@@ -895,6 +895,7 @@ def test_remote_storage_sends_owner_token_only_to_loopback_with_token_file(
     token_dir = tmp_path / "run"
     token_dir.mkdir()
     (token_dir / "owner-8765.token").write_text("same-user-token", encoding="utf-8")
+    (token_dir / "server-8765.json").write_text(json.dumps({"url": "http://127.0.0.1:8765"}))
     monkeypatch.setattr("visp_memory.core.remote.owner_auth.run_dir", lambda: token_dir)
     sessions = []
 
@@ -923,6 +924,7 @@ def test_remote_storage_rereads_owner_token_and_retries_one_forbidden_request(
     token_dir.mkdir()
     token_path = token_dir / "owner-8765.token"
     token_path.write_text("old-token", encoding="utf-8")
+    (token_dir / "server-8765.json").write_text(json.dumps({"url": "http://localhost:8765"}))
     monkeypatch.setattr("visp_memory.core.remote.owner_auth.run_dir", lambda: token_dir)
     session = _ProbeSession(FakeResponse(200, {}))
     monkeypatch.setattr(remote_module.requests, "Session", lambda: session)
