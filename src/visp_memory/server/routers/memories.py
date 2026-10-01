@@ -23,7 +23,6 @@ from visp_memory.core.storage import (
 )
 from visp_memory.core.trust import (
     RESERVED_METADATA_KEYS,
-    WriteChannel,
     channel_policy,
     filter_unsolicited,
     with_channel_provenance,
@@ -54,6 +53,7 @@ from visp_memory.server.schemas import (
     RelatedMemoryResponse,
     SearchQuery,
 )
+from visp_memory.server.write_channel import request_write_channel
 
 # No prefix to maintain backward compatibility for /recall and /relationships
 router = APIRouter(tags=["memories"])
@@ -68,14 +68,6 @@ def _preserve_metadata_keys(
             metadata[key] = existing[key]
         else:
             metadata.pop(key, None)
-
-
-def _preserve_written_by(metadata: Dict[str, Any], existing: Dict[str, Any]) -> None:
-    """Keep the original writer when a REST request replaces record metadata."""
-    if WRITTEN_BY_KEY in existing:
-        metadata[WRITTEN_BY_KEY] = existing[WRITTEN_BY_KEY]
-    else:
-        metadata.pop(WRITTEN_BY_KEY, None)
 
 
 PROVENANCE_FIELDS = (
@@ -313,7 +305,8 @@ async def create_memory(
         if key not in RESERVED_METADATA_KEYS
     }
     metadata["author_id"] = user.user_id
-    metadata["write_channel"] = WriteChannel.HTTP.value
+    write_channel = request_write_channel(user)
+    metadata["write_channel"] = write_channel.value
     if user.team_id:
         metadata["team_id"] = user.team_id
     for field in PROVENANCE_FIELDS:
@@ -323,7 +316,7 @@ async def create_memory(
         if value not in (None, [], ""):
             metadata[field] = value
 
-    http_policy = channel_policy(WriteChannel.HTTP)
+    write_policy = channel_policy(write_channel)
     try:
         mem_id = storage.store_memory(
             content=content,
@@ -331,13 +324,13 @@ async def create_memory(
             category=memory.category,
             importance=memory.importance,
             repo_id=memory_repo_id,
-            tags=with_channel_provenance(memory.tags, WriteChannel.HTTP),
+            tags=with_channel_provenance(memory.tags, write_channel),
             metadata=metadata,
             source_ids=memory.source_ids,
             evidence_ids=memory.evidence_ids,
             status=memory.status,
             authority_attestation=memory.authority_attestation,
-            source=http_policy.source,
+            source=write_policy.source,
             quality_flags=quality_flags or [],
         )
     except ProhibitionAuthorityError as exc:
@@ -375,7 +368,8 @@ async def create_evidence(
         for key, value in evidence.metadata.items()
         if key not in RESERVED_METADATA_KEYS
     }
-    metadata.update({"author_id": user.user_id, "write_channel": "http"})
+    write_channel = request_write_channel(user)
+    metadata.update({"author_id": user.user_id, "write_channel": write_channel.value})
     if user.team_id:
         metadata["team_id"] = user.team_id
     try:
@@ -383,7 +377,7 @@ async def create_evidence(
             evidence.content,
             repo_id=evidence.repo_id,
             evidence_type=evidence.evidence_type,
-            provenance="external",
+            provenance=channel_policy(write_channel).provenance.value,
             metadata=metadata,
         )
     except EvidenceUnsupportedError as exc:
@@ -870,6 +864,8 @@ async def revise_memory(
             RESERVED_METADATA_KEYS | {"environment", "task_type"},
         )
 
+    write_channel = request_write_channel(user)
+    metadata.update({"author_id": user.user_id, "write_channel": write_channel.value})
     try:
         content, quality_flags = redact_for_storage(
             revision.content,
@@ -886,6 +882,7 @@ async def revise_memory(
             reason=revision.reason,
             importance=revision.importance,
             tags=revision.tags,
+            channel=write_channel,
         )
     except SecretBearingContentError as exc:
         raise HTTPException(
@@ -953,7 +950,7 @@ async def update_memory(
     if "metadata" in update_data:
         metadata = dict(update_data["metadata"] or {})
         existing_metadata = mem.get("metadata") or {}
-        _preserve_written_by(metadata, existing_metadata)
+        _preserve_metadata_keys(metadata, existing_metadata, {WRITTEN_BY_KEY})
         # Non-admins may never set ownership/scope fields. Pin them to the record's
         # existing values, and strip them entirely when absent so a caller cannot
         # introduce a team_id/author_id (which drives record visibility) on a record

@@ -1,8 +1,10 @@
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 import requests
 
 from visp_memory.core.indexing import EmbeddingIndexReport, ReindexResult, ReindexScope
+from visp_memory.core.remote.compatibility import route_missing
 from visp_memory.core.remote.errors import RemoteStorageError
 from visp_memory.core.remote.scope import scoped_repo_id
 from visp_memory.core.storage import StorageCapabilities
@@ -93,6 +95,8 @@ class RemoteAdminMixin:
                 f"{self.server_url}/memories/{memory_id}/peek",
                 params=params,
             )
+            if route_missing(response):
+                return self.get_memory(memory_id)
             if response.status_code == 404:
                 return None
             response.raise_for_status()
@@ -119,7 +123,7 @@ class RemoteAdminMixin:
             raise ValueError("repo_id is required for repository registration inspection")
         try:
             response = self.session.get(
-                f"{self.server_url}/repos/{resolved_repo_id}/registration"
+                f"{self.server_url}/repos/{quote(resolved_repo_id, safe='')}/registration"
             )
             response.raise_for_status()
             return self._response_json(
@@ -142,7 +146,8 @@ class RemoteAdminMixin:
                 f"{self.server_url}/diagnostics/capabilities"
             )
             if response.status_code == 404:
-                capabilities = LEGACY_REMOTE_CAPABILITIES
+                # Retry on the next call so a server upgrade becomes visible.
+                return LEGACY_REMOTE_CAPABILITIES
             else:
                 response.raise_for_status()
                 payload = self._response_json(response, "get capabilities", dict)

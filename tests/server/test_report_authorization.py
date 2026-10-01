@@ -80,7 +80,10 @@ async def test_memory_intelligence_report_filters_team_scoped_rows_in_json_and_t
 
 
 @pytest.mark.asyncio
-async def test_admin_account_pat_without_admin_scope_stays_record_scoped(client):
+@pytest.mark.parametrize(
+    "path", ["/reports/memory-intelligence", "/reports/memory-intelligence/text"]
+)
+async def test_admin_account_pat_without_admin_scope_stays_record_scoped(client, path):
     repo_id = "pat-report-repo"
     storage = app.state.storage
     alpha_id = storage.store_memory(
@@ -116,13 +119,21 @@ async def test_admin_account_pat_without_admin_scope_stays_record_scoped(client)
         repo_ids=[repo_id],
     )
 
-    response = await client.get(
-        "/reports/memory-intelligence",
-        params={"repo_id": repo_id},
-        headers={"Authorization": f"Bearer {token}"},
+    denied = await client.get(
+        path, params={"repo_id": repo_id}, headers={"Authorization": f"Bearer {token}"}
     )
-
+    assert denied.status_code == 403
+    _, token = app.state.auth_store.create_token(
+        user_id=account["id"], name="memory-reader", scopes=["memory:read"], repo_ids=[repo_id]
+    )
+    response = await client.get(
+        path, params={"repo_id": repo_id}, headers={"Authorization": f"Bearer {token}"}
+    )
     assert response.status_code == 200
+    if path.endswith("/text"):
+        assert "PAT-hidden report memory" not in response.text
+        assert "PAT-visible report memory" in response.text
+        return
     report = response.json()
     serialized = json.dumps(report)
     assert report["summary"]["total_memories"] == 1

@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from visp_memory.core.remote.diagnostics import inspect_remote
 from visp_memory.core.verbs import INTENT_VERBS, render_inline_commands
 
 # Statuses the report can carry. Anything other than ``never_used`` and
@@ -101,12 +102,7 @@ def check_intent_usage(config) -> IntentUsageReport:
         An :class:`IntentUsageReport`. Any condition that stops the check from
         running is reported as its own status, never as a clean result.
     """
-    if config.storage.mode == "client":
-        return IntentUsageReport(
-            status=STATUS_NOT_CHECKED,
-            detail="Storage is client mode; intent adoption is the server's to report.",
-        )
-    if config.storage.backend not in ("sqlite", "neo4j"):
+    if config.storage.mode != "client" and config.storage.backend not in ("sqlite", "neo4j"):
         return IntentUsageReport(
             status=STATUS_NOT_CHECKED,
             detail=(
@@ -118,11 +114,12 @@ def check_intent_usage(config) -> IntentUsageReport:
     from visp_memory.core.storage import LocalStorage
 
     try:
-        counts = (
-            _inspect_neo4j_intent_usage(config.storage)
-            if config.storage.backend == "neo4j"
-            else LocalStorage.inspect_intent_usage(Path(config.storage.data_dir))
-        )
+        if config.storage.mode == "client":
+            counts = inspect_remote(config, "inspect_intent_usage")
+        elif config.storage.backend == "neo4j":
+            counts = _inspect_neo4j_intent_usage(config.storage)
+        else:
+            counts = LocalStorage.inspect_intent_usage(Path(config.storage.data_dir))
     except Exception as exc:
         return IntentUsageReport(status=STATUS_UNREADABLE, detail=str(exc))
 

@@ -23,6 +23,9 @@ access tokens, or has Codex configured.
   `src/visp_memory/server/pat_scopes.py`):
   - `GET /repos/{id}/export` needs `project:read`, `memory:read` and `intent:read`.
   - `POST /turn-keys/search` needs `memory:read`.
+  - `GET /remember`, `GET /reports/memory-intelligence`,
+    `GET /reports/memory-intelligence/text`, and `GET /repos/{id}/context` now
+    need `memory:read`; `project:read` alone returns 403.
   - `POST /repos/{id}/import` is refused to every token, including `*` and admin
     tokens. Import with the local owner token or a dashboard administrator session.
   - `/maintenance/*` needs an admin token.
@@ -72,10 +75,19 @@ access tokens, or has Codex configured.
   `visp-memory.yaml`. An old pinned block is replaced, and the previous file is kept
   as `config.toml.backup`. `hooks install codex --server-url` is now ignored; use
   `visp-memory connect`.
-- **Client-mode writes are stored with the `external` trust tier** and are never
-  auto-injected into prompts; the same write in local mode through stdio MCP is
-  `assisted`. This is a known limitation, not yet decided. Keep local mode where
-  auto-injection of new records matters.
+- **Client-mode writes with validated local-owner proof are now `assisted`**,
+  matching local stdio MCP and eligible for automatic context subject to normal
+  checks. The server records the distinct `local_owner` channel for memory and
+  evidence creation, semantic revisions, and intent outcomes; workflow-status
+  reports also record that channel. `RemoteStorage` supplies the owner token to
+  its own loopback server automatically. Accounts, PATs, JWTs, API keys, missing
+  or invalid proof, and non-loopback peers remain `external`. Existing records
+  retain their provenance.
+- **REST revisions take the caller's tier.** A semantic revision made over REST
+  used to inherit the original belief's tags and source, so an `external` caller
+  could produce a successor at the original's higher tier. The successor now gets
+  the revising request's channel (`assisted` with owner proof, otherwise
+  `external`). Local revisions are unchanged.
 - **Relative `data_dir` values from a found config file are resolved**, so symlinks
   and `..` in the path are resolved to the real directory.
 - **Review statuses over REST.** `POST /memories` and `PATCH /memories/{id}` accept

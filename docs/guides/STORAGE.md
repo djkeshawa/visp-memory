@@ -80,7 +80,20 @@ top-level directory; failing that, the current directory.
 only when no config exists; JSON and `.visp-memory/config.yaml` are updated in
 place. Simple block YAML retains comments and unrelated text. Complex YAML is
 rewritten after saving a `.backup` copy (numbered if a backup already exists),
-and the command reports that comments were not kept.
+and the command reports that comments were not kept. It then registers the
+repository on the server.
+Repository IDs may contain `/` (for example,
+`org/project`); REST clients URL-encode IDs, and repository suffix routes such as
+`/export`, `/import`, and `/registration` accept decoded slashes.
+
+In client mode, `visp-memory doctor` reads repository registration and intent usage
+for the configured `repo_id` from the server. It requires `project:read` and
+`intent:read` with a personal access token. Missing scope, unavailable diagnostic
+routes on older servers, and server errors are reported as unreadable checks.
+The checks do not create a local store. On older servers, clients fall back to a
+normal memory read when `/peek` is unavailable (which may increment access counts),
+omit turn-key hits when that route is unavailable, and retry legacy capability
+probes so upgrades become visible.
 
 To copy records from the project's previous local store, add
 `--migrate-local`. The import goes through the server and the old data directory
@@ -264,7 +277,10 @@ preserve account and operational data that graph exports do not replace.
 Exports contain Evidence, memories, intents, and relationships, with a 10,000-record
 ceiling per record kind; overflow is refused rather than truncated. Which backends can
 export and import, and what import validates, are in the
-[export contract](../reference/CONTRACTS.md#export-and-import).
+[export contract](../reference/CONTRACTS.md#export-and-import). REST imports default
+to a 64 MiB body limit; configure `server.max_import_body_bytes` or
+`VISP_MEMORY_SERVER_MAX_IMPORT_BODY_BYTES` to change it. Oversized bodies return
+HTTP 413 before parsing.
 
 ## Choose a backend
 

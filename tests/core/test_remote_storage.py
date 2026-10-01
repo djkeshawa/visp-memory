@@ -1339,7 +1339,7 @@ def test_remote_capabilities_are_loaded_once_and_keep_server_flags():
     ]
 
 
-def test_remote_capabilities_cache_the_legacy_404_fallback():
+def test_remote_capabilities_retry_the_legacy_404_fallback():
     storage = remote_storage_with(FakeResponse(404, {"detail": "Not found"}))
 
     first = storage.get_capabilities()
@@ -1350,5 +1350,6 @@ def test_remote_capabilities_cache_the_legacy_404_fallback():
     assert first.audit_log is False
     assert first.reindex is False
     assert storage.session.get_calls == [
-        ("http://memory.example/diagnostics/capabilities", None)
+        ("http://memory.example/diagnostics/capabilities", None),
+        ("http://memory.example/diagnostics/capabilities", None),
     ]
