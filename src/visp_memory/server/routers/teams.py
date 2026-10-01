@@ -2,6 +2,7 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from visp_memory.core.attribution import without_written_by
 from visp_memory.core.clock import utc_now
 from visp_memory.core.team import Team, TeamManager, User
 from visp_memory.server.auth import UserContext, get_current_user
@@ -50,7 +51,7 @@ async def create_user(
         username=user.username,
         email=user.email,
         display_name=user.display_name,
-        metadata=user.metadata or {},
+        metadata=without_written_by(user.metadata),
     )
 
     try:
@@ -105,7 +106,7 @@ async def create_team(
         id=team.id or team.name.lower().replace(" ", "-"),
         name=team.name,
         description=team.description,
-        metadata=team.metadata or {},
+        metadata=without_written_by(team.metadata),
     )
 
     try:
