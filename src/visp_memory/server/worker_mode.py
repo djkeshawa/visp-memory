@@ -6,6 +6,8 @@ import os
 import signal
 import threading
 
+from visp_memory.core.process_liveness import pid_is_alive
+
 SERVER_IMPORT_OWNER_PID_ENV = "VISP_MEMORY_SERVER_IMPORT_OWNER_PID"
 
 logger = logging.getLogger(__name__)
@@ -54,16 +56,25 @@ def idle_refused_worker() -> None:
         "without serving to prevent repeated respawns. Restart with a single worker."
     )
     # Uvicorn's handler merely sets should_exit, which cannot stop an import that
-    # is waiting. Replace it in this worker only, so supervisor shutdown still ends
-    # the wait (SIGBREAK is translated to SIGTERM by Uvicorn on Windows).
-    previous = signal.signal(signal.SIGTERM, _exit_worker)
+    # is waiting, so this worker installs its own. On Windows the supervisor sends
+    # CTRL_BREAK; Uvicorn translates SIGBREAK to SIGTERM only once its server runs,
+    # which a worker parked during import never reaches, so handle SIGBREAK too.
+    stop_signals = [signal.SIGTERM]
+    if hasattr(signal, "SIGBREAK"):
+        stop_signals.append(signal.SIGBREAK)
+    previous = {signum: signal.signal(signum, _exit_worker) for signum in stop_signals}
+    supervisor = os.getppid()
     try:
         pause = threading.Event()
         while True:
             # A finite wait lets Windows dispatch console signals as well.
             pause.wait(0.5)
+            # Never outlive the supervisor: if it is gone, nothing will stop us.
+            if not pid_is_alive(supervisor):
+                raise SystemExit(0)
     finally:
-        signal.signal(signal.SIGTERM, previous)
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
 
 
 def _exit_worker(signum, frame):

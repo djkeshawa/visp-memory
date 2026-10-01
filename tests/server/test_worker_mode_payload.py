@@ -54,3 +54,39 @@ def test_unrecognized_payload_keeps_ordinary_refusal_and_release(spawn_payload, 
 
     assert not worker_mode.is_uvicorn_multiworker()
     assert not worker_mode.retain_serving_import_role()
+
+
+def test_idle_worker_exits_when_its_supervisor_is_gone(monkeypatch):
+    """A parked worker must never be orphaned when its supervisor dies."""
+    import pytest
+
+    from visp_memory.server import worker_mode
+
+    monkeypatch.setattr(worker_mode, "pid_is_alive", lambda pid: False)
+    with pytest.raises(SystemExit) as stopped:
+        worker_mode.idle_refused_worker()
+    assert stopped.value.code == 0
+
+
+def test_idle_worker_stops_on_the_windows_break_signal(monkeypatch):
+    """SIGBREAK, which uvicorn's Windows supervisor sends, must end the idle wait.
+
+    Simulated with a POSIX signal standing in for SIGBREAK, so the handler wiring
+    is checked on every platform.
+    """
+    import os
+    import signal
+    import threading
+
+    import pytest
+
+    from visp_memory.server import worker_mode
+
+    if not hasattr(signal, "SIGUSR1"):
+        pytest.skip("needs a POSIX stand-in signal")
+    monkeypatch.setattr(signal, "SIGBREAK", signal.SIGUSR1, raising=False)
+    monkeypatch.setattr(worker_mode, "pid_is_alive", lambda pid: True)
+    threading.Timer(0.3, os.kill, (os.getpid(), signal.SIGUSR1)).start()
+    with pytest.raises(SystemExit) as stopped:
+        worker_mode.idle_refused_worker()
+    assert stopped.value.code == 0
