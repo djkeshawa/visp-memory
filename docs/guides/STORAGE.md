@@ -61,20 +61,28 @@ visp-memory connect
 Without `--server-url`, `connect` looks for a discovery record at
 `~/.visp-memory/run/server-<port>.json`. It takes the newest by modification
 time whose process ID is alive and whose URL answers `GET /` with a status below
-500, and otherwise falls back to `http://127.0.0.1:8000`. Only a server in
+500. Discovered URLs must be HTTP(S) loopback origins; redirects are not followed
+by the discovery probe. It otherwise falls back to `http://127.0.0.1:8000`.
+Only a server in
 [open local-owner mode](AUTHENTICATION.md#open-local-owner-mode) writes a record,
 so for a server with credentials pass `--server-url` (or accept the fallback).
+API key and JWT credentials are withheld from an automatically discovered URL
+unless it matches `storage.server_url` (including its environment override).
 
-The repository ID is, in order: `--repo`, then `repo_id` in the project's
-existing `visp-memory.yaml`, then the project root's directory name. The project
-root is the nearest ancestor of the current directory that contains
-`visp-memory.yaml`; failing that, the Git top-level directory; failing that, the
-current directory.
+The repository ID is, in order: `--repo`, then `repo_id` in the active
+project config, then the project root's directory name. Config selection uses
+the same discovery order as normal startup (including `VISP_MEMORY_CONFIG`).
+The project root is the discovered config's project base; failing that, the Git
+top-level directory; failing that, the current directory.
 
-`connect` merges `repo_id`, `storage.mode: client`, and `storage.server_url` into
-that `visp-memory.yaml` without replacing unrelated settings, then registers the
-repository on the server. The file is rewritten from its parsed content, so
-comments in it are not preserved. Repository IDs may contain `/` (for example,
+`connect` updates that active config with `repo_id`, `storage.mode: client`, and
+`storage.server_url`, preserving unrelated settings. It creates `visp-memory.yaml`
+only when no config exists; JSON and `.visp-memory/config.yaml` are updated in
+place. Simple block YAML retains comments and unrelated text. Complex YAML is
+rewritten after saving a `.backup` copy (numbered if a backup already exists),
+and the command reports that comments were not kept. It then registers the
+repository on the server.
+Repository IDs may contain `/` (for example,
 `org/project`); REST clients URL-encode IDs, and repository suffix routes such as
 `/export`, `/import`, and `/registration` accept decoded slashes.
 
@@ -89,8 +97,34 @@ probes so upgrades become visible.
 
 To copy records from the project's previous local store, add
 `--migrate-local`. The import goes through the server and the old data directory
-is left untouched. Never point that option at the shared server's own data
-directory.
+is retained. The command refuses if any local records belong to a different
+repository ID, names the source and target IDs, and leaves the config unchanged.
+Use `--repo <original-id>` for a store belonging to that repository; export/import
+repositories separately for a store containing multiple scopes. Never point
+migration at the shared server's own data directory.
+
+Before importing, the command prints the source directory and record counts by
+original provenance tier. Migration replaces every memory's `provenance:*` tags
+and source with the import channel's `external` tier, clears `approved_by` and
+`approved_at`, and sets Evidence provenance to `external`. Memory and Evidence
+metadata record `write_channel: import`; existing attribution is retained. This
+happens on the client before sending, only for `--migrate-local`; other file and
+server imports keep their existing behavior. No `--yes` is required.
+
+Content, scope, Evidence hashes and lineage remain unchanged, so signed authority
+attestations still verify and are retained. The server continues validating hashes,
+signatures and scope. Evidence uses its own provenance field; intents and graph
+links have no memory provenance tier and are counted as unknown. The result
+distinguishes new records from IDs already present in the server's pre-import
+export, including on reruns.
+
+External records are available to explicit recall but are never auto-injected.
+After owner review, re-approve a memory with `PATCH /memories/{id}`: replace its
+`provenance:*` tags with `provenance:authored` (preserve its other tags) and set
+`source` to `authored`. For a memory with no other tags, the JSON body is
+`{"tags": ["provenance:authored"], "source": "authored"}`. Use the configured
+server's normal authentication and repository scope. Evidence remains immutable.
+`visp-memory review accept` changes proposal status, not provenance.
 
 Agent setup can be included in the same command. `--agent-config` is a
 repeatable option:

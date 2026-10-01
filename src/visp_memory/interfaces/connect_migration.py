@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Callable
 
 from visp_memory import Memory, MemoryConfig
 from visp_memory.config import StorageConfig
 from visp_memory.core.remote.errors import RemoteStorageError
 from visp_memory.core.remote_storage import RemoteStorage
 from visp_memory.interfaces.connect_discovery import normalize_server_url
+from visp_memory.interfaces.connect_graph import record_ids, trust_counts
+from visp_memory.interfaces.connect_migration_trust import downgrade_for_migration
 from visp_memory.interfaces.connect_models import ConnectError, ServerRecord
+from visp_memory.interfaces.connect_source import source_repository_ids
 
 
 def local_data_dir(storage: dict, project_root: Path) -> Path:
@@ -42,20 +46,21 @@ def _local_memory_config(storage_document: dict, project_root: Path, repo_id: st
     return config
 
 
-def _graph_record_count(graph: dict) -> int:
-    memories = graph.get("memories") or {}
-    count = sum(len(rows) for rows in memories.values() if isinstance(rows, list))
-    for key in (
-        "evidence",
-        "intents",
-        "relationships",
-        "authority_attestations",
-        "belief_authority",
-    ):
-        rows = graph.get(key)
-        if isinstance(rows, list):
-            count += len(rows)
-    return count
+def _refuse_other_repositories(memory: Memory, target: str) -> None:
+    repo_ids = source_repository_ids(memory._storage)
+    for repo_id in sorted(repo_ids - {target}):
+        raise ConnectError(
+            f"Local store has records for repository {repo_id!r}, "
+            f"but the target is {target!r}. "
+            f"Refusing migration and config changes. Pass `--repo {repo_id}` to use that ID; "
+            "for a store with multiple repositories, export/import each repository separately."
+        )
+
+
+def _report_source(graph: dict, source: Path, report: Callable[[str], None]) -> None:
+    counts = trust_counts(graph)
+    report(f"Local migration source: {source}")
+    report("Trust tiers: " + ", ".join(f"{tier}: {count}" for tier, count in counts.items()))
 
 
 def _data_dir_claims_server(data_dir: Path, server_url: str) -> bool:
@@ -90,12 +95,13 @@ def refuse_served_source(
         )
 
 
-def migrate_local_records(
+def prepare_local_records(
     storage_document: dict,
     project_root: Path,
     repo_id: str,
-    remote: RemoteStorage,
-) -> tuple[int, Path]:
+    *,
+    report: Callable[[str], None],
+) -> tuple[dict, Path]:
     config = _local_memory_config(storage_document, project_root, repo_id)
     source = config.storage.data_dir
     try:
@@ -103,26 +109,37 @@ def migrate_local_records(
     except OSError as error:
         raise ConnectError(f"Cannot inspect local data directory {source}: {error}") from error
     if not populated:
-        return 0, source
+        graph = {}
+        _report_source(graph, source, report)
+        return graph, source
 
     memory = None
     try:
         memory = Memory(config=config)
+        _refuse_other_repositories(memory, repo_id)
         graph = memory.export()
+    except ConnectError:
+        raise
     except Exception as error:
         raise ConnectError(f"Could not export local data from {source}: {error}") from error
     finally:
         if memory is not None:
             memory.close()
 
-    record_count = _graph_record_count(graph)
-    if not record_count:
-        return 0, source
+    _report_source(graph, source, report)
+    return graph, source
+
+
+def migrate_local_records(graph: dict, repo_id: str, remote: RemoteStorage) -> tuple[int, int]:
+    identities = record_ids(graph)
+    if not identities:
+        return 0, 0
     try:
+        existing = record_ids(remote.export_graph(repo_id=repo_id))
         # ``Memory.export(path)`` stringifies path-like config values when it
         # writes JSON. Do the equivalent in memory before requests serializes it.
-        portable_graph = json.loads(json.dumps(graph, default=str))
+        portable_graph = json.loads(json.dumps(downgrade_for_migration(graph), default=str))
         remote.import_graph(portable_graph, default_repo_id=repo_id)
     except (RemoteStorageError, ValueError) as error:
         raise ConnectError(f"Could not import local data through the server: {error}") from error
-    return record_count, source
+    return len(identities - existing), len(identities & existing)

@@ -48,10 +48,19 @@ visp-memory connect --agent-config codex
 ```
 
 `connect` selects the project repository ID and writes client storage settings
-to `visp-memory.yaml`. See [storage](STORAGE.md#connect-a-project-to-a-shared-server)
+to the active project config. See [storage](STORAGE.md#connect-a-project-to-a-shared-server)
 for how the ID, project root and server are resolved. Use `--migrate-local` to
 copy existing local records to the server before switching that project. The
-file is rewritten from its parsed content, so YAML comments are not preserved.
+command prints the local source and original trust-tier counts first. All migrated
+memories and Evidence receive the import channel's `external` provenance on the
+client before sending; memory sources become `external` and prior approvals are
+cleared. No `--yes` is required. Valid signed authority attestations remain intact
+because their signed content, scope and Evidence hashes do not change. To re-approve
+memories after owner review, use `PATCH /memories/{id}` to replace `provenance:*` tags
+with `provenance:authored` (keep other tags) and set `source` to `authored`.
+`visp-memory review accept` accepts pending proposals; it does not promote trust.
+Other import callers keep their existing behavior. Simple YAML keeps comments;
+complex YAML is backed up before rewriting, with a warning.
 `--agent-config` installs the matching project integration; review its generated
 files.
 

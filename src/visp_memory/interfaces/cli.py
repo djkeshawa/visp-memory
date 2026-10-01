@@ -1021,6 +1021,7 @@ def connect(
             server_url=server_url,
             repo_id=repo,
             migrate_local=migrate_local,
+            report=lambda message: console.print(message, markup=False, soft_wrap=True),
             agent_configs=agent_config or (),
         )
     except (ConnectError, OSError, UnicodeError) as error:
@@ -1032,7 +1033,10 @@ def connect(
     if result.repository_registered:
         console.print("Registered repository on the shared server.")
     if migrate_local and result.local_data_dir is not None:
-        console.print(f"Migrated {result.migrated_records} local records.")
+        console.print(
+            f"Imported {result.migrated_records} local records; "
+            f"{result.already_present_records} already present."
+        )
         console.print(
             f"Local data left untouched at: {result.local_data_dir}",
             soft_wrap=True,
@@ -1839,7 +1843,14 @@ app.add_typer(review_app, name="review")
 
 def _pending_proposal(memory, proposal_id: str, scope: str) -> dict:
     """Fetch a proposal the resolved scope is allowed to decide on, or refuse."""
-    row = memory._storage.peek_memory(proposal_id)
+    from visp_memory.core.remote_storage import RemoteStorage
+
+    storage = memory._storage
+    row = (
+        storage.peek_memory(proposal_id, repo_id=scope)
+        if isinstance(storage, RemoteStorage)
+        else storage.peek_memory(proposal_id)
+    )
     if row is None or row.get("status") != "quarantined":
         console.print(f"[yellow]No pending proposal with id {proposal_id}.[/yellow]")
         console.print("See what is waiting with [bold]visp-memory review list[/bold].")
@@ -3638,7 +3649,7 @@ def contract_recall(
         "--endpoint",
         help=(
             "Ignored. Accepted so a coordinator's argument list stays stable; this "
-            "command always reads the locally configured store and contacts nothing."
+            "command uses the configured store, contacting the configured server in client mode."
         ),
     ),
     json_output: bool = typer.Option(True, "--json", help="Machine-readable output (always on)."),
@@ -3761,7 +3772,7 @@ def contract_propose(
         "--endpoint",
         help=(
             "Ignored. Accepted so a coordinator's argument list stays stable; this "
-            "command always reads the locally configured store and contacts nothing."
+            "command uses the configured store, contacting the configured server in client mode."
         ),
     ),
     json_output: bool = typer.Option(True, "--json", help="Machine-readable output (always on)."),
