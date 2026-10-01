@@ -3,6 +3,7 @@ from typing import Any, Callable, Dict, TypeVar
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from visp_memory.config import load_config
+from visp_memory.core.attribution import without_written_by
 from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import (
     require_repo_scope_access,
@@ -78,7 +79,7 @@ async def log_recall_event(
             query=event.query,
             task_id=event.task_id,
             outcome=event.outcome,
-            metadata=event.metadata,
+            metadata=without_written_by(event.metadata),
         )
     )
     return {"id": event_id}

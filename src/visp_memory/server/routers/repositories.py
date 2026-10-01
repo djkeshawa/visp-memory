@@ -5,6 +5,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
+from visp_memory.core.attribution import without_written_by
 from visp_memory.core.clock import utc_now
 from visp_memory.core.cross_repo import CrossRepoContext
 from visp_memory.core.repository import (
@@ -47,7 +48,7 @@ async def register_repository(
         description=repo.description,
         tech_stack=repo.tech_stack or [],
         team_id=user.team_id,
-        metadata=repo.metadata or {},
+        metadata=without_written_by(repo.metadata),
     )
 
     require_repo_scope_access(request.app.state.storage, repo_obj.id, user)

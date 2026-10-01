@@ -4,9 +4,11 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from visp_memory.config import load_config
+from visp_memory.core.attribution import stamp_written_by, without_written_by
 from visp_memory.core.clock import utc_now
 from visp_memory.core.trust import WriteChannel
 from visp_memory.layers.intent import IntentMemory
+from visp_memory.server.attribution_metadata import preserve_written_by
 from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import (
     can_access_scoped_record,
@@ -92,7 +94,7 @@ async def create_intent(
     require_repo_writable(storage, intent_repo_id, user)
 
     # Add author attribution
-    context = dict(intent.context or {})
+    context = stamp_written_by(without_written_by(intent.context))
     context["author_id"] = user.user_id
     if user.team_id:
         context["team_id"] = user.team_id
@@ -135,14 +137,16 @@ async def update_intent(
     if "status" in update_data:
         raise HTTPException(status_code=409, detail=STATUS_AUTHORITY_DETAIL)
 
-    if "context" in update_data and not has_admin_privileges(user):
+    if "context" in update_data:
         context = dict(update_data["context"] or {})
         existing_context = intent.get("context") or {}
-        for reserved_key in ("author_id", "team_id"):
-            if reserved_key in existing_context:
-                context[reserved_key] = existing_context[reserved_key]
-            else:
-                context.pop(reserved_key, None)
+        preserve_written_by(context, existing_context)
+        if not has_admin_privileges(user):
+            for reserved_key in ("author_id", "team_id"):
+                if reserved_key in existing_context:
+                    context[reserved_key] = existing_context[reserved_key]
+                else:
+                    context.pop(reserved_key, None)
         update_data["context"] = context
 
     success = storage.update_intent(intent_id, **update_data)

@@ -58,6 +58,18 @@ def test_current_writer_uses_sanitized_environment_default(monkeypatch):
     assert current_writer() == WriterIdentity("codex", "session_1", None)
 
 
+def test_explicit_no_writer_skips_environment_and_resets_after_exception(monkeypatch):
+    monkeypatch.setenv("VISP_MEMORY_AGENT", "server-agent")
+    monkeypatch.setenv("VISP_MEMORY_SESSION", "server-session")
+    with pytest.raises(RuntimeError), bind_writer(None):
+        assert current_writer() is None
+        with bind_writer(WriterIdentity(session="client-session")):
+            assert current_writer() == WriterIdentity(session="client-session")
+        assert current_writer() is None
+        raise RuntimeError("request failed")
+    assert current_writer() == WriterIdentity("server-agent", "server-session")
+
+
 def test_stamp_overwrites_current_writer_but_suppression_preserves_metadata(
     monkeypatch,
 ):

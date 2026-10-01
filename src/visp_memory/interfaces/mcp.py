@@ -129,13 +129,10 @@ _PROCESS_SESSION_LOCK = threading.Lock()
 def _ensure_process_session() -> str:
     """Create one stable fallback session ID for this stdio server process."""
     global _PROCESS_SESSION
-    configured = os.environ.get("VISP_MEMORY_SESSION")
+    configured = sanitize_label(os.environ.get("VISP_MEMORY_SESSION"))
     if configured:
         return configured
     with _PROCESS_SESSION_LOCK:
-        configured = os.environ.get("VISP_MEMORY_SESSION")
-        if configured:
-            return configured
         if _PROCESS_SESSION is None:
             _PROCESS_SESSION = uuid.uuid4().hex
         return _PROCESS_SESSION
@@ -143,9 +140,9 @@ def _ensure_process_session() -> str:
 
 def _writer_for_call(server) -> WriterIdentity | None:
     """Resolve writer labels from process configuration and MCP client info."""
-    request_writer = current_mcp_request_context().writer
-    if request_writer is not None:
-        return request_writer
+    context = current_mcp_request_context()
+    if context.transport == "http" or context.writer is not None:
+        return context.writer
     try:
         request_context = getattr(server, "request_context", None)
         session = getattr(request_context, "session", None)
@@ -157,8 +154,7 @@ def _writer_for_call(server) -> WriterIdentity | None:
     client_version = sanitize_label(getattr(client_info, "version", None))
     identity = WriterIdentity(
         agent=sanitize_label(os.environ.get("VISP_MEMORY_AGENT")) or client_name,
-        session=sanitize_label(os.environ.get("VISP_MEMORY_SESSION"))
-        or sanitize_label(_ensure_process_session()),
+        session=_ensure_process_session(),
         client=(
             sanitize_label(f"{client_name}/{client_version}")
             if client_name and client_version

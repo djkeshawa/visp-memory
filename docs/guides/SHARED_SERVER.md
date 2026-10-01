@@ -117,11 +117,15 @@ session" ranking boost.
 |---|---|
 | REST clients | `X-Visp-Agent`, `X-Visp-Session` and `X-Visp-Client` request headers |
 | Local CLI, hooks | `VISP_MEMORY_AGENT` and `VISP_MEMORY_SESSION` in the environment; the Claude Code hooks use agent `claude-code` and Claude's session ID |
-| stdio MCP | Agent from `VISP_MEMORY_AGENT`, else the MCP client's name; session from `VISP_MEMORY_SESSION`, else a per-process ID; client `name/version` |
+| stdio MCP | Agent from `VISP_MEMORY_AGENT`, else the MCP client's name; session from a valid `VISP_MEMORY_SESSION`, else a per-process ID; client `name/version` |
+| HTTP MCP | Request headers; agent defaults to the authenticated principal's username |
 
-Client mode (`RemoteStorage`) sends these as the headers above. When a request
-sends none of the headers, the server falls back to its own process's
-`VISP_MEMORY_AGENT` and `VISP_MEMORY_SESSION`. Invalid labels are dropped.
+Client mode (`RemoteStorage`) sends these as the headers above. REST requests use
+only the supplied valid labels: missing or invalid headers never fall back to the
+server's environment. Caller-supplied `written_by` in metadata or intent context
+is ignored; updates preserve the original writer. Privileged imports retain the
+historical attribution carried by the export. Invalid labels are dropped, and
+stdio MCP uses a stable per-process ID when its session environment value is invalid.
 
 ## Environment variables
 

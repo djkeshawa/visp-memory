@@ -29,6 +29,9 @@ from visp_memory.core.trust import (
     with_channel_provenance,
 )
 from visp_memory.quality.secrets import SecretBearingContentError, redact_for_storage
+from visp_memory.server.attribution_metadata import (
+    preserve_written_by as _preserve_written_by,
+)
 from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import (
     can_access_scoped_record,
@@ -68,14 +71,6 @@ def _preserve_metadata_keys(
             metadata[key] = existing[key]
         else:
             metadata.pop(key, None)
-
-
-def _preserve_written_by(metadata: Dict[str, Any], existing: Dict[str, Any]) -> None:
-    """Keep the original writer when a REST request replaces record metadata."""
-    if WRITTEN_BY_KEY in existing:
-        metadata[WRITTEN_BY_KEY] = existing[WRITTEN_BY_KEY]
-    else:
-        metadata.pop(WRITTEN_BY_KEY, None)
 
 
 PROVENANCE_FIELDS = (

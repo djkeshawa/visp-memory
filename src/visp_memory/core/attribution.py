@@ -8,6 +8,7 @@ import re
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from enum import Enum
 from typing import Iterator, Mapping
 
 from visp_memory.core.json_text import to_json_text
@@ -18,7 +19,13 @@ SESSION_HEADER = "X-Visp-Session"
 CLIENT_HEADER = "X-Visp-Client"
 
 _LABEL_RE = re.compile(r"[A-Za-z0-9._:@/+\-]{1,64}\Z")
-_BOUND_WRITER: ContextVar[WriterIdentity | None] = ContextVar(
+
+
+class _WriterBinding(Enum):
+    NO_WRITER = "no_writer"
+
+
+_BOUND_WRITER: ContextVar[WriterIdentity | _WriterBinding | None] = ContextVar(
     "visp_memory_writer", default=None
 )
 _ATTRIBUTION_SUPPRESSED: ContextVar[bool] = ContextVar(
@@ -69,8 +76,8 @@ def _sanitize_identity(identity: WriterIdentity | None) -> WriterIdentity | None
 
 @contextmanager
 def bind_writer(identity: WriterIdentity | None) -> Iterator[None]:
-    """Bind one sanitized writer identity until this context exits."""
-    token = _BOUND_WRITER.set(_sanitize_identity(identity))
+    """Bind a sanitized identity, explicitly excluding env fallback when absent."""
+    token = _BOUND_WRITER.set(_sanitize_identity(identity) or _WriterBinding.NO_WRITER)
     try:
         yield
     finally:
@@ -90,6 +97,8 @@ def suppress_attribution() -> Iterator[None]:
 def current_writer() -> WriterIdentity | None:
     """Return the bound writer or the process identity configured in the env."""
     bound = _BOUND_WRITER.get()
+    if bound is _WriterBinding.NO_WRITER:
+        return None
     if bound is not None:
         return bound
     identity = WriterIdentity(
