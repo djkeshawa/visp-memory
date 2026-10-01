@@ -137,9 +137,11 @@ async def test_lifespan_refuses_a_second_server_without_touching_the_first(serve
 
 
 @pytest.mark.asyncio
-async def test_neo4j_backend_takes_no_file_lock(served_dir):
+async def test_neo4j_backend_guards_local_sidecars(served_dir):
     async with server_app.lifespan(fake_app(backend="neo4j")):
-        assert not (served_dir / ".locks").exists()
+        assert_busy(served_dir / ".locks/server.lock")
+        with spawned_role(served_dir, "local") as (_, conflict):
+            assert conflict
 
 
 @pytest.mark.asyncio
@@ -188,3 +190,36 @@ async def test_refusal_by_another_server_still_says_one_process(served_dir, capl
             async with server_app.lifespan(fake_app()):
                 pytest.fail("a second server must not start")
     assert "a second server on the same data directory is refused" in caplog.text
+
+
+def test_neo4j_import_guards_auth_and_lifecycle(tmp_path, monkeypatch):
+    config = memory_config(tmp_path)
+    config.storage.backend = "neo4j"
+    monkeypatch.setattr(server_app, "Neo4jStorage", Mock(return_value=Mock()))
+
+    def auth(path):
+        with spawned_role(tmp_path, "server") as (_, conflict):
+            assert conflict
+        return Mock(bootstrap_admin=Mock(return_value=None))
+
+    monkeypatch.setattr(server_app, "AuthStore", auth)
+    application = SimpleNamespace(state=SimpleNamespace())
+    server_app.initialize_app_state(application, config, None, {})
+    application.state.storage.close()
+    with raw_lock(tmp_path / ".locks/server.lock"):
+        pass
+
+
+def test_single_serve_process_keeps_import_role_until_lifespan(tmp_path, monkeypatch):
+    from visp_memory.interfaces.serve_environment import server_environment
+
+    application = SimpleNamespace(state=SimpleNamespace())
+    # CLI serve knows whether this process serves or supervises a reload child.
+    with server_environment("127.0.0.1", 8123, serving=True):
+        server_app.initialize_app_state(application, memory_config(tmp_path), None, {})
+    try:
+        with spawned_role(tmp_path, "local") as (_, conflict):
+            assert conflict
+    finally:
+        application.state.storage.close()
+        application.state.server_import_role.close()

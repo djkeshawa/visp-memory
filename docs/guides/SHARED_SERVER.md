@@ -107,13 +107,21 @@ MCP, hooks), offline maintenance, or the separate HTTP MCP program cannot open
 the same data directory, and a server will not start while local-mode writers
 hold it. Local-mode processes may still share a directory with each other when
 no server owns it. Connect each project in client mode instead. The guard covers
-SQLite and ArcadeDB and uses OS file locks; NFS is unsupported.
+SQLite and ArcadeDB, plus the local `auth.db` and `lifecycle.db` files used with
+Neo4j. It does not lock the Neo4j database itself. The guard uses OS file locks;
+NFS is unsupported.
 
 The process that serves holds the lock, so `visp-memory serve --reload` works: the
-reloader only imports the app, and the child it spawns takes the lock. One server
-process owns a store. `uvicorn --workers N` with N above 1 is not supported: the
-first worker serves and the others are refused with a message naming the sibling
-worker, and uvicorn keeps restarting them. Run a single worker.
+reloader releases its import role, and the child retains its role from import
+through lifespan startup. `serve` without reload also retains the import role.
+Unidentified ASGI importers still release at the end of import and claim again
+at startup; retaining a role there could block a supervisor's serving child.
+One server process owns a store. `uvicorn --workers N` with N above 1 is not supported: the
+first worker serves and refused Uvicorn workers log once and stay idle without
+serving, while continuing to answer supervisor heartbeats. This prevents a
+respawn loop without acting on the supervisor. Idle workers do not take over
+if the serving worker exits; stop the supervisor and restart with a single worker.
+Unrelated servers still fail startup normally.
 
 Every record can carry a `written_by` label of the form `{agent, session, client}`
 on memories and evidence (in `metadata`) and on intents (in `context`); see the
@@ -156,6 +164,15 @@ through that file, not a separate application identity. The token exists only in
 open local-owner mode; see [authentication](AUTHENTICATION.md#owner-maintenance-on-a-local-server)
 for what it unlocks. The dashboard cannot read the token; dashboard maintenance
 requires an account.
+
+Runtime proof and discovery files are keyed by the literal bind host and port
+(`owner-<host>-<port>.token` and `server-<host>-<port>.json`; IPv6 colons are percent
+encoded). Discovery also records `bind_host`. A client sends proof only to that
+literal host: a `localhost` client URL cannot use proof for `127.0.0.1` or `::1`.
+Legacy per-port files work only when their discovery URL records the same literal
+host and port. A token file alone is insufficient. Startup refuses to replace a
+record belonging to a live or unidentified process, even for another data directory;
+shutdown removes only its own proof and record.
 
 Stdio MCP also refuses a `repo_id` override unless
 `VISP_MEMORY_MCP_ALLOW_REPO_OVERRIDE` is enabled. That stops an assistant naming

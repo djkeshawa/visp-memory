@@ -16,6 +16,7 @@ class ServerRecord:
     pid: int | None
     url: str
     data_dir: Path | None
+    bind_host: str | None = None
 
 
 @dataclass(frozen=True)
