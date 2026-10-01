@@ -74,10 +74,10 @@ _RULES = (
     _rule(r"/auth/me", _OPEN, _AUTH_DENIED),
     _any_method(_prefix("auth"), _AUTH_DENIED),
     # Owner-or-admin already, but a token must never reach it whatever it holds.
-    _any_method(r"/repos/[^/]+/import", PatDecision(DENIED, detail=IMPORT_DENIED)),
+    _any_method(r"/repos/.*/import", PatDecision(DENIED, detail=IMPORT_DENIED)),
     # The export is the whole memory, evidence and intent graph.
     _rule(
-        r"/repos/[^/]+/export",
+        r"/repos/.*/export",
         _scopes("project:read", "memory:read", "intent:read"),
         _scopes("project:write"),
     ),

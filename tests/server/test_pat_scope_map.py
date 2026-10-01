@@ -238,3 +238,23 @@ async def test_patching_intents_usage_needs_intent_write(client):
     )
     assert response.status_code == 403, response.text
     assert "intent:write" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("repo_id", ["", "org/project", "org/project/export"])
+def test_slash_repo_portability_keeps_strict_scopes(repo_id):
+    assert set(pat_scope_decision("GET", f"/repos/{repo_id}/export").scopes) == {
+        "project:read", "memory:read", "intent:read",
+    }
+    assert pat_scope_decision("POST", f"/repos/{repo_id}/import").kind == DENIED
+
+
+@pytest.mark.asyncio
+async def test_slash_repo_portability_cannot_bypass_pat_rules(client):
+    response = await client.get("/repos/org%2Fproject/export", headers=pat(["project:read"]))
+    assert response.status_code == 403
+    assert "memory:read" in response.json()["detail"]
+    response = await client.post(
+        "/repos/org%2Fproject/import", json={}, headers=pat(["*"], admin=True),
+    )
+    assert response.status_code == 403
+    assert "cannot import" in response.json()["detail"]

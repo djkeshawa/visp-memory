@@ -49,6 +49,7 @@ ENV_OVERRIDES: dict[str, tuple[str, ...]] = {
     "VISP_MEMORY_SERVER_ALLOW_ANONYMOUS": ("server", "allow_anonymous"),
     "VISP_MEMORY_SERVER_DEFAULT_TEAM": ("server", "default_team"),
     "VISP_MEMORY_SERVER_LOCAL_OWNER_MODE": ("server", "local_owner_mode"),
+    "VISP_MEMORY_SERVER_MAX_IMPORT_BODY_BYTES": ("server", "max_import_body_bytes"),
     "VISP_MEMORY_SERVER_SHARED": ("server", "shared"),
     "VISP_MEMORY_SERVER_JWT_EXPIRY_HOURS": ("server", "jwt_expiry_hours"),
     "VISP_MEMORY_LLM_PROVIDER": ("llm", "provider"),
@@ -331,6 +332,7 @@ class ServerConfig(BaseSettings):
 
     host: str = Field(default="127.0.0.1", validation_alias="VISP_MEMORY_BIND_HOST")
     port: int = 8000
+    max_import_body_bytes: int = Field(default=64 * 1024 * 1024, gt=0)
     cors_origins: List[str] = Field(
         default_factory=lambda: [
             "http://localhost:3000",

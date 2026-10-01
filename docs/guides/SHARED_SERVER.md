@@ -128,6 +128,7 @@ sends none of the headers, the server falls back to its own process's
 | Variable | Purpose |
 |---|---|
 | `VISP_MEMORY_CONFIG` | Explicit config file path. Startup fails if the file is missing. `serve --shared` sets it |
+| `VISP_MEMORY_SERVER_MAX_IMPORT_BODY_BYTES` | Maximum REST graph import body in bytes; default 67108864 (64 MiB). Oversized bodies return 413 before JSON parsing, including streamed requests. Also configurable as `server.max_import_body_bytes` |
 | `VISP_MEMORY_SERVER_SHARED` | Marks the server project-neutral (no server-wide `repo_id`). `serve --shared` sets it |
 | `VISP_MEMORY_SERVER_LOCAL_OWNER_MODE` | Open local-owner mode. `serve` sets it only for a credential-free loopback bind; see [authentication](AUTHENTICATION.md#open-local-owner-mode) |
 | `VISP_MEMORY_AGENT`, `VISP_MEMORY_SESSION` | Writer labels described above |
