@@ -1,13 +1,21 @@
 import json
 import os
 
+import pytest
 import yaml
 from typer.testing import CliRunner
 
+from visp_memory.core.writer_lock import acquire_writer_lock
 from visp_memory.interfaces.cli import app
 from visp_memory.interfaces.connect import discover_shared_server
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def isolated_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
 
 
 class _Response:
@@ -167,7 +175,8 @@ def test_connect_refuses_to_migrate_the_served_data_directory(tmp_path, monkeypa
     monkeypatch.setattr("visp_memory.interfaces.connect._probe_server", lambda _url: True)
     before = (tmp_path / "visp-memory.yaml").read_bytes()
 
-    result = runner.invoke(app, ["connect", "--migrate-local"])
+    with acquire_writer_lock(data_dir, "server", url="http://127.0.0.1:9123"):
+        result = runner.invoke(app, ["connect", "--migrate-local"])
 
     assert result.exit_code == 1
     assert "served data directory" in result.output

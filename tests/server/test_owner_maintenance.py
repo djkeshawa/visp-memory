@@ -328,7 +328,7 @@ def test_owner_token_files_are_atomic_private_and_discoverable(tmp_path, monkeyp
     assert files.token_path.read_text(encoding="utf-8") == files.token
     assert files.token and len(files.token) >= 40
     metadata = json.loads(files.server_path.read_text(encoding="utf-8"))
-    assert set(metadata) == {"pid", "url", "data_dir", "started_at"}
+    assert set(metadata) == {"pid", "url", "bind_host", "data_dir", "started_at"}
     assert metadata["url"] == "http://127.0.0.1:8765"
     assert metadata["data_dir"] == str((tmp_path / "data").resolve())
     assert replacements
@@ -361,7 +361,7 @@ async def test_app_lifespan_creates_and_removes_owner_discovery_files(tmp_path, 
     try:
         async with server_app.lifespan(app):
             token_path = Path(os.environ[OWNER_TOKEN_FILE_ENV])
-            server_path = token_path.with_name("server-8765.json")
+            server_path = token_path.with_name("server-127.0.0.1-8765.json")
             assert token_path.is_file()
             assert os.environ[OWNER_TOKEN_FILE_ENV] == str(token_path)
             assert os.environ[OWNER_TOKEN_FILE_ENV] != token_path.read_text(encoding="utf-8")

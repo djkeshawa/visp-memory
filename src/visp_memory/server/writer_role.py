@@ -15,6 +15,7 @@ from visp_memory.core.writer_lock import (
     acquire_writer_lock,
     read_server_metadata,
 )
+from visp_memory.server.worker_mode import idle_refused_worker, is_uvicorn_multiworker
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,8 @@ def _acquire_or_explain(config):
         )
     except WriterLockConflict as conflict:
         logger.error(_explain(conflict, config.storage.data_dir))
+        if is_uvicorn_multiworker():
+            idle_refused_worker()
         raise
 
 
@@ -67,9 +70,9 @@ def preflight_server_role(config, hold=None) -> None:
     beside it create auth.db and lifecycle.db and bootstrap the first account. Pass
     the ``ExitStack`` that spans those writes as ``hold`` and the role stays held
     until it closes, so they cannot race a live server, offline maintenance or a
-    local writer. It must close at the end of import: uvicorn's supervisor imports
-    too, and a role it kept would lock the serving process out. Without ``hold``
-    this is only a check. The lifespan claim is what holds the role while serving.
+    local writer. Supervisors close it at the end of import; known serving
+    processes retain it for lifespan to adopt without a gap. Without ``hold``
+    this is only a check. The lifespan claim holds the role while serving.
     """
     handle = _acquire_or_explain(config)
     if hold is None:

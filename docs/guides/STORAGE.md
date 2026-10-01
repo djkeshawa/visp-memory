@@ -59,8 +59,9 @@ visp-memory connect
 ```
 
 Without `--server-url`, `connect` looks for a discovery record at
-`~/.visp-memory/run/server-<port>.json`. It takes the newest by modification
-time whose process ID is alive and whose URL answers `GET /` with a status below
+`~/.visp-memory/run/server-<host>-<port>.json` (IPv6 colons are percent
+encoded). Legacy `server-<port>.json` records are also read. It takes the newest
+by modification time whose process ID is alive and whose URL answers `GET /` with a status below
 500, and otherwise falls back to `http://127.0.0.1:8000`. Only a server in
 [open local-owner mode](AUTHENTICATION.md#open-local-owner-mode) writes a record,
 so for a server with credentials pass `--server-url` (or accept the fallback).
@@ -79,7 +80,9 @@ comments in it are not preserved.
 To copy records from the project's previous local store, add
 `--migrate-local`. The import goes through the server and the old data directory
 is left untouched. Never point that option at the shared server's own data
-directory.
+directory. The migration check probes the actual `server.lock`; a stale
+`.locks/server.json` left after a crash does not by itself mark a store as served.
+A new server role holder rewrites that stale metadata.
 
 Agent setup can be included in the same command. `--agent-config` is a
 repeatable option:

@@ -79,6 +79,7 @@ from visp_memory.server.schemas import (
     GraphWhyRelevantRequest,
     MemoryIntelligenceReportResponse,
 )
+from visp_memory.server.worker_mode import retain_serving_import_role
 from visp_memory.server.writer_role import claim_server_role, preflight_server_role, server_url
 
 # Configure logging
@@ -241,8 +242,9 @@ def initialize_storage(config, embedding_fn=None, embedding_provider=None, hold=
     """Initialize the configured server storage backend.
 
     ``hold`` keeps the server role held until that ``ExitStack`` closes; see
-    ``preflight_server_role``. Neo4j keeps its own concurrency control.
+    ``preflight_server_role``. This also guards Neo4j's local SQLite sidecars.
     """
+    preflight_server_role(config, hold)
     if config.storage.backend == "neo4j":
         deadline = time.monotonic() + config.storage.connect_timeout_seconds
         last_error = None
@@ -281,7 +283,6 @@ def initialize_storage(config, embedding_fn=None, embedding_provider=None, hold=
                 "Neo4j storage is unavailable and fallback is disabled"
             ) from last_error
 
-    preflight_server_role(config, hold)
     if config.storage.backend == "arcadedb":
         storage = ArcadeDbStorage(
             config.storage.data_dir,
@@ -303,8 +304,8 @@ def initialize_app_state(application, config, embedding_provider, embedding_runt
     """Build storage and the stores beside it, then the first administrator.
 
     Every step writes the data directory, so the server role is held across all of
-    them and released on return: this runs in uvicorn's supervisor too, and the
-    serving process claims the role again in its lifespan.
+    them. Known serving processes retain it for lifespan to adopt; supervisors
+    and unidentified importers release it on return.
     """
     embedding_fn = embedding_provider.embed if embedding_provider is not None else None
     with ExitStack() as import_role:
@@ -331,6 +332,9 @@ def initialize_app_state(application, config, embedding_provider, embedding_runt
             logger.warning(
                 "First-time setup: open /dashboard/auth#setup=%s on this server", setup_code
             )
+
+        if retain_serving_import_role():
+            state.server_import_role = import_role.pop_all()
 
 
 cors_options = get_cors_options(config)
@@ -381,13 +385,16 @@ async def lifespan(app: FastAPI):
     previous_owner_token_path = getattr(app.state, "owner_maintenance_token_file", None)
     app.state.dream_last_activity = time.monotonic()
     # Claimed before anything else and outside the try: a refused claim owns nothing
-    # to clean up, and must not release the lock of the server that refused it. Neo4j
-    # keeps its own concurrency control and never used the file guard.
-    writer_lock = None
-    if getattr(app.state, "storage_backend", None) != "neo4j":
-        writer_lock = claim_server_role(config)
-        app.state.writer_lock = writer_lock
+    # to clean up, and must not release the lock of the server that refused it.
+    writer_lock = claim_server_role(config)
+    app.state.writer_lock = writer_lock
     try:
+        import_role = getattr(app.state, "server_import_role", None)
+        if import_role is not None:
+            app.state.server_import_role = None
+            # Claim above references the same OS lock before releasing import's
+            # reference, so another writer cannot enter between import and startup.
+            import_role.close()
         if isinstance(app.state.storage, (LocalStorage, Neo4jStorage)):
             app.state.dreaming = Dreaming(app.state.storage)
             task = asyncio.create_task(dreaming_loop(app, stop))
@@ -397,6 +404,7 @@ async def lifespan(app: FastAPI):
             # CLI arguments are copied into ServerConfig before Uvicorn imports us.
             owner_files = create_owner_token_files(
                 port=port,
+                bind_host=config.server.host,
                 url=server_url(config.server),
                 data_dir=config.storage.data_dir,
             )

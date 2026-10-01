@@ -79,8 +79,8 @@ For a server that is not in open mode, clients send credentials from
 ## Owner maintenance on a local server
 
 Only in open local-owner mode, `visp-memory serve` writes a random maintenance
-token to `~/.visp-memory/run/owner-<port>.token` with owner-only permissions on
-POSIX systems, and a discovery record `~/.visp-memory/run/server-<port>.json`.
+token to `~/.visp-memory/run/owner-<host>-<port>.token` with owner-only permissions on
+POSIX systems, and a discovery record `~/.visp-memory/run/server-<host>-<port>.json`.
 A server with credentials configured writes neither file, so `connect` finds no
 record there and falls back to `http://127.0.0.1:8000`; pass `--server-url` for
 any other address. On Windows, the files live under the current user's profile.

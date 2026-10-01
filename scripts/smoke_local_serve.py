@@ -29,6 +29,8 @@ from typing import Callable, Optional
 import requests
 import yaml
 
+from visp_memory.core.owner_token import owner_token_paths
+
 IS_WINDOWS = os.name == "nt"
 SMOKE_REPO = "smoke"
 SMOKE_AGENT = "smoke-agent"
@@ -131,7 +133,7 @@ class Server:
     def wait_ready(self, run_dir: Path) -> requests.Response:
         """Poll /readyz until it answers and the owner token exists (lifespan ran)."""
         last: list = [None]
-        token_path = run_dir / f"owner-{self.port}.token"
+        token_path, _ = owner_token_paths(run_dir, "127.0.0.1", self.port)
 
         def answered() -> bool:
             if self.process.poll() is not None:
@@ -215,8 +217,9 @@ class Smoke:
         self.tmp = tmp
         self.run_dir = home / ".visp-memory" / "run"
         self.data_dir = home / ".visp-memory" / "data"
-        self.token_path = self.run_dir / f"owner-{server.port}.token"
-        self.discovery_path = self.run_dir / f"server-{server.port}.json"
+        self.token_path, self.discovery_path = owner_token_paths(
+            self.run_dir, "127.0.0.1", server.port
+        )
 
     @property
     def base(self) -> str:

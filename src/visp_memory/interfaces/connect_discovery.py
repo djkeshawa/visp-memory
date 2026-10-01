@@ -51,6 +51,9 @@ def _read_server_record(path: Path) -> ServerRecord | None:
             pid=pid if isinstance(pid, int) else None,
             url=normalize_server_url(payload["url"]),
             data_dir=data_dir,
+            bind_host=(
+                payload["bind_host"] if isinstance(payload.get("bind_host"), str) else None
+            ),
         )
     except (OSError, ValueError, TypeError):
         return None

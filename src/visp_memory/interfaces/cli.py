@@ -62,6 +62,7 @@ from visp_memory.core.embedding_status import (
 )
 from visp_memory.core.intent_usage import STATUS_NEVER_USED, check_intent_usage
 from visp_memory.core.lexical_ranking import RANKING_STRATEGIES
+from visp_memory.core.owner_token import owner_token_paths
 from visp_memory.core.paths import run_dir
 from visp_memory.core.ranking import projected_importance
 from visp_memory.core.reporting import MemoryIntelligenceReporter
@@ -3400,9 +3401,9 @@ def serve(
     _ensure_serveable_auth_config(host)
     owner_token_file = None
     if getattr(load_config().server, "local_owner_mode", False):
-        owner_token_file = run_dir() / f"owner-{port}.token"
+        owner_token_file, _ = owner_token_paths(run_dir(), host, port)
     try:
-        with server_environment(host, port, owner_token_file):
+        with server_environment(host, port, owner_token_file, serving=not reload):
             console.print(f"[green]Starting Central Memory Server at http://{host}:{port}[/green]")
             import uvicorn
 
