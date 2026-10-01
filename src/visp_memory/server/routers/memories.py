@@ -28,9 +28,6 @@ from visp_memory.core.trust import (
     with_channel_provenance,
 )
 from visp_memory.quality.secrets import SecretBearingContentError, redact_for_storage
-from visp_memory.server.attribution_metadata import (
-    preserve_written_by as _preserve_written_by,
-)
 from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import (
     can_access_scoped_record,
