@@ -7,6 +7,7 @@ Connects to the Central Memory Server via HTTP.
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 try:
     import requests
@@ -786,7 +787,7 @@ class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, RemotePortabilityMixin,
 
     def get_repository(self, repo_id: str) -> Optional[Dict[str, Any]]:
         try:
-            response = self.session.get(f"{self.server_url}/repos/{repo_id}")
+            response = self.session.get(f"{self.server_url}/repos/{quote(repo_id, safe='')}")
             if response.status_code == 404:
                 return None
             response.raise_for_status()
@@ -808,7 +809,9 @@ class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, RemotePortabilityMixin,
     def update_repository(self, repo_id: str, **kwargs) -> bool:
         action = "archive" if kwargs.get("status") == "archived" else "restore"
         try:
-            response = self.session.post(f"{self.server_url}/repos/{repo_id}/{action}")
+            response = self.session.post(
+                f"{self.server_url}/repos/{quote(repo_id, safe='')}/{action}"
+            )
             if response.status_code == 404:
                 return False
             response.raise_for_status()
@@ -823,7 +826,8 @@ class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, RemotePortabilityMixin,
         """Purge a repository through the server's bounded purge protocol."""
         try:
             response = self.session.delete(
-                f"{self.server_url}/repos/{repo_id}", params={"confirmation": repo_id}
+                f"{self.server_url}/repos/{quote(repo_id, safe='')}",
+                params={"confirmation": repo_id},
             )
             if response.status_code == 404:
                 return {
@@ -876,7 +880,7 @@ class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, RemotePortabilityMixin,
                 "notes": notes,
             }
             response = self.session.post(
-                f"{self.server_url}/repos/{source_id}/dependencies", json=payload
+                f"{self.server_url}/repos/{quote(source_id, safe='')}/dependencies", json=payload
             )
             response.raise_for_status()
             return self._response_id(response, "add repository dependency")
@@ -885,7 +889,9 @@ class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, RemotePortabilityMixin,
 
     def get_repo_dependencies(self, repo_id: str) -> List[Dict[str, Any]]:
         try:
-            response = self.session.get(f"{self.server_url}/repos/{repo_id}/dependencies")
+            response = self.session.get(
+                f"{self.server_url}/repos/{quote(repo_id, safe='')}/dependencies"
+            )
             response.raise_for_status()
             return self._response_json(response, "get repository dependencies", list)
         except requests.RequestException as e:

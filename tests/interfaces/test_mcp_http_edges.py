@@ -457,3 +457,22 @@ def test_nested_mcp_contexts_restore_the_previous_context():
             assert current_mcp_request_context() == inner
         assert current_mcp_request_context() == outer
     assert current_mcp_request_context() == baseline
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/proxy/mcp", "/proxy/mcp/", "/mcp"])
+async def test_http_transport_uses_routed_path_under_root_path(path):
+    manager = _Manager()
+    scope = {**_http_scope(path), "root_path": "/proxy"}
+    messages = await _call_app(StatelessMCPApp(manager), scope)
+    assert messages[0]["status"] == 200
+    assert manager.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_http_transport_root_path_requires_a_segment_boundary():
+    manager = _Manager()
+    scope = {**_http_scope("/proxymcp"), "root_path": "/proxy"}
+    messages = await _call_app(StatelessMCPApp(manager), scope)
+    assert messages[0]["status"] == 404
+    assert manager.calls == 0

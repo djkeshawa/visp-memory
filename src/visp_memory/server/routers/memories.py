@@ -70,14 +70,6 @@ def _preserve_metadata_keys(
             metadata.pop(key, None)
 
 
-def _preserve_written_by(metadata: Dict[str, Any], existing: Dict[str, Any]) -> None:
-    """Keep the original writer when a REST request replaces record metadata."""
-    if WRITTEN_BY_KEY in existing:
-        metadata[WRITTEN_BY_KEY] = existing[WRITTEN_BY_KEY]
-    else:
-        metadata.pop(WRITTEN_BY_KEY, None)
-
-
 PROVENANCE_FIELDS = (
     "title",
     "summary",
@@ -953,7 +945,7 @@ async def update_memory(
     if "metadata" in update_data:
         metadata = dict(update_data["metadata"] or {})
         existing_metadata = mem.get("metadata") or {}
-        _preserve_written_by(metadata, existing_metadata)
+        _preserve_metadata_keys(metadata, existing_metadata, {WRITTEN_BY_KEY})
         # Non-admins may never set ownership/scope fields. Pin them to the record's
         # existing values, and strip them entirely when absent so a caller cannot
         # introduce a team_id/author_id (which drives record visibility) on a record

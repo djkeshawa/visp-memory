@@ -31,7 +31,7 @@ def _scoped_inspection(storage, method_name: str, repo_id: str) -> dict:
 
 
 @router.get("/memories/{memory_id}/peek", response_model=Dict[str, Any])
-async def peek_memory(
+def peek_memory(
     request: Request,
     memory_id: str,
     repo_id: str = None,
@@ -56,7 +56,7 @@ async def peek_memory(
 
 
 @router.post("/turn-keys/search", response_model=List[Dict[str, Any]])
-async def search_turn_keys(
+def search_turn_keys(
     request: Request,
     search: TurnKeySearchRequest,
     user: UserContext = Depends(get_current_user),
@@ -85,7 +85,7 @@ async def search_turn_keys(
 
 
 @router.get("/intents/usage", response_model=Dict[str, Any])
-async def inspect_intent_usage(
+def inspect_intent_usage(
     request: Request,
     repo_id: str = None,
     user: UserContext = Depends(get_current_user),
@@ -96,8 +96,8 @@ async def inspect_intent_usage(
     return _scoped_inspection(storage, "inspect_intent_usage", resolved_repo_id)
 
 
-@router.get("/repos/{repo_id}/registration", response_model=Dict[str, Any])
-async def inspect_repository_registration(
+@router.get("/repos/{repo_id:path}/registration", response_model=Dict[str, Any])
+def inspect_repository_registration(
     request: Request,
     repo_id: str,
     user: UserContext = Depends(get_current_user),
@@ -112,7 +112,7 @@ async def inspect_repository_registration(
 
 
 @router.get("/diagnostics/capabilities", response_model=Dict[str, bool])
-async def get_storage_capabilities(
+def get_storage_capabilities(
     request: Request,
     user: UserContext = Depends(get_current_user),
 ):
