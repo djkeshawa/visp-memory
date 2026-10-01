@@ -4,9 +4,9 @@ import functools
 import multiprocessing
 
 from uvicorn import Config
-from uvicorn.supervisors.multiprocess import Process
 
 from tests.core.test_writer_lock_processes import memory_config
+from tests.server.uvicorn_processes import worker_process
 from visp_memory.core.writer_lock import acquire_writer_lock
 
 
@@ -22,7 +22,7 @@ def test_refused_uvicorn_worker_stays_idle_and_answers_supervisor(tmp_path):
     context = multiprocessing.get_context("spawn")
     announced = context.Event()
     config = Config("visp_memory.server.app:app", workers=2, log_config=None)
-    worker = Process(config, functools.partial(_refused_worker, tmp_path, announced), [])
+    worker = worker_process(config, functools.partial(_refused_worker, tmp_path, announced))
     with acquire_writer_lock(tmp_path, "server"):
         worker.start()
         try:
@@ -68,9 +68,9 @@ def test_uvicorn_serving_child_keeps_import_role_until_lifespan(tmp_path):
     context = multiprocessing.get_context("spawn")
     imported, begin, serving, stop = (context.Event() for _ in range(4))
     config = Config("visp_memory.server.app:app", reload=True, log_config=None)
-    worker = Process(config, functools.partial(
+    worker = worker_process(config, functools.partial(
         _import_then_serve, tmp_path, imported, begin, serving, stop,
-    ), [])
+    ))
     worker.start()
     try:
         assert imported.wait(30)

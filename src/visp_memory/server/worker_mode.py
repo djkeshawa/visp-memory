@@ -13,16 +13,24 @@ logger = logging.getLogger(__name__)
 
 def _uvicorn_spawn_config():
     """Read the spawn payload, never infer supervision from a shared parent pid."""
-    process = multiprocessing.current_process()
-    target = getattr(process, "_target", None)
-    if (getattr(target, "__module__", None) != "uvicorn._subprocess"
-            or getattr(target, "__name__", None) != "subprocess_started"):
+    try:
+        from uvicorn import Config
+        from uvicorn._subprocess import subprocess_started
+    except ImportError:
         return None
-    # Uvicorn exposes no app-side worker-mode hook. Check both payload type and
-    # entry point; if its spawn contract changes, default to the ordinary refusal.
-    from uvicorn import Config
 
-    config = getattr(process, "_kwargs", {}).get("config")
+    process = multiprocessing.current_process()
+    # Both 0.47 and 0.54 use this outer bootstrap, despite changing Process's
+    # inner target. Identity avoids accepting an unrelated namesake launcher.
+    if getattr(process, "_target", None) is not subprocess_started:
+        return None
+
+    # Unknown payloads retain ordinary refusal/release rather than parking or
+    # retaining a supervisor's import role. Uvicorn exposes no app-side hook.
+    kwargs = getattr(process, "_kwargs", None)
+    if not isinstance(kwargs, dict):
+        return None
+    config = kwargs.get("config")
     return config if isinstance(config, Config) else None
 
 
