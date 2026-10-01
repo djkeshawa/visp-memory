@@ -132,6 +132,7 @@ stdio MCP uses a stable per-process ID when its session environment value is inv
 | Variable | Purpose |
 |---|---|
 | `VISP_MEMORY_CONFIG` | Explicit config file path. Startup fails if the file is missing. `serve --shared` sets it |
+| `VISP_MEMORY_SERVER_MAX_IMPORT_BODY_BYTES` | Maximum REST graph import body in bytes; default 67108864 (64 MiB). Oversized bodies return 413 before JSON parsing, including streamed requests. Also configurable as `server.max_import_body_bytes` |
 | `VISP_MEMORY_SERVER_SHARED` | Marks the server project-neutral (no server-wide `repo_id`). `serve --shared` sets it |
 | `VISP_MEMORY_SERVER_LOCAL_OWNER_MODE` | Open local-owner mode. `serve` sets it only for a credential-free loopback bind; see [authentication](AUTHENTICATION.md#open-local-owner-mode) |
 | `VISP_MEMORY_AGENT`, `VISP_MEMORY_SESSION` | Writer labels described above |
@@ -153,16 +154,27 @@ set `VISP_MEMORY_API_KEY`, `VISP_MEMORY_JWT_TOKEN` or `storage.api_key` in the
 client; [authentication](AUTHENTICATION.md) describes the server side and
 [storage](STORAGE.md) covers storage behavior.
 
-## Known limitation: trust tier of client writes
+## Trust tier of client writes
 
-In client mode every write is stored as `external` and is not auto-injected. This
-covers the CLI, MCP, hooks and dashboard alike: the client's write reaches the
-server over REST, where the memory is created on the HTTP channel, and external
-records are never auto-injected ([trust](../reference/TRUST.md)). It is a
-different outcome from local mode, where the same stdio MCP write is `assisted`
-and a CLI write is `authored`. The server cannot accept a client's claim of a
-stronger channel, because a payload never grants itself a trusted tier.
+Client-mode writes with valid local-owner proof are stored as `assisted`, the
+same tier and source as local stdio MCP writes. They are eligible for automatic
+context subject to the normal trust, relevance, scope, and freshness checks.
+`RemoteStorage` sends `X-Visp-Owner-Token` automatically to its own loopback
+server when it can read that server's owner token file.
 
-To record an authored conclusion, use a local-mode store. This is a known
-limitation and the decision on how connected projects should record trusted
-notes is pending; it is not a permanent design.
+The server selects the distinct `local_owner` write channel only for the
+anonymous local-owner path: local-owner mode must be enabled, the peer must be
+loopback, and the token must match with a constant-time comparison. Recording
+`metadata.write_channel: local_owner` keeps these writes auditable separately
+from stdio MCP. Payload tags, source, attribution, or flags cannot select a tier.
+
+This applies to memory and evidence creation, semantic revisions, and intent
+outcomes (`complete`, `close`, `reopen`, and `outcomes`). Workflow-status reports
+also record `local_owner`; they remain reports from the external workflow.
+Intent creation and context updates do not assign a trust channel. Existing
+records are not relabelled.
+
+Accounts, PATs, JWTs, API keys, anonymous callers without a valid token, and
+non-loopback peers retain the `external` tier, even with a token header. Dashboard
+writes therefore remain external. See [trust](../reference/TRUST.md) for the
+injection policy.

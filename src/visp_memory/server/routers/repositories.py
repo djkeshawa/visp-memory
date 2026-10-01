@@ -2,6 +2,7 @@ import json
 import os
 from datetime import datetime, timedelta
 from typing import List, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
@@ -94,23 +95,7 @@ async def list_project_scopes(request: Request, user: UserContext = Depends(get_
     return repo_mgr.project_scopes()
 
 
-@router.get("/{repo_id}", response_model=RepositoryResponse)
-async def get_repository(
-    request: Request,
-    repo_id: str,
-    user: UserContext = Depends(get_current_user),
-):
-    """Get repository details."""
-    repo_mgr = AuthorizedRepositoryManager(request.app.state.storage, user)
-    repo = repo_mgr.require(repo_id)
-
-    return {
-        **repo.__dict__,
-        "created_at": repo.created_at or utc_now(),
-    }
-
-
-@router.post("/{repo_id}/archive")
+@router.post("/{repo_id:path}/archive")
 async def archive_repository(
     request: Request,
     repo_id: str,
@@ -132,7 +117,7 @@ async def archive_repository(
     return {"status": "archived", "id": repo_id}
 
 
-@router.post("/{repo_id}/restore")
+@router.post("/{repo_id:path}/restore")
 async def restore_repository(
     request: Request,
     repo_id: str,
@@ -169,7 +154,7 @@ def _repository_purge_preview(storage, repo_id: str) -> dict:
     }
 
 
-@router.get("/{repo_id}/purge-preview")
+@router.get("/{repo_id:path}/purge-preview")
 async def preview_repository_purge(
     request: Request,
     repo_id: str,
@@ -194,7 +179,8 @@ def _export_repository_backup(storage, repo_id: str, backup_dir) -> str:
 
     created_at = utc_now()
     timestamp = created_at.strftime("%Y%m%dT%H%M%SZ")
-    backup_path = backup_dir / f"project-{repo_id}-{timestamp}.json"
+    # Repository scopes may contain separators, including Windows separators.
+    backup_path = backup_dir / f"project-{quote(repo_id, safe='')}-{timestamp}.json"
     payload = {
         "format": "visp-memory-project-backup-v1",
         "created_at": created_at.isoformat(),
@@ -223,7 +209,7 @@ def _export_repository_backup(storage, repo_id: str, backup_dir) -> str:
     return backup_path.name
 
 
-@router.delete("/{repo_id}")
+@router.delete("/{repo_id:path}")
 async def purge_repository(
     request: Request,
     repo_id: str,
@@ -264,7 +250,7 @@ async def purge_repository(
     return {"status": "purged", "id": repo_id, "backup": backup_name, **preview}
 
 
-@router.post("/{repo_id}/dependencies")
+@router.post("/{repo_id:path}/dependencies")
 async def add_dependency(
     request: Request,
     repo_id: str,
@@ -303,7 +289,7 @@ async def add_dependency(
     return {"id": result, "status": "created"}
 
 
-@router.get("/{repo_id}/dependencies")
+@router.get("/{repo_id:path}/dependencies")
 async def get_dependencies(
     request: Request,
     repo_id: str,
@@ -325,7 +311,7 @@ async def get_dependencies(
     ]
 
 
-@router.get("/{repo_id}/context")
+@router.get("/{repo_id:path}/context")
 async def get_cross_repo_context(
     request: Request,
     repo_id: str,
@@ -358,3 +344,20 @@ async def get_cross_repo_context(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=context["error"])
 
     return context
+
+
+# Keep suffix routes before the greedy repository detail route.
+@router.get("/{repo_id:path}", response_model=RepositoryResponse)
+async def get_repository(
+    request: Request,
+    repo_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """Get repository details."""
+    repo_mgr = AuthorizedRepositoryManager(request.app.state.storage, user)
+    repo = repo_mgr.require(repo_id)
+
+    return {
+        **repo.__dict__,
+        "created_at": repo.created_at or utc_now(),
+    }

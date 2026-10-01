@@ -15,20 +15,13 @@ from visp_memory.server.pat_scopes import ADMIN, DENIED, OPEN, pat_scope_decisio
 HEADERS = {"X-API-KEY": "test_key"}
 REPO = "repo-a"
 
-# Routes that rely on the compatibility default (project:read) rather than a rule
-# of their own. Each returns memory content to a project:read token, and existing
-# clients and tests depend on that, so tightening them is a product decision made
-# separately from this change; until then they are listed here on purpose so that
-# no *other* route can join them unnoticed.
-RELIES_ON_DEFAULT = {
-    ("GET", "/remember"),
-    ("GET", "/reports/memory-intelligence"),
-    ("GET", "/reports/memory-intelligence/text"),
-}
-
 # The routes whose responses carry memory content or the whole graph, with a
 # request that reaches them.
 MEMORY_READERS = [
+    ("GET", "/remember?repo_id=repo-a", None),
+    ("GET", "/reports/memory-intelligence?repo_id=repo-a", None),
+    ("GET", "/reports/memory-intelligence/text?repo_id=repo-a", None),
+    ("GET", f"/repos/{REPO}/context", None),
     ("GET", f"/repos/{REPO}/export", None),
     ("POST", "/turn-keys/search", {"query": "x", "repo_id": REPO}),
     ("GET", "/memories/missing/attestation", None),
@@ -58,6 +51,7 @@ def pat(scopes, *, admin=False):
         username=f"holder-{next(_holders)}",
         password="test-password-long",
         role="admin" if admin else "user",
+        team_id="alpha",
     )
     _, token = store.create_token(
         user_id=account["id"], name="scoped", scopes=list(scopes), repo_ids=[REPO]
@@ -72,19 +66,11 @@ def test_every_registered_route_has_an_explicit_scope_decision():
         (method, path)
         for method, path in signatures
         if not pat_scope_decision(method, concrete(path)).explicit
-    } - RELIES_ON_DEFAULT
+    }
     assert not undecided, (
         "These routes fall through to the project:read default; classify them in "
         f"server/pat_scopes.py: {sorted(undecided)}"
     )
-
-
-def test_the_allowlist_only_names_routes_that_really_use_the_default():
-    # A stale entry would hide a route that has since been classified.
-    assert {
-        sig for sig in RELIES_ON_DEFAULT
-        if not pat_scope_decision(sig[0], sig[1]).explicit
-    } == RELIES_ON_DEFAULT
 
 
 def test_an_unclassified_path_still_defaults_to_project_read():
@@ -96,6 +82,10 @@ def test_an_unclassified_path_still_defaults_to_project_read():
 @pytest.mark.parametrize(
     "method,path,scopes",
     [
+        ("GET", "/remember", {"memory:read"}),
+        ("GET", "/reports/memory-intelligence", {"memory:read"}),
+        ("GET", "/reports/memory-intelligence/text", {"memory:read"}),
+        ("GET", "/repos/r/context", {"memory:read"}),
         ("GET", "/repos/r/export", {"project:read", "memory:read", "intent:read"}),
         ("POST", "/turn-keys/search", {"memory:read"}),
         ("GET", "/memories/m/attestation", {"memory:read"}),
@@ -137,6 +127,34 @@ async def test_a_token_with_the_right_scopes_is_let_through(client, method, path
         headers=pat(["project:read", "memory:read", "intent:read"]),
     )
     assert response.status_code != 403, response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/remember",
+        "/reports/memory-intelligence",
+        "/reports/memory-intelligence/text",
+        f"/repos/{REPO}/context",
+    ],
+)
+async def test_memory_read_alone_can_read_the_new_memory_routes(client, path):
+    storage = app.state.storage
+    storage.store_repository({"id": REPO, "name": REPO, "team_id": "alpha"})
+    storage.store_memory(
+        "Readable memory content",
+        repo_id=REPO,
+        importance=0.9,
+        category="breaking_change",
+        metadata={"team_id": "alpha"},
+        auto_link=False,
+    )
+    denied = await client.get(path, params={"repo_id": REPO}, headers=pat(["project:read"]))
+    assert denied.status_code == 403
+    response = await client.get(path, params={"repo_id": REPO}, headers=pat(["memory:read"]))
+    assert response.status_code == 200, response.text
+    assert "Readable memory content" in response.text
 
 
 @pytest.mark.asyncio
@@ -200,6 +218,10 @@ def test_dashboard_pages_are_explicitly_open(path):
 # non-GET that reaches it must not be satisfied by the read scope.
 READ_ONLY_POSTS = ["/turn-keys/search", "/recall", "/context/compile", "/context/brief"]
 GET_ONLY_RULE_SAMPLES = [
+    "/remember",
+    "/reports/memory-intelligence",
+    "/reports/memory-intelligence/text",
+    "/repos/r/context",
     "/auth/me",
     "/repos/r/export",
     "/memories/m/attestation",
@@ -224,10 +246,18 @@ def test_a_write_to_a_read_rule_needs_a_write_or_admin_scope(method, path):
     assert decision.kind in {ADMIN, DENIED} or WRITE_SCOPES & set(decision.scopes), decision
 
 
-def test_head_is_decided_like_get():
-    assert pat_scope_decision("HEAD", "/repos/r/export") == pat_scope_decision(
-        "GET", "/repos/r/export"
-    )
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/repos/r/export",
+        "/remember",
+        "/reports/memory-intelligence",
+        "/reports/memory-intelligence/text",
+        "/repos/r/context",
+    ],
+)
+def test_head_is_decided_like_get(path):
+    assert pat_scope_decision("HEAD", path) == pat_scope_decision("GET", path)
 
 
 @pytest.mark.asyncio
@@ -238,3 +268,23 @@ async def test_patching_intents_usage_needs_intent_write(client):
     )
     assert response.status_code == 403, response.text
     assert "intent:write" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("repo_id", ["", "org/project", "org/project/export"])
+def test_slash_repo_portability_keeps_strict_scopes(repo_id):
+    assert set(pat_scope_decision("GET", f"/repos/{repo_id}/export").scopes) == {
+        "project:read", "memory:read", "intent:read",
+    }
+    assert pat_scope_decision("POST", f"/repos/{repo_id}/import").kind == DENIED
+
+
+@pytest.mark.asyncio
+async def test_slash_repo_portability_cannot_bypass_pat_rules(client):
+    response = await client.get("/repos/org%2Fproject/export", headers=pat(["project:read"]))
+    assert response.status_code == 403
+    assert "memory:read" in response.json()["detail"]
+    response = await client.post(
+        "/repos/org%2Fproject/import", json={}, headers=pat(["*"], admin=True),
+    )
+    assert response.status_code == 403
+    assert "cannot import" in response.json()["detail"]

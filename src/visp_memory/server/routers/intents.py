@@ -26,6 +26,7 @@ from visp_memory.server.schemas import (
     IntentResponse,
     IntentUpdate,
 )
+from visp_memory.server.write_channel import request_write_channel
 
 router = APIRouter(prefix="/intents", tags=["intents"])
 STATUS_AUTHORITY_DETAIL = (
@@ -178,7 +179,7 @@ async def complete_intent(
     recorded = IntentMemory(storage).complete(
         intent_id,
         actor_id=user.user_id,
-        channel=WriteChannel.REST,
+        channel=request_write_channel(user, default=WriteChannel.REST),
     )
     if not recorded:
         raise HTTPException(status_code=404, detail="Intent not found")
@@ -220,7 +221,7 @@ async def append_intent_outcome(
         intent_id,
         payload.outcome,
         actor_id=user.user_id,
-        channel=WriteChannel.REST,
+        channel=request_write_channel(user, default=WriteChannel.REST),
     )
     if not recorded:
         raise HTTPException(status_code=404, detail="Intent not found")
@@ -258,7 +259,7 @@ async def close_intent(
     recorded = IntentMemory(storage).close(
         intent_id,
         actor_id=user.user_id,
-        channel=WriteChannel.REST,
+        channel=request_write_channel(user, default=WriteChannel.REST),
     )
     if not recorded:
         raise HTTPException(status_code=404, detail="Intent not found")
@@ -367,7 +368,7 @@ async def reopen_intent(
         intent_id,
         "active",
         actor_id=user.user_id,
-        channel=WriteChannel.REST,
+        channel=request_write_channel(user, default=WriteChannel.REST),
     )
     if not recorded:
         raise HTTPException(status_code=404, detail="Intent not found")

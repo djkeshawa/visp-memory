@@ -46,6 +46,7 @@ from visp_memory.server.authorization import (
     has_admin_privileges,
     require_repo_scope_access,
 )
+from visp_memory.server.import_body_limit import ImportBodyLimitMiddleware
 from visp_memory.server.local_owner_guard import LocalOwnerGuardMiddleware
 from visp_memory.server.owner_token import (
     cleanup_owner_token_files,
@@ -486,6 +487,9 @@ app.add_middleware(
     allow_credentials=cors_options["allow_credentials"],
     allow_methods=["*"],
     allow_headers=["*"],
+)
+app.add_middleware(
+    ImportBodyLimitMiddleware, max_body_bytes=lambda: config.server.max_import_body_bytes,
 )
 # Added last so it is outermost: a rebinding request is refused before CORS or
 # routing sees it. It decides per request and only in local-owner mode.

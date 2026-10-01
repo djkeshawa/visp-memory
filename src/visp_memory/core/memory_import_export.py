@@ -169,13 +169,15 @@ def export_storage(storage: Any, repo_id: str) -> Dict[str, Any]:
     }
 
 
-def _require_dict(value: Any, field_path: str) -> Dict[str, Any]:
+def require_dict(value: Any, field_path: str) -> Dict[str, Any]:
+    """Require an object, naming the invalid field in any validation error."""
     if not isinstance(value, dict):
         raise ValueError(f"Import field '{field_path}' must be an object")
     return value
 
 
-def _require_list(value: Any, field_path: str) -> list[Any]:
+def require_list(value: Any, field_path: str) -> list[Any]:
+    """Require a collection before walking untrusted import records."""
     if not isinstance(value, list):
         raise ValueError(f"Import field '{field_path}' must be a list")
     return value
@@ -192,7 +194,7 @@ def _validate_optional_type(
 
 
 def _validate_memory_item(item: Any, field_path: str) -> None:
-    item = _require_dict(item, field_path)
+    item = require_dict(item, field_path)
     if not isinstance(item.get("content"), str):
         raise ValueError(f"Import field '{field_path}.content' must be a string")
 
@@ -204,7 +206,7 @@ def _validate_memory_item(item: Any, field_path: str) -> None:
 
 
 def _validate_intent_item(item: Any, field_path: str) -> None:
-    item = _require_dict(item, field_path)
+    item = require_dict(item, field_path)
     if not isinstance(item.get("description"), str):
         raise ValueError(f"Import field '{field_path}.description' must be a string")
 
@@ -213,22 +215,23 @@ def _validate_intent_item(item: Any, field_path: str) -> None:
     _validate_optional_type(item, "repo_id", str, field_path)
 
 
-def _validate_import_data(data: Any) -> Dict[str, Any]:
-    data = _require_dict(data, "root")
-    memories = _require_dict(data.get("memories", {}), "memories")
+def validate_import_data(data: Any) -> Dict[str, Any]:
+    """Validate the common document shape used by file and REST imports."""
+    data = require_dict(data, "root")
+    memories = require_dict(data.get("memories", {}), "memories")
 
     for layer in ("episodic", "semantic"):
-        layer_memories = _require_list(memories.get(layer, []), f"memories.{layer}")
+        layer_memories = require_list(memories.get(layer, []), f"memories.{layer}")
         for index, item in enumerate(layer_memories):
             _validate_memory_item(item, f"memories.{layer}[{index}]")
 
-    intents = _require_list(data.get("intents", []), "intents")
+    intents = require_list(data.get("intents", []), "intents")
     for index, item in enumerate(intents):
         _validate_intent_item(item, f"intents[{index}]")
 
     capture_manifest = data.get("capture_manifest")
     if capture_manifest is not None:
-        _require_dict(capture_manifest, "capture_manifest")
+        require_dict(capture_manifest, "capture_manifest")
         _validate_optional_type(capture_manifest, "entries", dict, "capture_manifest")
         _validate_optional_type(
             capture_manifest, "capture_version", str, "capture_manifest"
@@ -263,7 +266,7 @@ def import_memory_data(
 def _import_memory_data(
     storage: Any, data: Dict[str, Any], *, default_repo_id: str
 ) -> Dict[str, Any] | None:
-    data = _validate_import_data(data)
+    data = validate_import_data(data)
     version = data.get("version")
     if version not in (None, "1.0", "2.0", "3.0"):
         raise ValueError(f"Unsupported memory export version: {version!r}")

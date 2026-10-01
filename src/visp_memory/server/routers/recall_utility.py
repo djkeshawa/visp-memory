@@ -62,7 +62,7 @@ def _call_utility(operation: Callable[[], T]) -> T:
 
 
 @router.post("", response_model=RecallEventCreated)
-async def log_recall_event(
+def log_recall_event(
     request: Request,
     event: RecallEventCreate,
     user: UserContext = Depends(get_current_user),
@@ -86,7 +86,7 @@ async def log_recall_event(
 
 
 @router.get("/utility", response_model=Dict[str, Any])
-async def inspect_recall_utility(
+def inspect_recall_utility(
     request: Request,
     memory_id: str = None,
     repo_id: str = None,
@@ -109,7 +109,7 @@ async def inspect_recall_utility(
 
 
 @router.delete("", response_model=RecallUtilityResetResponse)
-async def reset_recall_utility(
+def reset_recall_utility(
     request: Request,
     memory_id: str = None,
     repo_id: str = None,
@@ -131,7 +131,7 @@ async def reset_recall_utility(
 
 
 @router.get("/verify", response_model=Dict[str, Any])
-async def verify_recall_utility(
+def verify_recall_utility(
     request: Request,
     memory_id: str = None,
     repo_id: str = None,

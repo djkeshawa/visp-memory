@@ -23,9 +23,9 @@ This module supplies the missing dimension.
 - ``assisted``  -- written by an assistant during a session. Usually right, but it is a
   model's summary of a model's work, so it decays faster and needs corroboration.
 - ``external``  -- originated in content outside a trusted package adapter: imports,
-  instruction files, and HTTP/REST payloads. **Never auto-injected.** This is precisely
-  the channel MemoryGraft uses, and quarantined records remain available to explicit
-  recall.
+  instruction files, and HTTP/REST payloads without local owner proof.
+  **Never auto-injected.** This is precisely the channel MemoryGraft uses, and
+  quarantined records remain available to explicit recall.
 - ``unknown``   -- unlabelled or malformed. Quarantined rather than trusted by default.
 
 **Trust decay.** Trust falls with age on a per-tier half-life, so a memory that has not
@@ -85,6 +85,7 @@ class WriteChannel(str, Enum):
     LIBRARY = "library"
     CLI = "cli"
     MCP = "mcp"
+    LOCAL_OWNER = "local_owner"
     HTTP = "http"
     REST = "rest"
     IMPORT = "import"
@@ -119,6 +120,7 @@ _CHANNEL_POLICIES = {
     WriteChannel.LIBRARY: ChannelPolicy(Provenance.UNKNOWN, "unknown"),
     WriteChannel.CLI: ChannelPolicy(Provenance.AUTHORED, "authored"),
     WriteChannel.MCP: ChannelPolicy(Provenance.ASSISTED, "assisted"),
+    WriteChannel.LOCAL_OWNER: ChannelPolicy(Provenance.ASSISTED, "assisted"),
     WriteChannel.HTTP: ChannelPolicy(Provenance.EXTERNAL, "external"),
     WriteChannel.REST: ChannelPolicy(Provenance.EXTERNAL, "external"),
     WriteChannel.IMPORT: ChannelPolicy(Provenance.EXTERNAL, "external"),
