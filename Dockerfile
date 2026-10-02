@@ -10,7 +10,7 @@ RUN npm run export
 
 # Dependency installation depends only on the lockfile and selected extras, so
 # editing Python or dashboard code does not download the server stack again.
-FROM python:3.14.7-slim-bookworm AS dependency-builder
+FROM python:3.15.0rc2-slim-bookworm AS dependency-builder
 WORKDIR /app
 ARG VISP_MEMORY_EXTRAS=api,mcp,arcadedb,neo4j,openai,anthropic,ollama
 COPY pyproject.toml uv.lock ./
@@ -34,7 +34,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --python /opt/venv/bin/python --no-deps /dist/*.whl && \
     uv pip check --python /opt/venv/bin/python
 
-FROM python:3.14.7-slim-bookworm AS runtime
+FROM python:3.15.0rc2-slim-bookworm AS runtime
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/* && \
