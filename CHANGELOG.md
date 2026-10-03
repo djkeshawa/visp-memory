@@ -11,7 +11,9 @@ tag has no section yet) as the GitHub release body. See
 
 ## [Unreleased]
 
-Everything merged since 0.7.10 (#49 to #69). The headline is one local server that
+## [0.8.0] - 2026-10-04
+
+Everything merged since 0.7.10 (#49 to #78). The headline is one local server that
 many projects and agents share; see [Shared server](https://github.com/djkeshawa/visp-memory/blob/develop/docs/guides/SHARED_SERVER.md).
 
 ### Upgrading
@@ -51,8 +53,8 @@ access tokens, or has Codex configured.
   `visp-memory connect` (or `storage.mode: client` and `storage.server_url` in
   `visp-memory.yaml`). A server refuses to start while local writers hold the
   directory; close them or switch them to client mode first. `uvicorn --workers`
-  above 1 is unsupported: the extra workers are refused and uvicorn keeps
-  respawning them, so run one worker. `storage backup|upgrade --offline` now
+  above 1 is unsupported: one worker serves and the extra workers stay idle without
+  serving (so uvicorn stops respawning them), so run one worker. `storage backup|upgrade --offline` now
   actually checks that no server holds the directory. `VISP_MEMORY_STORAGE_WRITER_GUARD=off`
   disables the guard.
 - **Workflow status needs the owner token.** An anonymous loopback caller of
@@ -95,6 +97,17 @@ access tokens, or has Codex configured.
   `status` values `quarantined` and `rejected`. `POST /recall` still refuses both.
 - In client mode, unscoped reads such as `get_stats()` now return the configured
   project's data, not the server-wide view, matching local mode.
+- **Graph imports are limited to 64 MiB** by default; larger bodies get HTTP 413.
+  Raise it with `server.max_import_body_bytes` or
+  `VISP_MEMORY_SERVER_MAX_IMPORT_BODY_BYTES`.
+- **Owner-token and discovery files are named by host and port**:
+  `~/.visp-memory/run/owner-<host>-<port>.token` and `server-<host>-<port>.json`
+  (IPv6 colons percent-encoded). The client sends the token only to that exact
+  origin. Records written by older servers (`server-<port>.json`) are still read.
+- **A second `serve` on a port whose record belongs to a live server refuses to
+  start** instead of overwriting that server's token and discovery files.
+- **`connect --migrate-local` refuses** when the local store's records belong to a
+  different repository ID than the target, naming both IDs.
 
 ### Added
 
@@ -107,7 +120,11 @@ access tokens, or has Codex configured.
   `~/.visp-memory/run/server-<port>.json`, writes `repo_id`, `storage.mode: client`
   and `server_url` into `visp-memory.yaml`, checks health and registers the repository.
   `--migrate-local` copies the old local store through the server and leaves the old
-  directory untouched. Comments in `visp-memory.yaml` are not preserved.
+  directory untouched. It edits the config file the project already uses (JSON in
+  place, simple YAML with comments kept, otherwise a full rewrite after a `.backup`
+  copy) and never creates a `visp-memory.yaml` that shadows another config file.
+  Discovered servers must be HTTP(S) loopback origins, and API keys or JWTs are not
+  sent to a discovered URL that differs from the configured one.
 - `hooks install claude-code --mcp` merges a `visp-memory` server into the project
   `.mcp.json` without touching other servers.
 - Client-mode parity over REST: recall-utility feedback (`/recall-events`),
@@ -124,7 +141,7 @@ access tokens, or has Codex configured.
   recall matches the writer's session. Imports keep the exported value. The Codex
   plugin sets `VISP_MEMORY_AGENT=codex`. Experimental.
 - Owner-token maintenance in open local-owner mode: the server writes a `0600`
-  token to `~/.visp-memory/run/owner-<port>.token`, and a loopback caller sending it
+  token to `~/.visp-memory/run/owner-<host>-<port>.token`, and a loopback caller sending it
   as `X-Visp-Owner-Token` may purge, archive, restore, run retention and
   consistency checks, reindex, run dreaming, import and read the audit log.
   Accounts, teams, providers and routing stay admin-only.
@@ -152,7 +169,20 @@ access tokens, or has Codex configured.
 - A writer conflict prints one line of guidance and exits 1 instead of a traceback;
   `contract recall` and `contract propose` keep their JSON envelope.
 - Environment overrides are coerced by the config field's type from one table.
-- `server-<port>.json` records the server's `ppid`.
+- `server-<host>-<port>.json` records the server's bind host and `ppid`.
+- Repository IDs containing `/` work on `/repos/{id}/export`, `/import` and
+  `/registration`; the client URL-encodes them.
+- Export, import, recall-utility and inspection handlers run in the threadpool
+  instead of blocking the event loop.
+- Against an older server, a missing route is told apart from a missing record:
+  `peek` falls back to a normal read, turn-key search returns nothing, and the legacy
+  capability fallback is retried rather than cached for the process lifetime.
+- Client-mode `visp-memory doctor` reads repository registration and intent usage
+  from the server.
+- The serving process keeps the server role from import into startup, closing the
+  gap between them; with the Neo4j backend the role now also covers `auth.db` and
+  `lifecycle.db` in the data directory.
+- CI runs the real `visp-memory serve --shared` quick start on Ubuntu and Windows.
 
 ### Fixed
 
@@ -174,6 +204,16 @@ access tokens, or has Codex configured.
   uvicorn supervisor, holds the server role.
 - A false conflict between two local writers, seen on loaded machines, no longer
   occurs.
+- A stale `.locks/server.json` left by a crashed server no longer blocks
+  `connect --migrate-local`; a store counts as served only while its lock is held.
+- An idle extra uvicorn worker stops on Windows when its supervisor shuts down, and
+  exits if the supervisor is gone.
+- HTTP MCP works under `--root-path`.
+- A REST request without attribution headers no longer takes the server process's
+  own `VISP_MEMORY_AGENT` / `VISP_MEMORY_SESSION`; an invalid `VISP_MEMORY_SESSION`
+  falls back to a per-process session instead of dropping the label.
+- In client mode, `review accept|reject` honour `--repo`, and the `--endpoint` help
+  no longer claims the contract commands contact nothing.
 - A regression in how a relative `data_dir` was resolved for
   `.visp-memory/config.yaml` opened an empty store at
   `<project>/.visp-memory/.visp-memory/data`. It existed only on `develop` and never
@@ -198,8 +238,14 @@ access tokens, or has Codex configured.
   `0700` on POSIX.
 - `POST /memories` strips a caller-supplied `metadata.team_id`, which drives
   visibility.
+- Caller-supplied `written_by` is stripped from intent context and other REST
+  metadata on create and kept from the original on update, so a forged session label
+  cannot boost recall.
+- `connect --migrate-local` imports at the `external` tier (see Upgrading), so a
+  crafted local store cannot import high-trust records.
 - A stdio MCP tool naming another repository is refused unless
   `VISP_MEMORY_MCP_ALLOW_REPO_OVERRIDE` is set, and unscoped writes are checked
   before dispatch.
 
-[Unreleased]: https://github.com/djkeshawa/visp-memory/compare/v0.7.10...develop
+[Unreleased]: https://github.com/djkeshawa/visp-memory/compare/v0.8.0...develop
+[0.8.0]: https://github.com/djkeshawa/visp-memory/compare/v0.7.10...v0.8.0
