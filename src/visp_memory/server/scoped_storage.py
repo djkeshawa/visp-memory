@@ -14,7 +14,7 @@ from visp_memory.server.scoped_utility import (
 # Content reads are explicit methods below; new read methods must be scoped too.
 _FORWARDED = frozenset({
     "get_capabilities", "get_schema_status", "supports_retrieval_channel",
-    "store_memory", "store_evidence", "update_memory", "revise_memory",
+    "update_memory", "revise_memory",
     "attach_evidence", "update_evidence", "update_intent", "append_intent_outcome",
     "report_intent_workflow", "add_relationship", "log_recall_event", "get_repo_dependencies",
     "data_dir", "server_url", "embedding_fn", "_embedding_fn", "turn_keys",
@@ -37,8 +37,28 @@ class ScopedStorageView:
 
     def _repo(self, requested):
         if requested is not None and requested != self.repo_id:
-            raise ValueError("Storage reads must stay within the authorized repository")
+            raise ValueError("Storage requests must stay within the authorized repository")
         return self.repo_id
+
+    def _owned_metadata(self, metadata):
+        result = dict(metadata or {})
+        result["author_id"] = self.user.user_id
+        result.pop("team_id", None)
+        if self.user.team_id:
+            result["team_id"] = self.user.team_id
+        return result
+
+    def store_memory(self, content, layer="episodic", repo_id=None, metadata=None, **kwargs):
+        return self.storage.store_memory(
+            content=content, layer=layer, repo_id=self._repo(repo_id),
+            metadata=self._owned_metadata(metadata), **kwargs,
+        )
+
+    def store_evidence(self, content, repo_id=None, metadata=None, **kwargs):
+        return self.storage.store_evidence(
+            content=content, repo_id=self._repo(repo_id),
+            metadata=self._owned_metadata(metadata), **kwargs,
+        )
 
     def _visible(self, record, scope_field="metadata"):
         return bool(
@@ -101,11 +121,8 @@ class ScopedStorageView:
         ]
 
     def set_intent(self, description, priority=0, context=None, repo_id=None):
-        context = {**(context or {}), "author_id": self.user.user_id}
-        if self.user.team_id:
-            context["team_id"] = self.user.team_id
         return self.storage.set_intent(
-            description=description, priority=priority, context=context,
+            description=description, priority=priority, context=self._owned_metadata(context),
             repo_id=self._repo(repo_id),
         )
 
