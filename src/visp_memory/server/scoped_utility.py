@@ -10,7 +10,7 @@ from visp_memory.server.memory_reads import iter_visible_memories
 
 
 def _event_type(value):
-    if not value:
+    if value is None:
         return value
     normalized = str(value).strip().lower()
     if normalized not in RECALL_EVENT_WEIGHTS:

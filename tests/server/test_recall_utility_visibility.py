@@ -58,3 +58,13 @@ async def test_repository_utility_reset_leaves_hidden_record_events_intact(clien
     storage = app.state.storage
     assert storage.inspect_recall_utility(memory_id=visible)["summary"]["total_events"] == 0
     assert storage.inspect_recall_utility(memory_id=hidden)["summary"]["total_events"] == 1
+
+
+@pytest.mark.asyncio
+async def test_empty_event_filter_is_invalid_even_without_visible_records(client, scoped_events):
+    storage = app.state.storage
+    storage.update_memory(scoped_events[0], metadata={"team_id": "beta"})
+
+    response = await client.get("/recall-events/utility?repo_id=utility-audit&event_type=")
+
+    assert response.status_code == 422
