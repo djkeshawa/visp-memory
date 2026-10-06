@@ -8,6 +8,7 @@ import re
 from collections.abc import Callable
 from typing import Any, Optional
 
+from visp_memory.core import task_intents
 from visp_memory.core.clock import parse_utc
 from visp_memory.core.context_compiler import (
     ContextCompiler,
@@ -107,23 +108,9 @@ class TaskMemoryBriefCompiler:
         self.storage = storage
         self.code_graph = code_graph
 
-    @staticmethod
-    def _unique(values: list[str]) -> list[str]:
-        return list(dict.fromkeys(value.strip() for value in values if value and value.strip()))
-
-    @staticmethod
-    def _as_strings(value: Any) -> list[str]:
-        if value is None:
-            return []
-        if isinstance(value, str):
-            return [value]
-        if isinstance(value, (list, tuple, set)):
-            return [str(item) for item in value if item is not None]
-        return [str(value)]
-
-    @staticmethod
-    def _terms(value: str) -> list[str]:
-        return re.findall(r"[a-z0-9_./-]+", value.casefold())
+    _unique = staticmethod(task_intents.unique_strings)
+    _as_strings = staticmethod(task_intents.as_strings)
+    _terms = staticmethod(task_intents.terms)
 
     def _task_profile(
         self, task: str, *, files: list[str], symbols: list[str]
@@ -174,49 +161,10 @@ class TaskMemoryBriefCompiler:
         self, task: str, *, repo_id: Optional[str], intent_id: Optional[str]
     ) -> Optional[dict[str, Any]]:
         intents = self.storage.get_active_intents(repo_id=repo_id, status="active")
-        if intent_id:
-            return next((intent for intent in intents if intent.get("id") == intent_id), None)
-        if not intents:
-            return None
-        task_terms = set(self._terms(task))
+        return task_intents.select_intent(intents, task, intent_id=intent_id)
 
-        def score(intent: dict[str, Any]) -> tuple[float, int, str]:
-            context = intent.get("context") or {}
-            searchable = " ".join(
-                [
-                    str(intent.get("description") or ""),
-                    *self._as_strings(context.get("constraints")),
-                    *self._as_strings(context.get("acceptance_criteria")),
-                ]
-            )
-            intent_terms = set(self._terms(searchable))
-            overlap = len(task_terms.intersection(intent_terms)) / max(len(task_terms), 1)
-            return overlap, int(intent.get("priority") or 0), str(intent.get("created_at") or "")
-
-        return max(intents, key=score)
-
-    def _intent_payload(self, intent: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
-        if not intent:
-            return None
-        context = intent.get("context") or {}
-        return {
-            "id": intent.get("id"),
-            "description": intent.get("description"),
-            "priority": intent.get("priority", 0),
-            "status": intent.get("status", "active"),
-            "acceptance_criteria": self._as_strings(context.get("acceptance_criteria")),
-        }
-
-    def _constraints(
-        self, explicit: list[str], intent: Optional[dict[str, Any]]
-    ) -> list[str]:
-        if not intent:
-            return self._unique(explicit)
-        context = intent.get("context") or {}
-        avoid = [f"Avoid: {item}" for item in self._as_strings(context.get("avoid"))]
-        return self._unique(
-            [*explicit, *self._as_strings(context.get("constraints")), *avoid]
-        )
+    _intent_payload = staticmethod(task_intents.intent_payload)
+    _constraints = staticmethod(task_intents.constraints)
 
     @staticmethod
     def _section(item: dict[str, Any]) -> str:
