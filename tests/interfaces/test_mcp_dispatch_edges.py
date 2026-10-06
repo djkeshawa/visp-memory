@@ -69,6 +69,10 @@ def test_http_resource_reader_formats_every_scoped_resource(monkeypatch):
             return {"repo_id": repo_id, "total": 2}
 
     monkeypatch.setattr(mcp, "_http_authorize_repo", lambda repo, memory, write: repo)
+    monkeypatch.setattr(
+        "visp_memory.interfaces.mcp_memory_view.memory_for_principal",
+        lambda memory, principal, repo_id: memory,
+    )
     memory = Memory()
 
     assert _read_http_resource("memory://repo/repo-a/context", memory) == "repository context"
@@ -118,6 +122,10 @@ def test_http_resource_reader_handles_empty_collections_and_unknown_resource(mon
         intent=SimpleNamespace(get_active=lambda *, repo_id: []),
     )
     monkeypatch.setattr(mcp, "_http_authorize_repo", lambda repo, memory, write: repo)
+    monkeypatch.setattr(
+        "visp_memory.interfaces.mcp_memory_view.memory_for_principal",
+        lambda memory, principal, repo_id: memory,
+    )
 
     assert _read_http_resource("memory://repo/repo-a/warnings", memory) == "No warnings."
     assert _read_http_resource("memory://repo/repo-a/goals", memory) == "No active goals."

@@ -185,9 +185,10 @@ the repository ID and data path. If semantic search is unavailable, check both
 | `core` (default) | 17 | Everyday recall and capture |
 | `full` | 36 | Advanced and maintenance tools, including workflow reports |
 
-Set `VISP_MEMORY_MCP_PROFILE` to choose a profile. Profiles affect advertisement,
-**not authorization**: a hidden tool can still be called by name. Enforce access
-through server credentials and scopes. See [server authentication](AUTHENTICATION.md).
+Set `VISP_MEMORY_MCP_PROFILE` to choose a profile. Profiles control both advertised
+tools and dispatch: calls to tools outside the active profile are refused.
+Server credentials and scopes also determine which records a client can access.
+See [server authentication](AUTHENTICATION.md).
 
 The [footprint test](../../tests/interfaces/test_mcp_profile_footprint.py) measures
 serialized schemas and checks a 35–45% reduction for core versus full. This is a
@@ -201,6 +202,8 @@ schema-size measurement, not a token-billing or coding-quality result.
 before binding beyond loopback.
 
 Clients should send project scope explicitly. Requests to `/mcp` do not depend
-on server-side session IDs. Model tasks use the configured server provider;
+on server-side session IDs. Tools and resources apply the authenticated user's
+team visibility within that project before using memories or intents in results.
+Model tasks use the configured server provider;
 client sampling is unavailable on this stateless transport. The retrieval policy
 itself does not call a model.
