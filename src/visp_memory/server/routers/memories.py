@@ -174,22 +174,17 @@ def _latest_visible_memory(
     category: str = None,
     status: str = "active",
 ):
-    memories = storage.list_memories(
-        limit=50,
+    memories = visible_memory_page(
+        storage,
+        user=user,
+        limit=1,
         repo_id=repo_id,
         layer=layer,
         category=category,
         status=status,
         order_by="created_at DESC",
     )
-    return next(
-        (
-            memory
-            for memory in memories
-            if can_access_scoped_record(storage, memory, user, scope_field="metadata")
-        ),
-        None,
-    )
+    return next(iter(memories), None)
 
 
 @router.get("/remember", response_model=MemoryResponse)
