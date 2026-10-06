@@ -68,3 +68,42 @@ async def test_empty_event_filter_is_invalid_even_without_visible_records(client
     response = await client.get("/recall-events/utility?repo_id=utility-audit&event_type=")
 
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event_type", ["task-linked", "outcome-linked"])
+@pytest.mark.parametrize("operation", ["inspect", "verify", "reset"])
+async def test_utility_filters_preserve_supported_hyphenated_event_names(
+    client, scoped_events, event_type, operation
+):
+    visible, hidden = scoped_events
+    storage = app.state.storage
+    for memory_id in scoped_events:
+        storage.log_recall_event(memory_id, event_type, repo_id="utility-audit")
+    params = {"repo_id": "utility-audit", "event_type": event_type}
+
+    if operation == "inspect":
+        response = await client.get("/recall-events/utility", params=params)
+    elif operation == "verify":
+        response = await client.get("/recall-events/verify", params=params)
+    else:
+        response = await client.delete("/recall-events", params=params)
+
+    assert response.status_code == 200
+    report = response.json()
+    if operation == "inspect":
+        assert report["summary"]["total_events"] == 1
+        assert report["summary"]["by_event_type"] == {event_type.replace("-", "_"): 1}
+        assert [event["memory_id"] for event in report["events"]] == [visible]
+        assert hidden not in json.dumps(report)
+    elif operation == "verify":
+        assert report["checked_events"] == 1
+        assert report["valid"]
+    else:
+        assert report["deleted"] == 1
+        assert storage.inspect_recall_utility(
+            memory_id=hidden, event_type=event_type
+        )["summary"]["total_events"] == 1
+        assert storage.inspect_recall_utility(
+            memory_id=visible, event_type="surfaced"
+        )["summary"]["total_events"] == 1
