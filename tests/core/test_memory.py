@@ -1430,6 +1430,7 @@ class TestImportExport:
         config.storage.neo4j_password = "neo4j-secret"
         config.server.jwt_secret = "server-secret"
         config.server.api_keys = ["server-api-secret"]
+        config.server.bootstrap_admin_password = "bootstrap-password-secret"
         memory = Memory(config=config)
 
         export_file = tmp_path / "repo-a-export.json"
@@ -1444,12 +1445,14 @@ class TestImportExport:
             "neo4j-secret",
             "server-secret",
             "server-api-secret",
+            "bootstrap-password-secret",
         ):
             assert secret not in serialized_export
 
         assert export_data["config"]["embedding"]["api_key"] == "***REDACTED***"
         assert exported["config"]["storage"]["jwt_token"] == "***REDACTED***"
         assert exported["config"]["server"]["api_keys"] == ["***REDACTED***"]
+        assert exported["config"]["server"]["bootstrap_admin_password"] == "***REDACTED***"
 
     def test_export_scrubs_vector_payloads(self, tmp_path, monkeypatch):
         config = MemoryConfig(project_name="export-test", repo_id="repo-a")

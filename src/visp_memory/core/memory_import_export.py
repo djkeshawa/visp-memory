@@ -24,6 +24,7 @@ _SENSITIVE_CONFIG_KEYS = {
     "jwt_token",
     "jwt_secret",
     "neo4j_password",
+    "bootstrap_admin_password",
 }
 _MAX_GRAPH_EXPORT_ITEMS = 10000
 
