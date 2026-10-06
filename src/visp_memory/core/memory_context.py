@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from visp_memory.core.clock import utc_now
+from visp_memory.core.clock import parse_utc, utc_now
 from visp_memory.core.eligibility import (
     EligibilityFilterResult,
     filter_recall_eligible,
@@ -30,6 +30,7 @@ def build_context(
     repo_id = require_repo_id(
         repo_id if repo_id is not None else memory.config.repo_id
     )
+    reference_time = parse_utc(as_of)
 
     def eligible(memories):
         result = filter_recall_eligible(
@@ -59,13 +60,13 @@ def build_context(
 
     if include_knowledge:
         warning_filter = filter_unsolicited(
-            eligible(memory.semantic.get_warnings(repo_id=repo_id))
+            eligible(memory.semantic.get_warnings(repo_id=repo_id)), now=reference_time,
         )
         convention_filter = filter_unsolicited(
-            eligible(memory.semantic.get_conventions(repo_id=repo_id))
+            eligible(memory.semantic.get_conventions(repo_id=repo_id)), now=reference_time,
         )
         issue_filter = filter_unsolicited(
-            eligible(memory.semantic.get_known_issues(repo_id=repo_id))
+            eligible(memory.semantic.get_known_issues(repo_id=repo_id)), now=reference_time,
         )
         trust_results.extend([warning_filter, convention_filter, issue_filter])
         warnings = warning_filter.allowed[:10]
@@ -80,7 +81,7 @@ def build_context(
 
     if include_history:
         recent_filter = filter_unsolicited(
-            eligible(memory.episodic.recent(limit=10, repo_id=repo_id))
+            eligible(memory.episodic.recent(limit=10, repo_id=repo_id)), now=reference_time,
         )
         trust_results.append(recent_filter)
         recent = recent_filter.allowed

@@ -418,7 +418,7 @@ class TaskMemoryBriefCompiler:
         def compiler_filter(item: dict[str, Any]) -> bool:
             if memory_filter and not memory_filter(item):
                 return False
-            result = filter_unsolicited([item])
+            result = filter_unsolicited([item], now=parse_utc(as_of))
             trust_assessments[str(item.get("id"))] = result
             return bool(result.allowed)
 

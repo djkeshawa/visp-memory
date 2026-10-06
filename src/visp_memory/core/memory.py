@@ -15,6 +15,7 @@ from typing import Any, Dict, List
 
 from visp_memory.config import MemoryConfig
 from visp_memory.core.attribution import WRITTEN_BY_KEY
+from visp_memory.core.clock import parse_utc
 from visp_memory.core.compression import MemoryCompressor, create_llm_compressor
 from visp_memory.core.eligibility import (
     EligibilityFilterResult,
@@ -1517,7 +1518,7 @@ class Memory:
                 as_of=as_of,
             )
             eligibility_results.append(eligibility)
-            filtered = filter_unsolicited(eligibility.allowed)
+            filtered = filter_unsolicited(eligibility.allowed, now=parse_utc(as_of))
             results[group] = filtered.allowed
             trust_results.append(filtered)
         results["trust_filter"] = TrustFilterResult.combine(trust_results).diagnostics()

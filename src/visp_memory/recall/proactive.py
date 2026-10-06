@@ -11,6 +11,7 @@ import hashlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from visp_memory.core.clock import parse_utc
 from visp_memory.core.eligibility import (
     EligibilityFilterResult,
     filter_recall_eligible,
@@ -162,7 +163,7 @@ class ProactiveRecall:
             as_of=self.as_of,
         )
         eligibility_reports.append(eligibility)
-        result = filter_unsolicited(eligibility.allowed)
+        result = filter_unsolicited(eligibility.allowed, now=parse_utc(self.as_of))
         reports.append(result)
         return result.allowed
 
@@ -879,7 +880,7 @@ class ProactiveRecall:
         recall_eligibility = getattr(self.memory, "last_recall_eligibility_result", None)
         if recall_eligibility is not None:
             eligibility_results.append(recall_eligibility)
-        task_trust = filter_unsolicited(task_results)
+        task_trust = filter_unsolicited(task_results, now=parse_utc(self.as_of))
         trust_results.append(task_trust)
         task_results = task_trust.allowed
 
