@@ -1,6 +1,6 @@
 """Lifecycle, eligibility, and trust guards shared by graph reads."""
 
-from typing import Any
+from typing import Any, Callable
 
 from visp_memory.core.clock import parse_utc
 from visp_memory.core.eligibility import filter_recall_eligible
@@ -15,7 +15,12 @@ def guard_graph_memories(
     environment: Any = None,
     task_type: Any = None,
     as_of: Any = None,
+    memory_filter: Callable[[dict], bool] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    # Authorization precedes every guard, including diagnostics about rejected rows.
+    if memory_filter is not None:
+        memories = [memory for memory in memories if memory_filter(memory)]
+
     # Lifecycle first. Eligibility and trust both answer "should this be shown
     # to this caller, now" — neither asks whether the memory still exists. A
     # deleted, merged or superseded belief could pass both and be returned by
@@ -62,4 +67,3 @@ def guard_graph_memories(
         for rejection in trust.rejected
     )
     return trust.allowed, omissions
-

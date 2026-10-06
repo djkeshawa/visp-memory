@@ -759,7 +759,7 @@ async def test_system_status_reports_unavailable_and_partial_stats(client, monke
 
 
 class _FakeGraphRecall:
-    def __init__(self, storage):
+    def __init__(self, storage, *, memory_filter=None):
         self.storage = storage
 
     @staticmethod

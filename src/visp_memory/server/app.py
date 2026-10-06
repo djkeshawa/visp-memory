@@ -732,6 +732,16 @@ def _filter_graph_recall_result(result, user: UserContext):
     return result
 
 
+def _graph_recall(user: UserContext) -> GraphRecall:
+    storage = app.state.storage
+    return GraphRecall(
+        storage,
+        memory_filter=lambda memory: can_access_scoped_record(
+            storage, memory, user, scope_field="metadata"
+        ),
+    )
+
+
 def _require_graph_repo_access(repo_id: str | None, user: UserContext) -> str | None:
     graph_repo_id = request_repo_id(repo_id, config)
     require_repo_scope_access(app.state.storage, graph_repo_id, user)
@@ -775,7 +785,7 @@ async def graph_recall_trace(
 ):
     """Return an agent-optimized evidence-backed recall subgraph for a query."""
     graph_repo_id = _require_graph_repo_access(payload.repo_id, user)
-    result = GraphRecall(app.state.storage).trace(
+    result = _graph_recall(user).trace(
         query=payload.query,
         repo_id=graph_repo_id,
         depth=payload.depth,
@@ -795,7 +805,7 @@ async def graph_recall_neighbors(
 ):
     """Return a compact relationship neighborhood for a memory."""
     graph_repo_id = _require_graph_repo_access(payload.repo_id, user)
-    result = GraphRecall(app.state.storage).neighbors(
+    result = _graph_recall(user).neighbors(
         memory_id=payload.memory_id,
         relationship_filter=payload.relationship_filter,
         repo_id=graph_repo_id,
@@ -815,7 +825,7 @@ async def graph_recall_path(
 ):
     """Return the shortest evidence-backed relationship path between memories."""
     graph_repo_id = _require_graph_repo_access(payload.repo_id, user)
-    result = GraphRecall(app.state.storage).path(
+    result = _graph_recall(user).path(
         source_id=payload.source_id,
         target_id=payload.target_id,
         repo_id=graph_repo_id,
@@ -834,7 +844,7 @@ async def graph_recall_why_relevant(
 ):
     """Explain why a memory is relevant to a query through relationship evidence."""
     graph_repo_id = _require_graph_repo_access(payload.repo_id, user)
-    result = GraphRecall(app.state.storage).why_relevant(
+    result = _graph_recall(user).why_relevant(
         query=payload.query,
         memory_id=payload.memory_id,
         repo_id=graph_repo_id,
