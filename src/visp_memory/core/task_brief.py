@@ -158,9 +158,12 @@ class TaskMemoryBriefCompiler:
         }
 
     def _match_intent(
-        self, task: str, *, repo_id: Optional[str], intent_id: Optional[str]
+        self, task: str, *, repo_id: Optional[str], intent_id: Optional[str],
+        intent_filter: Optional[Callable[[dict[str, Any]], bool]] = None,
     ) -> Optional[dict[str, Any]]:
         intents = self.storage.get_active_intents(repo_id=repo_id, status="active")
+        if intent_filter is not None:
+            intents = [intent for intent in intents if intent_filter(intent)]
         return task_intents.select_intent(intents, task, intent_id=intent_id)
 
     _intent_payload = staticmethod(task_intents.intent_payload)
@@ -380,6 +383,7 @@ class TaskMemoryBriefCompiler:
         previous_fingerprint: Optional[str] = None,
         min_confidence: float = 0.0,
         memory_filter: Optional[Callable[[dict[str, Any]], bool]] = None,
+        intent_filter: Optional[Callable[[dict[str, Any]], bool]] = None,
         environment: Any = None,
         task_type: Any = None,
         ranking_strategy: str = "default",
@@ -398,7 +402,7 @@ class TaskMemoryBriefCompiler:
         token_budget = max(64, int(token_budget))
         profile = self._task_profile(task, files=files, symbols=symbols)
         matched_intent = self._match_intent(
-            task, repo_id=repo_id, intent_id=intent_id
+            task, repo_id=repo_id, intent_id=intent_id, intent_filter=intent_filter
         )
         intent = self._intent_payload(matched_intent)
         resolved_constraints = self._constraints(constraints or [], matched_intent)

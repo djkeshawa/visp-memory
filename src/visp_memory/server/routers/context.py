@@ -70,6 +70,9 @@ async def prepare_task_brief(
         files=payload.files,
         symbols=payload.symbols,
         intent_id=payload.intent_id,
+        intent_filter=lambda intent: can_access_scoped_record(
+            storage, intent, user, scope_field="context"
+        ),
         constraints=payload.constraints,
         previous_fingerprint=payload.previous_fingerprint,
         min_confidence=payload.min_confidence,
