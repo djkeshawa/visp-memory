@@ -2,7 +2,9 @@
 
 from typing import Any, Optional
 
+from visp_memory.core.source_support import scope_signature
 from visp_memory.core.tokens import estimate_tokens
+from visp_memory.core.trust import provenance_of
 from visp_memory.quality.secrets import redact_for_storage
 
 
@@ -20,6 +22,16 @@ def build_merge_preview(
         errors.append("Memories from different projects cannot be merged")
     if len(layers) != 1:
         errors.append("Memories from different layers cannot be merged")
+    if len({provenance_of(memory) for memory in memories}) != 1:
+        errors.append("Memories with different provenance tiers cannot be merged")
+    scopes = [memory.get("metadata") or {} for memory in memories]
+    if any(scope.get("team_id") != scopes[0].get("team_id") for scope in scopes):
+        errors.append("Memories from different team scopes cannot be merged")
+    try:
+        if len({scope_signature(scope) for scope in scopes}) != 1:
+            errors.append("Memories with different environment or task scopes cannot be merged")
+    except ValueError:
+        errors.append("Memories with invalid environment or task scopes cannot be merged")
     invalid_statuses = {
         memory.get("status")
         for memory in memories
@@ -40,7 +52,7 @@ def build_merge_preview(
         )
         for memory in memories
     }
-    if len(temporal_ranges) > 1 and not exact_duplicate:
+    if len(temporal_ranges) > 1:
         errors.append("Temporally different facts must be superseded or linked, not merged")
     if not exact_duplicate:
         warnings.append("Semantic merges require explicit human review")

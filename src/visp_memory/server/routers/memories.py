@@ -639,11 +639,14 @@ async def merge_memories(
             scope_field="metadata",
             not_found_detail="Memory not found",
         )
-    preview = request.app.state.memory_lifecycle.preview_merge(
-        payload.memory_ids,
-        target_id=payload.target_id,
-        target_content=payload.target_content,
-    )
+    try:
+        preview = request.app.state.memory_lifecycle.preview_merge(
+            payload.memory_ids,
+            target_id=payload.target_id,
+            target_content=payload.target_content,
+        )
+    except LifecycleError as error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
     if not preview["exact_duplicate"] and not payload.reviewed:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
