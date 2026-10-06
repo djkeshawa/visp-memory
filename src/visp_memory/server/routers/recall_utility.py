@@ -16,6 +16,11 @@ from visp_memory.server.schemas_recall import (
     RecallEventCreated,
     RecallUtilityResetResponse,
 )
+from visp_memory.server.scoped_utility import (
+    inspect_visible_utility,
+    reset_visible_utility,
+    verify_visible_utility,
+)
 
 router = APIRouter(prefix="/recall-events", tags=["recall-utility"])
 T = TypeVar("T")
@@ -99,7 +104,8 @@ def inspect_recall_utility(
     require_repo_scope_access(storage, resolved_repo_id, user)
     _require_optional_memory(storage, memory_id, resolved_repo_id, user)
     return _call_utility(
-        lambda: storage.inspect_recall_utility(
+        lambda: inspect_visible_utility(
+            storage, user,
             memory_id=memory_id,
             repo_id=resolved_repo_id,
             event_type=event_type,
@@ -121,7 +127,8 @@ def reset_recall_utility(
     require_repo_writable(storage, resolved_repo_id, user)
     _require_optional_memory(storage, memory_id, resolved_repo_id, user)
     deleted = _call_utility(
-        lambda: storage.reset_recall_utility(
+        lambda: reset_visible_utility(
+            storage, user,
             memory_id=memory_id,
             repo_id=resolved_repo_id,
             event_type=event_type,
@@ -143,7 +150,8 @@ def verify_recall_utility(
     require_repo_scope_access(storage, resolved_repo_id, user)
     _require_optional_memory(storage, memory_id, resolved_repo_id, user)
     return _call_utility(
-        lambda: storage.verify_recall_utility(
+        lambda: verify_visible_utility(
+            storage, user,
             memory_id=memory_id,
             repo_id=resolved_repo_id,
             event_type=event_type,
