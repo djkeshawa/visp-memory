@@ -37,6 +37,7 @@ from visp_memory.server.authorization import (
     require_repo_writable,
     require_scoped_record_access,
 )
+from visp_memory.server.memory_reads import visible_memory_page
 from visp_memory.server.provenance_guard import pin_provenance
 from visp_memory.server.request_scope import request_repo_id
 from visp_memory.server.routers.platform import append_audit_event
@@ -240,30 +241,10 @@ async def list_memories(
     # to the shared purge page size through the Remote adapter.
     limit = max(1, min(limit, 1000))
     offset = max(0, offset)
-    visible_memories = []
-    storage_offset = 0
-    storage_page_size = 200
-    visible_target = offset + limit
-    while len(visible_memories) < visible_target:
-        page = storage.list_memories(
-            limit=storage_page_size,
-            offset=storage_offset,
-            repo_id=memory_repo_id,
-            layer=layer,
-            category=category,
-            status=status,
-            order_by=order_by,
-            after_id=after_id,
-        )
-        visible_memories.extend(
-            memory
-            for memory in page
-            if can_access_scoped_record(storage, memory, user, scope_field="metadata")
-        )
-        if len(page) < storage_page_size:
-            break
-        storage_offset += storage_page_size
-    selected = visible_memories[offset:visible_target]
+    selected = visible_memory_page(
+        storage, repo_id=memory_repo_id, user=user, layer=layer, category=category,
+        status=status, order_by=order_by, after_id=after_id, limit=limit, offset=offset,
+    )
     return [_memory_response_payload(memory) for memory in selected]
 
 
