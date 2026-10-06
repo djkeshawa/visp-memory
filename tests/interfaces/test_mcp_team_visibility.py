@@ -141,6 +141,80 @@ async def test_refused_hidden_id_does_not_increase_the_memory_access_count(team_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool", "arguments", "description"),
+    [
+        ("memory_goal", {"goal": "Deliver login"}, "Deliver login"),
+        ("memory_working_on", {"task": "Deliver login"}, "WORKING ON: Deliver login"),
+    ],
+)
+async def test_mcp_intent_creator_can_connect_a_workflow_report(
+    team_server, tool, arguments, description
+):
+    app, memory, _, _ = team_server
+    async with app.lifespan(), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        created = await client.post(
+            "/mcp", headers=HEADERS,
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+                "name": tool, "arguments": {"repo_id": "team-audit", **arguments},
+            }},
+        )
+        assert "authorization_denied" not in created.text
+        intent = next(
+            row for row in memory._storage.get_active_intents(repo_id="team-audit")
+            if row["description"] == description
+        )
+        reported = await client.post(
+            "/mcp", headers=HEADERS,
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+                "name": "memory_update_intent", "arguments": {
+                    "repo_id": "team-audit", "intent_id": intent["id"],
+                    "workflow_report": {
+                        "source": "assistant", "task_id": "task-1", "event_id": "event-1",
+                        "revision": 1, "status": "completed", "summary": "Login delivered",
+                        "evidence": [{"description": "Acceptance tests passed"}],
+                    },
+                },
+            }},
+        )
+
+    text = reported.json()["result"]["content"][0]["text"]
+    assert json.loads(text)["applied"]
+    assert intent["context"]["author_id"] == "alice"
+    assert intent["context"]["team_id"] == "alpha"
+
+
+@pytest.mark.asyncio
+async def test_mcp_intent_write_keeps_the_exact_authorized_repository(team_server, monkeypatch):
+    app, memory, _, _ = team_server
+    repo_id = "team-audit "
+    memory._storage.store_repository({"id": repo_id, "name": "Exact", "team_id": "alpha"})
+    monkeypatch.setattr(app._auth_store, "authenticate_token", lambda token: {
+        "user_id": "alice", "username": "alice", "team_id": "alpha",
+        "scopes": ["memory:write"], "repo_ids": [repo_id],
+    })
+    async with app.lifespan(), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        created = await client.post(
+            "/mcp", headers=HEADERS,
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+                "name": "memory_goal", "arguments": {"repo_id": repo_id, "goal": "Exact scope"},
+            }},
+        )
+
+    assert created.status_code == 200
+    result = created.json()["result"]
+    assert not result.get("isError")
+    intent = next(
+        row for row in memory._storage.get_active_intents() if row["description"] == "Exact scope"
+    )
+    assert intent["repo_id"] == repo_id
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("resource", ["context", "warnings", "goals"])
 async def test_mcp_http_resources_apply_record_visibility(team_server, resource):
     app, _, _, hidden = team_server

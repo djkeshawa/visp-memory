@@ -14,7 +14,7 @@ from visp_memory.server.scoped_utility import (
 # Content reads are explicit methods below; new read methods must be scoped too.
 _FORWARDED = frozenset({
     "get_capabilities", "get_schema_status", "supports_retrieval_channel",
-    "store_memory", "store_evidence", "set_intent", "update_memory", "revise_memory",
+    "store_memory", "store_evidence", "update_memory", "revise_memory",
     "attach_evidence", "update_evidence", "update_intent", "append_intent_outcome",
     "report_intent_workflow", "add_relationship", "log_recall_event", "get_repo_dependencies",
     "data_dir", "server_url", "embedding_fn", "_embedding_fn", "turn_keys",
@@ -99,6 +99,15 @@ class ScopedStorageView:
                 repo_id=self._repo(repo_id), status=status
             ) if self._visible(intent, scope_field="context")
         ]
+
+    def set_intent(self, description, priority=0, context=None, repo_id=None):
+        context = {**(context or {}), "author_id": self.user.user_id}
+        if self.user.team_id:
+            context["team_id"] = self.user.team_id
+        return self.storage.set_intent(
+            description=description, priority=priority, context=context,
+            repo_id=self._repo(repo_id),
+        )
 
     def get_related_memories(self, memory_id, relationship=None):
         if not self.peek_memory(memory_id):
