@@ -99,3 +99,52 @@ def test_explicit_config_missing_file_has_a_clear_error(tmp_path, monkeypatch):
 
     with pytest.raises(FileNotFoundError, match="VISP_MEMORY_CONFIG.*missing.yaml"):
         MemoryConfig.find_and_load()
+
+
+@pytest.mark.parametrize(
+    ("env_name", "raw", "file_settings"),
+    [
+        ("VISP_MEMORY_SERVER_AUTH_ENABLED", "tru", "server:\n  auth_enabled: true\n"),
+        ("VISP_MEMORY_STORAGE_BACKEND", "unknown", "storage:\n  backend: sqlite\n"),
+        ("VISP_MEMORY_STORAGE_MODE", "standalone", "storage:\n  mode: local\n"),
+        ("VISP_MEMORY_EMBEDDING_PROVIDER", "invalid", "embedding:\n  provider: noop\n"),
+        (
+            "VISP_MEMORY_STORAGE_CONNECT_TIMEOUT_SECONDS",
+            "-1",
+            "storage:\n  connect_timeout_seconds: 15\n",
+        ),
+        (
+            "VISP_MEMORY_STORAGE_CONNECT_TIMEOUT_SECONDS",
+            "301",
+            "storage:\n  connect_timeout_seconds: 15\n",
+        ),
+        (
+            "VISP_MEMORY_SERVER_MAX_IMPORT_BODY_BYTES",
+            "0",
+            "server:\n  max_import_body_bytes: 100\n",
+        ),
+        ("VISP_MEMORY_LLM_MAX_OUTPUT_TOKENS", "1", "llm:\n  max_output_tokens: 800\n"),
+    ],
+)
+def test_file_overrides_reject_values_outside_the_field_schema(
+    tmp_path, monkeypatch, env_name, raw, file_settings
+):
+    for mapped_name in ENV_OVERRIDES:
+        monkeypatch.delenv(mapped_name, raising=False)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(file_settings, encoding="utf-8")
+    monkeypatch.setenv(env_name, raw)
+
+    with pytest.raises(ValueError):
+        MemoryConfig.from_file(config_path)
+
+
+def test_invalid_boolean_override_does_not_disable_authentication(monkeypatch):
+    monkeypatch.delenv("VISP_MEMORY_SERVER_AUTH_ENABLED", raising=False)
+    config = MemoryConfig()
+    monkeypatch.setenv("VISP_MEMORY_SERVER_AUTH_ENABLED", "tru")
+
+    with pytest.raises(ValueError):
+        config.apply_env_overrides()
+
+    assert config.server.auth_enabled is True
