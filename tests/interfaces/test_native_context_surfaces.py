@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 
 from visp_memory import Memory, MemoryConfig
 from visp_memory.config import EmbeddingConfig, StorageConfig
+from visp_memory.core.clock import parse_utc
 from visp_memory.core.trust import WriteChannel
 from visp_memory.interfaces import cli
 from visp_memory.interfaces.mcp import _handle_context, _handle_task_brief
@@ -14,7 +15,11 @@ from visp_memory.interfaces.mcp_tools import build_tool_definitions
 
 
 @pytest.fixture
-def memory(tmp_path):
+def memory(tmp_path, monkeypatch):
+    # Keep the authored fixture fresh at the snapshot requested by these tests.
+    fixture_time = parse_utc("2029-12-31T00:00:00Z")
+    monkeypatch.setattr("visp_memory.core.storage.utc_now", lambda: fixture_time)
+    monkeypatch.setattr("visp_memory.layers.episodic.utc_now", lambda: fixture_time)
     with Memory(config=MemoryConfig(
         repo_id="repo", embedding=EmbeddingConfig(provider="none"),
         storage=StorageConfig(data_dir=tmp_path),
@@ -41,6 +46,18 @@ def test_mcp_native_context_uses_ranking_and_time(memory, handler, field, rankin
     assert not result["abstained"]
 
 
+@pytest.mark.parametrize("ranking", ["hybrid", "hybrid_union"])
+def test_mcp_task_brief_omits_memories_stale_at_the_requested_time(memory, ranking):
+    result = json.loads(_handle_task_brief({
+        "task": "secure session cookies", "ranking_strategy": ranking, "format": "json",
+        "as_of": "2033-01-01T00:00:00Z", "context_selection": "coverage",
+    }, memory))
+
+    assert result["abstained"]
+    assert result["trust_filter"]["below_trust_count"] == 1
+    assert result["citations"] == []
+
+
 def test_context_without_query_does_not_silently_ignore_hybrid(memory):
     with pytest.raises(ValueError, match="query"):
         _handle_context({"ranking_strategy": "hybrid"}, memory)
@@ -58,6 +75,7 @@ def test_cli_brief_uses_native_hybrid(memory, monkeypatch, ranking):
     brief = json.loads(result.output)
     assert brief["retrieval"]["direct_ranking_strategy"] == ranking
     assert brief["as_of"].startswith("2030-01-01")
+    assert not brief["abstained"]
 
 
 def test_mcp_advertises_native_ranking_and_time():
