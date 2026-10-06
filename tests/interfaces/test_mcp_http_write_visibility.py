@@ -84,3 +84,10 @@ async def test_mcp_new_project_writes_are_visible_only_to_the_creating_team(
         memory, UserContext(user_id="alpha", username="alpha", team_id="alpha"), "new-project"
     )
     assert own_view._storage.peek_memory(record["id"])["id"] == record["id"]
+    other_view = memory_for_principal(
+        memory, UserContext(user_id="beta", username="beta", team_id="beta"), "new-project"
+    )
+    assert record["evidence_ids"]
+    for evidence_id in record["evidence_ids"]:
+        assert own_view._storage.get_evidence(evidence_id)["metadata"]["team_id"] == "alpha"
+        assert other_view._storage.get_evidence(evidence_id) is None
