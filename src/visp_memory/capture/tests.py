@@ -64,50 +64,33 @@ class TestCapture:
 
         memory_ids = []
 
-        # Parse suites if multiple, or root as suite
-        suites = root.findall(".//testsuite")
-        if not suites:
-            suites = [root]
-
-        for suite in suites:
-            # Check for failures
-            failures = int(suite.get("failures", 0))
-            errors = int(suite.get("errors", 0))
-
-            if failures > 0 or errors > 0:
-                # Record specific failures
-                for case in suite.findall("testcase"):
-                    failure = case.find("failure")
-                    error = case.find("error")
-
-                    if failure is not None or error is not None:
-                        elem = failure if failure is not None else error
-                        msg = elem.get("message", "Test failed")
-                        details = elem.text
-                        name = case.get("name", "Unknown test")
-                        file = case.get("file", "Unknown file")
-
-                        # Check if this is a known flaky test or recurring issue
-                        # (Future enhancement: check deduplication here)
-
-                        mem_id = self.memory.record(
-                            event=f"Test Failed: {name} - {msg}",
-                            category="bug_found",
-                            importance=0.8,
-                            context={
-                                "file": file,
-                                "test_name": name,
-                                "error": msg,
-                                "details": details[:500]
-                                if details
-                                else None,  # Truncate stack trace
-                                "write_channel": WriteChannel.TEST_CAPTURE.value,
-                            },
-                            tags=["test", "failure", "auto-captured"],
-                            _write_channel=WriteChannel.TEST_CAPTURE,
-                        )
-                        memory_ids.append(mem_id)
-
+        # Failure elements are authoritative even when suite counters are absent
+        # or inaccurate. Iteration includes testcases in root and nested suites.
+        for case in root.iter("testcase"):
+            failure = case.find("failure")
+            error = case.find("error")
+            if failure is None and error is None:
+                continue
+            elem = failure if failure is not None else error
+            msg = elem.get("message", "Test failed")
+            details = elem.text
+            name = case.get("name", "Unknown test")
+            file = case.get("file", "Unknown file")
+            mem_id = self.memory.record(
+                event=f"Test Failed: {name} - {msg}",
+                category="bug_found",
+                importance=0.8,
+                context={
+                    "file": file,
+                    "test_name": name,
+                    "error": msg,
+                    "details": details[:500] if details else None,
+                    "write_channel": WriteChannel.TEST_CAPTURE.value,
+                },
+                tags=["test", "failure", "auto-captured"],
+                _write_channel=WriteChannel.TEST_CAPTURE,
+            )
+            memory_ids.append(mem_id)
 
         manifest.record("test_report", str(path), content_hash, memory_ids, status=status)
         self.last_manifest_report = CaptureManifest.status_report([status])
