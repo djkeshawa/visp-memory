@@ -577,6 +577,20 @@ def test_neo4j_memory_reads_normalize_contract_fields_and_search_scores():
     assert search_params["exclude_raw"] is True
 
 
+def test_neo4j_peek_reads_a_memory_without_counting_an_access():
+    storage = neo4j_storage_with_delete_count(0)
+    session = storage.driver.session_obj
+    node = {"id": "memory-1", "content": "Hidden from this caller", "repo_id": "repo-a"}
+    session.query_results["MATCH (m:Memory {id: $id}) RETURN m"] = lambda _params: FakeResult(
+        single_value={"m": node}
+    )
+
+    memory = storage.peek_memory("memory-1")
+
+    assert memory["id"] == "memory-1"
+    assert not any("access_count" in query for query, _params in session.calls)
+
+
 def test_neo4j_semantic_content_updates_are_filtered_by_storage_contract():
     storage = neo4j_storage_with_delete_count(0)
 

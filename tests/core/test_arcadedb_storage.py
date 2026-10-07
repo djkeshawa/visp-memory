@@ -1344,6 +1344,15 @@ def test_arcadedb_search_attaches_canonical_recall_utility_scores(
     }
 
 
+def test_arcadedb_peek_reads_a_memory_without_counting_an_access(fake_arcadedb, tmp_path):
+    storage = ArcadeDbStorage(tmp_path)
+    memory_id = storage.store_memory("ArcadeDB peek target", repo_id="repo-a")
+
+    assert storage.peek_memory(memory_id)["id"] == memory_id
+    assert storage.peek_memory("missing") is None
+    assert int(storage._query_memory(memory_id).get("access_count") or 0) == 0
+
+
 def test_arcadedb_reinforces_on_use_in_parity_with_local(fake_arcadedb, tmp_path):
     # Backend parity: a used memory must strengthen (access_count++) just like SQLite,
     # while a merely-surfaced one must not.

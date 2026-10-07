@@ -1452,6 +1452,10 @@ class ArcadeDbStorage(BaseStorage):
 
         return memory_id
 
+    def peek_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
+        """Read a memory without counting it as an access."""
+        return self._query_memory(memory_id)
+
     def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
         record = self._query_memory(memory_id)
         if record is None:
