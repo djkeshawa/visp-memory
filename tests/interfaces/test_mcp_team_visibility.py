@@ -187,31 +187,44 @@ async def test_mcp_intent_creator_can_connect_a_workflow_report(
 
 
 @pytest.mark.asyncio
-async def test_mcp_intent_write_keeps_the_exact_authorized_repository(team_server, monkeypatch):
+@pytest.mark.parametrize(
+    ("tool", "arguments"),
+    [
+        ("memory_goal", {"goal": "Padded scope"}),
+        ("memory_learn", {"knowledge": "Padded scope"}),
+        ("memory_recall", {"query": "Padded scope"}),
+    ],
+)
+async def test_mcp_refuses_a_padded_repository_id_it_could_not_scope_exactly(
+    team_server, monkeypatch, tool, arguments
+):
+    # Core reads strip the scope, so a padded ID would be authorized as one
+    # repository and then read from or written to another.
     app, memory, _, _ = team_server
     repo_id = "team-audit "
-    memory._storage.store_repository({"id": repo_id, "name": "Exact", "team_id": "alpha"})
+    memory._storage.store_repository({"id": repo_id, "name": "Padded", "team_id": "alpha"})
     monkeypatch.setattr(app._auth_store, "authenticate_token", lambda token: {
         "user_id": "alice", "username": "alice", "team_id": "alpha",
-        "scopes": ["memory:write"], "repo_ids": [repo_id],
+        "scopes": ["memory:read", "memory:write"], "repo_ids": [repo_id],
     })
     async with app.lifespan(), httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://testserver"
     ) as client:
-        created = await client.post(
+        response = await client.post(
             "/mcp", headers=HEADERS,
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
-                "name": "memory_goal", "arguments": {"repo_id": repo_id, "goal": "Exact scope"},
+                "name": tool, "arguments": {"repo_id": repo_id, **arguments},
             }},
         )
 
-    assert created.status_code == 200
-    result = created.json()["result"]
-    assert not result.get("isError")
-    intent = next(
-        row for row in memory._storage.get_active_intents() if row["description"] == "Exact scope"
+    assert "leading or trailing whitespace" in response.text
+    assert not any(
+        "Padded scope" in str(row.get("description") or row.get("content"))
+        for row in [
+            *memory._storage.get_active_intents(status="all"),
+            *memory._storage.list_memories(status="all", limit=1000),
+        ]
     )
-    assert intent["repo_id"] == repo_id
 
 
 @pytest.mark.asyncio

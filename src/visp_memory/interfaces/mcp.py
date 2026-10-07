@@ -1412,6 +1412,10 @@ def _http_authorize_repo(repo_id: Any, memory: Memory, *, write: bool) -> str:
         raise _http_refusal("An authenticated HTTP principal is required.")
     if not isinstance(repo_id, str) or not repo_id.strip():
         raise _http_refusal("An explicit repo_id is required for stateless HTTP requests.")
+    if repo_id != repo_id.strip():
+        # Core reads strip the scope, so a padded ID would be authorized as one
+        # repository and then read from another.
+        raise _http_refusal("repo_id must not have leading or trailing whitespace.")
     required_scope = "memory:write" if write else "memory:read"
     if not principal.allows(required_scope):
         raise _http_refusal("The personal access token lacks the required memory scope.")
@@ -1532,8 +1536,7 @@ def _refuse_unscoped_write(name: str, args: dict[str, Any], memory: Memory) -> s
         return None
     scope = args.get("repo_id") or memory.config.repo_id
     if isinstance(scope, str) and scope.strip() and scope.strip() != UNSCOPED_REPO_ID:
-        # HTTP authorizes the exact identifier; trimming here could change the repository.
-        args["repo_id"] = scope if _requires_explicit_scope() else scope.strip()
+        args["repo_id"] = scope.strip()
         return None
     return (
         f"Refused: {name} needs a repository scope, and none is configured. Anything written "
