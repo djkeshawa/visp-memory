@@ -11,6 +11,11 @@ tag has no section yet) as the GitHub release body. See
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-09
+
+Fixes from a codebase audit (#82), chiefly team visibility on a shared server, plus
+dashboard dependency updates for published advisories (#83, #84).
+
 ### Upgrading
 
 - Environment overrides are validated against the field they set. A value the field
@@ -300,5 +305,6 @@ access tokens, or has Codex configured.
   `VISP_MEMORY_MCP_ALLOW_REPO_OVERRIDE` is set, and unscoped writes are checked
   before dispatch.
 
-[Unreleased]: https://github.com/djkeshawa/visp-memory/compare/v0.8.0...develop
+[Unreleased]: https://github.com/djkeshawa/visp-memory/compare/v0.8.1...develop
+[0.8.1]: https://github.com/djkeshawa/visp-memory/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/djkeshawa/visp-memory/compare/v0.7.10...v0.8.0
