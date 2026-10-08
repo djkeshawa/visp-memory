@@ -59,6 +59,8 @@ tag has no section yet) as the GitHub release body. See
 - Private keys are redacted through their `END` line, or to the end of the text when
   a capture is truncated, instead of only the `BEGIN` header.
 - Memory exports redact `bootstrap_admin_password`.
+- Dashboard build dependencies: `sharp` 0.35.5 (GHSA-wq5f-xc86-pv6w, librsvg) and
+  `source-map-js` 1.2.2 (GHSA-68fv-2mgg-jv7q).
 
 ## [0.8.0] - 2026-10-04
 
