@@ -11,6 +11,11 @@ tag has no section yet) as the GitHub release body. See
 
 ## [Unreleased]
 
+### Security
+
+- Dashboard build dependencies: `sharp` 0.35.5 (GHSA-wq5f-xc86-pv6w, librsvg) and
+  `source-map-js` 1.2.2 (GHSA-68fv-2mgg-jv7q).
+
 ## [0.8.0] - 2026-10-04
 
 Everything merged since 0.7.10 (#49 to #78). The headline is one local server that
