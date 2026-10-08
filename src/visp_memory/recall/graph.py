@@ -3,13 +3,9 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
-from typing import Any
+from typing import Any, Callable
 
-from visp_memory.core.clock import parse_utc
-from visp_memory.core.eligibility import (
-    filter_recall_eligible,
-    require_repo_id,
-)
+from visp_memory.core.eligibility import require_repo_id
 from visp_memory.core.ranking import (
     clamp_score,
     graph_edge_score,
@@ -17,8 +13,8 @@ from visp_memory.core.ranking import (
     rank_memory_results,
     text_similarity,
 )
-from visp_memory.core.storage import NON_SERVABLE_STATUSES
-from visp_memory.core.trust import TrustFilterResult, filter_unsolicited
+from visp_memory.core.recall_candidates import recall_candidates
+from visp_memory.recall.graph_visibility import guard_graph_memories
 
 # Spreading-activation constants (HippoRAG-style associative recall, cheap variant).
 # Each hop attenuates the signal by ACTIVATION_HOP_DECAY; a damped fixed-point pass
@@ -81,8 +77,9 @@ class GraphRecall:
     MAX_HOPS = 6
     MAX_EDGES_PER_NODE = 12
 
-    def __init__(self, storage):
+    def __init__(self, storage, *, memory_filter: Callable[[dict], bool] | None = None):
         self.storage = storage
+        self.memory_filter = memory_filter
 
     def neighbors(
         self,
@@ -380,16 +377,29 @@ class GraphRecall:
         task_type: Any = None,
         as_of: Any = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        candidate_omissions = []
         try:
-            results = self.storage.search_memories(
-                query=query,
-                repo_id=repo_id,
-                limit=limit,
-                status="active",
-                environment=environment,
-                task_type=task_type,
-                as_of=as_of,
-            )
+            if self.memory_filter is not None:
+                candidates = recall_candidates(
+                    self.storage, query, repo_id=repo_id, layers=[None], limit=limit,
+                    environment=environment, task_type=task_type, as_of=as_of,
+                    memory_filter=self.memory_filter,
+                )
+                results = candidates.allowed
+                candidate_omissions = [
+                    {"type": "eligibility", "count": 1, **rejection.as_dict()}
+                    for rejection in candidates.rejected
+                ]
+            else:
+                results = self.storage.search_memories(
+                    query=query,
+                    repo_id=repo_id,
+                    limit=limit,
+                    status="active",
+                    environment=environment,
+                    task_type=task_type,
+                    as_of=as_of,
+                )
         except TypeError:
             results = self.storage.search_memories(query=query, repo_id=repo_id, limit=limit)
         allowed, omitted = self._guard_memories(
@@ -401,7 +411,7 @@ class GraphRecall:
         )
         return rank_memory_results(
             allowed, query=query, limit=limit, min_score=None
-        ), omitted
+        ), [*candidate_omissions, *omitted]
 
     def _relationships(
         self, repo_id: str | None, relationship_filter: str | None = None
@@ -468,56 +478,10 @@ class GraphRecall:
         task_type: Any = None,
         as_of: Any = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        # Lifecycle first. Eligibility and trust both answer "should this be shown
-        # to this caller, now" — neither asks whether the memory still exists. A
-        # deleted, merged or superseded belief could pass both and be returned by
-        # every graph read (MG-031), which is how deleting something failed to
-        # make it go away.
-        lifecycle_rejected = [
-            memory
-            for memory in memories
-            if memory.get("status") in NON_SERVABLE_STATUSES
-        ]
-        memories = [
-            memory
-            for memory in memories
-            if memory.get("status") not in NON_SERVABLE_STATUSES
-        ]
-
-        eligibility = filter_recall_eligible(
-            memories,
-            repo_id=repo_id,
-            environment=environment,
-            task_type=task_type,
-            as_of=as_of,
+        return guard_graph_memories(
+            memories, repo_id, environment=environment, task_type=task_type, as_of=as_of,
+            memory_filter=self.memory_filter,
         )
-        trust = filter_unsolicited(
-            eligibility.allowed,
-            now=parse_utc(as_of) if as_of is not None else None,
-        )
-        omissions = [
-            {
-                "type": "lifecycle",
-                "count": 1,
-                "id": memory.get("id"),
-                "status": memory.get("status"),
-                "reason": f"memory is {memory.get('status')}",
-            }
-            for memory in lifecycle_rejected
-        ]
-        omissions.extend(
-            {"type": "eligibility", "count": 1, **rejection.as_dict()}
-            for rejection in eligibility.rejected
-        )
-        omissions.extend(self._trust_omissions(trust))
-        return trust.allowed, omissions
-
-    @staticmethod
-    def _trust_omissions(result: TrustFilterResult) -> list[dict[str, Any]]:
-        return [
-            {"type": "trust", "count": 1, **rejection.as_dict()}
-            for rejection in result.rejected
-        ]
 
     def _expand(
         self,

@@ -236,10 +236,11 @@ class TrustAssessment:
     trust: float
     quarantined: bool
     reason: str
+    min_trust: float = DEFAULT_MIN_TRUST
 
     @property
     def injectable(self) -> bool:
-        return not self.quarantined and self.trust >= DEFAULT_MIN_TRUST
+        return not self.quarantined and self.trust >= self.min_trust
 
 
 @dataclass(frozen=True)
@@ -354,7 +355,9 @@ def assess(
     else:
         reason = f"{tier.value}, trust {trust:.2f}"
 
-    return TrustAssessment(tier=tier, trust=trust, quarantined=False, reason=reason)
+    return TrustAssessment(
+        tier=tier, trust=trust, quarantined=False, reason=reason, min_trust=min_trust
+    )
 
 
 def filter_unsolicited(

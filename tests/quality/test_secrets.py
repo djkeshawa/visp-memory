@@ -93,6 +93,49 @@ class TestFalsePositives:
 
 
 class TestRedaction:
+    @pytest.mark.parametrize(
+        "key_type",
+        [
+            "PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY", "OPENSSH PRIVATE KEY",
+            "ENCRYPTED PRIVATE KEY",
+        ],
+    )
+    def test_removes_the_entire_private_key_and_preserves_surrounding_text(self, key_type):
+        text = (
+            f"Before key\n-----BEGIN {key_type}-----\n"
+            "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n"
+            f"AQIDBAUGBwgJCgsMDQ4PEA==\n-----END {key_type}-----\nAfter key"
+        )
+
+        result = redact(text)
+
+        assert result.text == "Before key\n[REDACTED:private-key]\nAfter key"
+        assert result.findings == ["private-key"]
+
+    def test_removes_a_truncated_private_key_through_the_end_of_input(self):
+        result = redact(
+            "Before key\n-----BEGIN PRIVATE KEY-----\n"
+            "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\nAQIDBAUGBwgJCgsMDQ4PEA=="
+        )
+
+        assert result.text == "Before key\n[REDACTED:private-key]"
+        assert result.findings == ["private-key"]
+
+    def test_public_key_content_is_untouched(self):
+        text = "-----BEGIN PUBLIC KEY-----\nAQIDBAUGBwgJCgsMDQ4PEA==\n-----END PUBLIC KEY-----"
+
+        assert redact(text).text == text
+
+    def test_private_key_blocks_are_redacted_independently(self):
+        key = "-----BEGIN PRIVATE KEY-----\nAQIDBAUGBwgJCgsMDQ4PEA==\n-----END PRIVATE KEY-----"
+
+        result = redact(f"{key}\nKeep this context\n{key}")
+
+        assert result.text == (
+            "[REDACTED:private-key]\nKeep this context\n[REDACTED:private-key]"
+        )
+        assert result.findings == ["private-key", "private-key"]
+
     def test_replaces_secret_and_keeps_the_sentence(self):
         result = redact("deploy fails unless AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE is set")
 
@@ -176,6 +219,18 @@ class TestStorageEnforcement:
         assert "[REDACTED:aws-access-key-id]" in stored["content"]
         # The engineering fact survives.
         assert "deploy broke" in stored["content"]
+
+    def test_private_key_body_never_reaches_memory_or_evidence(self, memory):
+        memory_id = memory.record(
+            "Rotate this key\n-----BEGIN PRIVATE KEY-----\n"
+            "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----"
+        )
+        stored = memory._storage.get_memory(memory_id)
+
+        assert stored["content"] == "Rotate this key\n[REDACTED:private-key]"
+        assert "secret_redacted:private-key" in stored["quality_flags"]
+        for evidence_id in stored["evidence_ids"]:
+            assert memory._storage.get_evidence(evidence_id)["content"] == stored["content"]
 
     def test_redaction_is_recorded_on_the_memory(self, memory):
         memory_id = memory.record("token ghp_016C7cAbCdEfGhIjKlMnOpQrStUvWxYz1234 leaked")

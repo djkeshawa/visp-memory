@@ -2,6 +2,7 @@ import pytest
 
 from visp_memory.core.lifecycle import LifecycleError, MemoryLifecycleManager
 from visp_memory.core.storage import LocalStorage
+from visp_memory.core.trust import Provenance, provenance_of
 
 
 def _manager(tmp_path):
@@ -53,6 +54,67 @@ def test_merge_rejects_cross_project_and_temporal_conflicts(tmp_path):
     assert preview["validation_errors"]
     with pytest.raises(LifecycleError):
         manager.merge([first, second], actor_id="admin")
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_merge_cannot_promote_an_external_memory_through_tag_order(tmp_path, reverse):
+    storage, manager = _manager(tmp_path)
+    authored = storage.store_memory(
+        "Same content", repo_id="repo-a", tags=["provenance:authored"], auto_link=False
+    )
+    external = storage.store_memory(
+        "Same content", repo_id="repo-a", tags=["provenance:external"], auto_link=False
+    )
+    ids = [external, authored] if reverse else [authored, external]
+
+    preview = manager.preview_merge(ids, target_id=external)
+    assert any("provenance" in error for error in preview["validation_errors"])
+    with pytest.raises(LifecycleError, match="provenance"):
+        manager.merge(ids, target_id=external, actor_id="admin")
+
+    assert provenance_of(storage.get_memory(external)) is Provenance.EXTERNAL
+    assert storage.get_memory(authored)["status"] == "active"
+
+
+@pytest.mark.parametrize(
+    ("field", "scoped_value"),
+    [
+        ("environment", ["production"]),
+        ("task_type", ["deployment"]),
+        ("team_id", "team-a"),
+        ("valid_from", "2026-01-01T00:00:00+00:00"),
+        ("valid_to", "2026-01-31T00:00:00+00:00"),
+    ],
+)
+def test_exact_duplicate_merge_cannot_erase_source_scope(tmp_path, field, scoped_value):
+    storage, manager = _manager(tmp_path)
+    target = storage.store_memory("Same content", repo_id="repo-a", auto_link=False)
+    scoped = storage.store_memory(
+        "Same content", repo_id="repo-a", metadata={field: scoped_value}, auto_link=False
+    )
+
+    preview = manager.preview_merge([target, scoped])
+
+    assert preview["validation_errors"]
+    with pytest.raises(LifecycleError):
+        manager.merge([target, scoped], actor_id="admin")
+    assert storage.get_memory(scoped)["status"] == "active"
+
+
+def test_merge_accepts_equivalent_normalized_scopes(tmp_path):
+    storage, manager = _manager(tmp_path)
+    ids = [
+        storage.store_memory(
+            "Same content", repo_id="repo-a", tags=["provenance:authored"],
+            metadata={"environment": value, "team_id": "team-a"}, auto_link=False,
+        )
+        for value in (["production", "staging"], ["staging", "production"])
+    ]
+
+    result = manager.merge(ids, actor_id="admin")
+
+    assert result["target_id"] == ids[0]
+    assert storage.get_memory(ids[1])["status"] == "merged"
 
 
 def test_merge_requires_distinct_existing_memories_and_selected_target(tmp_path):

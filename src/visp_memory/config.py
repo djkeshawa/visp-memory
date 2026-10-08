@@ -11,10 +11,9 @@ import json
 import os
 import warnings
 from pathlib import Path
-from types import UnionType
-from typing import Annotated, Any, List, Literal, Optional, Union, get_args, get_origin
+from typing import Annotated, Any, List, Literal, Optional
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, TypeAdapter, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from visp_memory.config_discovery import find_config_file
@@ -90,27 +89,10 @@ ENV_OVERRIDES: dict[str, tuple[str, ...]] = {
 }
 
 
-def _unwrap_optional(annotation: Any) -> Any:
-    """Return the value type from an Optional annotation."""
-    if get_origin(annotation) in (Union, UnionType):
-        value_types = [item for item in get_args(annotation) if item is not type(None)]
-        if len(value_types) == 1:
-            return value_types[0]
-    return annotation
-
-
 def _coerce_env_value(target: BaseSettings, attr: str, value: str) -> Any:
-    """Coerce one override from the destination field's declared type."""
-    annotation = _unwrap_optional(type(target).model_fields[attr].annotation)
-    if annotation is bool:
-        return value.lower() in {"1", "true", "yes", "on"}
-    if annotation is int:
-        return int(value)
-    if annotation is float:
-        return float(value)
-    if annotation is Path:
-        return Path(value)
-    return value
+    """Validate an override with the destination field's type and constraints."""
+    field = type(target).model_fields[attr]
+    return TypeAdapter(field.rebuild_annotation()).validate_python(value)
 
 
 class EmbeddingConfig(BaseSettings):

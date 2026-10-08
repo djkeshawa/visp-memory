@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Callable
 
+from visp_memory.core.clock import parse_utc
+
 THRESHOLDS = {
     "high_impact_importance": 0.75,
     "stale_intent_days": 30,
@@ -441,11 +443,7 @@ def _float(value: Any, default: float) -> float:
 
 
 def _parse_datetime(value: Any) -> datetime | None:
-    if isinstance(value, datetime):
-        return value.replace(tzinfo=None)
-    if isinstance(value, str) and value:
-        try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
-        except ValueError:
-            return None
-    return None
+    parsed = parse_utc(value)
+    # Keep the report's existing naive UTC representation after normalizing
+    # offsets, so comparisons measure elapsed time rather than local clocks.
+    return parsed.replace(tzinfo=None) if parsed is not None else None

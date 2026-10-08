@@ -327,6 +327,10 @@ def _read_http_resource(uri_str: str, memory: Memory) -> str:
             )
         ) from error
 
+    from visp_memory.interfaces.mcp_memory_view import memory_for_principal
+
+    memory = memory_for_principal(memory, current_mcp_request_context().principal, repo_id)
+
     if resource == "context":
         return memory.context(format="text", repo_id=repo_id)
     if resource == "warnings":
@@ -1408,6 +1412,10 @@ def _http_authorize_repo(repo_id: Any, memory: Memory, *, write: bool) -> str:
         raise _http_refusal("An authenticated HTTP principal is required.")
     if not isinstance(repo_id, str) or not repo_id.strip():
         raise _http_refusal("An explicit repo_id is required for stateless HTTP requests.")
+    if repo_id != repo_id.strip():
+        # Core reads strip the scope, so a padded ID would be authorized as one
+        # repository and then read from another.
+        raise _http_refusal("repo_id must not have leading or trailing whitespace.")
     required_scope = "memory:write" if write else "memory:read"
     if not principal.allows(required_scope):
         raise _http_refusal("The personal access token lacks the required memory scope.")
@@ -1454,8 +1462,9 @@ def _http_validate_record_ids(
         if args.get(key):
             memory_ids.append(args[key])
     memory_ids.extend(args.get("memory_ids") or [])
+    peek_memory = getattr(memory._storage, "peek_memory", memory._storage.get_memory)
     for memory_id in memory_ids:
-        record = memory._storage.get_memory(str(memory_id))
+        record = peek_memory(str(memory_id))
         if (
             not record
             or record.get("repo_id") != repo_id
@@ -1901,6 +1910,12 @@ def _dispatch_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
     """Route tool calls to specialized handlers."""
 
     _http_preflight(name, args, memory)
+    if _requires_explicit_scope() and name in HTTP_REPO_TOOL_NAMES:
+        from visp_memory.interfaces.mcp_memory_view import memory_for_principal
+
+        memory = memory_for_principal(
+            memory, current_mcp_request_context().principal, args["repo_id"]
+        )
 
     refusal = _refuse_stdio_repo_override(args, memory)
     if refusal is not None:

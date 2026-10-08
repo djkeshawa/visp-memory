@@ -161,6 +161,10 @@ Evidence and `derived_from` relationships. Lexical overlap alone cannot reconcil
 changes to numeric, temporal, or negation markers. Ambiguous changes remain
 separate facts for explicit conflict handling or revision.
 
+Manual merges also require matching provenance, team, environment, task scope,
+and validity bounds, even when the content is identical. Choosing a canonical
+memory cannot promote quarantined content or remove a source's restrictions.
+
 Archiving, merging, and quarantine retain data; they are not erasure. Dreaming
 keeps original content and action history so changes can be undone, and never
 purges memories. Deleting an active memory is not a promise that evidence,

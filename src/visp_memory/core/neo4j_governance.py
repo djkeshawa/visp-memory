@@ -297,7 +297,14 @@ class Neo4jGovernance:
                         provenance=source or "unknown",
                         created_at=created_at,
                         content_hash=LocalStorage._evidence_hash(content),
-                        metadata=json.dumps({"captured_memory_id": memory_id, "exact_input": True}),
+                        metadata=json.dumps({
+                            "captured_memory_id": memory_id,
+                            "exact_input": True,
+                            **{
+                                key: metadata[key]
+                                for key in ("author_id", "team_id") if key in metadata
+                            },
+                        }),
                     ),
                 )
                 ids = [captured_id]

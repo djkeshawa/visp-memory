@@ -130,6 +130,19 @@ class TestTrustDecay:
     def test_fresh_authored_memory_is_fully_trusted(self):
         assert assess(_memory(Provenance.AUTHORED)).trust > 0.95
 
+    @pytest.mark.parametrize(
+        "min_trust,days_old,injectable", [(0.8, 0, False), (0.2, 180, True)]
+    )
+    def test_assessment_honors_the_requested_trust_floor(self, min_trust, days_old, injectable):
+        memory = _memory(Provenance.ASSISTED, days_old=days_old)
+
+        assessment = assess(memory, min_trust=min_trust)
+        allowed, rejected = filter_injectable([memory], min_trust=min_trust)
+
+        assert assessment.injectable is injectable
+        assert bool(allowed) is injectable
+        assert bool(rejected) is not injectable
+
     def test_trust_falls_with_age(self):
         fresh = assess(_memory(Provenance.ASSISTED, days_old=0)).trust
         old = assess(_memory(Provenance.ASSISTED, days_old=240)).trust
@@ -162,6 +175,18 @@ class TestTrustDecay:
 
 
 class TestFiltering:
+    def test_injection_honors_a_stricter_policy_trust_floor(self):
+        result = select_for_injection(
+            [_memory(Provenance.ASSISTED)],
+            task="deploy the release to production",
+            corpus_size=50,
+            repo_id="repo-a",
+            policy=InjectionPolicy(min_trust=0.8),
+        )
+
+        assert result.abstained
+        assert result.dropped_untrusted == 1
+
     def test_splits_and_annotates(self):
         allowed, rejected = filter_injectable(
             [

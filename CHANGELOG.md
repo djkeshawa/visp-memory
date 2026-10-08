@@ -11,10 +11,58 @@ tag has no section yet) as the GitHub release body. See
 
 ## [Unreleased]
 
+### Upgrading
+
+- Environment overrides are validated against the field they set. A value the field
+  rejects now stops configuration loading with an error instead of being coerced: for
+  example `VISP_MEMORY_SERVER_AUTH_ENABLED=tru` used to turn authentication off, and
+  out-of-range numbers such as `VISP_MEMORY_STORAGE_CONNECT_TIMEOUT_SECONDS=-1` were
+  accepted.
+- Manual merges refuse memories whose provenance tier, team, environment or task
+  scope, or validity bounds differ, even when the content is identical.
+- HTTP MCP refuses a `repo_id` with leading or trailing whitespace. Such an ID was
+  authorized as written but read and written with the whitespace removed, which could
+  reach a different project.
+
+### Fixed
+
+- JUnit capture records every failed or errored test case, even when a suite's
+  `failures` and `errors` counters are missing or wrong.
+- `GET /remember` finds the latest memory the caller can see even when more than 50
+  newer memories are hidden from them.
+- Context, recall, task briefs and proactive recall with `as_of` judge trust decay at
+  the requested time rather than now.
+- A stricter configured `min_trust` is honoured when memories are selected for
+  injection.
+- Memory-intelligence reports normalize timestamps with UTC offsets before comparing
+  ages.
+- `POST /memories/merge` answers 400 instead of failing when the merge group is
+  invalid.
+- The Neo4j and ArcadeDB backends can read a memory without counting an access.
+  `GET /memories/{id}/peek` and recall-utility calls naming a memory no longer fail
+  on them, and visibility checks no longer raise the access count of records the
+  caller cannot see.
+
 ### Security
 
-- Dashboard build dependencies: `sharp` 0.35.5 (GHSA-wq5f-xc86-pv6w, librsvg) and
-  `source-map-js` 1.2.2 (GHSA-68fv-2mgg-jv7q).
+- HTTP MCP tools and resources apply the authenticated user's team visibility to
+  memories, intents, relationships, evidence, statistics and recall utility within the
+  requested project. Memories and intents written over HTTP MCP record the caller as
+  author and carry the caller's team.
+- REST graph recall applies team visibility to seed memories and traversal, task
+  briefs only match intents the caller can see, and recall-utility inspect, verify and
+  reset aggregate only visible memories for non-administrators.
+- `POST /memories/merge` can no longer raise a memory's trust tier: merging records
+  from different provenance tiers used to carry the other records' `provenance:*`
+  tags onto the canonical memory.
+- Evidence captured automatically with a memory keeps the memory's author and team.
+- Private keys are redacted through their `END` line, or to the end of the text when
+  a capture is truncated, instead of only the `BEGIN` header.
+- Memory exports redact `bootstrap_admin_password`.
+- Dashboard build dependencies: `sharp` 0.35.5 (GHSA-wq5f-xc86-pv6w, librsvg),
+  `source-map-js` 1.2.2 (GHSA-68fv-2mgg-jv7q) and `next` 16.3.8 (GHSA-3w37-wq28-93x7,
+  GHSA-4jqv-mc3x-m676, GHSA-39w2-rjm5-chcv, GHSA-f87g-xv8r-7p7x, GHSA-mcj8-r9mp-w47p,
+  GHSA-cjq9-62q9-8jv4).
 
 ## [0.8.0] - 2026-10-04
 

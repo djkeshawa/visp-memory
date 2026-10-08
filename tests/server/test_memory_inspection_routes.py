@@ -1,8 +1,32 @@
 import pytest
 
 from visp_memory.server.app import app
+from visp_memory.server.auth import UserContext, get_current_user
 
 HEADERS = {"X-API-KEY": "test_key"}
+
+
+@pytest.mark.asyncio
+async def test_remember_finds_the_latest_visible_memory_beyond_hidden_pages(client, monkeypatch):
+    storage = app.state.storage
+    visible_id = storage.store_memory(
+        "Older accessible memory", repo_id="remember-audit", auto_link=False,
+        metadata={"team_id": "alpha"}, created_at="2020-01-01T00:00:00+00:00",
+    )
+    for index in range(205):
+        storage.store_memory(
+            f"Newer hidden memory {index}", repo_id="remember-audit", auto_link=False,
+            metadata={"team_id": "beta"}, created_at="2030-01-01T00:00:00+00:00",
+        )
+
+    async def current_user():
+        return UserContext(user_id="alice", username="alice", team_id="alpha")
+
+    monkeypatch.setitem(app.dependency_overrides, get_current_user, current_user)
+    response = await client.get("/remember", params={"repo_id": "remember-audit"})
+
+    assert response.status_code == 200
+    assert response.json()["id"] == visible_id
 
 
 @pytest.fixture

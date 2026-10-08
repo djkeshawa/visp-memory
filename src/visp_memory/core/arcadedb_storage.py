@@ -1271,7 +1271,14 @@ class ArcadeDbStorage(BaseStorage):
                         "repo_id": repo_id,
                         "evidence_type": "observation" if layer == "episodic" else "raw",
                         "provenance": source or "unknown",
-                        "metadata": {"captured_memory_id": memory_id, "exact_input": True},
+                        "metadata": {
+                            "captured_memory_id": memory_id,
+                            "exact_input": True,
+                            **{
+                                key: metadata[key]
+                                for key in ("author_id", "team_id") if key in metadata
+                            },
+                        },
                         "created_at": now,
                     }
                     fields = list(self.EVIDENCE_FIELDS)
@@ -1444,6 +1451,10 @@ class ArcadeDbStorage(BaseStorage):
                     )
 
         return memory_id
+
+    def peek_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
+        """Read a memory without counting it as an access."""
+        return self._query_memory(memory_id)
 
     def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
         record = self._query_memory(memory_id)

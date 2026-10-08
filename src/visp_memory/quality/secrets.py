@@ -72,7 +72,15 @@ class SecretPattern:
 # Anchored to published credential formats. Ordered most specific first so a token that
 # matches several patterns is labelled with the most informative one.
 PATTERNS: tuple[SecretPattern, ...] = (
-    SecretPattern("private-key", re.compile(r"-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----")),
+    SecretPattern(
+        "private-key",
+        # Truncated captures still contain key material, so redact through EOF.
+        re.compile(
+            r"-----BEGIN (?P<key_type>(?:[A-Z ]+ )?PRIVATE KEY)-----"
+            r".*?(?:-----END (?P=key_type)-----|\Z)",
+            re.DOTALL,
+        ),
+    ),
     SecretPattern("aws-access-key-id", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     SecretPattern("github-token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b")),
     SecretPattern("anthropic-key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}\b")),

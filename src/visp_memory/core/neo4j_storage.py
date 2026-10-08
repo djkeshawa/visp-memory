@@ -655,6 +655,12 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, Neo4jTurnKeys, BaseStorage):
             memory["similarity"] = text_similarity(content, str(memory.get("content", "")))
         return rank_memory_results(memories, query=content, limit=limit)
 
+    def peek_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
+        """Read a memory without counting it as an access."""
+        with self.driver.session() as session:
+            record = session.run("MATCH (m:Memory {id: $id}) RETURN m", id=memory_id).single()
+            return self._memory_node_to_dict(dict(record["m"])) if record else None
+
     def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
         """Get a memory by ID."""
         with self.driver.session() as session:
