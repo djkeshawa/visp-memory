@@ -13,6 +13,7 @@ from visp_memory.core.repository import (
     DependencyType,
     Repository,
     RepositoryDependency,
+    declared_repository_metadata,
 )
 from visp_memory.core.storage import iter_repository_memories
 from visp_memory.server.auth import UserContext, get_current_user
@@ -49,10 +50,11 @@ async def register_repository(
         description=repo.description,
         tech_stack=repo.tech_stack or [],
         team_id=user.team_id,
-        metadata=without_written_by(repo.metadata),
+        metadata=declared_repository_metadata(without_written_by(repo.metadata)),
     )
 
     require_repo_scope_access(request.app.state.storage, repo_obj.id, user)
+    repo_mgr.require_claimable(repo_obj.id)
     try:
         repo_id = repo_mgr.register(repo_obj)
     except NotImplementedError as e:

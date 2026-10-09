@@ -10,6 +10,7 @@ from visp_memory.core.storage import (
     IMPLICIT_REGISTRATION_KEY,
     IMPLICIT_REGISTRATION_VALUE,
     is_implicitly_registered,
+    iter_repository_memories,
 )
 from visp_memory.server.auth import UserContext
 from visp_memory.server.authorization import (
@@ -55,6 +56,39 @@ class AuthorizedRepositoryManager(RepositoryManager):
             for repo in super().list_all(team_id=team_id, include_archived=include_archived)
             if self._can_access(repo)
         ]
+
+    def require_claimable(self, repo_id: str) -> None:
+        """Refuse to let this principal register a scope that already holds others' records.
+
+        A row the store created for itself is a placeholder that registration takes
+        over, and registration stamps the caller's team on it. Without this check
+        any authenticated user could register another team's unregistered project:
+        that team's writes would then 404, and every untagged record in the scope
+        would become visible to the claimant through the repository fallback.
+
+        Administrators and the local owner already see every record, so the claim
+        moves nothing for them. Anyone else may claim only a scope whose every
+        memory and intent is already tagged with their own team.
+        """
+        if has_admin_privileges(self.user) or self.user.is_local_owner:
+            return
+        existing = super().get(repo_id)
+        if existing is None or _is_declared(existing):
+            return
+        if not self._owns_every_record(repo_id):
+            raise HTTPException(status_code=404, detail="Repository not found")
+
+    def _owns_every_record(self, repo_id: str) -> bool:
+        def visible(record: dict[str, Any], scope_field: str) -> bool:
+            return can_access_scoped_record(
+                self.storage, record, self.user, scope_field=scope_field
+            )
+
+        memories = iter_repository_memories(self.storage, repo_id)
+        if not all(visible(memory, "metadata") for memory in memories):
+            return False
+        intents = self.storage.get_active_intents(repo_id=repo_id, status="all")
+        return all(visible(intent, "context") for intent in intents)
 
     def get_dependencies(self, repo_id: str) -> list[RepositoryDependency]:
         if self.get(repo_id) is None:
