@@ -81,7 +81,7 @@ async def get_account_manager(user: UserContext = Depends(get_current_user)) -> 
     here so that a path the table fails to match (a proxy prefix, a new route)
     cannot let one token mint another or manage accounts.
     """
-    if user.auth_type == "pat":
+    if user.is_scoped_token:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=AUTH_DENIED)
     return user
 

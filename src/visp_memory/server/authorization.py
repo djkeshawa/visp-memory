@@ -39,7 +39,7 @@ def has_admin_privileges(user: UserContext) -> bool:
     return bool(
         user.is_admin
         and (
-            user.auth_type != "pat"
+            not user.is_scoped_token
             or "admin" in user.scopes
             or "*" in user.scopes
         )
@@ -111,7 +111,7 @@ def require_repo_scope_access(
                 "origin. It cannot be read from or written to. Use your project's repo_id."
             ),
         )
-    if user.auth_type == "pat" and user.repo_ids and repo_id not in user.repo_ids:
+    if user.is_scoped_token and user.repo_ids and repo_id not in user.repo_ids:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
     if has_admin_privileges(user) or user.is_local_owner:
         return
@@ -175,7 +175,7 @@ def can_access_scoped_record(
     boundary, only the reason the dashboard read zero. It is still not an admin.
     """
     repo_id = record.get("repo_id")
-    if user.auth_type == "pat" and user.repo_ids and repo_id not in user.repo_ids:
+    if user.is_scoped_token and user.repo_ids and repo_id not in user.repo_ids:
         return False
     if has_admin_privileges(user) or user.is_local_owner:
         return True
