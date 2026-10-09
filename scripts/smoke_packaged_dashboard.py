@@ -121,11 +121,11 @@ const { chromium } = require('@playwright/test');
     waitUntil: 'domcontentloaded',
   });
   await page.getByLabel('Task').fill('Review the authentication callback');
-  await page.getByText('Select a project to prepare a brief').waitFor({ state: 'visible' });
-  const prepare = page.getByRole('button', { name: 'Prepare brief' });
+  await page.getByText('Select a project to compile a brief').waitFor({ state: 'visible' });
+  const prepare = page.getByRole('button', { name: 'Compile brief' });
   await prepare.waitFor({ state: 'visible' });
   if (!(await prepare.isDisabled())) {
-    throw new Error('Prepare brief was enabled with no project selected');
+    throw new Error('Compile brief was enabled with no project selected');
   }
 
   const repoId = process.env.VISP_MEMORY_SMOKE_REPO_ID;
@@ -151,9 +151,9 @@ const { chromium } = require('@playwright/test');
   );
   await page.getByLabel('Task').fill('Review the authentication callback');
   await page.getByLabel('Files').fill('src/auth.py');
-  await page.getByRole('button', { name: 'Prepare brief' }).click();
-  await page.getByRole('heading', { name: 'Compiled context' }).waitFor({ state: 'visible' });
-  await page.getByRole('heading', { name: 'Unknowns to verify' }).waitFor({ state: 'visible' });
+  await page.getByRole('button', { name: 'Compile brief' }).click();
+  await page.getByRole('heading', { name: 'Compiled brief' }).waitFor({ state: 'visible' });
+  await page.getByRole('heading', { name: 'Unknowns' }).waitFor({ state: 'visible' });
 
   await page.setViewportSize({ width: 390, height: 844 });
   for (const path of pages) {
@@ -170,7 +170,7 @@ const { chromium } = require('@playwright/test');
   });
   await page.getByRole('button', { name: 'Open navigation menu' }).click();
   const drawer = page.getByRole('dialog', { name: 'Navigation menu' });
-  await drawer.getByRole('link', { name: 'Memory Graph' }).waitFor({ state: 'visible' });
+  await drawer.getByRole('link', { name: 'Graph', exact: true }).waitFor({ state: 'visible' });
   await drawer.getByRole('combobox', { name: 'Project' }).waitFor({ state: 'visible' });
   await drawer.getByText('Theme', { exact: true }).waitFor({ state: 'visible' });
   await drawer.getByText('System Online', { exact: true }).waitFor({ state: 'visible' });

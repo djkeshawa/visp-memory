@@ -353,6 +353,7 @@ export async function getStats(repoId?: string | null): Promise<Stats> {
         activeIntents: stats.active_intents || 0,
         knowledgeNodes: stats.memories_by_layer?.semantic || 0,
         connections: stats.total_relationships || 0,
+        byLayer: stats.memories_by_layer && typeof stats.memories_by_layer === "object" ? stats.memories_by_layer : {},
     }
 }
 

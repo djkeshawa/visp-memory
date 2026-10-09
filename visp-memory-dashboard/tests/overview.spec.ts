@@ -18,6 +18,7 @@ async function mockOverview(page: Page, options: { failed?: boolean; empty?: boo
     else if (path === "/auth/me") { body = { detail: "Authentication required" }; status = 401 }
     else if (path === "/") body = { status: "online", storage_ready: true, embedding_driver_status: "fallback", embedding_driver_connected: false }
     else if (path === "/diagnostics/providers") body = []
+    else if (path === "/diagnostics/storage") body = { backend: "sqlite", capabilities: {}, schema_status: {} }
     else if (path === "/diagnostics/embedding-index") body = { status: "unavailable", message: "Keyword fallback is active" }
     else if (path === "/ai/routing") body = { configured: false, tasks: [] }
     else if (path === "/status") {
@@ -37,19 +38,28 @@ async function mockOverview(page: Page, options: { failed?: boolean; empty?: boo
 test("filters and expands recent memories and preserves project context in navigation", async ({ page }) => {
   await mockOverview(page)
   await page.goto("/dashboard?repo_id=visp-memory")
-  await expect(page.getByRole("heading", { name: "Memory overview" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "What this project knows" })).toBeVisible()
   await expect(page.getByLabel("Memory totals")).toContainText("12")
   await page.getByRole("button", { name: "Semantic", exact: true }).click()
   await expect(page.locator("details")).toHaveCount(1)
   await expect(page.locator("summary")).toContainText("Memory supplies cited knowledge")
-  await page.getByRole("button", { name: "All layers" }).click()
+  await page.getByRole("button", { name: "All", exact: true }).click()
   await page.locator("summary").first().focus()
   await page.keyboard.press("Enter")
   await expect(page.locator("details").first()).toHaveAttribute("open", "")
   await expect(page.getByText("project scope", { exact: true })).toBeVisible()
-  await expect(page.getByRole("link", { name: /Recall a memory/ })).toHaveAttribute("href", "/dashboard/recall?repo_id=visp-memory")
-  await expect(page.getByRole("link", { name: "Overview", exact: true })).toHaveAttribute("aria-current", "page")
+  await expect(page.getByRole("link", { name: "Brief a task" })).toHaveAttribute("href", "/dashboard/brief?repo_id=visp-memory")
+  await expect(page.getByRole("link", { name: "Desk", exact: true })).toHaveAttribute("aria-current", "page")
   await expect(page.getByText("Keyword fallback")).toBeVisible()
+})
+
+test("searches from the desk, keeps the project, and keeps the query out of the URL", async ({ page }) => {
+  await mockOverview(page)
+  await page.goto("/dashboard?repo_id=visp-memory")
+  await page.getByRole("searchbox", { name: "Recall a memory" }).fill("why scoped per repository")
+  await page.keyboard.press("Enter")
+  await expect(page).toHaveURL(/\/dashboard\/recall\?repo_id=visp-memory$/)
+  await expect(page.getByRole("searchbox", { name: "Search memories" })).toHaveValue("why scoped per repository")
 })
 
 test("creates a memory with the keyboard and refreshes the overview", async ({ page }) => {
@@ -176,7 +186,7 @@ for (const theme of ["dark", "light"] as const) {
     await mockOverview(page)
     await page.addInitScript((value) => localStorage.setItem("theme", value), theme)
     await page.goto("/dashboard?repo_id=visp-memory")
-    const library = page.getByRole("link", { name: "View library", exact: true })
+    const library = page.getByRole("link", { name: "Open the library", exact: true })
     await expect(library).toBeVisible()
     const highlight = await library.evaluate((element) => getComputedStyle(element).color)
     const background = await page.locator("body").evaluate((element) => getComputedStyle(element).backgroundColor)
@@ -185,7 +195,6 @@ for (const theme of ["dark", "light"] as const) {
 
     await page.getByRole("link", { name: "Recall", exact: true }).click()
     await expect(page.getByRole("heading", { name: "Recall", exact: true })).toBeVisible()
-    await expect(page.locator("main .lucide-search").first()).toHaveCSS("color", highlight)
     await expect(active).toHaveText("Recall")
     await expect(active).toHaveCSS("background-color", selection)
 
@@ -195,11 +204,11 @@ for (const theme of ["dark", "light"] as const) {
     await expect(active).toHaveCSS("background-color", selection)
     await page.getByRole("link", { name: "Open search setup guide" }).click()
     await expect(page.getByRole("link", { name: "Add or select a project" })).toHaveCSS("color", highlight)
-    await expect(page.getByRole("radio", { name: "Keyword search", exact: false })).toHaveCSS("accent-color", highlight)
+    await expect(page.getByRole("radio", { name: /^Keyword search/ })).toBeVisible()
     await expect(page.locator("html")).toHaveClass(new RegExp(theme))
     await expect(page.locator("body")).toHaveCSS("background-color", background)
 
-    await page.getByRole("link", { name: "Overview", exact: true }).click()
+    await page.getByRole("link", { name: "Desk", exact: true }).click()
     await expect(library).toHaveCSS("color", highlight)
     await expect(active).toHaveCSS("background-color", selection)
     await page.reload()

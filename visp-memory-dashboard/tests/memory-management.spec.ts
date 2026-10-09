@@ -136,7 +136,7 @@ test("ends a cold project's loading gate when the scope request never responds",
   await expect(page.getByText("Loading projects…")).toBeVisible()
   try {
     await page.clock.fastForward(12500)
-    await expect(page.getByRole("heading", { name: "Memory overview" })).toBeVisible()
+    await expect(page.getByRole("heading", { name: "What this project knows" })).toBeVisible()
     await expect(page.getByRole("alert").filter({ hasText: /server/i })).toBeVisible()
   } finally { release() }
 })
@@ -168,7 +168,7 @@ test("pages through older memories and resets paging when the project or status 
   await expect(page.getByRole("button", { name: "Previous page" })).toBeDisabled()
   await page.getByRole("button", { name: "Next page" }).click()
   await expect(page.getByText("Project note m51", { exact: true })).toBeVisible()
-  await page.getByRole("tab", { name: "deleted", exact: true }).click()
+  await page.getByRole("button", { name: "Trash", exact: true }).click()
   await expect(page.getByText("Project note m1", { exact: true })).toBeVisible()
   await expect(page.getByRole("button", { name: "Previous page" })).toBeDisabled()
 })
@@ -195,4 +195,29 @@ test("returns to the previous page after deleting the final memory on the last p
   await expect(page.getByRole("button", { name: "Previous page" })).toBeDisabled()
   await expect(page.getByRole("button", { name: "Next page" })).toBeDisabled()
   await expect(page.getByRole("checkbox", { name: "Select memory m1", exact: true })).not.toBeChecked()
+})
+
+test("moves every selected memory to trash from the selection bar and reports partial failures", async ({ page }) => {
+  await mockDashboard(page)
+  let records = [memory("m1"), memory("m2"), memory("m3")]
+  const deleted: string[] = []
+  await page.route((url) => url.pathname === "/memories", (route) => json(route, records))
+  await page.route("**/memories/m*?*", (route) => {
+    if (route.request().method() !== "DELETE") return route.fallback()
+    const id = decodeURIComponent(new URL(route.request().url()).pathname.split("/").pop() || "")
+    if (id === "m2") return json(route, { detail: "Memory is locked" }, 409)
+    deleted.push(id)
+    records = records.filter((record) => record.id !== id)
+    return json(route, { id, status: "deleted" })
+  })
+  await page.goto("/dashboard/memories?repo_id=repo-a")
+  const trash = page.getByRole("button", { name: "Move to trash", exact: true })
+  await expect(trash).toBeDisabled()
+  await page.getByRole("checkbox", { name: "Select memory m1", exact: true }).check()
+  await page.getByRole("checkbox", { name: "Select memory m2", exact: true }).check()
+  await trash.click()
+  await expect(page.getByText("1 of 2 memories could not be moved to trash")).toBeVisible()
+  expect(deleted).toEqual(["m1"])
+  await expect(page.getByText("Project note m1", { exact: true })).toHaveCount(0)
+  await expect(page.getByText("Project note m2", { exact: true })).toBeVisible()
 })

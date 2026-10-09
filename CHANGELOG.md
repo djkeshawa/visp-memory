@@ -11,6 +11,23 @@ tag has no section yet) as the GitHub release body. See
 
 ## [Unreleased]
 
+### Changed
+
+- The dashboard has a new design, "Strata". Navigation is grouped into Know, Curate
+  and Operate, and some pages are renamed: Overview is now Desk, Memories is Library,
+  Memory Graph is Graph, and Dreaming is Review. Routes are unchanged.
+- The Desk shows memory counts per layer, items waiting for review, and active
+  intents. Recall shows a selected result's evidence in an inspector panel.
+- A search started from the Desk no longer puts its text in the URL, so it stays out
+  of browser history and server access logs.
+- Building the dashboard now downloads its fonts (Instrument Sans, JetBrains Mono)
+  at build time.
+
+### Fixed
+
+- Light-theme status and layer colours, input borders and focus rings meet WCAG
+  contrast minimums.
+
 ## [0.8.1] - 2026-10-09
 
 Fixes from a codebase audit (#82), chiefly team visibility on a shared server, plus

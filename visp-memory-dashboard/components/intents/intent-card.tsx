@@ -1,160 +1,49 @@
 "use client"
 
 import { useState } from "react"
-import { motion } from "framer-motion"
-import { Check, CheckCircle2, Circle, Edit3, Sparkles, Undo2, X } from "lucide-react"
+import { Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Slider } from "@/components/ui/slider"
-import { staggerItem } from "@/lib/animations"
+import { Pill } from "@/components/strata/primitives"
+import { Criteria } from "@/components/intents/criteria"
+import { IntentEditDialog } from "@/components/intents/intent-edit-dialog"
 import { WorkflowDetails } from "@/components/intents/workflow-details"
 import type { Intent } from "@/lib/types"
-import { cn } from "@/lib/utils"
 
-interface IntentCardProps {
+export type IntentUpdate = { description: string; priority: number }
+export const PRIORITY_TONE = { high: "warning", medium: "info", low: "neutral" } as const
+
+/** An active intent: priority, acceptance criteria, what the workflow reported, and the advisory outcome actions. */
+export function IntentCard({ intent, onComplete, onClose, onUpdate }: {
   intent: Intent
-  onComplete?: (intent: Intent) => void
-  onClose?: (intent: Intent) => void
-  onUpdate?: (intent: Intent, updates: { description: string; priority: number }) => void
-  onReopen?: (intent: Intent) => void
-}
-
-export function IntentCard({ intent, onComplete, onClose, onUpdate, onReopen }: IntentCardProps) {
-  const isCompleted = intent.status === "completed"
-  const isClosed = intent.status === "closed"
-  const [isEditing, setIsEditing] = useState(false)
-  const [description, setDescription] = useState(intent.description)
-  const [priority, setPriority] = useState([priorityToSlider(intent.priorityValue)])
-
-  const submitUpdate = () => {
-    if (!description.trim()) return
-    onUpdate?.(intent, { description: description.trim(), priority: priority[0] })
-    setIsEditing(false)
-  }
-
+  onComplete: (intent: Intent) => void
+  onClose: (intent: Intent) => void
+  onUpdate: (intent: Intent, updates: IntentUpdate) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const suggested = intent.context?.completed_automatically
   return (
-    <>
-      <motion.div
-        variants={staggerItem}
-        whileHover={{ x: 4 }}
-        className={cn(
-          "glass flex items-start gap-4 rounded-lg p-4 transition-all",
-          (isCompleted || isClosed) && "opacity-75",
-        )}
-      >
-        {isCompleted || isClosed ? (
-          <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-success" />
-        ) : (
-          <Circle className="mt-0.5 h-5 w-5 shrink-0 text-intent" />
-        )}
-        <div className="min-w-0 flex-1">
-          <p
-            className={cn(
-              "text-sm font-medium text-foreground",
-              (isCompleted || isClosed) && "line-through text-muted-foreground",
-            )}
-          >
-            {intent.description}
-          </p>
-          <div className="mt-1 flex flex-wrap items-center gap-2">
-            <p className="text-xs capitalize text-muted-foreground">{intent.priority} priority</p>
-            {isClosed ? <p className="text-xs text-muted-foreground">closed</p> : null}
-            {intent.context?.completed_automatically ? <span className="inline-flex items-center gap-1 text-xs text-highlight"><Sparkles className="h-3 w-3" />Completed automatically · {Math.round(Number(intent.context?.completion_evaluation?.confidence || 0) * 100)}%</span> : null}
-          </div>
-          <WorkflowDetails intent={intent} />
+    <article aria-labelledby={`intent-${intent.id}`} className="surface flex flex-col gap-3.5 rounded-2xl p-5">
+      <div className="flex flex-wrap items-start justify-between gap-2.5">
+        <h3 id={`intent-${intent.id}`} className="min-w-0 flex-1 basis-64 text-base font-semibold leading-snug">{intent.description}</h3>
+        <Pill tone={PRIORITY_TONE[intent.priority]}>{intent.priority.charAt(0).toUpperCase() + intent.priority.slice(1)} priority</Pill>
+      </div>
+      {suggested ? (
+        <p className="flex items-center gap-1.5 text-xs text-highlight">
+          <Sparkles className="h-3 w-3" aria-hidden="true" />
+          Completed automatically · {Math.round(Number(intent.context?.completion_evaluation?.confidence || 0) * 100)}%
+        </p>
+      ) : null}
+      <Criteria intent={intent} />
+      <WorkflowDetails intent={intent} />
+      <div className="flex flex-wrap items-center justify-between gap-2.5 border-t border-border pt-3">
+        <span className="truncate font-mono text-xs text-muted-foreground" title={intent.id}>{intent.id}</span>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="ghost" onClick={() => setEditing(true)} aria-label="Edit intent">Edit</Button>
+          <Button variant="outline" onClick={() => onClose(intent)} aria-label="Record close outcome" title="Record close outcome">Record close</Button>
+          <Button onClick={() => onComplete(intent)} aria-label="Record completion outcome" title="Record completion outcome">Record completion</Button>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
-          {onUpdate ? (
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setIsEditing(true)}>
-              <Edit3 className="h-4 w-4" />
-            </Button>
-          ) : null}
-          {!isCompleted && !isClosed && onComplete ? (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              onClick={() => onComplete(intent)}
-              aria-label="Record completion outcome"
-              title="Record completion outcome"
-            >
-              <Check className="h-4 w-4" />
-            </Button>
-          ) : null}
-          {!isCompleted && !isClosed && onClose ? (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              onClick={() => onClose(intent)}
-              aria-label="Record close outcome"
-              title="Record close outcome"
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          ) : null}
-          {(isCompleted || isClosed) && onReopen ? (
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onReopen(intent)} title="Reopen intent">
-              <Undo2 className="h-4 w-4" />
-            </Button>
-          ) : null}
-        </div>
-      </motion.div>
-
-      <Dialog open={isEditing} onOpenChange={setIsEditing}>
-        <DialogContent className="sm:max-w-[425px]">
-          <DialogHeader>
-            <DialogTitle>Update Intent</DialogTitle>
-          </DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="grid gap-2">
-              <Label htmlFor={`intent-description-${intent.id}`}>Description</Label>
-              <Input
-                id={`intent-description-${intent.id}`}
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-              />
-            </div>
-            <div className="grid gap-2">
-              <div className="flex justify-between">
-                <Label htmlFor={`intent-priority-${intent.id}`}>Priority</Label>
-                <span className="text-sm text-muted-foreground">{priority[0]}/10</span>
-              </div>
-              <Slider
-                id={`intent-priority-${intent.id}`}
-                value={priority}
-                min={1}
-                max={10}
-                step={1}
-                onValueChange={setPriority}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setIsEditing(false)}>
-              Cancel
-            </Button>
-            <Button type="button" onClick={submitUpdate}>
-              Save
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
+      </div>
+      {editing ? <IntentEditDialog intent={intent} open onOpenChange={setEditing} onSave={(updates) => onUpdate(intent, updates)} /> : null}
+    </article>
   )
-}
-
-function priorityToSlider(priority?: number): number {
-  if (!priority) return 5
-  if (priority >= 3) return 9
-  if (priority >= 2) return 5
-  return 2
 }

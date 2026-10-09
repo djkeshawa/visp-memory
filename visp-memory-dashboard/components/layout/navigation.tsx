@@ -1,63 +1,62 @@
 import Link from "next/link"
-import {
-  Activity, Cable, ClipboardCheck, ClipboardList, FolderGit2, LayoutDashboard,
-  Library, Moon, Network, Search, Settings, Target, Users,
-} from "lucide-react"
 import { projectHref } from "@/lib/project-selection"
 import { cn } from "@/lib/utils"
 
-const groups = [
+/** Know what the project knows, curate it, operate the server. Routes are unchanged. */
+export const NAV_GROUPS = [
   {
-    label: "Knowledge",
+    label: "Know",
     items: [
-      { href: "/", label: "Overview", icon: LayoutDashboard },
-      { href: "/brief", label: "Task Brief", icon: ClipboardCheck },
-      { href: "/memories", label: "Memories", icon: Library },
-      { href: "/recall", label: "Recall", icon: Search },
-      { href: "/graph", label: "Memory Graph", icon: Network },
-      { href: "/intents", label: "Intents", icon: Target },
+      { href: "/", label: "Desk" },
+      { href: "/recall", label: "Recall" },
+      { href: "/brief", label: "Task brief" },
+      { href: "/memories", label: "Library" },
+      { href: "/graph", label: "Graph" },
     ],
   },
   {
-    label: "Workspace",
+    label: "Curate",
     items: [
-      { href: "/projects", label: "Projects", icon: FolderGit2 },
-      { href: "/intelligence", label: "Intelligence", icon: ClipboardList },
-      { href: "/dreaming", label: "Dreaming", icon: Moon },
+      { href: "/dreaming", label: "Review" },
+      { href: "/intents", label: "Intents" },
+      { href: "/intelligence", label: "Intelligence" },
     ],
   },
   {
-    label: "Manage",
+    label: "Operate",
     items: [
-      { href: "/health", label: "Operations", icon: Activity },
-      { href: "/integrations", label: "Integrations", icon: Cable },
-      { href: "/users", label: "Users", icon: Users },
-      { href: "/settings", label: "Settings", icon: Settings },
+      { href: "/projects", label: "Projects" },
+      { href: "/health", label: "Operations" },
+      { href: "/integrations", label: "Integrations" },
+      { href: "/users", label: "Users" },
+      { href: "/settings", label: "Settings" },
     ],
   },
-]
+] as const
 
 export function Navigation({ activePath, repoId }: { activePath: string; repoId: string | null }) {
-  return groups.map((group) => (
-    <div key={group.label}>
-      <p className="px-3 pb-2 pt-5 text-[11px] font-semibold tracking-wide text-muted-foreground">{group.label}</p>
+  return NAV_GROUPS.map((group) => (
+    <div key={group.label} className="pt-5 first:pt-3">
+      <p className="eyebrow px-3 pb-1.5 text-[11px]">{group.label}</p>
       <div className="space-y-0.5">
-        {group.items.map((item) => (
-          <Link
-            key={item.href}
-            aria-current={activePath === item.href ? "page" : undefined}
-            href={projectHref(item.href, repoId)}
-            className={cn(
-              "flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors duration-150",
-              activePath === item.href
-                ? "bg-accent text-accent-foreground shadow-[inset_0_1px_0_#ffffff08]"
-                : "text-muted-foreground hover:bg-secondary hover:text-foreground",
-            )}
-          >
-            <item.icon className="h-[18px] w-[18px] shrink-0" aria-hidden="true" />
-            <span>{item.label}</span>
-          </Link>
-        ))}
+        {group.items.map((item) => {
+          const current = activePath === item.href
+          return (
+            <Link
+              key={item.href}
+              aria-current={current ? "page" : undefined}
+              href={projectHref(item.href, repoId)}
+              className={cn(
+                "flex min-h-9 items-center rounded-lg px-3 text-sm transition-colors duration-150",
+                current
+                  ? "bg-sidebar-accent font-semibold text-sidebar-accent-foreground"
+                  : "font-medium text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground",
+              )}
+            >
+              {item.label}
+            </Link>
+          )
+        })}
       </div>
     </div>
   ))

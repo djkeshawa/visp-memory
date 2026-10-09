@@ -36,7 +36,7 @@ test("creates first account using a private code then shows search setup", async
   await expect(page.getByRole("heading", { name: "Choose how to find your memories" })).toBeVisible()
   await expect(page.getByText("Keyword search is available", { exact: true })).toBeVisible()
   await page.getByRole("radio", { name: /^OpenAI/ }).check()
-  await expect(page.getByRole("heading", { name: "Configure OpenAI" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Server settings for OpenAI" })).toBeVisible()
 })
 
 test("reflects external completion and shows evidence and history after refresh", async ({ page }) => {
@@ -77,7 +77,7 @@ test("explains search matches and flags stale or conflicting knowledge", async (
   await expect(page.getByText(/Dashboard and API notes remain searchable/)).toBeVisible()
   await expect(page.getByText("May be stale · review before using")).toBeVisible()
   await expect(page.getByText("Possible conflict · review sources")).toBeVisible()
-  await page.getByText("Match explanation and quality", { exact: true }).click()
   await expect(page.getByText("Matched words: login")).toBeVisible()
+  await expect(page.getByText("Ranking score 0.75 orders results. It is not a probability of correctness.")).toBeVisible()
   await expect(page.getByText("1 linked evidence records")).toBeVisible()
 })

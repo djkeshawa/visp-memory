@@ -144,9 +144,9 @@ test("shows raw as a styled opt-in graph layer but keeps it out of recall", asyn
   })
   await page.goto("/dashboard/graph?repo_id=repo-a")
   await expect(page.getByTestId("graph-settlement")).toContainText("3 of 4 nodes visible")
-  await page.getByRole("button", { name: "Show graph filters" }).click()
   const rawFilter = page.getByTestId("graph-filter-raw")
-  await expect(rawFilter).toHaveText("Raw")
+  await expect(rawFilter).toContainText("Raw")
+  await expect(rawFilter).toContainText("1")
   await expect(rawFilter).toHaveAttribute("aria-pressed", "false")
   await rawFilter.click()
   await expect(page.getByTestId("graph-settlement")).toContainText("4 of 4 nodes visible")
@@ -154,7 +154,7 @@ test("shows raw as a styled opt-in graph layer but keeps it out of recall", asyn
   await page.goto("/dashboard/recall?repo_id=repo-a")
   await page.getByPlaceholder("What did I decide about authentication?").fill("memory")
   await page.getByRole("button", { name: "Search" }).click()
-  await expect(page.getByText("visible episodic memory")).toBeVisible()
+  await expect(page.getByRole("region", { name: "Results" }).getByText("visible episodic memory")).toBeVisible()
   await expect(page.getByText("secret raw capture")).toHaveCount(0)
 })
 
@@ -262,13 +262,13 @@ test("exercises restore and permanent purge memory actions", async ({ page }) =>
   })
 
   await page.goto("/dashboard/memories?repo_id=repo-a")
-  await page.getByRole("tab", { name: "deleted" }).click()
+  await page.getByRole("button", { name: "Trash", exact: true }).click()
   await expect(page.getByText("deleted memory")).toBeVisible()
   await page.getByTitle("Restore").click()
   await expect.poll(() => restoreCalls).toBe(1)
   await expect(page.getByText("deleted memory")).toHaveCount(0)
 
-  await page.getByRole("tab", { name: "archived" }).click()
+  await page.getByRole("button", { name: "Archived", exact: true }).click()
   await expect(page.getByText("archived memory")).toBeVisible()
   page.once("dialog", (dialog) => dialog.accept())
   await page.getByTitle("Permanently purge").click()
@@ -343,11 +343,11 @@ test("refreshes project scopes after a mutation and falls back when the selected
   })
   await page.goto("/dashboard/projects?repo_id=repo-a")
   await page.getByLabel("Name").fill("Project B")
-  await page.getByLabel("ID").fill("repo-b")
-  await page.getByRole("button", { name: "Create", exact: true }).click()
+  await page.getByLabel("Project id").fill("repo-b")
+  await page.getByRole("button", { name: "Create project", exact: true }).click()
   await expect(page.getByRole("combobox", { name: "Project" }).locator("option", { hasText: "Project B" })).toBeAttached()
 
-  await page.getByRole("row").filter({ hasText: "Project A" }).getByTitle("Archive").click()
+  await page.getByRole("row").filter({ hasText: "Project A" }).getByRole("button", { name: /^Archive/ }).click()
   await expect(page.getByRole("combobox", { name: "Project" })).toHaveValue("repo-b")
 })
 
@@ -435,7 +435,7 @@ test("draws relationship particles when a linked node is selected", async ({ pag
     prototype.__phase3ArcCalls = 0
   })
   await page.getByTestId("graph-node-control-one").evaluate((element) => (element as HTMLButtonElement).click())
-  await expect(page.getByText("1 connections")).toBeVisible()
+  await expect(page.getByText("1 relationship", { exact: false })).toBeVisible()
   await expect(page.getByText("supports")).toBeVisible()
   await expect.poll(() => page.evaluate(() => {
     const prototype = CanvasRenderingContext2D.prototype as CanvasRenderingContext2D & { __phase3ArcCalls?: number }
@@ -457,7 +457,6 @@ test("force layout settles and restarts after an intentional graph filter change
   })
   await page.goto("/dashboard/graph?repo_id=repo-a")
   await expect(page.getByTestId("graph-settlement")).toContainText("Layout settled", { timeout: 10000 })
-  await page.getByRole("button", { name: "Show graph filters" }).click()
   await page.getByTestId("graph-filter-semantic").click()
   await expect(page.getByTestId("graph-settlement")).toContainText("1 of 2 nodes visible")
   await expect(page.getByTestId("graph-settlement")).toContainText("Layout settled", { timeout: 10000 })

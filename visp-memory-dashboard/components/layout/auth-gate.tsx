@@ -1,7 +1,8 @@
 "use client"
 
 import { useEffect, useState, type ReactNode } from "react"
-import { LockKeyhole } from "lucide-react"
+import { StrataMark } from "@/components/strata/layer-glyph"
+import { Button } from "@/components/ui/button"
 import {
   AUTH_CHANGED_EVENT,
   AUTH_REQUIRED_EVENT,
@@ -68,20 +69,16 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (status === "allowed") return children
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-background px-6">
-      <div className="max-w-md text-center">
-        <LockKeyhole className="mx-auto mb-4 h-7 w-7 text-muted-foreground" aria-hidden="true" />
+    <main className="flex min-h-screen items-center justify-center bg-background px-4">
+      <div className="flex max-w-md flex-col items-center text-center">
+        <StrataMark className="mb-5" />
         {status === "error" ? (
           <>
             <h1 className="text-xl font-semibold">Unable to check your session</h1>
             <p role="alert" className="mt-3 text-sm leading-6 text-muted-foreground">{error}</p>
-            <button
-              type="button"
-              onClick={() => setAttempt((value) => value + 1)}
-              className="mt-5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
-            >
+            <Button type="button" onClick={() => setAttempt((value) => value + 1)} className="mt-5 h-11 px-5">
               Try again
-            </button>
+            </Button>
           </>
         ) : (
           <p role="status" className="text-sm text-muted-foreground">Checking your session…</p>

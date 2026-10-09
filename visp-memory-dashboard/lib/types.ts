@@ -194,6 +194,8 @@ export interface Stats {
   activeIntents: number
   knowledgeNodes: number
   connections: number
+  /** Memory count per layer, as reported by the server. The server lists only layers that have memories, so a missing layer means zero. */
+  byLayer: Partial<Record<MemoryLayer, number>>
 }
 
 export type ProviderConnectionStatus =
