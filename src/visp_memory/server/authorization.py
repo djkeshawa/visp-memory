@@ -193,7 +193,14 @@ def can_access_scoped_record(
     filter at all -- so serving it less through its own dashboard was never a
     boundary, only the reason the dashboard read zero. It is still not an admin.
     """
-    if is_outside_token_projects(record.get("repo_id"), user):
+    repo_id = record.get("repo_id")
+    # The reserved-scope rule of `require_repo_scope_access`, for routes that
+    # reach a record by id rather than by scope. Without it a quarantined row
+    # was readable, editable, deletable and restorable by anyone who knew its id
+    # -- including an admin, which is why this comes before the admin check.
+    if isinstance(repo_id, str) and repo_id.strip() == UNSCOPED_REPO_ID:
+        return False
+    if is_outside_token_projects(repo_id, user):
         return False
     if has_admin_privileges(user) or user.is_local_owner:
         return True

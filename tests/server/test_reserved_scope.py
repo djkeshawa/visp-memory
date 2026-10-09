@@ -115,3 +115,32 @@ async def test_a_real_scope_is_unaffected(client):
 
     assert response.status_code == 200, response.text
     assert "ordinary project memory" in response.text
+
+
+# Routes that reach a record by id, not by scope. The scope gate never sees a
+# repo_id here, so the reserved-scope rule has to hold on the record itself —
+# for the API-key administrator too.
+BY_ID_ENDPOINTS = [
+    ("GET", "/memories/{id}", None),
+    ("GET", "/memories/{id}/related", None),
+    ("GET", "/memories/{id}/attestation", None),
+    ("PATCH", "/memories/{id}", {"content": "rewritten"}),
+    ("DELETE", "/memories/{id}", None),
+    ("POST", "/memories/{id}/restore", None),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,path,payload", BY_ID_ENDPOINTS)
+async def test_a_quarantined_row_is_not_reachable_by_id(client, method, path, payload):
+    memory_id = _quarantined_row()
+
+    response = await client.request(
+        method, path.format(id=memory_id), json=payload, headers=HEADERS
+    )
+
+    assert response.status_code == 404, response.text
+    assert "secret sauce" not in response.text
+    stored = app.state.storage.get_memory(memory_id)
+    assert stored["content"] == "the quarantined secret sauce recipe"
+    assert stored["status"] == "active"
