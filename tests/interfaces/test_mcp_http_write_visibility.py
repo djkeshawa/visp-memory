@@ -68,7 +68,7 @@ async def test_mcp_new_project_writes_are_visible_only_to_the_creating_team(
 ):
     app, memory = new_project_server
     async with app.lifespan(), httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
     ) as client:
         await call_tool(client, "alpha", tool, arguments)
         own_stats = json.loads(await call_tool(client, "alpha", "memory_stats", {}))

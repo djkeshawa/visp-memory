@@ -83,7 +83,7 @@ class _Client:
         self._lifespan = self._app.lifespan()
         await self._lifespan.__aenter__()
         self._client = httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=self._app), base_url="http://testserver"
+            transport=httpx.ASGITransport(app=self._app), base_url="http://127.0.0.1"
         )
         return self._client
 

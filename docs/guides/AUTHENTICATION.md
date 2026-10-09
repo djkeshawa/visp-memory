@@ -113,13 +113,17 @@ The same token is required to report an intent's workflow status
 (`POST /intents/{id}/workflow-status`) as the local owner; an anonymous loopback
 caller without it is refused.
 
-In local-owner mode the server also refuses requests whose `Host` is not
-`localhost`, `127.0.0.1` or `[::1]` (HTTP 421), and refuses a cross-origin
-`POST`/`PUT`/`PATCH`/`DELETE` whose `Origin` is not a loopback page that is this
-server's own dashboard or a configured CORS origin (HTTP 403). This stops a
-web page that rebinds its hostname to `127.0.0.1` from reading or changing your
-memories. Clients that send no `Origin` (the CLI, `RemoteStorage`, MCP) are not
-affected, and neither are servers that are not in local-owner mode.
+In local-owner mode, and whenever auth is disabled, the server also refuses
+requests whose `Host` is not `localhost`, `127.0.0.1`, `[::1]` or a host listed in
+`VISP_MEMORY_SERVER_ALLOWED_HOSTS` (HTTP 421), and refuses a cross-origin
+`POST`/`PUT`/`PATCH`/`DELETE` whose `Origin` is not such a host's page that is
+this server's own dashboard or a configured CORS origin (HTTP 403). An
+unauthenticated MCP HTTP endpoint applies the same Host and Origin allowlist.
+This stops a web page that rebinds its hostname to `127.0.0.1` from reading or
+changing your memories. Clients that send no `Origin` (the CLI, `RemoteStorage`,
+MCP) are not affected, and neither are authenticated servers outside local-owner
+mode. `VISP_MEMORY_SERVER_ALLOWED_HOSTS` takes comma-separated `host` or
+`host:port` entries; `*` turns the Host check off.
 
 ## Server deployment
 

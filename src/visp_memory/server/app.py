@@ -500,7 +500,8 @@ app.add_middleware(
     ImportBodyLimitMiddleware, max_body_bytes=lambda: config.server.max_import_body_bytes,
 )
 # Added last so it is outermost: a rebinding request is refused before CORS or
-# routing sees it. It decides per request and only in local-owner mode.
+# routing sees it. It decides per request, and only while auth is disabled or the
+# local-owner view is being granted.
 app.add_middleware(LocalOwnerGuardMiddleware)
 
 # Initialize Storage

@@ -42,6 +42,7 @@ ENV_OVERRIDES: dict[str, tuple[str, ...]] = {
     "VISP_MEMORY_BIND_HOST": ("server", "host"),
     "VISP_MEMORY_JWT_SECRET": ("server", "jwt_secret"),
     "VISP_MEMORY_SERVER_CORS_ORIGINS": ("server", "cors_origins"),
+    "VISP_MEMORY_SERVER_ALLOWED_HOSTS": ("server", "allowed_hosts"),
     "VISP_MEMORY_SERVER_CORS_ALLOW_CREDENTIALS": (
         "server",
         "cors_allow_credentials",
@@ -326,6 +327,10 @@ class ServerConfig(BaseSettings):
         ]
     )
     cors_allow_credentials: bool = True
+    #: Host names, besides loopback, that an unauthenticated server answers to.
+    #: Only consulted while auth is disabled or in local-owner mode; ``*`` turns
+    #: the Host check off. See ``visp_memory.server.local_hosts``.
+    allowed_hosts: Annotated[List[str], NoDecode] = Field(default_factory=list)
 
     # Authentication
     auth_enabled: bool = True
@@ -359,7 +364,7 @@ class ServerConfig(BaseSettings):
     local_owner_mode: bool = False
     shared: bool = False
 
-    @field_validator("cors_origins", "api_keys", mode="before")
+    @field_validator("cors_origins", "api_keys", "allowed_hosts", mode="before")
     @classmethod
     def parse_cors_origins(cls, value: Any) -> List[str]:
         """Accept JSON-style lists or comma-separated env/config values."""
@@ -450,7 +455,7 @@ class MemoryConfig(BaseSettings):
             value = os.environ[env_name]
             if path == ("server", "cors_origins"):
                 value = ServerConfig.parse_cors_origins(value)
-            elif path == ("server", "api_keys"):
+            elif path in {("server", "api_keys"), ("server", "allowed_hosts")}:
                 value = ServerConfig.parse_cors_origins(value)
             else:
                 value = _coerce_env_value(target, path[-1], value)

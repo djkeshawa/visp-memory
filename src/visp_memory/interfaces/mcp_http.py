@@ -478,10 +478,37 @@ def build_http_app(
         event_store=None,
         json_response=json_response,
         stateless=True,
+        security_settings=_local_transport_security(
+            config, unauthenticated=auth_store is None and token is None
+        ),
     )
     return StatelessMCPApp(
         manager, token=token, auth_store=auth_store, config=config
     )
+
+
+def _local_transport_security(config, *, unauthenticated: bool):
+    """Host/Origin allowlisting for a server that answers as the local administrator.
+
+    With no credential to check, every request that reaches the endpoint gets the
+    local principal, so a hostile page that rebinds its own name to 127.0.0.1
+    could drive the write surface from the victim's browser. The SDK's DNS
+    rebinding protection refuses such a Host or Origin. An authenticated server
+    needs a bearer credential no browser sends on another site's behalf, so it is
+    left as it was.
+    """
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    from visp_memory.server.local_hosts import allows_any_host, transport_hosts
+
+    server_config = getattr(config, "server", None)
+    if not unauthenticated or getattr(server_config, "auth_enabled", False):
+        return None
+    extra_hosts = getattr(server_config, "allowed_hosts", None) or []
+    if allows_any_host(extra_hosts):
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    hosts, origins = transport_hosts(extra_hosts)
+    return TransportSecuritySettings(allowed_hosts=hosts, allowed_origins=origins)
 
 
 def _bearer_token(scope) -> str | None:
