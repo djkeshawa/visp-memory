@@ -51,7 +51,9 @@ def apply(unit, run_id, repo_id, item, actor_id):
         metadata = {**memory["metadata"], "dreaming_action": action_id}
         state = "archived"
         if item["kind"] == "duplicate":
-            metadata["merged_into"] = memories[0]["id"]
+            # Retention counts from merged_at; without it a merge looks as old as
+            # the note itself and becomes purgeable immediately.
+            metadata.update(merged_into=memories[0]["id"], merged_at=utc_now_iso())
             state = "merged"
         before = {key: memory.get(key) for key in ("status", "metadata", "archived_at")}
         after = {

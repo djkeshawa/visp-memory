@@ -367,16 +367,7 @@ class MemoryLifecycleManager:
         cutoff = utc_now() - timedelta(days=max(30, retention_days))
         candidates: list[str] = []
         for memory in self.storage.list_memories(repo_id=repo_id, status="all", limit=100000):
-            if memory.get("status") not in {"deleted", "merged", "superseded"}:
-                continue
-            metadata = memory.get("metadata") or {}
-            timestamp = (
-                (metadata.get("deletion") or {}).get("deleted_at")
-                or metadata.get("merged_at")
-                or metadata.get("invalid_at")
-                or memory.get("created_at")
-            )
-            parsed = parse_utc(timestamp)
+            parsed = parse_utc(self._retired_at(memory))
             if parsed and parsed <= cutoff:
                 candidates.append(memory["id"])
         return {
@@ -384,6 +375,23 @@ class MemoryLifecycleManager:
             "retention_days": max(30, retention_days),
             **self.purge_preview(candidates),
         }
+
+    @staticmethod
+    def _retired_at(memory: dict[str, Any]) -> Optional[str]:
+        """When a memory left the active set, or None when that was never recorded.
+
+        Retention counts from this moment only. Falling back to ``created_at`` would
+        purge a long-lived memory the day it was merged or deleted.
+        """
+        metadata = memory.get("metadata") or {}
+        status = memory.get("status")
+        if status == "deleted":
+            return (metadata.get("deletion") or {}).get("deleted_at")
+        if status == "merged":
+            return metadata.get("merged_at")
+        if status == "superseded":
+            return metadata.get("invalid_at")
+        return None
 
     def execute_retention(self, repo_id: str, *, retention_days: int = 30) -> dict[str, Any]:
         preview = self.retention_preview(repo_id, retention_days=retention_days)

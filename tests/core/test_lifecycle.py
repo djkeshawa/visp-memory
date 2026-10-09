@@ -370,3 +370,24 @@ def test_merge_undo_restores_relationships_replaced_by_re_pointing(tmp_path):
     manager.undo_merge(result["operation_id"], actor_id="admin")
     # The pre-existing target -> other edge survives, and the replaced edge returns.
     assert edges() == before
+
+
+def test_retention_counts_from_the_merge_not_from_creation(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    from visp_memory.core.dreaming import Dreaming
+
+    storage, manager = _manager(tmp_path)
+    old = (datetime.now(timezone.utc) - timedelta(days=400)).isoformat()
+    ids = [
+        storage.store_memory("Old note", repo_id="repo-a", created_at=old, auto_link=False)
+        for _ in range(2)
+    ]
+    Dreaming(storage).run("repo-a", actor_id="owner")
+    merged = next(mid for mid in ids if storage.get_memory(mid)["status"] == "merged")
+    assert storage.get_memory(merged)["metadata"]["merged_at"]
+    assert manager.retention_preview("repo-a")["purgeable_ids"] == []
+
+    # A merged row with no recorded merge time is never guessed from created_at.
+    assert storage.update_memory(merged, metadata={"merged_into": ids[0]})
+    assert manager.retention_preview("repo-a")["purgeable_ids"] == []
