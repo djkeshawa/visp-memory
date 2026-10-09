@@ -7,6 +7,7 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from visp_memory.config import load_config
 from visp_memory.core.clock import parse_utc, utc_now
@@ -126,14 +127,26 @@ async def setup_account(request: Request, payload: InitialAccountRequest):
 @router.post("/login")
 async def login(request: Request, response: Response, credentials: LoginRequest):
     config = load_config()
-    account = request.app.state.auth_store.authenticate_password(
-        credentials.username, credentials.password
+    store = request.app.state.auth_store
+    address = request.client.host if request.client else "unknown"
+    retry_after = store.login_throttle.retry_after(address, credentials.username)
+    if retry_after:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed sign-in attempts; try again later",
+            headers={"Retry-After": str(retry_after)},
+        )
+    # Argon2 is deliberately slow; on the event loop it would stall every request.
+    account = await run_in_threadpool(
+        store.authenticate_password, credentials.username, credentials.password
     )
     if not account:
+        store.login_throttle.record_failure(address, credentials.username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
         )
+    store.login_throttle.record_success(address, credentials.username)
 
     session_token, csrf_token = request.app.state.auth_store.create_session(
         account["id"],

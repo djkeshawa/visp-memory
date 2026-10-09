@@ -8,6 +8,7 @@ import secrets
 import sqlite3
 from contextlib import contextmanager
 from datetime import timedelta
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
@@ -15,6 +16,19 @@ from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError
 
 from visp_memory.core.clock import parse_utc, utc_now, utc_now_iso
+from visp_memory.server.login_throttle import LoginThrottle
+
+_PASSWORD_PARAMETERS = {"memory_cost": 19456, "time_cost": 2, "parallelism": 1}
+
+
+@lru_cache(maxsize=1)
+def _decoy_password_hash() -> str:
+    """A hash no password matches, verified for unknown users.
+
+    Verifying it costs what verifying a real account's hash costs, so the time a
+    failed login takes no longer says whether the username exists.
+    """
+    return PasswordHasher(**_PASSWORD_PARAMETERS).hash(secrets.token_urlsafe(32))
 
 
 class AuthStore:
@@ -28,7 +42,9 @@ class AuthStore:
     def __init__(self, path: Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.passwords = PasswordHasher(memory_cost=19456, time_cost=2, parallelism=1)
+        self.passwords = PasswordHasher(**_PASSWORD_PARAMETERS)
+        self.login_throttle = LoginThrottle()
+        _decoy_password_hash()
         self._initialize()
 
     @contextmanager
@@ -252,11 +268,14 @@ class AuthStore:
             row = connection.execute(
                 "SELECT * FROM auth_accounts WHERE username = ? COLLATE NOCASE", (username.strip(),)
             ).fetchone()
-        if not row or not row["enabled"]:
-            return None
+        known = bool(row and row["enabled"])
         try:
-            self.passwords.verify(row["password_hash"], password)
+            self.passwords.verify(
+                row["password_hash"] if known else _decoy_password_hash(), password
+            )
         except (VerifyMismatchError, InvalidHashError):
+            return None
+        if not known:
             return None
 
         now = utc_now_iso()
