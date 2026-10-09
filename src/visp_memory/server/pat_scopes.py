@@ -87,7 +87,8 @@ _RULES = (
         _scopes("memory:read"),
         _scopes("memory:write"),
     ),
-    _rule(r"/repos/[^/]+/context", _scopes("memory:read"), _scopes("memory:write")),
+    # `.*`, not `[^/]+`: repository ids are `{repo_id:path}` and may contain `/`.
+    _rule(r"/repos/.*/context", _scopes("memory:read"), _scopes("memory:write")),
     _rule(r"/memories/[^/]+/attestation", _scopes("memory:read"), _scopes("memory:write")),
     # A POST, but it only searches: it reads memory content.
     _any_method(r"/turn-keys/search", _scopes("memory:read")),
