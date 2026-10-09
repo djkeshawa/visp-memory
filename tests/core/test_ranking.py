@@ -306,3 +306,24 @@ def test_graph_scores_include_evidence_and_distance():
     assert graph_node_relevance(0.9, 0.7, observed, distance=0) > graph_node_relevance(
         0.9, 0.7, observed, distance=3
     )
+
+
+def test_decay_reference_is_the_later_of_access_and_last_decay():
+    from datetime import datetime, timezone
+
+    from visp_memory.core.ranking import decay_reference_at
+
+    accessed = "2026-01-01T00:00:00+00:00"
+    decayed = "2026-02-01T00:00:00+00:00"
+    expected = datetime(2026, 2, 1, tzinfo=timezone.utc)
+    assert decay_reference_at(
+        {"accessed_at": accessed, "metadata": {"decayed_at": decayed}}
+    ) == expected
+    # A later access restarts idle time even after a decay pass.
+    assert decay_reference_at(
+        {"accessed_at": "2026-03-01 00:00:00", "metadata": {"decayed_at": decayed}}
+    ) == datetime(2026, 3, 1, tzinfo=timezone.utc)
+    assert decay_reference_at({"created_at": accessed, "accessed_at": None}) == datetime(
+        2026, 1, 1, tzinfo=timezone.utc
+    )
+    assert decay_reference_at({"metadata": None}) is None

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Request
 
 from visp_memory.config import load_config
 from visp_memory.core.clock import parse_utc, utc_now
+from visp_memory.core.ranking import decay_reference_at
 from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import can_access_scoped_record, require_repo_scope_access
 from visp_memory.server.request_scope import request_repo_id
@@ -38,7 +39,8 @@ def _decay_projection(
     current_importance = float(memory.get("importance", 0.5) or 0.0)
     created_at = _as_datetime(memory.get("created_at"))
     last_accessed_at = _as_datetime(memory.get("accessed_at") or memory.get("created_at"))
-    age_days = max(0.0, (now - last_accessed_at).total_seconds() / 86400)
+    reference = decay_reference_at(memory) or now
+    age_days = max(0.0, (now - reference).total_seconds() / 86400)
     decay_factor = 0.5 ** (age_days / max(halflife_days, 1))
     projected_importance = max(min_importance, current_importance * decay_factor)
     decay_amount = max(0.0, current_importance - projected_importance)

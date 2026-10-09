@@ -49,7 +49,6 @@ import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, Iterator
 
 import anyio
@@ -87,7 +86,7 @@ from visp_memory.core.attribution import (
     bind_writer,
     sanitize_label,
 )
-from visp_memory.core.clock import parse_utc, utc_now
+from visp_memory.core.clock import utc_now
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID, require_repo_id
 from visp_memory.core.embedding_status import (
     DEFAULT_SCORE_LABEL,
@@ -95,7 +94,7 @@ from visp_memory.core.embedding_status import (
     LEXICAL_SCORE_LABEL,
 )
 from visp_memory.core.model_router import ModelUnavailableError
-from visp_memory.core.ranking import projected_importance
+from visp_memory.core.ranking import decay_reference_at, projected_importance
 from visp_memory.core.remote.errors import RemoteStorageError
 from visp_memory.core.trust import LOCAL_WORKFLOW_ACTOR, MCP_CLIENT_ACTOR, WriteChannel
 from visp_memory.interfaces.mcp_remote_errors import MCPToolError, classify_remote_failure
@@ -1728,11 +1727,6 @@ def _handle_intent(name: str, args: dict[str, Any], memory: Memory) -> str:
     return f"Unknown intent tool: {name}"
 
 
-def _parse_memory_datetime(value: Any) -> datetime:
-    """Parse storage timestamps into aware UTC so age math matches utc_now()."""
-    return parse_utc(value) or utc_now()
-
-
 def _format_decay_preview(args: dict[str, Any], memory: Memory) -> str:
     repo_id = args.get("repo_id") or memory.config.repo_id
     limit = max(1, min(int(args.get("limit", 10)), 100))
@@ -1748,8 +1742,8 @@ def _format_decay_preview(args: dict[str, Any], memory: Memory) -> str:
     previews = []
     for item in memories:
         current = float(item.get("importance", 0.5) or 0.0)
-        accessed = _parse_memory_datetime(item.get("accessed_at") or item.get("created_at"))
-        age_days = max(0.0, (now - accessed).total_seconds() / 86400)
+        reference = decay_reference_at(item) or now
+        age_days = max(0.0, (now - reference).total_seconds() / 86400)
         projected = projected_importance(
             importance=current,
             age_days=age_days,

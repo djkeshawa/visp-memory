@@ -18,7 +18,7 @@ from typing import Any, Callable, Dict, List, Optional
 from visp_memory.core.beliefs import map_producer_belief_type
 from visp_memory.core.clock import utc_now
 from visp_memory.core.eligibility import normalize_optional_scope_values, require_repo_id
-from visp_memory.core.ranking import projected_importance
+from visp_memory.core.ranking import DECAYED_AT_KEY, decay_reference_at, projected_importance
 from visp_memory.core.source_support import source_support
 from visp_memory.core.storage import BaseStorage, EvidenceReferenceError
 from visp_memory.core.tokens import compute_savings
@@ -28,6 +28,9 @@ from visp_memory.core.trust import (
     with_provenance,
 )
 from visp_memory.quality.secrets import redact_for_storage
+
+# Decay pages through every memory rather than only the newest page of each layer.
+DECAY_PAGE_SIZE = 500
 
 COMPRESSION_PROMPT_HEADER = (
     "Compress these {count} related memories into a single piece of actionable "
@@ -592,6 +595,20 @@ class MemoryCompressor:
 
         return created
 
+    def _iter_layer(self, layer: str):
+        """Yield every active memory in ``layer`` using an ID keyset cursor."""
+        cursor = None
+        while True:
+            kwargs = {"layer": layer, "limit": DECAY_PAGE_SIZE, "order_by": "id ASC"}
+            if cursor is not None:
+                kwargs["after_id"] = cursor
+            page = self.storage.list_memories(**kwargs)
+            yield from page
+            last_id = page[-1].get("id") if page else None
+            if len(page) < DECAY_PAGE_SIZE or not last_id or last_id == cursor:
+                return
+            cursor = last_id
+
     def decay_old_memories(self, halflife_days: int = 30, min_importance: float = 0.1) -> int:
         """
         Decay importance of old, rarely-accessed memories.
@@ -599,6 +616,10 @@ class MemoryCompressor:
         Mimics how human memories fade if not reinforced. The decay half-life is
         stretched by how often a memory has been recalled (spaced repetition), so
         frequently-used memories fade far more slowly than one-off notes.
+
+        Decay is applied only for the idle time since the later of the last access
+        and the last decay (``metadata.decayed_at``), so repeated runs compose to a
+        single continuous decay instead of compounding the whole idle period again.
 
         Args:
             halflife_days: Base days for importance to halve (before use-based stretch)
@@ -608,27 +629,16 @@ class MemoryCompressor:
             Number of memories decayed
         """
         decayed = 0
+        now = utc_now()
 
-        # Get all memories
         for layer in ["episodic", "semantic"]:
-            memories = self.storage.list_memories(layer=layer, limit=1000)
-
-            for mem in memories:
-                # Calculate age since last access. Coalesce explicitly: a row
-                # may carry accessed_at=None (key present but null), in which
-                # case dict.get would return None instead of the created_at
-                # fallback.
-                accessed = self._parse_datetime(
-                    mem.get("accessed_at") or mem.get("created_at")
-                )
-                from datetime import timezone
-
+            for mem in self._iter_layer(layer):
+                reference = decay_reference_at(mem)
                 # Skip rows we can't date rather than crashing on them.
-                if accessed is None:
+                if reference is None:
                     continue
 
-                age_days = (datetime.now(timezone.utc) - accessed).days
-
+                age_days = (now - reference).total_seconds() / 86400
                 if age_days < 1:
                     continue
 
@@ -647,9 +657,14 @@ class MemoryCompressor:
                     min_importance=min_importance,
                 )
 
-                # Only update if significant change
+                # Only update (and move the reference) on a significant change, so
+                # small per-run decrements accumulate instead of being discarded.
                 if current - new_importance > 0.05:
-                    self.storage.update_memory(mem["id"], importance=new_importance)
+                    self.storage.update_memory(
+                        mem["id"],
+                        importance=new_importance,
+                        metadata={**(mem.get("metadata") or {}), DECAYED_AT_KEY: now.isoformat()},
+                    )
                     decayed += 1
 
         return decayed

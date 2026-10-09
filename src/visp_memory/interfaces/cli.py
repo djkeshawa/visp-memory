@@ -21,7 +21,6 @@ Usage:
 import json
 import os
 import shlex
-from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, List, Optional
@@ -43,7 +42,7 @@ from visp_memory.core.authority import (
     sign_prohibition_attestation,
 )
 from visp_memory.core.beliefs import BeliefType
-from visp_memory.core.clock import parse_utc, utc_now
+from visp_memory.core.clock import utc_now
 from visp_memory.core.contract_recall import (
     STRATEGY_TEXT,
     admission_reason,
@@ -64,7 +63,7 @@ from visp_memory.core.intent_usage import STATUS_NEVER_USED, check_intent_usage
 from visp_memory.core.lexical_ranking import RANKING_STRATEGIES
 from visp_memory.core.owner_token import owner_token_paths
 from visp_memory.core.paths import run_dir
-from visp_memory.core.ranking import projected_importance
+from visp_memory.core.ranking import decay_reference_at, projected_importance
 from visp_memory.core.remote.diagnostics import inspect_remote
 from visp_memory.core.reporting import MemoryIntelligenceReporter
 from visp_memory.core.storage import LocalStorage
@@ -318,11 +317,6 @@ def _require_repo_scope(memory: Memory, repo: str = None, *, writing: bool = Fal
     raise typer.Exit(1)
 
 
-def _parse_cli_datetime(value: Any) -> datetime:
-    """Parse storage timestamps into aware UTC so age math matches utc_now()."""
-    return parse_utc(value) or utc_now()
-
-
 def _priority_label(priority: int) -> str:
     labels = {0: "LOW", 1: "NORMAL", 2: "HIGH", 3: "CRITICAL"}
     return labels.get(priority, str(priority))
@@ -373,8 +367,8 @@ def _memory_decay_preview(
 
     for item in memories:
         current = float(item.get("importance", 0.5) or 0.0)
-        accessed = _parse_cli_datetime(item.get("accessed_at") or item.get("created_at"))
-        age_days = max(0.0, (now - accessed).total_seconds() / 86400)
+        reference = decay_reference_at(item) or now
+        age_days = max(0.0, (now - reference).total_seconds() / 86400)
         projected = projected_importance(
             importance=current,
             age_days=age_days,
