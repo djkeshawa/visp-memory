@@ -73,6 +73,26 @@ def require_owner_or_admin(user: UserContext) -> None:
         )
 
 
+def is_outside_token_projects(repo_id: Optional[str], user: UserContext) -> bool:
+    """Whether a token restricted to named projects is asking about another one.
+
+    A blank scope counts as outside: for a restricted token, "every project" is
+    not one of the projects it names.
+    """
+    return bool(user.is_scoped_token and user.repo_ids and repo_id not in user.repo_ids)
+
+
+def require_token_project_access(repo_id: Optional[str], user: UserContext) -> None:
+    """Hold a project-restricted token to its projects, whatever else it holds.
+
+    Admin and owner-maintenance routes skip the tenancy check, since their
+    principal already sees every record, but a token's project list still binds
+    an administrator's token.
+    """
+    if is_outside_token_projects(repo_id, user):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
+
+
 def require_repo_scope_access(
     storage: Any,
     repo_id: Optional[str],
@@ -111,8 +131,7 @@ def require_repo_scope_access(
                 "origin. It cannot be read from or written to. Use your project's repo_id."
             ),
         )
-    if user.is_scoped_token and user.repo_ids and repo_id not in user.repo_ids:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
+    require_token_project_access(repo_id, user)
     if has_admin_privileges(user) or user.is_local_owner:
         return
 
@@ -174,8 +193,7 @@ def can_access_scoped_record(
     filter at all -- so serving it less through its own dashboard was never a
     boundary, only the reason the dashboard read zero. It is still not an admin.
     """
-    repo_id = record.get("repo_id")
-    if user.is_scoped_token and user.repo_ids and repo_id not in user.repo_ids:
+    if is_outside_token_projects(record.get("repo_id"), user):
         return False
     if has_admin_privileges(user) or user.is_local_owner:
         return True

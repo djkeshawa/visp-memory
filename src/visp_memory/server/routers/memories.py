@@ -36,6 +36,7 @@ from visp_memory.server.authorization import (
     require_repo_scope_access,
     require_repo_writable,
     require_scoped_record_access,
+    require_token_project_access,
 )
 from visp_memory.server.memory_reads import visible_memory_page
 from visp_memory.server.provenance_guard import pin_provenance
@@ -713,6 +714,13 @@ async def preview_memory_purge(
     user: UserContext = Depends(get_current_user),
 ):
     require_owner_or_admin(user)
+    storage = request.app.state.storage
+    for memory_id in payload.memory_ids:
+        memory = storage.get_memory(memory_id)
+        if memory:
+            require_scoped_record_access(
+                storage, memory, user, scope_field="metadata", not_found_detail="Memory not found"
+            )
     return request.app.state.memory_lifecycle.purge_preview(payload.memory_ids)
 
 
@@ -729,9 +737,13 @@ async def purge_memory(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Confirmation must exactly match the memory ID",
         )
-    memory = request.app.state.storage.get_memory(memory_id)
-    if not memory:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory not found")
+    memory = require_scoped_record_access(
+        request.app.state.storage,
+        request.app.state.storage.get_memory(memory_id),
+        user,
+        scope_field="metadata",
+        not_found_detail="Memory not found",
+    )
     try:
         result = request.app.state.memory_lifecycle.purge([memory_id])
     except LifecycleError as error:
@@ -756,6 +768,7 @@ async def retention_preview(
     user: UserContext = Depends(get_current_user),
 ):
     require_owner_or_admin(user)
+    require_token_project_access(repo_id, user)
     return request.app.state.memory_lifecycle.retention_preview(
         repo_id, retention_days=retention_days
     )
@@ -770,6 +783,7 @@ async def execute_retention(
     user: UserContext = Depends(get_current_user),
 ):
     require_owner_or_admin(user)
+    require_token_project_access(repo_id, user)
     if confirmation != repo_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -800,6 +814,7 @@ async def verify_memory_consistency(
     user: UserContext = Depends(get_current_user),
 ):
     require_owner_or_admin(user)
+    require_token_project_access(repo_id, user)
     return request.app.state.memory_lifecycle.verify_consistency(repo_id)
 
 
