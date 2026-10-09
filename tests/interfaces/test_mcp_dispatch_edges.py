@@ -260,7 +260,7 @@ def test_http_preflight_scopes_repo_reads_and_feedback_writes(monkeypatch):
     )
 
 
-def test_http_preflight_refuses_hidden_tools_and_skips_unscoped_non_repo_tools():
+def test_http_preflight_refuses_hidden_tools():
     context = MCPRequestContext(
         transport="http",
         principal=UserContext(user_id="u", username="u", scopes=["*"]),
@@ -269,7 +269,28 @@ def test_http_preflight_refuses_hidden_tools_and_skips_unscoped_non_repo_tools()
     with bind_mcp_request_context(context):
         with pytest.raises(MCPAuthorizationError, match="Global maintenance"):
             _http_preflight("memory_clear_goals", {}, SimpleNamespace())
-        # Model execution is not a repository tool and has its own provider policy.
+
+
+@pytest.mark.parametrize(
+    "principal",
+    [
+        None,
+        UserContext(user_id="u", username="u", scopes=["*"]),
+        UserContext(user_id="u", username="u", auth_type="pat", is_admin=True,
+                    scopes=["memory:read", "memory:write"]),
+    ],
+)
+def test_http_model_task_needs_an_administrator(principal):
+    # Over HTTP the task always runs on the server's provider: POST /ai/test's policy.
+    context = MCPRequestContext(transport="http", principal=principal)
+    with bind_mcp_request_context(context):
+        with pytest.raises(MCPAuthorizationError):
+            _http_preflight("memory_model_task", {}, SimpleNamespace())
+
+
+def test_http_model_task_admits_an_administrator():
+    admin = UserContext(user_id="u", username="u", auth_type="pat", is_admin=True, scopes=["*"])
+    with bind_mcp_request_context(MCPRequestContext(transport="http", principal=admin)):
         _http_preflight("memory_model_task", {}, SimpleNamespace())
 
 

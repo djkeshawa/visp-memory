@@ -480,6 +480,7 @@ def create_mcp_server() -> "Server":
                 max_tokens = max(64, min(int(arguments.get("max_tokens", 800)), 4000))
                 if not prompt:
                     raise ValueError("prompt is required")
+                _http_preflight(name, arguments, memory)
                 capabilities = getattr(session, "client_capabilities", None)
                 create_message = getattr(session, "create_message", None)
                 supports_sampling = bool(
@@ -523,6 +524,7 @@ def create_mcp_server() -> "Server":
                             task,
                             prompt,
                             system_prompt=system_prompt or None,
+                            max_output_tokens=max_tokens,
                         )
                     )
                 return [TextContent(type="text", text=json.dumps(result, indent=2))]
@@ -1544,6 +1546,24 @@ def _http_validate_record_ids(
             raise _http_refusal("The requested intent is not available in this repository scope.")
 
 
+def _http_authorize_model_task(principal: Any) -> None:
+    """Hold an HTTP model task to the policy of the REST route that does the same.
+
+    A stateless request cannot sample the client's model, so the task always runs
+    an arbitrary prompt on the server's provider and its credentials. That is
+    ``POST /ai/test``, which requires an administrator; a token that could only
+    read one project's memory must not spend the operator's provider either.
+    """
+    from visp_memory.server.authorization import has_admin_privileges
+
+    if principal is None:
+        raise _http_refusal("An authenticated HTTP principal is required.")
+    if not has_admin_privileges(principal):
+        raise _http_refusal(
+            "Running a model task on the server's provider requires an administrator token."
+        )
+
+
 def _http_preflight(name: str, args: dict[str, Any], memory: Memory) -> None:
     """Apply the common HTTP policy before any tool can touch durable state."""
     context = current_mcp_request_context()
@@ -1551,9 +1571,12 @@ def _http_preflight(name: str, args: dict[str, Any], memory: Memory) -> None:
         return
     if name in HTTP_HIDDEN_TOOL_NAMES:
         raise _http_refusal("Global maintenance tools are disabled over stateless HTTP.")
+    principal = context.principal
+    if name == "memory_model_task":
+        _http_authorize_model_task(principal)
+        return
     if name not in HTTP_REPO_TOOL_NAMES:
         return
-    principal = context.principal
     repo_id = _http_authorize_repo(
         args.get("repo_id"),
         memory,

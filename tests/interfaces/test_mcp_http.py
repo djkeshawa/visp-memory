@@ -754,3 +754,43 @@ async def test_read_only_pat_cannot_write_even_when_account_is_admin(tmp_path, r
         )
     assert "authorization_denied" in _result_text(response)
     assert memory._storage.list_memories(repo_id="allowed", status="all") == []
+
+
+@pytest.mark.asyncio
+async def test_a_non_admin_pat_cannot_run_a_server_model_task(tmp_path, monkeypatch):
+    monkeypatch.setenv("VISP_MEMORY_MCP_PROFILE", "full")
+    complete = mock.Mock()
+    monkeypatch.setattr("visp_memory.core.model_router.ModelRouter.complete", complete)
+    store = AuthStore(tmp_path / "auth.db")
+    account = store.create_account(
+        username="memory-user", password="a-secure-password-123", team_id="alpha"
+    )
+    _, token = store.create_token(
+        user_id=account["id"], name="rw", scopes=["memory:read", "memory:write"], repo_ids=[]
+    )
+    app = _build_app(tmp_path, auth_store=store)
+    async with _Client(app) as client:
+        response = await client.post(
+            "/mcp",
+            json=_tool_call("memory_model_task", {"task": "answer", "prompt": "hi"}),
+            headers={**HEADERS, "authorization": f"Bearer {token}"},
+        )
+    assert "authorization_denied" in _result_text(response)
+    complete.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_model_task_max_tokens_reaches_the_provider(tmp_path, monkeypatch):
+    monkeypatch.setenv("VISP_MEMORY_MCP_PROFILE", "full")
+    complete = mock.Mock(return_value={"task": "answer", "provider": "t", "model": "t", "text": ""})
+    monkeypatch.setattr("visp_memory.core.model_router.ModelRouter.complete", complete)
+    app = _build_app(tmp_path)
+    async with _Client(app) as client:
+        await client.post(
+            "/mcp",
+            json=_tool_call(
+                "memory_model_task", {"task": "answer", "prompt": "hi", "max_tokens": 128}
+            ),
+            headers=HEADERS,
+        )
+    assert complete.call_args.kwargs["max_output_tokens"] == 128
