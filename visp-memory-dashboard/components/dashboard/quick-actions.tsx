@@ -74,7 +74,7 @@ export function QuickActions({ onMemoryCreated }: QuickActionsProps = {}) {
     <div>
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
         <DialogTrigger asChild>
-          <Button className="h-10 px-4">
+          <Button className="h-12 rounded-xl px-5 font-semibold">
             <Plus className="h-4 w-4" />
             New memory
           </Button>
@@ -92,7 +92,7 @@ export function QuickActions({ onMemoryCreated }: QuickActionsProps = {}) {
               {errorMessage ? (
                 <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-muted-foreground">
                   <div className="flex items-start gap-2">
-                    <AlertTriangle className="mt-0.5 h-4 w-4 text-destructive" />
+                    <AlertTriangle className="mt-0.5 h-4 w-4 text-destructive" aria-hidden="true" />
                     <span>{errorMessage}</span>
                   </div>
                 </div>
@@ -125,7 +125,6 @@ export function QuickActions({ onMemoryCreated }: QuickActionsProps = {}) {
           </form>
         </DialogContent>
       </Dialog>
-
     </div>
   )
 }

@@ -1,68 +1,62 @@
 "use client"
 
-import { Suspense, useEffect, useRef, useState } from "react"
-import { motion } from "framer-motion"
+import { Suspense, useEffect, useMemo, useState } from "react"
+import { AlertTriangle } from "lucide-react"
+import { ConfidenceLegend, LayerChips, NodeSearch } from "@/components/graph/graph-controls"
+import { GraphInspector } from "@/components/graph/graph-inspector"
 import { MemoryGraph } from "@/components/graph/memory-graph"
-import { pageTransition } from "@/lib/animations"
-import { Network } from "lucide-react"
-import { getStats } from "@/lib/api"
+import { useGraphData } from "@/components/graph/use-graph-data"
+import { PageHeader } from "@/components/strata/primitives"
+import { DEFAULT_GRAPH_LAYERS, MEMORY_LAYERS } from "@/lib/layers"
 import { useSelectedProjectId } from "@/lib/project-selection"
-import type { Stats } from "@/lib/types"
-import { MEMORY_LAYERS } from "@/lib/layers"
+import type { MemoryLayer } from "@/lib/types"
 
 function GraphContent() {
-  const selectedRepoId = useSelectedProjectId()
-  const [stats, setStats] = useState<Stats | null>(null)
-  const statsRequestRef = useRef(0)
-  const selectedRepoIdRef = useRef(selectedRepoId)
-  selectedRepoIdRef.current = selectedRepoId
+  const repoId = useSelectedProjectId()
+  const { graph, error, loading } = useGraphData(repoId)
+  const [query, setQuery] = useState("")
+  const [activeLayers, setActiveLayers] = useState<MemoryLayer[]>([...DEFAULT_GRAPH_LAYERS])
+  const [selectedId, setSelectedId] = useState<string | null>(null)
 
-  useEffect(() => {
-    const requestId = ++statsRequestRef.current
-    const requestedRepoId = selectedRepoId
-    setStats(null)
-    getStats(requestedRepoId)
-      .then((nextStats) => {
-        if (requestId === statsRequestRef.current && selectedRepoIdRef.current === requestedRepoId) {
-          setStats(nextStats)
-        }
-      })
-      .catch((error) => {
-        if (requestId === statsRequestRef.current && selectedRepoIdRef.current === requestedRepoId) console.error(error)
-      })
-  }, [selectedRepoId])
+  useEffect(() => setSelectedId(null), [graph])
+
+  const counts = useMemo(() => {
+    const result = Object.fromEntries(MEMORY_LAYERS.map((layer) => [layer, 0])) as Record<MemoryLayer, number>
+    for (const node of graph?.nodes ?? []) result[node.layer] += 1
+    return result
+  }, [graph])
+
+  const toggleLayer = (layer: MemoryLayer) =>
+    setActiveLayers((current) => (current.includes(layer) ? current.filter((item) => item !== layer) : [...current, layer]))
+
+  const summary = graph
+    ? `${graph.nodes.length} nodes · ${graph.links.length} connections · line style shows how each link was established`
+    : loading ? "Loading graph…" : "Graph unavailable"
 
   return (
-    <motion.div initial="initial" animate="animate" variants={pageTransition} className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-foreground flex items-center gap-3">
-            <Network className="w-6 h-6 text-muted-foreground" />
-            Memory Graph
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            Explore connections between your memories in an interactive knowledge map
-          </p>
-        </div>
-        <div className="flex gap-6 text-sm">
-          <div className="text-center">
-            <div className="text-2xl font-semibold text-foreground">{stats?.totalMemories || "-"}</div>
-            <div className="text-muted-foreground">Nodes</div>
-          </div>
-          <div className="text-center">
-            <div className="text-2xl font-semibold text-foreground">{stats?.connections || "-"}</div>
-            <div className="text-muted-foreground">Connections</div>
-          </div>
-          <div className="text-center">
-            <div className="text-2xl font-semibold text-foreground">{MEMORY_LAYERS.length}</div>
-            <div className="text-muted-foreground">Layers</div>
-          </div>
-        </div>
+    <div className="space-y-5">
+      <PageHeader eyebrow={summary} title="Graph" actions={<NodeSearch value={query} onChange={setQuery} />} />
+
+      <div className="flex flex-wrap items-center justify-between gap-2.5">
+        <LayerChips counts={counts} active={activeLayers} onToggle={toggleLayer} />
+        <ConfidenceLegend />
       </div>
 
-      <MemoryGraph repoId={selectedRepoId} />
-    </motion.div>
+      {error ? (
+        <div role="alert" className="surface flex min-h-[22rem] items-center justify-center rounded-2xl p-6">
+          <div className="max-w-md text-center text-sm text-muted-foreground">
+            <AlertTriangle className="mx-auto mb-3 h-6 w-6 text-destructive" aria-hidden="true" />
+            <p className="font-medium text-foreground">Graph data is unavailable</p>
+            <p className="mt-2">{error}</p>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-start gap-[18px]">
+          <MemoryGraph graph={graph} loading={loading} query={query} activeLayers={activeLayers} selectedId={selectedId} onSelect={setSelectedId} />
+          <GraphInspector graph={graph} nodeId={selectedId} onSelect={setSelectedId} />
+        </div>
+      )}
+    </div>
   )
 }
 

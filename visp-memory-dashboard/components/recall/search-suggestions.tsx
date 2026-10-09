@@ -1,7 +1,5 @@
 "use client"
 
-import { motion } from "framer-motion"
-
 interface SearchSuggestionsProps {
   onSelect: (suggestion: string) => void
 }
@@ -10,19 +8,18 @@ const suggestions = ["authentication", "database schema", "API design"]
 
 export function SearchSuggestions({ onSelect }: SearchSuggestionsProps) {
   return (
-    <div className="px-2 py-4 text-center">
-      <p className="text-xs text-muted-foreground mb-4">Try searching for:</p>
-      <div className="flex items-center justify-center gap-3 flex-wrap">
+    <div className="surface rounded-2xl px-5 py-6 sm:px-6">
+      <p className="eyebrow mb-3">Try searching for:</p>
+      <div className="flex flex-wrap gap-2">
         {suggestions.map((suggestion) => (
-          <motion.button
+          <button
             key={suggestion}
+            type="button"
             onClick={() => onSelect(suggestion)}
-
-
-            className="px-4 py-2 rounded-full border border-border bg-card text-muted-foreground text-xs font-medium hover:bg-accent hover:text-accent-foreground transition-colors"
+            className="h-10 rounded-full border border-border px-4 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
           >
             {suggestion}
-          </motion.button>
+          </button>
         ))}
       </div>
     </div>

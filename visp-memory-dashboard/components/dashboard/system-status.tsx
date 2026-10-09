@@ -2,8 +2,9 @@
 
 import Link from "next/link"
 import { useEffect, useState } from "react"
-import { Activity, ArrowUpRight } from "lucide-react"
+import { Panel, StatusDot } from "@/components/strata/primitives"
 import { getRuntimeStatus } from "@/lib/api"
+import type { TrustTone } from "@/lib/memory-trust"
 import { projectHref, useSelectedProjectId } from "@/lib/project-selection"
 import type { RuntimeStatus } from "@/lib/types"
 
@@ -29,29 +30,27 @@ export function SystemStatus() {
 
   const storage = runtime?.storageReady
   const embeddings = runtime?.embeddingDriverStatus
-  const items = [
-    { label: "API connection", value: failed ? "Unavailable" : runtime ? "Connected" : "Checking…", good: !!runtime },
-    { label: "Storage", value: storage === true ? "Ready" : storage === false ? "Not ready" : "Unknown", good: storage === true },
-    { label: "Embeddings", value: runtime?.embeddingDriverConnected ? "Connected" : embeddings === "failed" ? "Failed" : embeddings === "fallback" || embeddings === "disabled" ? "Keyword fallback" : "Not connected", good: !!runtime?.embeddingDriverConnected },
+  const fallback = embeddings === "fallback" || embeddings === "disabled"
+  const items: { label: string; value: string; tone: TrustTone; hollow?: boolean }[] = [
+    { label: "API connection", value: failed ? "Unavailable" : runtime ? "Connected" : "Checking…", tone: runtime ? "success" : failed ? "danger" : "neutral" },
+    { label: "Storage", value: storage === true ? "Ready" : storage === false ? "Not ready" : "Unknown", tone: storage === true ? "success" : storage === false ? "danger" : "neutral" },
+    { label: "Embeddings", value: runtime?.embeddingDriverConnected ? "Connected" : embeddings === "failed" ? "Failed" : fallback ? "Keyword fallback" : "Not connected", tone: runtime?.embeddingDriverConnected ? "success" : embeddings === "failed" ? "danger" : "neutral", hollow: !runtime?.embeddingDriverConnected && fallback },
   ]
+  const checking = !runtime && !failed
 
   return (
-    <section className="surface rounded-2xl p-5 sm:p-6" aria-labelledby="connection-heading">
-      <div className="mb-5 flex items-center justify-between">
-        <h2 id="connection-heading" className="text-sm font-semibold">Connection status</h2>
-        <Activity className="h-4 w-4 text-muted-foreground" />
-      </div>
-      <dl className="space-y-4">
-        {items.map((item) => <div key={item.label} className="flex items-center justify-between gap-3 text-xs">
-          <dt className="text-muted-foreground">{item.label}</dt>
-          <dd className="flex items-center gap-2 text-right">
-            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${item.good ? "bg-success" : "bg-muted-foreground"}`} />{!runtime && !failed ? "Checking…" : item.value}</dd>
-        </div>)}
+    <Panel title="Connection status" titleId="connection-heading">
+      <dl className="space-y-3">
+        {items.map((item) => (
+          <div key={item.label} className="flex items-center justify-between gap-3 text-[13px]">
+            <dt className="text-muted-foreground">{item.label}</dt>
+            <dd className="flex items-center gap-2 text-right"><StatusDot tone={checking ? "neutral" : item.tone} hollow={!checking && item.hollow} />{checking ? "Checking…" : item.value}</dd>
+          </div>
+        ))}
       </dl>
       {failed && <p className="mt-4 text-xs leading-5 text-muted-foreground">Check your server and sign-in settings in Operations.</p>}
       {runtime?.embeddingStatusMessage && <p className="mt-4 break-words text-xs leading-5 text-muted-foreground">{runtime.embeddingStatusMessage}</p>}
-      <Link href={projectHref("/health", repoId)} className="mt-5 flex items-center justify-between border-t border-border pt-4 text-xs font-medium text-highlight hover:underline">Open operations<ArrowUpRight className="h-4 w-4" />
-      </Link>
-    </section>
+      <Link href={projectHref("/health", repoId)} className="mt-4 inline-block text-[13px] font-medium text-highlight hover:underline">Open operations<span aria-hidden="true"> →</span></Link>
+    </Panel>
   )
 }
