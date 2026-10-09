@@ -4,26 +4,28 @@ import type { MemoryLayer } from "./types"
 export interface MemoryLayerConfig {
   label: string
   icon: LucideIcon
+  /** Text colour class, e.g. "text-episodic". */
   color: string
-  bgColor: string
+  /** Solid background class for bars, dots and glyphs. */
+  solid: string
+  /** Canvas fallback when the CSS layer token cannot be read. */
   fill: string
-  glow: string
-  bg: string
   recallable: boolean
   graphVisibleByDefault: boolean
 }
 
 export const MEMORY_LAYERS = ["raw", "episodic", "semantic", "intent"] as const satisfies readonly MemoryLayer[]
 
+/** Strata order, top to bottom, as drawn by LayerGlyph and the strata bar. */
+export const STRATA_ORDER = ["intent", "semantic", "episodic", "raw"] as const satisfies readonly MemoryLayer[]
+
 export const MEMORY_LAYER_CONFIG: Record<MemoryLayer, MemoryLayerConfig> = {
   raw: {
     label: "Raw",
     icon: FileText,
-    color: "text-muted-foreground",
-    bgColor: "bg-secondary",
-    fill: "#94a3b8",
-    glow: "rgba(148, 163, 184, 0.55)",
-    bg: "rgba(148, 163, 184, 0.12)",
+    color: "text-raw",
+    solid: "bg-raw",
+    fill: "#9aa1ab",
     recallable: false,
     graphVisibleByDefault: false,
   },
@@ -31,10 +33,8 @@ export const MEMORY_LAYER_CONFIG: Record<MemoryLayer, MemoryLayerConfig> = {
     label: "Episodic",
     icon: Database,
     color: "text-episodic",
-    bgColor: "bg-episodic/10",
-    fill: "#a78bfa",
-    glow: "rgba(167, 139, 250, 0.6)",
-    bg: "rgba(167, 139, 250, 0.1)",
+    solid: "bg-episodic",
+    fill: "#b8a4ff",
     recallable: true,
     graphVisibleByDefault: true,
   },
@@ -42,10 +42,8 @@ export const MEMORY_LAYER_CONFIG: Record<MemoryLayer, MemoryLayerConfig> = {
     label: "Semantic",
     icon: Brain,
     color: "text-semantic",
-    bgColor: "bg-semantic/10",
-    fill: "#22d3ee",
-    glow: "rgba(34, 211, 238, 0.6)",
-    bg: "rgba(34, 211, 238, 0.1)",
+    solid: "bg-semantic",
+    fill: "#63d3c2",
     recallable: true,
     graphVisibleByDefault: true,
   },
@@ -53,10 +51,8 @@ export const MEMORY_LAYER_CONFIG: Record<MemoryLayer, MemoryLayerConfig> = {
     label: "Intent",
     icon: Target,
     color: "text-intent",
-    bgColor: "bg-intent/10",
-    fill: "#fbbf24",
-    glow: "rgba(251, 191, 36, 0.6)",
-    bg: "rgba(251, 191, 36, 0.1)",
+    solid: "bg-intent",
+    fill: "#f0b45e",
     recallable: true,
     graphVisibleByDefault: true,
   },

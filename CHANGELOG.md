@@ -23,11 +23,25 @@ tag has no section yet) as the GitHub release body. See
 ### Added
 
 - Dreaming reviews accept `{ "decision": "merge" }` for pending duplicate proposals,
-  shown as **Merge copies** in the dashboard. Protected and explicitly linked copies
-  are still merged from Memories.
+  shown as **Merge copies** on the dashboard Review page. Protected and explicitly
+  linked copies are still merged from the Library.
+
+### Changed
+
+- The dashboard has a new design, "Strata". Navigation is grouped into Know, Curate
+  and Operate, and some pages are renamed: Overview is now Desk, Memories is Library,
+  Memory Graph is Graph, and Dreaming is Review. Routes are unchanged.
+- The Desk shows memory counts per layer, items waiting for review, and active
+  intents. Recall shows a selected result's evidence in an inspector panel.
+- A search started from the Desk no longer puts its text in the URL, so it stays out
+  of browser history and server access logs.
+- Building the dashboard now downloads its fonts (Instrument Sans, JetBrains Mono)
+  at build time.
 
 ### Fixed
 
+- Light-theme status and layer colours, input borders and focus rings meet WCAG
+  contrast minimums.
 - Importance decay no longer compounds: repeated runs at the same time leave a memory
   unchanged, and each run decays only the idle time since the last access or decay.
   Decay covers every memory instead of the newest 1,000 per layer.

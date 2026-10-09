@@ -34,7 +34,7 @@ test("opens login before requesting or showing protected dashboard content", asy
   await page.goto("/dashboard?repo_id=repo-a")
   await expect(page).toHaveURL(/\/dashboard\/auth\?next=/)
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible()
-  await expect(page.getByRole("heading", { name: "Memory overview" })).toHaveCount(0)
+  await expect(page.getByRole("heading", { name: "What this project knows" })).toHaveCount(0)
   await expect(page.getByRole("navigation")).toHaveCount(0)
   expect(requests).toEqual([])
 })
@@ -60,16 +60,16 @@ test("keeps the dashboard hidden until the server validates the session", async 
   })
   await page.goto("/dashboard")
   await expect(page.getByText("Checking your session…")).toBeVisible()
-  await expect(page.getByRole("heading", { name: "Memory overview" })).toHaveCount(0)
+  await expect(page.getByRole("heading", { name: "What this project knows" })).toHaveCount(0)
   expect(requests).toEqual([])
   release?.()
-  await expect(page.getByRole("heading", { name: "Memory overview" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "What this project knows" })).toBeVisible()
 })
 
 test("allows explicitly anonymous servers without redirecting to login", async ({ page }) => {
   await mockAuthentication(page, { disabled: true })
   await page.goto("/dashboard")
-  await expect(page.getByRole("heading", { name: "Memory overview" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "What this project knows" })).toBeVisible()
 })
 
 test("offers retry without exposing dashboard content when auth checks fail", async ({ page }) => {
@@ -80,7 +80,7 @@ test("offers retry without exposing dashboard content when auth checks fail", as
   expect(requests).toEqual([])
   await page.unroute("**/auth/status")
   await page.getByRole("button", { name: "Try again" }).click()
-  await expect(page.getByRole("heading", { name: "Memory overview" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "What this project knows" })).toBeVisible()
 })
 
 test("does not follow an external return URL after authentication", async ({ page }) => {
@@ -92,7 +92,7 @@ test("does not follow an external return URL after authentication", async ({ pag
 test("returns an expired session to login after a protected request is rejected", async ({ page }) => {
   await mockAuthentication(page, { signedIn: true })
   await page.goto("/dashboard")
-  await expect(page.getByRole("heading", { name: "Memory overview" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "What this project knows" })).toBeVisible()
   await page.route("**/auth/me", (route) => route.fulfill({ status: 401, body: '{"detail":"Session expired"}' }))
   await page.route("**/status?*", (route) => route.fulfill({ status: 401, body: '{"detail":"Session expired"}' }))
   await page.getByRole("button", { name: "Refresh dashboard" }).click()

@@ -1,33 +1,23 @@
 "use client"
 
 import { Suspense, useEffect, useRef, useState } from "react"
-import { motion } from "framer-motion"
-import { AlertTriangle, Plus } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Slider } from "@/components/ui/slider"
-import { IntentsColumn } from "@/components/intents/intents-column"
+import type { FormEvent } from "react"
+import { AlertTriangle } from "lucide-react"
+import { PageHeader } from "@/components/strata/primitives"
+import { IntentCard, type IntentUpdate } from "@/components/intents/intent-card"
+import { IntentForm } from "@/components/intents/intent-form"
+import { OutcomeList } from "@/components/intents/outcome-list"
 import { closeIntent, completeIntent, createIntent, describeApiError, getIntents, reopenIntent, updateIntent } from "@/lib/api"
-import { pageTransition } from "@/lib/animations"
 import { useSelectedProjectId } from "@/lib/project-selection"
-import type { Intent } from "@/lib/types"
+import type { Intent, IntentOutcomeResponse } from "@/lib/types"
+
+type Outcome = "Completion" | "Close" | "Reopen"
 
 function IntentsContent() {
   const selectedRepoId = useSelectedProjectId()
   const [intents, setIntents] = useState<Intent[]>([])
-  const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [newDescription, setNewDescription] = useState("")
-  const [newPriority, setNewPriority] = useState([5])
+  const [newPriority, setNewPriority] = useState(5)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [outcomeMessage, setOutcomeMessage] = useState<string | null>(null)
@@ -64,196 +54,86 @@ function IntentsContent() {
       })
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
+  // Every mutation is dropped if the selected project changed while it was in flight.
+  const mutate = async (work: () => Promise<void>, failure: string) => {
+    const requestedRepoId = selectedRepoId
+    try {
+      await work()
+      if (selectedRepoIdRef.current !== requestedRepoId) return false
+      return true
+    } catch (error) {
+      if (selectedRepoIdRef.current !== requestedRepoId) return false
+      console.error(failure, error)
+      setErrorMessage(describeApiError(error))
+      return false
+    }
+  }
+
+  const handleSubmit = async (event: FormEvent) => {
+    event.preventDefault()
     if (!newDescription.trim()) return
-
     setIsSubmitting(true)
-    const requestedRepoId = selectedRepoId
-    try {
-      await createIntent(newDescription, newPriority[0], requestedRepoId)
-      if (selectedRepoIdRef.current !== requestedRepoId) return
-      setErrorMessage(null)
-      setNewDescription("")
-      setNewPriority([5])
-      setIsDialogOpen(false)
-      fetchIntents()
-    } catch (error) {
-      if (selectedRepoIdRef.current !== requestedRepoId) return
-      console.error("Failed to create intent", error)
-      setErrorMessage(describeApiError(error))
-    } finally {
-      setIsSubmitting(false)
-    }
+    const ok = await mutate(async () => { await createIntent(newDescription, newPriority, selectedRepoId) }, "Failed to create intent")
+    setIsSubmitting(false)
+    if (!ok) return
+    setErrorMessage(null)
+    setNewDescription("")
+    setNewPriority(5)
+    fetchIntents()
   }
 
-  const handleComplete = async (intent: Intent) => {
-    const requestedRepoId = selectedRepoId
-    try {
-      const outcome = await completeIntent(intent.id)
-      if (selectedRepoIdRef.current !== requestedRepoId) return
-      setOutcomeMessage(formatOutcomeMessage("Completion", outcome.statusChanged, outcome.status))
-      fetchIntents()
-    } catch (error) {
-      if (selectedRepoIdRef.current !== requestedRepoId) return
-      console.error("Failed to complete intent", error)
-      setErrorMessage(describeApiError(error))
-    }
+  const recordOutcome = (name: Outcome, send: (id: string) => Promise<IntentOutcomeResponse>) => async (intent: Intent) => {
+    let outcome: IntentOutcomeResponse | undefined
+    const ok = await mutate(async () => { outcome = await send(intent.id) }, `Failed to record ${name.toLowerCase()} outcome`)
+    if (!ok || !outcome) return
+    setOutcomeMessage(formatOutcomeMessage(name, outcome.statusChanged, outcome.status))
+    fetchIntents()
+  }
+  const handleComplete = recordOutcome("Completion", completeIntent)
+  const handleClose = recordOutcome("Close", closeIntent)
+  const handleReopen = recordOutcome("Reopen", reopenIntent)
+
+  const handleUpdate = async (intent: Intent, updates: IntentUpdate) => {
+    const ok = await mutate(async () => { await updateIntent(intent.id, updates) }, "Failed to update intent")
+    if (ok) fetchIntents()
   }
 
-  const handleClose = async (intent: Intent) => {
-    const requestedRepoId = selectedRepoId
-    try {
-      const outcome = await closeIntent(intent.id)
-      if (selectedRepoIdRef.current !== requestedRepoId) return
-      setOutcomeMessage(formatOutcomeMessage("Close", outcome.statusChanged, outcome.status))
-      fetchIntents()
-    } catch (error) {
-      if (selectedRepoIdRef.current !== requestedRepoId) return
-      console.error("Failed to close intent", error)
-      setErrorMessage(describeApiError(error))
-    }
-  }
-
-  const handleReopen = async (intent: Intent) => {
-    const requestedRepoId = selectedRepoId
-    try {
-      const outcome = await reopenIntent(intent.id)
-      if (selectedRepoIdRef.current !== requestedRepoId) return
-      setOutcomeMessage(formatOutcomeMessage("Reopen", outcome.statusChanged, outcome.status))
-      fetchIntents()
-    } catch (error) {
-      if (selectedRepoIdRef.current !== requestedRepoId) return
-      setErrorMessage(describeApiError(error))
-    }
-  }
-
-  const handleUpdate = async (intent: Intent, updates: { description: string; priority: number }) => {
-    const requestedRepoId = selectedRepoId
-    try {
-      await updateIntent(intent.id, updates)
-      if (selectedRepoIdRef.current !== requestedRepoId) return
-      fetchIntents()
-    } catch (error) {
-      if (selectedRepoIdRef.current !== requestedRepoId) return
-      console.error("Failed to update intent", error)
-      setErrorMessage(describeApiError(error))
-    }
-  }
-
-  const activeIntents = intents.filter((i) => i.status === "active")
-  const closedIntents = intents.filter((i) => i.status === "completed" || i.status === "closed")
+  const activeIntents = intents.filter((item) => item.status === "active")
+  const closedIntents = intents.filter((item) => item.status === "completed" || item.status === "closed")
 
   return (
-    <motion.div initial="initial" animate="animate" variants={pageTransition} className="space-y-8">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-foreground">Intents</h1>
-          <p className="text-muted-foreground mt-1">Track goals and follow status reported by your assistant or workflow</p>
-        </div>
-
-        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogTrigger asChild>
-              <Button>
-                <Plus className="h-4 w-4" />
-                New Intent
-              </Button>
-          </DialogTrigger>
-          <DialogContent className="sm:max-w-[425px]">
-            <form onSubmit={handleSubmit}>
-              <DialogHeader>
-                <DialogTitle>Create New Intent</DialogTitle>
-                <DialogDescription>
-                  Define a new goal or objective for the system to track.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="grid gap-4 py-4">
-                <div className="grid gap-2">
-                  <Label htmlFor="description">Description</Label>
-                  <Input
-                    id="description"
-                    value={newDescription}
-                    onChange={(e) => setNewDescription(e.target.value)}
-                    placeholder="e.g., Optimize database queries"
-                    className="col-span-3"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <div className="flex justify-between">
-                    <Label htmlFor="priority">Priority</Label>
-                    <span className="text-sm text-muted-foreground">{newPriority[0]}/10</span>
-                  </div>
-                  <Slider
-                    id="priority"
-                    value={newPriority}
-                    min={1}
-                    max={10}
-                    step={1}
-                    onValueChange={setNewPriority}
-                  />
-                </div>
-              </div>
-              <DialogFooter>
-                <Button type="submit" disabled={isSubmitting}>
-                  {isSubmitting ? "Creating..." : "Create Intent"}
-                </Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
-      </div>
+    <div className="mx-auto flex max-w-6xl flex-col gap-6">
+      <PageHeader eyebrow="Goals your assistant or workflow reports against" title="Intents" description="Track goals and follow status reported by your assistant or workflow." />
+      <IntentForm description={newDescription} priority={newPriority} submitting={isSubmitting} onDescription={setNewDescription} onPriority={setNewPriority} onSubmit={handleSubmit} />
 
       {errorMessage ? (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-muted-foreground">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="mt-0.5 h-4 w-4 text-destructive" />
-            <span>{errorMessage}</span>
-          </div>
+        <div role="alert" className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />
+          <span>{errorMessage}</span>
         </div>
       ) : null}
+      {outcomeMessage ? <div role="status" className="rounded-xl border border-highlight/30 bg-accent p-4 text-sm text-accent-foreground">{outcomeMessage}</div> : null}
 
-      {outcomeMessage ? (
-        <div className="rounded-lg border border-highlight/30 bg-accent p-4 text-sm text-muted-foreground" role="status">
-          {outcomeMessage}
-        </div>
-      ) : null}
-
-      {/* Two Column Layout */}
-      <div className="grid gap-8 md:grid-cols-2">
-        <IntentsColumn
-          title="Active intents"
-          intents={activeIntents}
-          type="active"
-          onComplete={handleComplete}
-          onClose={handleClose}
-          onUpdate={handleUpdate}
-        />
-        <IntentsColumn
-          title="Recorded outcomes"
-          intents={closedIntents}
-          type="completed"
-          onUpdate={handleUpdate}
-          onReopen={handleReopen}
-        />
+      <div className="flex flex-wrap items-start gap-6">
+        <section aria-labelledby="active-h" className="flex min-w-0 flex-[999_1_32rem] flex-col gap-3">
+          <h2 id="active-h" className="eyebrow">Active · {activeIntents.length}</h2>
+          {activeIntents.length === 0 ? (
+            <p className="rounded-2xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">No active intents</p>
+          ) : activeIntents.map((intent) => (
+            <IntentCard key={intent.id} intent={intent} onComplete={handleComplete} onClose={handleClose} onUpdate={handleUpdate} />
+          ))}
+        </section>
+        <OutcomeList intents={closedIntents} onReopen={handleReopen} onUpdate={handleUpdate} />
       </div>
-    </motion.div>
+    </div>
   )
 }
 
 export default function IntentsPage() {
-  return (
-    <Suspense fallback={null}>
-      <IntentsContent />
-    </Suspense>
-  )
+  return <Suspense fallback={null}><IntentsContent /></Suspense>
 }
 
-function formatOutcomeMessage(
-  outcomeName: "Completion" | "Close" | "Reopen",
-  statusChanged: boolean,
-  status: Intent["status"],
-): string {
+function formatOutcomeMessage(outcomeName: Outcome, statusChanged: boolean, status: Intent["status"]): string {
   if (statusChanged) {
     return `${outcomeName} outcome recorded and the backend changed the authoritative status to ${status}.`
   }

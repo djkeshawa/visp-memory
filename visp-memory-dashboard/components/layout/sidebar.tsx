@@ -3,10 +3,12 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useEffect, useRef, useState } from "react"
-import { Brain, LogOut, Menu, UserRound, X } from "lucide-react"
+import { LogOut, Menu, UserRound, X } from "lucide-react"
 import { Navigation } from "./navigation"
 import { ProjectSelector } from "@/components/projects/project-selector"
 import { ThemeToggle } from "@/components/ui/theme-toggle"
+import { StrataMark } from "@/components/strata/layer-glyph"
+import { StatusDot } from "@/components/strata/primitives"
 import {
   AUTH_CHANGED_EVENT,
   getCurrentAccount,
@@ -15,8 +17,8 @@ import {
   logout,
 } from "@/lib/api"
 import type { AuthUser } from "@/lib/types"
+import type { TrustTone } from "@/lib/memory-trust"
 import { projectHref, useSelectedProjectId } from "@/lib/project-selection"
-import { cn } from "@/lib/utils"
 
 type SystemHealth = "checking" | "online" | "degraded" | "offline" | "auth_required"
 
@@ -100,13 +102,13 @@ export function Sidebar() {
 
   useEffect(() => setDrawerOpen(false), [pathname])
 
-  const systemIndicator = {
-    checking: { color: "bg-muted-foreground", label: "Checking connection" },
-    online: { color: "bg-success", label: "System Online" },
-    degraded: { color: "bg-intent", label: "System Degraded" },
-    offline: { color: "bg-error", label: "System Offline" },
-    auth_required: { color: "bg-intent", label: "Authentication Required" },
-  }[systemHealth]
+  const systemIndicator = ({
+    checking: { tone: "neutral", label: "Checking connection" },
+    online: { tone: "success", label: "System Online" },
+    degraded: { tone: "warning", label: "System Degraded" },
+    offline: { tone: "danger", label: "System Offline" },
+    auth_required: { tone: "warning", label: "Authentication Required" },
+  } satisfies Record<SystemHealth, { tone: TrustTone; label: string }>)[systemHealth]
 
   const handleLogout = async () => {
     try {
@@ -123,13 +125,8 @@ export function Sidebar() {
     <>
       <header className="sticky top-0 z-40 flex h-16 items-center justify-between border-b border-border bg-sidebar/95 px-4 backdrop-blur-xl md:hidden">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-card">
-            <Brain className="h-5 w-5 text-foreground" />
-          </div>
-          <div>
-            <p className="font-semibold text-foreground">Visp Memory</p>
-            <p className="text-xs text-muted-foreground">Project knowledge</p>
-          </div>
+          <StrataMark />
+          <p className="text-[15px] font-semibold text-foreground">Visp Memory</p>
         </div>
         <button
           type="button"
@@ -143,15 +140,10 @@ export function Sidebar() {
         </button>
       </header>
 
-      <aside className="fixed left-0 top-0 z-40 hidden h-screen w-60 flex-col border-r border-border/70 bg-sidebar md:flex">
-        <div className="flex items-center gap-3 px-6 pb-4 pt-7">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-card">
-            <Brain className="h-5 w-5 text-foreground" />
-          </div>
-          <div>
-            <p className="font-semibold text-foreground">Visp Memory</p>
-            <p className="text-xs text-muted-foreground">Project knowledge</p>
-          </div>
+      <aside className="fixed left-0 top-0 z-40 hidden h-screen w-60 flex-col border-r border-sidebar-border bg-sidebar md:flex">
+        <div className="flex items-center gap-2.5 px-5 pb-4 pt-6">
+          <StrataMark />
+          <p className="text-[15px] font-semibold text-foreground">Visp Memory</p>
         </div>
         <div className="pb-1 pt-2"><ProjectSelector /></div>
         <nav className="workspace-nav flex-1 space-y-1 overflow-y-auto px-3 pb-4" aria-label="Primary navigation">
@@ -167,12 +159,12 @@ export function Sidebar() {
               href={projectHref("/auth", selectedRepoId)}
               className="flex items-center gap-2 rounded-md px-4 py-2 text-xs text-intent hover:bg-secondary"
             >
-              <span className={cn("h-2 w-2 rounded-full", systemIndicator.color)} />
+              <StatusDot tone={systemIndicator.tone} />
               <span>{systemIndicator.label}</span>
             </Link>
           ) : (
             <div className="flex items-center gap-2 px-4 py-2">
-              <span className={cn("h-2 w-2 rounded-full", systemIndicator.color)} />
+              <StatusDot tone={systemIndicator.tone} />
               <span className="text-xs text-muted-foreground">{systemIndicator.label}</span>
             </div>
           )}
@@ -197,6 +189,7 @@ export function Sidebar() {
         <div className="fixed inset-0 z-50 md:hidden">
           <button
             type="button"
+            tabIndex={-1}
             aria-label="Close navigation menu"
             className="absolute inset-0 bg-black/45"
             onClick={() => setDrawerOpen(false)}
@@ -235,12 +228,12 @@ export function Sidebar() {
                     href={projectHref("/auth", selectedRepoId)}
                     className="flex min-w-0 items-center gap-2 text-intent"
                   >
-                    <span className={cn("h-2 w-2 shrink-0 rounded-full", systemIndicator.color)} />
+                    <StatusDot tone={systemIndicator.tone} />
                     <span className="truncate text-xs">{systemIndicator.label}</span>
                   </Link>
                 ) : (
                   <div className="flex min-w-0 items-center gap-2">
-                    <span className={cn("h-2 w-2 shrink-0 rounded-full", systemIndicator.color)} />
+                    <StatusDot tone={systemIndicator.tone} />
                     <span className="truncate text-xs text-muted-foreground">{systemIndicator.label}</span>
                   </div>
                 )}
