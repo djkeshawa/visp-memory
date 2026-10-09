@@ -32,6 +32,7 @@ from visp_memory.core.trust import TrustFilterResult, filter_unsolicited
 from visp_memory.core.turn_keys import BRIEF_TURN_KEYS, key_passages
 
 SECTION_ORDER = ("warnings", "decisions", "knowledge", "history")
+CONTRADICTION_RELATIONSHIPS = frozenset({"contradicts", "conflicts_with"})
 # Both sets carry the governed belief type first and keep the pre-v4 words after
 # it. A brief is a read over whatever is already stored, so dropping the legacy
 # words would silently unfile every memory written before the migration — the
@@ -156,6 +157,14 @@ class TaskMemoryBriefCompiler:
         return "knowledge"
 
     @staticmethod
+    def _omission_reason(rejection) -> str:
+        """A trust omission reason that does not drift with the memory's age."""
+        assessment = rejection.assessment
+        if assessment.quarantined:
+            return assessment.reason
+        return f"{assessment.tier.value} trust below {assessment.min_trust:.2f}"
+
+    @staticmethod
     def _score(item: dict[str, Any]) -> float:
         return float(item.get("relevance_score") or 0.0)
 
@@ -222,13 +231,29 @@ class TaskMemoryBriefCompiler:
             )
         return sections, citations
 
+    def _contradiction_edges(self, repo_id: Optional[str]) -> list[dict[str, Any]]:
+        """Fetch the project's contradiction edges once per brief."""
+        return [
+            relationship
+            for relationship in self.storage.get_all_relationships(repo_id=repo_id)
+            if str(relationship.get("relationship") or "").casefold()
+            in CONTRADICTION_RELATIONSHIPS
+        ]
+
+    def _peek(self, memory_id: str, cache: dict[str, Any]) -> Optional[dict[str, Any]]:
+        """Read a memory without counting it as an access; a brief is not a use."""
+        if memory_id not in cache:
+            peek = getattr(self.storage, "peek_memory", None) or self.storage.get_memory
+            cache[memory_id] = peek(memory_id)
+        return cache[memory_id]
+
     def _contradictions(
         self,
         selected: list[dict[str, Any]],
         *,
-        repo_id: Optional[str],
         memory_filter: Optional[Callable[[dict[str, Any]], bool]],
-        relationships: Optional[list[dict[str, Any]]] = None,
+        relationships: list[dict[str, Any]],
+        others: dict[str, Any],
     ) -> list[dict[str, Any]]:
         selected_by_id = {item["id"]: item for item in selected}
         if not selected_by_id:
@@ -237,19 +262,15 @@ class TaskMemoryBriefCompiler:
             item["id"]: f"M{index}" for index, item in enumerate(selected, start=1)
         }
         results = []
-        if relationships is None:
-            relationships = self.storage.get_all_relationships(repo_id=repo_id)
         for relationship in relationships:
             relationship_type = str(relationship.get("relationship") or "").casefold()
-            if relationship_type not in {"contradicts", "conflicts_with"}:
-                continue
             source_id = relationship.get("source_id")
             target_id = relationship.get("target_id")
             if source_id not in selected_by_id and target_id not in selected_by_id:
                 continue
             selected_id = source_id if source_id in selected_by_id else target_id
             other_id = target_id if selected_id == source_id else source_id
-            other = selected_by_id.get(other_id) or self.storage.get_memory(other_id)
+            other = selected_by_id.get(other_id) or self._peek(other_id, others)
             if not other or (memory_filter and not memory_filter(other)):
                 continue
             results.append(
@@ -463,7 +484,7 @@ class TaskMemoryBriefCompiler:
                 "source of truth instead of inferring project behavior."
             )
         if trust_filter.rejected:
-            reasons = sorted({item.reason for item in trust_filter.rejected})
+            reasons = sorted({self._omission_reason(item) for item in trust_filter.rejected})
             unknowns.append(
                 f"The trust policy omitted {len(trust_filter.rejected)} memory "
                 f"candidate(s): {'; '.join(reasons)}."
@@ -474,10 +495,8 @@ class TaskMemoryBriefCompiler:
             ):
                 unknowns.append(f"No cited memory evidence covers `{file_path}`.")
 
-        coverage_relationships = (
-            self.storage.get_all_relationships(repo_id=repo_id)
-            if context_selection == "coverage" else None
-        )
+        contradiction_edges = self._contradiction_edges(repo_id)
+        others: dict[str, Any] = {}
 
         def rendered_cost(items):
             trial_sections, _ = self._shape_sections(items)
@@ -485,8 +504,8 @@ class TaskMemoryBriefCompiler:
                 task=task, repo_id=repo_id, profile=profile, intent=intent,
                 constraints=resolved_constraints, sections=trial_sections,
                 contradictions=self._contradictions(
-                    items, repo_id=repo_id, memory_filter=eligible_memory,
-                    relationships=coverage_relationships,
+                    items, memory_filter=eligible_memory,
+                    relationships=contradiction_edges, others=others,
                 ), unknowns=unknowns,
             ))
 
@@ -504,7 +523,8 @@ class TaskMemoryBriefCompiler:
             unknowns.append("Relevant evidence did not fit within the requested token budget.")
         sections, citations = self._shape_sections(selected)
         contradictions = self._contradictions(
-            selected, repo_id=repo_id, memory_filter=eligible_memory
+            selected, memory_filter=eligible_memory,
+            relationships=contradiction_edges, others=others,
         )
         context = self._render(
             task=task,
@@ -537,7 +557,12 @@ class TaskMemoryBriefCompiler:
             ],
             "contradictions": contradictions,
             "unknowns": unknowns,
-            "trust_filter": trust_filter.diagnostics(),
+            # Which memories were omitted and why, without the trust scores that
+            # decay continuously and would change the fingerprint every day.
+            "trust_filter": sorted(
+                (str(item["memory_id"]), item["provenance"], item["quarantined"])
+                for item in trust_filter.diagnostics()["rejected"]
+            ),
         }
         fingerprint = hashlib.sha256(
             json.dumps(fingerprint_payload, sort_keys=True, default=str).encode("utf-8")

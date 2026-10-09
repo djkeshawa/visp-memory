@@ -242,3 +242,74 @@ def test_task_with_no_shared_topic_matches_no_intent(tmp_path):
     intent = {"id": "i1", "description": "Use the cache for this"}
     assert select_intent([intent], "use the database for this", intent_id=None) is None
 
+
+def test_brief_fetches_relationships_once_and_does_not_count_reads(tmp_path):
+    storage = LocalStorage(tmp_path)
+    intent_id, warning, _ = _store_fixture(storage)
+    other = next(
+        r["target_id"]
+        for r in storage.get_all_relationships(repo_id="repo-a")
+        if r["relationship"] == "contradicts"
+    )
+    import sys
+
+    callers = []
+    original = storage.get_all_relationships
+
+    def counted(**kwargs):
+        callers.append(sys._getframe(1).f_code.co_filename)
+        return original(**kwargs)
+
+    storage.get_all_relationships = counted
+
+    def accesses(memory_id):
+        return storage._get_memory_row(memory_id, track_access=False)["access_count"]
+
+    before = accesses(other)
+    brief = TaskMemoryBriefCompiler(storage).prepare(
+        "Implement `login` in `src/auth.py` and verify secure authentication",
+        repo_id="repo-a",
+        intent_id=intent_id,
+        token_budget=500,
+    )
+
+    assert brief["contradictions"][0]["other_memory_id"] == other
+    # Retrieval may read the graph itself; the brief's own pass reads it once.
+    assert sum(caller.endswith("task_brief.py") for caller in callers) == 1
+    assert accesses(other) == before
+
+
+def test_brief_fingerprint_ignores_trust_drift_over_time(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    storage = LocalStorage(tmp_path)
+    _store_memory(storage,
+        "Authentication uses trusted session cookies",
+        layer="semantic",
+        repo_id="repo-a",
+        tags=[provenance_tag(Provenance.DERIVED)],
+        metadata={"confidence": 0.8},
+        auto_link=False,
+    )
+    stale = _store_memory(storage,
+        "Authentication session cookies were once cached",
+        layer="semantic",
+        repo_id="repo-a",
+        tags=[provenance_tag(Provenance.ASSISTED)],
+        metadata={"confidence": 0.8},
+        auto_link=False,
+    )
+
+    def brief_at_age(days):
+        created = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        with storage._get_db() as conn:
+            conn.execute("UPDATE memories SET created_at = ? WHERE id = ?", (created, stale))
+            conn.commit()
+        return TaskMemoryBriefCompiler(storage).prepare(
+            "Review authentication session cookies", repo_id="repo-a", token_budget=400
+        )
+
+    first, later = brief_at_age(200), brief_at_age(230)
+    assert first["trust_filter"]["rejected"][0]["memory_id"] == stale
+    assert first["trust_filter"]["rejected"] != later["trust_filter"]["rejected"]
+    assert first["fingerprint"] == later["fingerprint"]
