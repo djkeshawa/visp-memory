@@ -342,3 +342,70 @@ def test_soft_delete_restore_and_confirmed_purge(tmp_path):
     result = manager.purge([memory_id])
     assert result["purged_ids"] == [memory_id]
     assert storage.get_memory(memory_id) is None
+
+
+def test_merge_undo_restores_relationships_replaced_by_re_pointing(tmp_path):
+    storage, manager = _manager(tmp_path)
+    target = storage.store_memory("Same content", repo_id="repo-a", auto_link=False)
+    source = storage.store_memory("Same content", repo_id="repo-a", auto_link=False)
+    neighbor = storage.store_memory("Neighbor", repo_id="repo-a", auto_link=False)
+    other = storage.store_memory("Other", repo_id="repo-a", auto_link=False)
+    storage.add_relationship(target, neighbor, "related_to", strength=0.7)
+    storage.add_relationship(target, other, "supports")
+    storage.add_relationship(source, neighbor, "supports")
+    storage.add_relationship(source, other, "supports")
+
+    def edges():
+        return sorted(
+            (r["source_id"], r["target_id"], r["relationship"], r["strength"])
+            for r in storage.get_all_relationships(repo_id="repo-a")
+        )
+
+    before = edges()
+    result = manager.merge([target, source], actor_id="admin")
+    # Re-pointing source -> neighbor replaced the target's inferred related_to edge.
+    assert (target, neighbor, "supports", 1.0) in edges()
+    assert (target, neighbor, "related_to", 0.7) not in edges()
+
+    manager.undo_merge(result["operation_id"], actor_id="admin")
+    # The pre-existing target -> other edge survives, and the replaced edge returns.
+    assert edges() == before
+
+
+def test_merge_undo_completes_when_a_displaced_edge_neighbor_was_purged(tmp_path):
+    storage, manager = _manager(tmp_path)
+    target = storage.store_memory("Same content", repo_id="repo-a", auto_link=False)
+    source = storage.store_memory("Same content", repo_id="repo-a", auto_link=False)
+    neighbor = storage.store_memory("Neighbor", repo_id="repo-a", auto_link=False)
+    storage.add_relationship(target, neighbor, "related_to", strength=0.7)
+    storage.add_relationship(source, neighbor, "supports")
+    result = manager.merge([target, source], actor_id="admin")
+    manager.soft_delete(neighbor, actor_id="admin", reason="obsolete")
+    manager.purge([neighbor])
+
+    undone = manager.undo_merge(result["operation_id"], actor_id="admin")
+    assert undone["status"] == "undone"
+    assert manager.get_operation(result["operation_id"])["status"] == "undone"
+    assert {storage.get_memory(mid)["status"] for mid in (target, source)} == {"active"}
+    assert not storage.get_all_relationships(repo_id="repo-a")
+
+
+def test_retention_counts_from_the_merge_not_from_creation(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    from visp_memory.core.dreaming import Dreaming
+
+    storage, manager = _manager(tmp_path)
+    old = (datetime.now(timezone.utc) - timedelta(days=400)).isoformat()
+    ids = [
+        storage.store_memory("Old note", repo_id="repo-a", created_at=old, auto_link=False)
+        for _ in range(2)
+    ]
+    Dreaming(storage).run("repo-a", actor_id="owner")
+    merged = next(mid for mid in ids if storage.get_memory(mid)["status"] == "merged")
+    assert storage.get_memory(merged)["metadata"]["merged_at"]
+    assert manager.retention_preview("repo-a")["purgeable_ids"] == []
+
+    # A merged row with no recorded merge time is never guessed from created_at.
+    assert storage.update_memory(merged, metadata={"merged_into": ids[0]})
+    assert manager.retention_preview("repo-a")["purgeable_ids"] == []

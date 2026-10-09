@@ -51,7 +51,9 @@ def apply(unit, run_id, repo_id, item, actor_id):
         metadata = {**memory["metadata"], "dreaming_action": action_id}
         state = "archived"
         if item["kind"] == "duplicate":
-            metadata["merged_into"] = memories[0]["id"]
+            # Retention counts from merged_at; without it a merge looks as old as
+            # the note itself and becomes purgeable immediately.
+            metadata.update(merged_into=memories[0]["id"], merged_at=utc_now_iso())
             state = "merged"
         before = {key: memory.get(key) for key in ("status", "metadata", "archived_at")}
         after = {
@@ -108,17 +110,26 @@ def undo(unit, action, actor_id):
     )
 
 
-def linked_ids(conn, memory_ids):
-    """Find protected graph/lineage references with a single scan of source lists."""
+def linked_ids(conn, memory_ids, similarity_relationship="related_to"):
+    """Find protected graph/lineage references with a single scan of source lists.
+
+    The similarity link ``store_memory`` infers between identical copies carries no
+    knowledge of its own, so it does not protect them from merging. A similarity link
+    to any other note is graph knowledge and does.
+    """
     if not memory_ids:
         return set()
     encoded = json.dumps(memory_ids)
     linked = set()
     for row in conn.execute(
-        """SELECT source_id, target_id FROM relationships
-        WHERE source_id IN (SELECT value FROM json_each(?))
-        OR target_id IN (SELECT value FROM json_each(?))""",
-        (encoded, encoded),
+        """SELECT r.source_id, r.target_id FROM relationships r
+        LEFT JOIN memories a ON a.id = r.source_id LEFT JOIN memories b ON b.id = r.target_id
+        WHERE (r.source_id IN (SELECT value FROM json_each(?))
+            OR r.target_id IN (SELECT value FROM json_each(?)))
+        AND NOT COALESCE(r.relationship = ? AND a.content = b.content
+            AND r.source_id IN (SELECT value FROM json_each(?))
+            AND r.target_id IN (SELECT value FROM json_each(?)), 0)""",
+        (encoded, encoded, similarity_relationship, encoded, encoded),
     ):
         linked.update((row["source_id"], row["target_id"]))
     linked.update(

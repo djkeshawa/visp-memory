@@ -118,9 +118,17 @@ class MemoryLifecycleManager:
         snapshots = {memory["id"]: self._snapshot(memory) for memory in memories}
         source_ids = [memory["id"] for memory in memories if memory["id"] != target["id"]]
         created_relationship_ids: list[str] = []
+        repo_id = target.get("repo_id")
+        relationships = self.storage.get_all_relationships(repo_id=repo_id)
+        target_relationships = [
+            relationship
+            for relationship in relationships
+            if target["id"] in (relationship.get("source_id"), relationship.get("target_id"))
+        ]
         snapshot = {
             "memories": snapshots,
             "created_relationship_ids": created_relationship_ids,
+            "displaced_relationships": [],
         }
         self._record_operation(
             operation_id,
@@ -133,8 +141,11 @@ class MemoryLifecycleManager:
 
         try:
             created_relationship_ids.extend(
-                self._retarget_relationships(target["id"], source_ids, target.get("repo_id"))
+                self._retarget_relationships(
+                    target["id"], source_ids, relationships, target_relationships
+                )
             )
+            snapshot["displaced_relationships"] = self._displaced(target_relationships, repo_id)
             target_metadata = dict(target.get("metadata") or {})
             target_metadata["merged_source_ids"] = list(
                 dict.fromkeys(
@@ -175,8 +186,11 @@ class MemoryLifecycleManager:
             }
         except Exception as error:
             self._restore_snapshots(snapshots)
-            for relationship_id in created_relationship_ids:
-                self.storage.delete_relationship(relationship_id)
+            self._restore_relationships(
+                created_relationship_ids,
+                self._displaced(target_relationships, repo_id),
+                repo_id,
+            )
             self._update_operation(operation_id, status="failed", snapshot=snapshot)
             raise LifecycleError("Merge failed and was rolled back") from error
 
@@ -210,8 +224,11 @@ class MemoryLifecycleManager:
             ):
                 raise LifecycleError("Merge cannot be undone after a source has changed")
         self._restore_snapshots(snapshot["memories"])
-        for relationship_id in snapshot.get("created_relationship_ids", []):
-            self.storage.delete_relationship(relationship_id)
+        self._restore_relationships(
+            snapshot.get("created_relationship_ids", []),
+            snapshot.get("displaced_relationships", []),
+            operation.get("repo_id"),
+        )
         self._update_operation(operation_id, status="undone", undone=True)
         return {
             "operation_id": operation_id,
@@ -350,16 +367,7 @@ class MemoryLifecycleManager:
         cutoff = utc_now() - timedelta(days=max(30, retention_days))
         candidates: list[str] = []
         for memory in self.storage.list_memories(repo_id=repo_id, status="all", limit=100000):
-            if memory.get("status") not in {"deleted", "merged", "superseded"}:
-                continue
-            metadata = memory.get("metadata") or {}
-            timestamp = (
-                (metadata.get("deletion") or {}).get("deleted_at")
-                or metadata.get("merged_at")
-                or metadata.get("invalid_at")
-                or memory.get("created_at")
-            )
-            parsed = parse_utc(timestamp)
+            parsed = parse_utc(self._retired_at(memory))
             if parsed and parsed <= cutoff:
                 candidates.append(memory["id"])
         return {
@@ -367,6 +375,23 @@ class MemoryLifecycleManager:
             "retention_days": max(30, retention_days),
             **self.purge_preview(candidates),
         }
+
+    @staticmethod
+    def _retired_at(memory: dict[str, Any]) -> Optional[str]:
+        """When a memory left the active set, or None when that was never recorded.
+
+        Retention counts from this moment only. Falling back to ``created_at`` would
+        purge a long-lived memory the day it was merged or deleted.
+        """
+        metadata = memory.get("metadata") or {}
+        status = memory.get("status")
+        if status == "deleted":
+            return (metadata.get("deletion") or {}).get("deleted_at")
+        if status == "merged":
+            return metadata.get("merged_at")
+        if status == "superseded":
+            return metadata.get("invalid_at")
+        return None
 
     def execute_retention(self, repo_id: str, *, retention_days: int = 30) -> dict[str, Any]:
         preview = self.retention_preview(repo_id, retention_days=retention_days)
@@ -486,38 +511,94 @@ class MemoryLifecycleManager:
                 updates["content"] = snapshot["content"]
             self.storage.update_memory(memory_id, **updates)
 
+    @staticmethod
+    def _relationship_key(relationship: dict[str, Any]) -> tuple[Any, Any, Any]:
+        return (
+            relationship.get("source_id"),
+            relationship.get("target_id"),
+            relationship.get("relationship", "related_to"),
+        )
+
+    def _copy_relationship(
+        self, source_id: str, target_id: str, relationship: dict[str, Any]
+    ) -> str:
+        relation = relationship.get("relationship", "related_to")
+        strength = relationship.get("strength", 1.0)
+        try:
+            return self.storage.add_relationship(
+                source_id,
+                target_id,
+                relation,
+                strength=strength,
+                evidence=relationship.get("evidence"),
+            )
+        except TypeError:
+            return self.storage.add_relationship(
+                source_id, target_id, relation, strength=strength
+            )
+
+    def _displaced(
+        self, before: list[dict[str, Any]], repo_id: Optional[str]
+    ) -> list[dict[str, Any]]:
+        """Return the target's relationships that re-pointing replaced or removed.
+
+        Adding a typed relationship can drop an inferred ``related_to`` edge between
+        the same pair, so undo needs these to restore the target's graph exactly.
+        """
+        remaining = {
+            relationship.get("id")
+            for relationship in self.storage.get_all_relationships(repo_id=repo_id)
+        }
+        fields = ("source_id", "target_id", "relationship", "strength", "evidence")
+        return [
+            json.loads(json.dumps({key: item.get(key) for key in fields}, default=str))
+            for item in before
+            if item.get("id") not in remaining
+        ]
+
+    def _restore_relationships(
+        self,
+        created_ids: list[str],
+        displaced: list[dict[str, Any]],
+        repo_id: Optional[str],
+    ) -> None:
+        for relationship_id in created_ids:
+            self.storage.delete_relationship(relationship_id)
+        present = {
+            self._relationship_key(relationship)
+            for relationship in self.storage.get_all_relationships(repo_id=repo_id)
+        }
+        for relationship in displaced:
+            ends = (relationship["source_id"], relationship["target_id"])
+            # A neighbour purged since the merge takes its edges with it.
+            if self._relationship_key(relationship) in present or not all(
+                self.storage.peek_memory(memory_id) for memory_id in ends
+            ):
+                continue
+            self._copy_relationship(*ends, relationship)
+
     def _retarget_relationships(
-        self, target_id: str, source_ids: list[str], repo_id: Optional[str]
+        self,
+        target_id: str,
+        source_ids: list[str],
+        relationships: list[dict[str, Any]],
+        target_relationships: list[dict[str, Any]],
     ) -> list[str]:
         source_set = set(source_ids)
         created: list[str] = []
-        seen: set[tuple[str, str, str]] = set()
-        for relationship in self.storage.get_all_relationships(repo_id=repo_id):
+        # Edges the target already has are left alone: re-adding one would replace it
+        # (and its id), so undo would delete the original instead of the copy.
+        seen = {self._relationship_key(item) for item in target_relationships}
+        for relationship in relationships:
             source_id = relationship.get("source_id")
             related_id = relationship.get("target_id")
             if source_id not in source_set and related_id not in source_set:
                 continue
             new_source = target_id if source_id in source_set else source_id
             new_target = target_id if related_id in source_set else related_id
-            relation = relationship.get("relationship", "related_to")
-            key = (new_source, new_target, relation)
+            key = (new_source, new_target, relationship.get("relationship", "related_to"))
             if not new_source or not new_target or new_source == new_target or key in seen:
                 continue
             seen.add(key)
-            try:
-                relationship_id = self.storage.add_relationship(
-                    new_source,
-                    new_target,
-                    relation,
-                    strength=relationship.get("strength", 1.0),
-                    evidence=relationship.get("evidence"),
-                )
-            except TypeError:
-                relationship_id = self.storage.add_relationship(
-                    new_source,
-                    new_target,
-                    relation,
-                    strength=relationship.get("strength", 1.0),
-                )
-            created.append(relationship_id)
+            created.append(self._copy_relationship(new_source, new_target, relationship))
         return created

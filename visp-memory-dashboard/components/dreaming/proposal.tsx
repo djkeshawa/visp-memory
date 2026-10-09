@@ -4,7 +4,7 @@ import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Pill, StatusDot } from "@/components/strata/primitives"
 import type { TrustTone } from "@/lib/memory-trust"
-import type { DreamProposal } from "@/lib/dreaming-types"
+import type { DreamDecision, DreamProposal } from "@/lib/dreaming-types"
 import { cn } from "@/lib/utils"
 
 const KINDS: Record<DreamProposal["kind"], { label: string; tone: TrustTone; hollow?: boolean }> = {
@@ -25,7 +25,7 @@ function resolutionLabel(item: DreamProposal): string {
 export function DreamProposalCard({ item, busy, onReview, onUndo }: {
   item: DreamProposal
   busy: boolean
-  onReview?: (decision: "archive" | "dismiss") => void
+  onReview?: (decision: DreamDecision) => void
   onUndo?: () => void
 }) {
   const [copyState, setCopyState] = useState("")
@@ -61,6 +61,7 @@ export function DreamProposalCard({ item, busy, onReview, onUndo }: {
       <div className="flex flex-wrap items-center gap-2">
         {item.resolution === "pending" && onReview ? (
           <>
+            {item.kind === "duplicate" ? <Button disabled={busy} onClick={() => onReview("merge")}>Merge copies</Button> : null}
             {item.kind === "expired" ? <Button disabled={busy} onClick={() => onReview("archive")}>Archive this memory</Button> : null}
             <Button variant="outline" disabled={busy} onClick={() => onReview("dismiss")}>Dismiss suggestion</Button>
           </>

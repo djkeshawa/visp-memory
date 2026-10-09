@@ -7,7 +7,12 @@ from datetime import timedelta
 from visp_memory.core.clock import parse_utc, utc_now
 from visp_memory.core.dreaming import journal
 from visp_memory.core.dreaming.persistence import defaults, transaction
-from visp_memory.core.dreaming.planner import SCAN_LIMIT, plan
+from visp_memory.core.dreaming.planner import (
+    DUPLICATE_SCAN_LIMIT,
+    SCAN_LIMIT,
+    plan,
+    review_merge_blocker,
+)
 from visp_memory.core.storage import LocalStorage
 
 
@@ -63,8 +68,9 @@ class Dreaming:
         cursor = self._settings(unit, repo_id)["cursor"]
         rows = unit.memories(repo_id, cursor, SCAN_LIMIT + 1)
         memories = rows[:SCAN_LIMIT]
-        linked = unit.linked_ids([m["id"] for m in memories if m["layer"] == "episodic"])
-        report = plan(memories, linked, now)
+        duplicates = unit.duplicate_memories(repo_id, DUPLICATE_SCAN_LIMIT)
+        linked = unit.linked_ids([m["id"] for m in duplicates])
+        report = plan(memories, linked, now, duplicates=duplicates)
         dismissed = {
             (r["proposal_id"], r["signature"]) for r in unit.rows("dismissals", repo_id=repo_id)
         }
@@ -148,7 +154,14 @@ class Dreaming:
             item = next((p for p in report["proposals"] if p["id"] == proposal_id), None)
             if not item or item["resolution"] != "pending":
                 raise ValueError("This proposal is no longer pending")
-            if decision == "archive" and item["kind"] == "expired":
+            if decision == "merge" and item["kind"] == "duplicate":
+                memories = [unit.memory(mid) or {"id": mid} for mid in item["memory_ids"]]
+                blocker = review_merge_blocker(memories, unit.linked_ids(item["memory_ids"]))
+                if blocker:
+                    raise ValueError(blocker)
+                item["action_id"] = journal.apply(unit, run_id, repo_id, item, actor_id)
+                item["resolution"] = "applied"
+            elif decision == "archive" and item["kind"] == "expired":
                 item["action_id"] = journal.apply(unit, run_id, repo_id, item, actor_id)
                 item["resolution"] = "applied"
             elif decision == "dismiss":
@@ -160,7 +173,9 @@ class Dreaming:
                 )
                 item["resolution"] = "dismissed"
             else:
-                raise ValueError("Only expired notes can be archived from dreaming")
+                raise ValueError(
+                    "Dreaming can merge duplicates and archive expired notes; dismiss the rest"
+                )
             unit.put("runs", {**rows[0], "report": json.dumps(report)})
             return item
 

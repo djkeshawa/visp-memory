@@ -10,6 +10,9 @@ export type DreamProposal = {
   action_id?: string
 }
 
+/** A reviewer's answer to a pending finding; the server accepts exactly these. */
+export type DreamDecision = "merge" | "archive" | "dismiss"
+
 export type DreamRun = {
   id?: string
   created_at?: string

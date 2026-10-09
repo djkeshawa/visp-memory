@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import { DreamProposalCard } from "@/components/dreaming/proposal"
 import { cn } from "@/lib/utils"
-import type { DreamProposal, DreamRun } from "@/lib/dreaming-types"
+import type { DreamDecision, DreamProposal, DreamRun } from "@/lib/dreaming-types"
 
 type Group = "review" | "applied" | "dismissed"
 
@@ -24,7 +24,7 @@ export function Findings({ run, preview, busy, onReview, onUndo }: {
   run: DreamRun
   preview: boolean
   busy: boolean
-  onReview: (run: DreamRun, item: DreamProposal, decision: "archive" | "dismiss") => void
+  onReview: (run: DreamRun, item: DreamProposal, decision: DreamDecision) => void
   onUndo: (item: DreamProposal) => void
 }) {
   const [chosen, setChosen] = useState<Group | null>(null)

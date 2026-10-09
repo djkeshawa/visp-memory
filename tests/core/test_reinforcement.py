@@ -125,3 +125,45 @@ def test_decay_tolerates_null_accessed_at(tmp_path):
 
     # Must not raise (regression guard for None accessed_at).
     MemoryCompressor(storage).decay_old_memories(halflife_days=30, min_importance=0.1)
+
+
+def _importance(storage: LocalStorage, memory_id: str) -> float:
+    return float(storage._get_memory_row(memory_id, track_access=False)["importance"])
+
+
+def test_repeated_decay_runs_do_not_compound(tmp_path, monkeypatch):
+    import visp_memory.core.compression as compression
+
+    storage = LocalStorage(tmp_path)
+    memory_id = storage.store_memory("idle note", auto_link=False)
+    storage.update_memory(memory_id, importance=0.8)
+    _backdate_and_set_access(storage, memory_id, days=30, access=0)
+    now = datetime.now(timezone.utc)
+    monkeypatch.setattr(compression, "utc_now", lambda: now)
+    compressor = MemoryCompressor(storage)
+
+    assert compressor.decay_old_memories(halflife_days=30, min_importance=0.1) == 1
+    assert abs(_importance(storage, memory_id) - 0.4) < 0.01
+    # Same moment, same answer: three more runs must not halve it again each time.
+    for _ in range(3):
+        assert compressor.decay_old_memories(halflife_days=30, min_importance=0.1) == 0
+    assert abs(_importance(storage, memory_id) - 0.4) < 0.01
+
+    # Thirty more idle days decay only that interval: 60 days total -> 0.8 / 4.
+    monkeypatch.setattr(compression, "utc_now", lambda: now + timedelta(days=30))
+    assert compressor.decay_old_memories(halflife_days=30, min_importance=0.1) == 1
+    assert abs(_importance(storage, memory_id) - 0.2) < 0.01
+
+
+def test_decay_pages_through_every_memory(tmp_path, monkeypatch):
+    import visp_memory.core.compression as compression
+
+    monkeypatch.setattr(compression, "DECAY_PAGE_SIZE", 2)
+    storage = LocalStorage(tmp_path)
+    ids = [storage.store_memory(f"idle note {i}", auto_link=False) for i in range(5)]
+    for memory_id in ids:
+        storage.update_memory(memory_id, importance=0.8)
+        _backdate_and_set_access(storage, memory_id, days=30, access=0)
+
+    assert MemoryCompressor(storage).decay_old_memories(halflife_days=30) == 5
+    assert all(abs(_importance(storage, mid) - 0.4) < 0.01 for mid in ids)

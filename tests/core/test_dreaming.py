@@ -215,3 +215,111 @@ def test_most_used_duplicate_is_retained(dream):
     dream.run("repo-a", actor_id="owner")
     assert dream.storage.get_memory(ids[1])["status"] == "active"
     assert dream.storage.get_memory(ids[0])["status"] == "merged"
+
+
+def test_auto_linked_duplicates_are_merged_automatically(dream):
+    # store_memory links identical content with an inferred related_to edge; that
+    # similarity link must not make the copies look like curated knowledge.
+    ids = [
+        dream.storage.store_memory("Rotate the signing key monthly", repo_id="repo-a")
+        for _ in range(2)
+    ]
+    assert dream.storage.get_all_relationships(repo_id="repo-a")
+    item = next(p for p in dream.run("repo-a", actor_id="owner")["proposals"])
+    assert item["kind"] == "duplicate" and item["resolution"] == "applied"
+    assert sorted(dream.storage.get_memory(mid)["status"] for mid in ids) == [
+        "active",
+        "merged",
+    ]
+
+
+def test_explicit_related_to_link_to_another_note_still_protects_a_copy(dream):
+    # Only the similarity link between the identical copies themselves is ignored;
+    # a related_to link from a copy to a different note is curated graph knowledge.
+    ids = duplicates(dream)
+    other = dream.storage.store_memory(
+        "Key rotation runbook lives in ops/keys.md", repo_id="repo-a", auto_link=False
+    )
+    dream.storage.add_relationship(ids[1], other, "related_to")
+    report = dream.run("repo-a", actor_id="owner")
+    item = next(p for p in report["proposals"] if p["kind"] == "duplicate")
+    assert not item["automatic"] and item["resolution"] == "pending"
+    with pytest.raises(ValueError, match="from Memories"):
+        dream.review("repo-a", report["id"], item["id"], "merge", actor_id="owner")
+    assert all(dream.storage.get_memory(mid)["status"] == "active" for mid in ids)
+
+
+def test_duplicates_in_different_windows_are_found(dream, monkeypatch):
+    import visp_memory.core.dreaming as module
+
+    monkeypatch.setattr(module, "SCAN_LIMIT", 1)
+    ids = duplicates(dream)
+    report = dream.run("repo-a", actor_id="owner")
+    assert report["scanned"] == 1
+    assert [p["kind"] for p in report["proposals"]] == ["duplicate"]
+    assert sum(dream.storage.get_memory(mid)["status"] == "merged" for mid in ids) == 1
+
+
+def _semantic_duplicates(dream):
+    evidence = dream.storage.store_evidence("Verified TTL", repo_id="repo-a")
+    return [
+        dream.storage.store_memory(
+            "Session TTL is five minutes",
+            layer="semantic",
+            repo_id="repo-a",
+            evidence_ids=[evidence],
+            auto_link=False,
+        )
+        for _ in range(2)
+    ]
+
+
+def test_reviewer_can_merge_pending_duplicates_and_undo(dream):
+    ids = _semantic_duplicates(dream)
+    report = dream.run("repo-a", actor_id="owner")
+    item = report["proposals"][0]
+    assert item["kind"] == "duplicate" and item["resolution"] == "pending"
+    result = dream.review("repo-a", report["id"], item["id"], "merge", actor_id="owner")
+    assert result["resolution"] == "applied"
+    assert sum(dream.storage.get_memory(mid)["status"] == "merged" for mid in ids) == 1
+    dream.undo("repo-a", result["action_id"], actor_id="owner")
+    assert all(dream.storage.get_memory(mid)["status"] == "active" for mid in ids)
+
+
+def test_review_merge_refuses_protected_and_explicitly_linked_copies(dream):
+    ids = duplicates(dream, metadata={"pinned": True})
+    report = dream.run("repo-a", actor_id="owner")
+    with pytest.raises(ValueError, match="never merged"):
+        dream.review("repo-a", report["id"], report["proposals"][0]["id"], "merge",
+                     actor_id="owner")
+    linked = _semantic_duplicates(dream)
+    dream.storage.add_relationship(linked[0], ids[0], "depends_on")
+    report = dream.run("repo-a", actor_id="owner")
+    item = next(p for p in report["proposals"] if p["memory_ids"][0] in linked)
+    with pytest.raises(ValueError, match="from Memories"):
+        dream.review("repo-a", report["id"], item["id"], "merge", actor_id="owner")
+    assert all(dream.storage.get_memory(mid)["status"] == "active" for mid in ids + linked)
+
+
+def test_dreaming_status_changes_reach_the_vector_index(tmp_path):
+    import hashlib
+
+    def embed(text):
+        digest = hashlib.sha256(text.encode()).digest()
+        return [byte / 255.0 for byte in digest[:16]]
+
+    store = LocalStorage(tmp_path, embedding_fn=embed)
+    dream = Dreaming(store)
+    ids = duplicates(dream)
+    collection = store._get_collection("episodic")
+    if collection is None:
+        pytest.skip("no vector collection in this environment")
+
+    def vector_status(memory_id):
+        return collection.get(ids=[memory_id])["metadatas"][0]["status"]
+
+    action = dream.run("repo-a", actor_id="owner")["proposals"][0]["action_id"]
+    merged = next(mid for mid in ids if store.get_memory(mid)["status"] == "merged")
+    assert vector_status(merged) == "merged"
+    dream.undo("repo-a", action, actor_id="owner")
+    assert vector_status(merged) == "active"

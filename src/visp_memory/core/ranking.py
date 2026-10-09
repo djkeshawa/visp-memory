@@ -7,6 +7,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from visp_memory.core.clock import parse_utc
 from visp_memory.core.numeric import bounded_float
 
 DEFAULT_RECALL_MIN_SCORE = 0.56
@@ -133,6 +134,23 @@ def effective_halflife_days(halflife_days: Any, access_count: Any = 0) -> float:
     except (TypeError, ValueError):
         count = 0.0
     return base * (1.0 + DECAY_STRENGTH_FACTOR * math.log1p(count))
+
+
+# Metadata key recording when decay last lowered a memory's importance.
+DECAYED_AT_KEY = "decayed_at"
+
+
+def decay_reference_at(memory: dict) -> datetime | None:
+    """Return when a memory's undecayed idle time starts.
+
+    That is the later of its last access (or creation) and the last decay pass that
+    changed it, so decay and its previews never charge the same idle days twice.
+    """
+    metadata = memory.get("metadata")
+    decayed = parse_utc(metadata.get(DECAYED_AT_KEY)) if isinstance(metadata, dict) else None
+    accessed = parse_utc(memory.get("accessed_at") or memory.get("created_at"))
+    candidates = [value for value in (accessed, decayed) if value is not None]
+    return max(candidates) if candidates else None
 
 
 def projected_importance(

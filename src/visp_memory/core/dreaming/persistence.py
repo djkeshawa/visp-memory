@@ -22,6 +22,7 @@ def defaults(repo_id):
 class SQLiteUnit:
     def __init__(self, storage, connection):
         self.storage, self.connection = storage, connection
+        self.changed_ids = []
 
     def rows(self, kind, *, newest=False, limit=None, **filters):
         table = TABLES[kind][0]
@@ -66,6 +67,21 @@ class SQLiteUnit:
             )
         ]
 
+    def duplicate_memories(self, repo_id, limit):
+        """Active memories whose exact content occurs more than once in the project."""
+        scope = (
+            "repo_id = ? AND status = 'active' AND layer IN ('episodic', 'semantic')"
+        )
+        return [
+            self.storage._row_to_dict(row)
+            for row in self.connection.execute(
+                f"SELECT * FROM memories WHERE {scope} AND content IN ("
+                f"SELECT content FROM memories WHERE {scope} "
+                "GROUP BY content HAVING COUNT(*) > 1) ORDER BY content, id LIMIT ?",
+                (repo_id, repo_id, limit),
+            )
+        ]
+
     def memory(self, memory_id):
         row = self.connection.execute(
             "SELECT * FROM memories WHERE id = ?", (memory_id,)
@@ -77,11 +93,14 @@ class SQLiteUnit:
             "UPDATE memories SET status = ?, metadata = ?, archived_at = ? WHERE id = ?",
             (values["status"], json.dumps(values["metadata"]), values["archived_at"], memory_id),
         )
+        self.changed_ids.append(memory_id)
 
     def linked_ids(self, memory_ids):
         from visp_memory.core.dreaming.journal import linked_ids
 
-        return linked_ids(self.connection, memory_ids)
+        return linked_ids(
+            self.connection, memory_ids, self.storage.AUTO_LINK_RELATIONSHIP
+        )
 
 
 class Neo4jUnit:
@@ -128,6 +147,19 @@ class Neo4jUnit:
             )
         ]
 
+    def duplicate_memories(self, repo_id, limit):
+        return [
+            self.storage._memory_node_to_dict(dict(row["m"]))
+            for row in self.transaction.run(
+                "MATCH (m:Memory {repo_id: $repo, status: 'active'}) "
+                "WHERE m.layer IN ['episodic', 'semantic'] "
+                "WITH m.content AS content, collect(m) AS copies WHERE size(copies) > 1 "
+                "UNWIND copies AS m RETURN m ORDER BY m.content, m.id LIMIT $limit",
+                repo=repo_id,
+                limit=limit,
+            )
+        ]
+
     def memory(self, memory_id):
         row = self.transaction.run("MATCH (m:Memory {id: $id}) RETURN m", id=memory_id).single()
         return self.storage._memory_node_to_dict(dict(row["m"])) if row else None
@@ -140,10 +172,14 @@ class Neo4jUnit:
         ).consume()
 
     def linked_ids(self, memory_ids):
+        from visp_memory.core.neo4j_storage import _normalize_relationship_type
+
         rows = self.transaction.run(
-            "MATCH (a:Memory)-[]->(b:Memory) WHERE a.id IN $ids OR b.id IN $ids "
-            "RETURN a.id AS source, b.id AS target",
+            "MATCH (a:Memory)-[r]->(b:Memory) WHERE (a.id IN $ids OR b.id IN $ids) "
+            "AND NOT (type(r) = $similarity AND a.content = b.content "
+            "AND a.id IN $ids AND b.id IN $ids) RETURN a.id AS source, b.id AS target",
             ids=memory_ids,
+            similarity=_normalize_relationship_type(self.storage.AUTO_LINK_RELATIONSHIP),
         )
         linked = {row[key] for row in rows for key in ("source", "target")}
         linked.update(
@@ -162,9 +198,14 @@ def transaction(storage, *, write=False):
     if isinstance(storage, LocalStorage):
         with storage._get_db() as connection:
             connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
-            yield SQLiteUnit(storage, connection)
+            unit = SQLiteUnit(storage, connection)
+            yield unit
             if write:
                 connection.commit()
+        # The vector index is outside the transaction: refresh it from committed rows
+        # so vector search stops ranking merged or archived memories.
+        for memory_id in dict.fromkeys(unit.changed_ids):
+            storage.sync_vector_entry(memory_id)
     else:
         from visp_memory.core.neo4j_governance import lock_graph
 
