@@ -4182,47 +4182,56 @@ class LocalStorage(BaseStorage):
             updated = cursor.rowcount > 0
 
         if updated and any(value is not None for value in (content, importance, tags, status)):
-            memory = self._get_memory_row(memory_id, track_access=False)
-            if memory:
-                collection = self._get_collection(memory["layer"])
-                if collection is not None:
-                    try:
-                        metadata_dict = {
-                            "category": memory.get("category", "general"),
-                            "importance": memory.get("importance", 0.5),
-                            "tags": self._json_serialize(memory.get("tags", [])),
-                            "status": memory.get("status", "active"),
-                        }
-                        if memory.get("repo_id"):
-                            metadata_dict["repo_id"] = memory["repo_id"]
-                        update_kwargs = {
-                            "ids": [memory_id],
-                            "metadatas": [metadata_dict],
-                        }
-                        if content is not None:
-                            update_kwargs["documents"] = [content]
-                            if self._embedding_fn is not None:
-                                try:
-                                    update_kwargs["embeddings"] = [self._embedding_fn(content)]
-                                except Exception as exc:
-                                    logger.warning(
-                                        "Embedding computation failed during update of "
-                                        "memory %s: %s",
-                                        memory_id,
-                                        exc,
-                                    )
-                        collection.update(**update_kwargs)
-                    except Exception as exc:
-                        logger.warning(
-                            "Vector update failed for memory %s; vector index may be "
-                            "stale (run rebuild_embedding_index to reconcile): %s",
-                            memory_id,
-                            exc,
-                        )
+            self.sync_vector_entry(memory_id, content=content)
         if updated and content is not None:
             self._index_turn_keys(memory_id)
 
         return updated
+
+    def sync_vector_entry(self, memory_id: str, content: str = None) -> None:
+        """Copy a committed row's filterable fields (and new content) to its vector.
+
+        Vector search filters on this metadata, so a stale status keeps merged or
+        archived rows in the top-N slots. Failures are logged; a rebuild reconciles.
+        """
+        memory = self._get_memory_row(memory_id, track_access=False)
+        if not memory:
+            return
+        collection = self._get_collection(memory["layer"])
+        if collection is None:
+            return
+        try:
+            metadata_dict = {
+                "category": memory.get("category", "general"),
+                "importance": memory.get("importance", 0.5),
+                "tags": self._json_serialize(memory.get("tags", [])),
+                "status": memory.get("status", "active"),
+            }
+            if memory.get("repo_id"):
+                metadata_dict["repo_id"] = memory["repo_id"]
+            update_kwargs = {
+                "ids": [memory_id],
+                "metadatas": [metadata_dict],
+            }
+            if content is not None:
+                update_kwargs["documents"] = [content]
+                if self._embedding_fn is not None:
+                    try:
+                        update_kwargs["embeddings"] = [self._embedding_fn(content)]
+                    except Exception as exc:
+                        logger.warning(
+                            "Embedding computation failed during update of memory %s: %s",
+                            memory_id,
+                            exc,
+                        )
+            collection.update(**update_kwargs)
+        except Exception as exc:
+            logger.warning(
+                "Vector update failed for memory %s; vector index may be "
+                "stale (run rebuild_embedding_index to reconcile): %s",
+                memory_id,
+                exc,
+            )
 
     def _index_turn_keys(self, memory_id: str) -> None:
         """Keys are an index: a failure is logged and repaired by a rebuild."""

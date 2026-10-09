@@ -283,3 +283,27 @@ def test_review_merge_refuses_protected_and_explicitly_linked_copies(dream):
     with pytest.raises(ValueError, match="from Memories"):
         dream.review("repo-a", report["id"], item["id"], "merge", actor_id="owner")
     assert all(dream.storage.get_memory(mid)["status"] == "active" for mid in ids + linked)
+
+
+def test_dreaming_status_changes_reach_the_vector_index(tmp_path):
+    import hashlib
+
+    def embed(text):
+        digest = hashlib.sha256(text.encode()).digest()
+        return [byte / 255.0 for byte in digest[:16]]
+
+    store = LocalStorage(tmp_path, embedding_fn=embed)
+    dream = Dreaming(store)
+    ids = duplicates(dream)
+    collection = store._get_collection("episodic")
+    if collection is None:
+        pytest.skip("no vector collection in this environment")
+
+    def vector_status(memory_id):
+        return collection.get(ids=[memory_id])["metadatas"][0]["status"]
+
+    action = dream.run("repo-a", actor_id="owner")["proposals"][0]["action_id"]
+    merged = next(mid for mid in ids if store.get_memory(mid)["status"] == "merged")
+    assert vector_status(merged) == "merged"
+    dream.undo("repo-a", action, actor_id="owner")
+    assert vector_status(merged) == "active"

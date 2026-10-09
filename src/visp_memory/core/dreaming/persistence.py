@@ -22,6 +22,7 @@ def defaults(repo_id):
 class SQLiteUnit:
     def __init__(self, storage, connection):
         self.storage, self.connection = storage, connection
+        self.changed_ids = []
 
     def rows(self, kind, *, newest=False, limit=None, **filters):
         table = TABLES[kind][0]
@@ -92,6 +93,7 @@ class SQLiteUnit:
             "UPDATE memories SET status = ?, metadata = ?, archived_at = ? WHERE id = ?",
             (values["status"], json.dumps(values["metadata"]), values["archived_at"], memory_id),
         )
+        self.changed_ids.append(memory_id)
 
     def linked_ids(self, memory_ids):
         from visp_memory.core.dreaming.journal import linked_ids
@@ -195,9 +197,14 @@ def transaction(storage, *, write=False):
     if isinstance(storage, LocalStorage):
         with storage._get_db() as connection:
             connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
-            yield SQLiteUnit(storage, connection)
+            unit = SQLiteUnit(storage, connection)
+            yield unit
             if write:
                 connection.commit()
+        # The vector index is outside the transaction: refresh it from committed rows
+        # so vector search stops ranking merged or archived memories.
+        for memory_id in dict.fromkeys(unit.changed_ids):
+            storage.sync_vector_entry(memory_id)
     else:
         from visp_memory.core.neo4j_governance import lock_graph
 
