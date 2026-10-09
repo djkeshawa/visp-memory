@@ -342,3 +342,31 @@ def test_soft_delete_restore_and_confirmed_purge(tmp_path):
     result = manager.purge([memory_id])
     assert result["purged_ids"] == [memory_id]
     assert storage.get_memory(memory_id) is None
+
+
+def test_merge_undo_restores_relationships_replaced_by_re_pointing(tmp_path):
+    storage, manager = _manager(tmp_path)
+    target = storage.store_memory("Same content", repo_id="repo-a", auto_link=False)
+    source = storage.store_memory("Same content", repo_id="repo-a", auto_link=False)
+    neighbor = storage.store_memory("Neighbor", repo_id="repo-a", auto_link=False)
+    other = storage.store_memory("Other", repo_id="repo-a", auto_link=False)
+    storage.add_relationship(target, neighbor, "related_to", strength=0.7)
+    storage.add_relationship(target, other, "supports")
+    storage.add_relationship(source, neighbor, "supports")
+    storage.add_relationship(source, other, "supports")
+
+    def edges():
+        return sorted(
+            (r["source_id"], r["target_id"], r["relationship"], r["strength"])
+            for r in storage.get_all_relationships(repo_id="repo-a")
+        )
+
+    before = edges()
+    result = manager.merge([target, source], actor_id="admin")
+    # Re-pointing source -> neighbor replaced the target's inferred related_to edge.
+    assert (target, neighbor, "supports", 1.0) in edges()
+    assert (target, neighbor, "related_to", 0.7) not in edges()
+
+    manager.undo_merge(result["operation_id"], actor_id="admin")
+    # The pre-existing target -> other edge survives, and the replaced edge returns.
+    assert edges() == before
