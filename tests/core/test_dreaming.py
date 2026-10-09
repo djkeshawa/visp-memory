@@ -233,6 +233,22 @@ def test_auto_linked_duplicates_are_merged_automatically(dream):
     ]
 
 
+def test_explicit_related_to_link_to_another_note_still_protects_a_copy(dream):
+    # Only the similarity link between the identical copies themselves is ignored;
+    # a related_to link from a copy to a different note is curated graph knowledge.
+    ids = duplicates(dream)
+    other = dream.storage.store_memory(
+        "Key rotation runbook lives in ops/keys.md", repo_id="repo-a", auto_link=False
+    )
+    dream.storage.add_relationship(ids[1], other, "related_to")
+    report = dream.run("repo-a", actor_id="owner")
+    item = next(p for p in report["proposals"] if p["kind"] == "duplicate")
+    assert not item["automatic"] and item["resolution"] == "pending"
+    with pytest.raises(ValueError, match="from Memories"):
+        dream.review("repo-a", report["id"], item["id"], "merge", actor_id="owner")
+    assert all(dream.storage.get_memory(mid)["status"] == "active" for mid in ids)
+
+
 def test_duplicates_in_different_windows_are_found(dream, monkeypatch):
     import visp_memory.core.dreaming as module
 

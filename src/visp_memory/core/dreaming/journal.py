@@ -113,19 +113,23 @@ def undo(unit, action, actor_id):
 def linked_ids(conn, memory_ids, similarity_relationship="related_to"):
     """Find protected graph/lineage references with a single scan of source lists.
 
-    Inferred similarity links (the ones ``store_memory`` adds for identical content)
-    carry no knowledge of their own, so they do not protect a copy from merging.
+    The similarity link ``store_memory`` infers between identical copies carries no
+    knowledge of its own, so it does not protect them from merging. A similarity link
+    to any other note is graph knowledge and does.
     """
     if not memory_ids:
         return set()
     encoded = json.dumps(memory_ids)
     linked = set()
     for row in conn.execute(
-        """SELECT source_id, target_id FROM relationships
-        WHERE relationship != ? AND (
-            source_id IN (SELECT value FROM json_each(?))
-            OR target_id IN (SELECT value FROM json_each(?)))""",
-        (similarity_relationship, encoded, encoded),
+        """SELECT r.source_id, r.target_id FROM relationships r
+        LEFT JOIN memories a ON a.id = r.source_id LEFT JOIN memories b ON b.id = r.target_id
+        WHERE (r.source_id IN (SELECT value FROM json_each(?))
+            OR r.target_id IN (SELECT value FROM json_each(?)))
+        AND NOT COALESCE(r.relationship = ? AND a.content = b.content
+            AND r.source_id IN (SELECT value FROM json_each(?))
+            AND r.target_id IN (SELECT value FROM json_each(?)), 0)""",
+        (encoded, encoded, similarity_relationship, encoded, encoded),
     ):
         linked.update((row["source_id"], row["target_id"]))
     linked.update(

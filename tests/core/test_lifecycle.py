@@ -372,6 +372,24 @@ def test_merge_undo_restores_relationships_replaced_by_re_pointing(tmp_path):
     assert edges() == before
 
 
+def test_merge_undo_completes_when_a_displaced_edge_neighbor_was_purged(tmp_path):
+    storage, manager = _manager(tmp_path)
+    target = storage.store_memory("Same content", repo_id="repo-a", auto_link=False)
+    source = storage.store_memory("Same content", repo_id="repo-a", auto_link=False)
+    neighbor = storage.store_memory("Neighbor", repo_id="repo-a", auto_link=False)
+    storage.add_relationship(target, neighbor, "related_to", strength=0.7)
+    storage.add_relationship(source, neighbor, "supports")
+    result = manager.merge([target, source], actor_id="admin")
+    manager.soft_delete(neighbor, actor_id="admin", reason="obsolete")
+    manager.purge([neighbor])
+
+    undone = manager.undo_merge(result["operation_id"], actor_id="admin")
+    assert undone["status"] == "undone"
+    assert manager.get_operation(result["operation_id"])["status"] == "undone"
+    assert {storage.get_memory(mid)["status"] for mid in (target, source)} == {"active"}
+    assert not storage.get_all_relationships(repo_id="repo-a")
+
+
 def test_retention_counts_from_the_merge_not_from_creation(tmp_path):
     from datetime import datetime, timedelta, timezone
 

@@ -569,10 +569,13 @@ class MemoryLifecycleManager:
             for relationship in self.storage.get_all_relationships(repo_id=repo_id)
         }
         for relationship in displaced:
-            if self._relationship_key(relationship) not in present:
-                self._copy_relationship(
-                    relationship["source_id"], relationship["target_id"], relationship
-                )
+            ends = (relationship["source_id"], relationship["target_id"])
+            # A neighbour purged since the merge takes its edges with it.
+            if self._relationship_key(relationship) in present or not all(
+                self.storage.peek_memory(memory_id) for memory_id in ends
+            ):
+                continue
+            self._copy_relationship(*ends, relationship)
 
     def _retarget_relationships(
         self,

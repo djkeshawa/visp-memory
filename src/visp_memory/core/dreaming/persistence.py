@@ -176,7 +176,8 @@ class Neo4jUnit:
 
         rows = self.transaction.run(
             "MATCH (a:Memory)-[r]->(b:Memory) WHERE (a.id IN $ids OR b.id IN $ids) "
-            "AND type(r) <> $similarity RETURN a.id AS source, b.id AS target",
+            "AND NOT (type(r) = $similarity AND a.content = b.content "
+            "AND a.id IN $ids AND b.id IN $ids) RETURN a.id AS source, b.id AS target",
             ids=memory_ids,
             similarity=_normalize_relationship_type(self.storage.AUTO_LINK_RELATIONSHIP),
         )
