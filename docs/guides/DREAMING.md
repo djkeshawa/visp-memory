@@ -14,9 +14,9 @@ flowchart TD
     Plan --> Run["Run: apply and journal atomically"]
     Run --> Exact["Eligible exact duplicates
 Merge with originals retained"]
-    Run --> Review["Related, conflicting, or expired notes
+    Run --> Review["Related, conflicting, expired, or protected duplicate notes
 Review suggestions"]
-    Review --> Choice["Copy draft, archive eligible note, or dismiss"]
+    Review --> Choice["Copy draft, merge or archive eligible notes, or dismiss"]
     Exact --> History["Run history and undo"]
     Choice --> History
 ```
@@ -38,14 +38,21 @@ manual run. Broader semantic merging is a review task, not an automatic rewrite.
   suggestion. Archiving requires an explicit review action and is reversible.
 
 Pinned, held, approved, warning/prohibition, derived, and graph-linked notes are protected
-from automatic merging. Semantic knowledge is not automatically merged. Differences in
+from automatic merging. The inferred `related_to` similarity link that saving adds between
+identical notes does not count as a graph link. Semantic knowledge is not automatically
+merged.
+
+Duplicates that are not merged automatically stay as review suggestions. **Merge copies**
+applies the same recoverable merge to them, except for pinned, held, approved,
+warning/prohibition, or graph-linked copies: merge those from Memories, which re-points
+their links. Differences in
 project, author/team, environment, task scope, or validity cannot be collapsed by the
 exact-duplicate path. General source editing and semantic merges remain in Memories.
 
 This first version uses exact content and lexical overlap. It works without Chroma,
 embeddings, a paid provider, or an LLM. It neither calls an LLM nor changes intent status,
 permissions, evidence authority, or workflow readiness. It does not purge memories or
-apply the legacy compounding importance-decay routine.
+apply the importance-decay routine.
 
 ## Scheduling and recovery
 
@@ -63,7 +70,8 @@ No second scheduler service or Docker container is required.
 
 Each cycle scans at most 500 active episodic/semantic memories, compares at most 5,000
 candidate pairs, and returns at most 40 findings. Larger projects rotate through ID-ordered
-batches. Cross-batch duplicates and relationships may need manual review. A limited batch
+batches. Exact duplicates are found across the whole project (up to 2,000 copies per
+cycle); cross-batch relationships may need manual review. A limited batch
 is labeled in the dashboard; an empty batch does not certify the whole store as clean.
 
 The dashboard shows the most recent 20 runs. History and action journals stay in
@@ -88,5 +96,5 @@ return HTTP 409.
 | GET | `/dreaming/{repo_id}/preview` | Read-only memory preview |
 | PUT | `/dreaming/{repo_id}/schedule` | `{ "enabled": true, "interval_hours": 24 }` |
 | POST | `/dreaming/{repo_id}/run` | Run a cycle immediately |
-| POST | `/dreaming/{repo_id}/runs/{run_id}/proposals/{proposal_id}` | `{ "decision": "archive" }` or `"dismiss"` |
+| POST | `/dreaming/{repo_id}/runs/{run_id}/proposals/{proposal_id}` | `{ "decision": "merge" }`, `"archive"`, or `"dismiss"` |
 | POST | `/dreaming/{repo_id}/actions/{action_id}/undo` | Undo an applied change |

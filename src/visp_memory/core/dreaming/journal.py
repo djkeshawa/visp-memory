@@ -108,17 +108,22 @@ def undo(unit, action, actor_id):
     )
 
 
-def linked_ids(conn, memory_ids):
-    """Find protected graph/lineage references with a single scan of source lists."""
+def linked_ids(conn, memory_ids, similarity_relationship="related_to"):
+    """Find protected graph/lineage references with a single scan of source lists.
+
+    Inferred similarity links (the ones ``store_memory`` adds for identical content)
+    carry no knowledge of their own, so they do not protect a copy from merging.
+    """
     if not memory_ids:
         return set()
     encoded = json.dumps(memory_ids)
     linked = set()
     for row in conn.execute(
         """SELECT source_id, target_id FROM relationships
-        WHERE source_id IN (SELECT value FROM json_each(?))
-        OR target_id IN (SELECT value FROM json_each(?))""",
-        (encoded, encoded),
+        WHERE relationship != ? AND (
+            source_id IN (SELECT value FROM json_each(?))
+            OR target_id IN (SELECT value FROM json_each(?)))""",
+        (similarity_relationship, encoded, encoded),
     ):
         linked.update((row["source_id"], row["target_id"]))
     linked.update(

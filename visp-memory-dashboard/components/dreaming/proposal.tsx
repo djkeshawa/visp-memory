@@ -11,7 +11,7 @@ const labels = {
 export function DreamProposalCard({ item, busy, onReview, onUndo }: {
   item: DreamProposal
   busy: boolean
-  onReview?: (decision: "archive" | "dismiss") => void
+  onReview?: (decision: "merge" | "archive" | "dismiss") => void
   onUndo?: () => void
 }) {
   const [copyState, setCopyState] = useState("")
@@ -45,6 +45,7 @@ export function DreamProposalCard({ item, busy, onReview, onUndo }: {
     </details>}
     <div className="mt-4 flex flex-wrap gap-2">
       {item.resolution === "pending" && onReview && <>
+        {item.kind === "duplicate" && <Button size="sm" disabled={busy} onClick={() => onReview("merge")}>Merge copies</Button>}
         {item.kind === "expired" && <Button size="sm" disabled={busy} onClick={() => onReview("archive")}>Archive this memory</Button>}
         <Button size="sm" variant="outline" disabled={busy} onClick={() => onReview("dismiss")}>Dismiss suggestion</Button>
       </>}

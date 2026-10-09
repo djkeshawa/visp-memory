@@ -83,3 +83,20 @@ async def test_schedule_rejects_unbounded_frequency(client):
         "/dreaming/repo-a/schedule", headers=HEADERS, json={"enabled": True, "interval_hours": 0}
     )
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_review_merge_decision_is_accepted_and_respects_protection(client):
+    ids = [
+        app.state.storage.store_memory(
+            "Pinned backup note", repo_id="repo-a", auto_link=False, metadata={"hold": True}
+        )
+        for _ in range(2)
+    ]
+    run = (await client.post("/dreaming/repo-a/run", headers=HEADERS)).json()
+    item = run["proposals"][0]
+    path = f"/dreaming/repo-a/runs/{run['id']}/proposals/{item['id']}"
+    # Held copies stay protected even from an explicit review merge.
+    refused = await client.post(path, headers=HEADERS, json={"decision": "merge"})
+    assert refused.status_code == 409
+    assert all(app.state.storage.get_memory(mid)["status"] == "active" for mid in ids)

@@ -21,7 +21,7 @@ class Schedule(BaseModel):
 
 class Review(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    decision: Literal["archive", "dismiss"]
+    decision: Literal["merge", "archive", "dismiss"]
 
 
 def service(request, repo_id, user):

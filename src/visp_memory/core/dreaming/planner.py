@@ -9,6 +9,8 @@ from itertools import combinations
 from visp_memory.core.clock import parse_utc
 
 SCAN_LIMIT = 500
+# Exact duplicates are found across the whole project, not only the current window.
+DUPLICATE_SCAN_LIMIT = 2000
 PAIR_LIMIT = 5000
 PROPOSAL_LIMIT = 40
 STOPWORDS = frozenset(
@@ -93,22 +95,36 @@ def proposal(kind, memories, reason, **extra):
     }
 
 
-def plan(memories, linked_ids, now):
+def review_merge_blocker(memories, linked_ids):
+    """Why a reviewer may not merge these copies here, or None when they may.
+
+    Merging only changes status, so a copy's own graph links would stop being served;
+    those copies and protected notes are merged from Memories, which re-points links.
+    """
+    if any(protected(m) for m in memories):
+        return "Pinned, held, approved or prohibition notes are never merged by dreaming"
+    if any(m["id"] in linked_ids for m in memories):
+        return "Copies with graph links or derived notes must be merged from Memories"
+    return None
+
+
+def plan(memories, linked_ids, now, duplicates=None):
+    """Propose changes for a window of ``memories``.
+
+    ``duplicates`` holds the project's exact-duplicate candidates; it defaults to the
+    window. ``linked_ids`` must cover both.
+    """
     proposals = []
     groups = defaultdict(list)
-    for memory in memories:
+    for memory in memories if duplicates is None else duplicates:
         if memory.get("content", "").strip():
             groups[safe_duplicate_key(memory)].append(memory)
     for group in groups.values():
         if len(group) < 2:
             continue
         group.sort(key=lambda m: (-int(m.get("access_count") or 0), m["id"]))
-        eligible = all(
-            m.get("layer") == "episodic"
-            and not protected(m)
-            and not m.get("source_ids")
-            and m["id"] not in linked_ids
-            for m in group
+        eligible = review_merge_blocker(group, linked_ids) is None and all(
+            m.get("layer") == "episodic" and not m.get("source_ids") for m in group
         )
         proposals.append(
             proposal(
