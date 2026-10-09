@@ -224,3 +224,21 @@ def test_task_brief_filters_contradiction_other_side_by_runtime_scope(tmp_path):
 
     assert selected in {item["memory_id"] for item in brief["citations"]}
     assert brief["contradictions"] == []
+
+
+def test_task_with_no_shared_topic_matches_no_intent(tmp_path):
+    from visp_memory.core.task_intents import select_intent
+
+    storage = LocalStorage(tmp_path)
+    intent_id, _, _ = _store_fixture(storage)
+    compiler = TaskMemoryBriefCompiler(storage)
+
+    unrelated = compiler.prepare("Change the payment gateway", repo_id="repo-a")
+    assert unrelated["intent"] is None
+    assert any("No active intent" in unknown for unknown in unrelated["unknowns"])
+    related = compiler.prepare("Fix the account login redirect", repo_id="repo-a")
+    assert related["intent"]["id"] == intent_id
+    # Stop words alone are not a shared topic.
+    intent = {"id": "i1", "description": "Use the cache for this"}
+    assert select_intent([intent], "use the database for this", intent_id=None) is None
+

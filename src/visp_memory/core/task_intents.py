@@ -3,6 +3,33 @@
 import re
 from typing import Any, Optional
 
+STOP_WORDS = frozenset({
+    "about",
+    "after",
+    "again",
+    "also",
+    "and",
+    "are",
+    "before",
+    "build",
+    "can",
+    "for",
+    "from",
+    "have",
+    "into",
+    "make",
+    "need",
+    "our",
+    "that",
+    "the",
+    "their",
+    "this",
+    "use",
+    "using",
+    "want",
+    "with",
+})
+
 
 def unique_strings(values: list[str]) -> list[str]:
     return list(dict.fromkeys(value.strip() for value in values if value and value.strip()))
@@ -22,6 +49,11 @@ def terms(value: str) -> list[str]:
     return re.findall(r"[a-z0-9_./-]+", value.casefold())
 
 
+def topic_terms(value: str) -> set[str]:
+    """Terms that can tie a task to an intent: no stop words or one- or two-letter tokens."""
+    return {term for term in terms(value) if len(term) > 2 and term not in STOP_WORDS}
+
+
 def select_intent(
     intents: list[dict[str, Any]], task: str, *, intent_id: Optional[str]
 ) -> Optional[dict[str, Any]]:
@@ -29,7 +61,7 @@ def select_intent(
         return next((intent for intent in intents if intent.get("id") == intent_id), None)
     if not intents:
         return None
-    task_terms = set(terms(task))
+    task_terms = topic_terms(task)
 
     def score(intent: dict[str, Any]) -> tuple[float, int, str]:
         context = intent.get("context") or {}
@@ -40,11 +72,13 @@ def select_intent(
                 *as_strings(context.get("acceptance_criteria")),
             ]
         )
-        intent_terms = set(terms(searchable))
-        overlap = len(task_terms.intersection(intent_terms)) / max(len(task_terms), 1)
+        overlap = len(task_terms & topic_terms(searchable)) / max(len(task_terms), 1)
         return overlap, int(intent.get("priority") or 0), str(intent.get("created_at") or "")
 
-    return max(intents, key=score)
+    best = max(intents, key=score)
+    # Priority and recency only break ties between intents the task actually names;
+    # with no shared topic term the brief reports that no intent matched.
+    return best if score(best)[0] > 0 else None
 
 
 def intent_payload(intent: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:

@@ -67,32 +67,6 @@ ACTION_TERMS = {
     "deploy": {"deploy", "release", "publish", "docker", "rollout"},
     "document": {"document", "explain", "readme", "guide"},
 }
-STOP_WORDS = {
-    "about",
-    "after",
-    "again",
-    "also",
-    "and",
-    "are",
-    "before",
-    "build",
-    "can",
-    "for",
-    "from",
-    "have",
-    "into",
-    "make",
-    "need",
-    "our",
-    "that",
-    "the",
-    "their",
-    "this",
-    "use",
-    "using",
-    "want",
-    "with",
-}
 
 
 class TaskMemoryBriefCompiler:
@@ -145,7 +119,7 @@ class TaskMemoryBriefCompiler:
                 term
                 for term in terms
                 if len(term) > 2
-                and term not in STOP_WORDS
+                and term not in task_intents.STOP_WORDS
                 and "/" not in term
                 and "\\" not in term
             ]
