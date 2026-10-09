@@ -11,6 +11,35 @@ tag has no section yet) as the GitHub release body. See
 
 ## [Unreleased]
 
+### Upgrading
+
+- Retention purges a merged, deleted or superseded memory only when its transition
+  time (`merged_at`, `deleted_at`, `invalid_at`) was recorded; it no longer counts from
+  `created_at`. Rows merged by dreaming before this release have no `merged_at` and
+  are skipped by retention; purge them explicitly if needed.
+- A task brief no longer reports an active intent unless the task shares a topic word
+  with it; otherwise it lists the missing intent under unknowns.
+
+### Added
+
+- Dreaming reviews accept `{ "decision": "merge" }` for pending duplicate proposals,
+  shown as **Merge copies** in the dashboard. Protected and explicitly linked copies
+  are still merged from Memories.
+
+### Fixed
+
+- Importance decay no longer compounds: repeated runs at the same time leave a memory
+  unchanged, and each run decays only the idle time since the last access or decay.
+  Decay covers every memory instead of the newest 1,000 per layer.
+- Dreaming merges exact duplicates that saving had auto-linked with `related_to`, and
+  finds duplicates across the whole project rather than one 500-memory batch.
+- Undoing a manual merge restores `related_to` edges that re-pointing replaced, and no
+  longer deletes a relationship the merge target already had.
+- Dreaming status changes update the vector index, so merged and archived memories
+  stop taking vector search slots.
+- Task briefs read the relationship graph once, read contradiction targets without
+  counting an access, and keep the same fingerprint as trust scores decay.
+
 ## [0.8.1] - 2026-10-09
 
 Fixes from a codebase audit (#82), chiefly team visibility on a shared server, plus
