@@ -32,6 +32,23 @@ from visp_memory.core.trust import TrustFilterResult, filter_unsolicited
 from visp_memory.core.turn_keys import BRIEF_TURN_KEYS, key_passages
 
 SECTION_ORDER = ("warnings", "decisions", "knowledge", "history")
+_URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://\S+")
+_FILE_EXTENSION_RE = re.compile(r"\.[A-Za-z0-9]*[A-Za-z][A-Za-z0-9]*$")
+_UNKNOWNS_HEADING = "\n\n## Unknowns"
+
+
+def _looks_like_path(reference: str) -> bool:
+    """Whether bare prose like ``a/b`` names a file rather than "read/write" or "1/2".
+
+    A path ends in a file with an extension, ends in a separator, starts relative
+    (``./``, ``../``, ``~/``), or has at least three segments that are not all numbers.
+    """
+    segments = re.split(r"[/\\]", reference)
+    if _FILE_EXTENSION_RE.search(segments[-1]):
+        return True
+    if not segments[-1] or segments[0] in {".", "..", "~"}:
+        return True
+    return len(segments) >= 3 and not all(segment.isdigit() for segment in segments)
 CONTRADICTION_RELATIONSHIPS = frozenset({"contradicts", "conflicts_with"})
 # Both sets carry the governed belief type first and keep the pre-v4 words after
 # it. A brief is a read over whatever is already stored, so dropping the legacy
@@ -100,10 +117,22 @@ class TaskMemoryBriefCompiler:
                 action = candidate
                 action_score = score
 
-        code_references = re.findall(r"`([^`\r\n]{1,200})`", task)
-        path_references = re.findall(
-            r"(?:[A-Za-z0-9_.-]+[/\\])+[A-Za-z0-9_.\\/-]+", task
-        )
+        code_references = [
+            reference
+            for reference in re.findall(r"`([^`\r\n]{1,200})`", task)
+            if "://" not in reference
+        ]
+        # Bare prose is held to a stricter shape than a backticked reference, so
+        # "read/write", "TCP/IP", "1/2" and URLs are not mistaken for files.
+        path_references = [
+            reference.rstrip(".")
+            for reference in re.findall(
+                r"(?:[A-Za-z0-9_.~-]+[/\\])+[A-Za-z0-9_.\\/-]*", _URL_RE.sub(" ", task)
+            )
+        ]
+        path_references = [
+            reference for reference in path_references if _looks_like_path(reference)
+        ]
         inferred_files = [
             reference
             for reference in [*code_references, *path_references]
@@ -352,17 +381,44 @@ class TaskMemoryBriefCompiler:
         return "\n".join(lines).strip()
 
     @staticmethod
-    def _truncate_to_budget(text: str, token_budget: int) -> tuple[str, bool]:
-        if estimate_tokens(text) <= token_budget:
-            return text, False
+    def _char_truncate(text: str, token_budget: int) -> str:
         low, high = 0, len(text)
         while low < high:
             middle = (low + high + 1) // 2
-            if estimate_tokens(text[:middle]) <= max(token_budget - 1, 1):
+            if estimate_tokens(text[:middle]) <= max(token_budget, 1):
                 low = middle
             else:
                 high = middle - 1
-        return text[:low].rstrip() + "...", True
+        return text[:low].rstrip()
+
+    @classmethod
+    def _truncate_to_budget(cls, text: str, token_budget: int) -> tuple[str, bool]:
+        if estimate_tokens(text) <= token_budget:
+            return text, False
+        # The Unknowns section says what the brief could not establish; cutting it
+        # off would present a partial brief as complete. It is kept whole and the
+        # rest gives way by whole lines; only the Task line is ever cut mid-line.
+        head, heading, unknowns = text.partition(_UNKNOWNS_HEADING)
+        tail = heading + unknowns
+        lines = head.split("\n")
+
+        def joined(kept: list[str]) -> str:
+            body = "\n".join(kept).rstrip()
+            return (body + "\n..." if body else "...") + tail
+
+        while lines and estimate_tokens(joined(lines)) > token_budget:
+            if lines[-1].startswith("Task: "):
+                room = token_budget - estimate_tokens(joined(lines[:-1])) - 1
+                if room > 2:
+                    lines[-1] = cls._char_truncate(lines[-1], room) + "..."
+                    if estimate_tokens(joined(lines)) <= token_budget:
+                        break
+            lines.pop()
+        result = joined(lines)
+        if estimate_tokens(result) > token_budget:
+            # Only an Unknowns section larger than the whole budget gets here.
+            result = cls._char_truncate(text, max(token_budget - 1, 1)) + "..."
+        return result, True
 
     def prepare(
         self,

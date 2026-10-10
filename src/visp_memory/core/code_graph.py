@@ -502,6 +502,8 @@ def collapse_to_file_graph(projection: Mapping[str, Any]) -> FileGraph:
             if kind_code is not None and 0 <= kind_code < len(node_kinds)
             else None
         )
+        if not isinstance(kind, str):
+            kind = None  # a non-string dictionary entry names no kind
 
         if path_code is not None:
             if not 0 <= path_code < len(paths):
@@ -529,6 +531,8 @@ def collapse_to_file_graph(projection: Mapping[str, Any]) -> FileGraph:
         if kind_code is None or not 0 <= kind_code < len(edge_kinds):
             continue
         kind = edge_kinds[kind_code]
+        if not isinstance(kind, str):
+            continue
         is_dependency = kind in DEPENDENCY_EDGE_KINDS
         is_test = kind in TEST_EDGE_KINDS
         if not is_dependency and not is_test:
@@ -625,7 +629,8 @@ def load_projection(path: Optional[Path]) -> GraphLoad:
         return GraphLoad(
             GraphState.UNREADABLE, f"intel projection is unreadable: {error}", path=str(resolved)
         )
-    except json.JSONDecodeError as error:
+    except (json.JSONDecodeError, RecursionError) as error:
+        # RecursionError: nesting deeper than the parser will follow is not a projection.
         return GraphLoad(
             GraphState.MALFORMED, f"intel projection is not JSON: {error}", path=str(resolved)
         )
@@ -682,6 +687,13 @@ def load_projection(path: Optional[Path]) -> GraphLoad:
         graph = collapse_to_file_graph(raw)
     except ProjectionError as error:
         return GraphLoad(GraphState.MALFORMED, str(error), path=str(resolved))
+    except (TypeError, ValueError, RecursionError) as error:
+        # The contract is "never raises": any shape the collapse cannot read is malformed.
+        return GraphLoad(
+            GraphState.MALFORMED,
+            f"intel projection could not be collapsed: {type(error).__name__}",
+            path=str(resolved),
+        )
 
     if graph.is_empty:
         return GraphLoad(

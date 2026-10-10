@@ -29,6 +29,8 @@ DEFAULT_EMBEDDING_MODELS = {
     "ollama": "nomic-embed-text",
 }
 OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
+# Bound every Ollama embedding request; matches the LLMConfig.timeout_seconds default.
+OLLAMA_TIMEOUT_SECONDS = 30.0
 
 _CONFIG_DEFAULT_MODEL = DEFAULT_EMBEDDING_MODELS["sentence-transformers"]
 
@@ -162,13 +164,22 @@ class OllamaProvider(EmbeddingProvider):
 
     provider_name = "ollama"
 
-    def __init__(self, model: str = DEFAULT_EMBEDDING_MODELS["ollama"], host: Optional[str] = None):
+    def __init__(
+        self,
+        model: str = DEFAULT_EMBEDDING_MODELS["ollama"],
+        host: Optional[str] = None,
+        timeout: float = OLLAMA_TIMEOUT_SECONDS,
+    ):
         try:
             import ollama
         except ImportError:
             raise ImportError("ollama required: pip install ollama")
 
-        self._client = ollama.Client(host=host) if host and hasattr(ollama, "Client") else ollama
+        # The module-level client has no timeout, so a stalled server would hang
+        # every embedding call; always use a bounded client when one is available.
+        self._client = (
+            ollama.Client(host=host, timeout=timeout) if hasattr(ollama, "Client") else ollama
+        )
         self.model = model
         self.host = host
 

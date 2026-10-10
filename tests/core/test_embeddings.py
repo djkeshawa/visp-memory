@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from visp_memory.config import EmbeddingConfig
-from visp_memory.core.embeddings import get_embedding_provider
+from visp_memory.core.embeddings import OLLAMA_TIMEOUT_SECONDS, get_embedding_provider
 
 
 def test_auto_embeddings_prefer_openai_when_key_is_available(monkeypatch):
@@ -73,7 +73,9 @@ def test_cloud_embeddings_fall_back_to_ollama_when_cloud_fails(monkeypatch):
 
     assert provider.provider_name == "ollama"
     assert provider.model == "nomic-embed-text"
-    ollama_module.Client.assert_called_once_with(host="http://ollama:11434")
+    ollama_module.Client.assert_called_once_with(
+        host="http://ollama:11434", timeout=OLLAMA_TIMEOUT_SECONDS
+    )
 
 
 def test_auto_embeddings_fall_back_to_noop_when_cloud_and_ollama_fail(monkeypatch):
@@ -201,7 +203,9 @@ def test_auto_embeddings_use_ollama_host_with_provider_default_model(monkeypatch
     assert provider.provider_name == "ollama"
     assert provider.model == "nomic-embed-text"
     assert provider.dimension == 3
-    ollama_module.Client.assert_called_once_with(host="http://ollama:11434")
+    ollama_module.Client.assert_called_once_with(
+        host="http://ollama:11434", timeout=OLLAMA_TIMEOUT_SECONDS
+    )
     ollama_client.embeddings.assert_called_with(model="nomic-embed-text", prompt="test")
 
 

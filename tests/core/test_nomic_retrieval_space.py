@@ -18,7 +18,7 @@ def test_nomic_storage_uses_distinct_retrieval_inputs(tmp_path, monkeypatch, mod
         return {"embedding": [1.0, 0.0]}
 
     client = SimpleNamespace(embeddings=embeddings)
-    monkeypatch.setitem(sys.modules, "ollama", SimpleNamespace(Client=lambda host: client))
+    monkeypatch.setitem(sys.modules, "ollama", SimpleNamespace(Client=lambda host, **_: client))
     provider = OllamaProvider(model=model, host="http://local-model")
     storage = LocalStorage(tmp_path, embedding_fn=provider.embed)
     prompts.clear()
@@ -43,7 +43,7 @@ def test_other_ollama_models_keep_existing_embedding_space(tmp_path, monkeypatch
         sys.modules,
         "ollama",
         SimpleNamespace(
-            Client=lambda host: SimpleNamespace(embeddings=embeddings),
+            Client=lambda host, **_: SimpleNamespace(embeddings=embeddings),
         ),
     )
     provider = OllamaProvider(model="other-embedding-model", host="http://local-model")

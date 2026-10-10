@@ -65,6 +65,15 @@ class OllamaClient:
             raise ImportError("ollama required: pip install ollama")
         self.model = model
         self.client = ollama
+        self._timed_clients = {}
+
+    def _client_for(self, timeout):
+        """A client bounded by ``timeout`` so a stalled local model cannot hang the caller."""
+        if timeout is None or not hasattr(self.client, "Client"):
+            return self.client
+        if timeout not in self._timed_clients:
+            self._timed_clients[timeout] = self.client.Client(timeout=timeout)
+        return self._timed_clients[timeout]
 
     def completion(self, prompt: str, system_prompt: str = None, **kwargs) -> str:
         messages = []
@@ -73,12 +82,12 @@ class OllamaClient:
         messages.append({"role": "user", "content": prompt})
 
         max_tokens = kwargs.pop("max_output_tokens", kwargs.pop("max_tokens", None))
-        kwargs.pop("timeout", None)
+        client = self._client_for(kwargs.pop("timeout", None))
         if max_tokens:
             options = dict(kwargs.pop("options", {}) or {})
             options["num_predict"] = max_tokens
             kwargs["options"] = options
-        response = self.client.chat(model=self.model, messages=messages, **kwargs)
+        response = client.chat(model=self.model, messages=messages, **kwargs)
         return response["message"]["content"].strip()
 
 

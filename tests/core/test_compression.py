@@ -51,6 +51,9 @@ class _FakeStorage:
         self.relationships.append(kwargs)
         return f"relationship-{len(self.relationships)}"
 
+    def get_related_memories(self, memory_id: str, relationship: str = None):
+        return []
+
 
 def _iso_days_ago(days: int) -> str:
     return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()

@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
-from visp_memory.core.beliefs import map_producer_belief_type
+from visp_memory.core.beliefs import BeliefType, EpistemicStatus, map_producer_belief_type
 from visp_memory.core.clock import utc_now
 from visp_memory.core.eligibility import normalize_optional_scope_values, require_repo_id
 from visp_memory.core.ranking import DECAYED_AT_KEY, decay_reference_at, projected_importance
@@ -72,6 +72,28 @@ def _shared_compression_scope(
             inherited[field] = list(normalized[0])
 
     return repo_ids[0], inherited
+
+
+def _is_hypothesis(memory: Dict[str, Any]) -> bool:
+    """Whether a row is a guess; a guess must never be promoted into a principle (MG-048)."""
+    hypothesis = BeliefType.HYPOTHESIS.value
+    return (
+        str(memory.get("belief_type") or "").casefold() == hypothesis
+        or str(memory.get("category") or "").casefold() == hypothesis
+        or str(memory.get("epistemic_status") or "").casefold()
+        == EpistemicStatus.HYPOTHESIZED.value
+    )
+
+
+def _is_principle(memory: Dict[str, Any]) -> bool:
+    """Whether a row is a Level-2 principle (stored as category ``procedure``)."""
+    metadata = memory.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    if metadata.get("legacy_category") == "principle" or metadata.get("level") == 2:
+        return True
+    tags = memory.get("tags") or []
+    return isinstance(tags, (list, tuple, set)) and "principle" in tags
 
 
 @dataclass(frozen=True)
@@ -423,6 +445,10 @@ class MemoryCompressor:
         """
         if not memories or len(memories) < 3:
             return None
+        # A principle is stored as a canonical procedure; built from guesses it
+        # would launder hypotheses into a non-hypothesis belief (MG-048).
+        if any(_is_hypothesis(m) for m in memories):
+            return None
 
         write_channel = WriteChannel.COMPRESSION
         canonical_inputs = _canonical_compression_inputs(
@@ -431,6 +457,8 @@ class MemoryCompressor:
         if canonical_inputs is None:
             return None
         memories = canonical_inputs.memories
+        if any(_is_hypothesis(m) for m in memories):
+            return None
         source_ids = canonical_inputs.source_ids
         source_evidence = canonical_inputs.evidence_ids
         repo_id = canonical_inputs.repo_id
@@ -515,11 +543,6 @@ class MemoryCompressor:
 
         # --- Level 1: Episodic -> Semantic ---
 
-        # Get uncompressed episodes
-        episodes = self.storage.list_memories(
-            layer="episodic", limit=500, order_by="created_at ASC"
-        )
-
         # Filter to old episodes not yet compressed
         from datetime import timezone
 
@@ -532,7 +555,10 @@ class MemoryCompressor:
             # Skip episodes we can't date rather than crashing on them.
             return created is not None and created < cutoff
 
-        old_episodes = [ep for ep in episodes if _is_old_uncompressed(ep)]
+        # Page through the whole layer: a fixed first page of the oldest rows let
+        # uncompressible episodes starve every newer one. Only candidates are kept.
+        old_episodes = [ep for ep in self._iter_layer("episodic") if _is_old_uncompressed(ep)]
+        old_episodes.sort(key=lambda ep: self._parse_datetime(ep.get("created_at")))
 
         if len(old_episodes) >= min_episodes:
             # Group only records whose repository and entity scope can be inherited.
@@ -561,12 +587,13 @@ class MemoryCompressor:
 
         # --- Level 2: Semantic -> Principle ---
 
-        # Get all semantic memories (excluding principles)
-        semantic = self.storage.list_memories(layer="semantic", limit=1000)
+        # Get all semantic facts (excluding principles and guesses)
         facts = [
             m
-            for m in semantic
-            if m.get("category") != "principle" and (m.get("metadata") or {}).get("level", 1) == 1
+            for m in self._iter_layer("semantic")
+            if not _is_principle(m)
+            and not _is_hypothesis(m)
+            and (m.get("metadata") or {}).get("level", 1) == 1
         ]
 
         # Cluster them (naive approach: group by auto-extracted topics/tags would be better)
@@ -586,14 +613,23 @@ class MemoryCompressor:
             compatible_groups[key].append(m)
 
         for items in compatible_groups.values():
-            if len(items) >= 5:  # Need more evidence for a principle
-                # Only check items not already supporting a principle to avoid loops
-                # (Ideally we checks relationships, but simplified for MVP)
+            if len(items) < 5:  # Need more evidence for a principle
+                continue
+            # A fact that already supports a live principle was consolidated by an
+            # earlier run; compressing it again only mints a duplicate principle.
+            items = [m for m in items if not self._supports_principle(m["id"])]
+            if len(items) >= 5:
                 principle_id = self.compress_semantic_to_principle(items)
                 if principle_id:
                     created.append(principle_id)
 
         return created
+
+    def _supports_principle(self, memory_id: str) -> bool:
+        """Whether ``memory_id`` already has a servable ``supports_principle`` edge."""
+        return bool(
+            self.storage.get_related_memories(memory_id, relationship="supports_principle")
+        )
 
     def _iter_layer(self, layer: str):
         """Yield every active memory in ``layer`` using an ID keyset cursor."""
