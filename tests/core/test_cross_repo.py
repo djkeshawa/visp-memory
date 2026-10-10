@@ -7,9 +7,17 @@ class FakeStorage:
         self.memories_by_repo = memories_by_repo or {}
         self.listed_repo_ids = []
 
-    def list_memories(self, repo_id=None, limit=50):
-        self.listed_repo_ids.append(repo_id)
-        return list(self.memories_by_repo.get(repo_id, []))
+    def list_memories(self, repo_id=None, layer=None, category=None, limit=50):
+        # Context reads several filtered pages per repository; record each
+        # repository once, in the order it was visited.
+        if not self.listed_repo_ids or self.listed_repo_ids[-1] != repo_id:
+            self.listed_repo_ids.append(repo_id)
+        return [
+            memory
+            for memory in self.memories_by_repo.get(repo_id, [])
+            if (layer is None or memory.get("layer") == layer)
+            and (category is None or memory.get("category") == category)
+        ][:limit]
 
 
 class FakeRepoManager:
