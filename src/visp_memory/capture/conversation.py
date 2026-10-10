@@ -12,6 +12,7 @@ from visp_memory.capture.git import CaptureManifest, capture_content_hash
 from visp_memory.core.beliefs import map_producer_belief_type
 from visp_memory.core.llm import LLMClient, create_llm_client
 from visp_memory.core.memory import Memory
+from visp_memory.core.model_router import ModelRouter
 from visp_memory.core.source_passages import turn_ranges, validate_source_quote
 from visp_memory.core.trust import WriteChannel
 from visp_memory.quality.secrets import redact_for_storage
@@ -42,10 +43,15 @@ class ConversationCapture:
                 "No LLM provider configured for conversation capture. "
                 "Set VISP_MEMORY_CAPTURE_LLM_PROVIDER."
             )
+        # Never hand this vendor another vendor's credential (the embedding key
+        # was passed here before): the shared LLM key only when it is for this
+        # provider, otherwise the provider's own environment variable.
+        llm = self.memory.config.llm
+        api_key = llm.api_key if llm.provider == provider else None
         self._client = create_llm_client(
             provider=provider,
             model=self.config.llm_model or self.memory.config.compression.llm_model,
-            api_key=self.memory.config.embedding.api_key,
+            api_key=api_key or ModelRouter._provider_api_key(provider),
         )
         return self._client
 
@@ -54,14 +60,23 @@ class ConversationCapture:
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"File not found: {path}")
+        # The display name stays the file name; capture identity is the resolved
+        # path, so two `chat.md` files in different directories never share state.
         return self.parse_text(
-            path.read_text(encoding="utf-8"), source=path.name, dry_run=dry_run
+            path.read_text(encoding="utf-8"), source=path.name, dry_run=dry_run,
+            source_key=str(path.resolve()),
         )
 
     def parse_text(
-        self, text: str, source: str = "conversation", dry_run: bool = False
+        self, text: str, source: str = "conversation", dry_run: bool = False,
+        source_key: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Extract source-backed memories from every bounded input chunk."""
+        """Extract source-backed memories from every bounded input chunk.
+
+        ``source`` is the name shown to the model and stored with each episode;
+        ``source_key`` (default: ``source``) identifies the input for manifests.
+        """
+        display, source = source, source_key or source
         text, _ = redact_for_storage(text, None)
         manifest = CaptureManifest(self.memory)
         content_hash = capture_content_hash({"source": source, "text": text})
@@ -88,7 +103,7 @@ class ConversationCapture:
                 source_turns=descriptors, extraction_version=EXTRACTION_VERSION,
             )
         source_ids = self._prepare_source_episodes(
-            text, source, content_hash, descriptors, existing, dry_run, manifest, overall_key
+            text, display, content_hash, descriptors, existing, dry_run, manifest, overall_key
         )
         stable_to_actual = dict(zip((d["stable_id"] for d in descriptors), source_ids))
         spans = self._chunk_spans(text, descriptors)
@@ -126,7 +141,7 @@ class ConversationCapture:
                 continue
             try:
                 data = self._decode_response(client.completion(
-                    prompt=self._prompt(text, source, descriptors, start, end),
+                    prompt=self._prompt(text, display, descriptors, start, end),
                     system_prompt=self._system_prompt(),
                 ))
             except Exception as exc:

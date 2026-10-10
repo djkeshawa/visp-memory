@@ -14,7 +14,9 @@ Supports:
 
 import hashlib
 import json
+import os
 import re
+import tempfile
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -146,9 +148,22 @@ class CaptureManifest:
         if self.path is None:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
-            json.dumps(self.data, indent=2, sort_keys=True, default=str), encoding="utf-8"
+        # Write-then-rename: hooks capture in background processes, and a reader
+        # must never see (and then discard) a half-written manifest.
+        payload = json.dumps(self.data, indent=2, sort_keys=True, default=str)
+        fd, temp_name = tempfile.mkstemp(
+            prefix=f".{self.path.name}.", suffix=".tmp", dir=self.path.parent
         )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(payload)
+            os.replace(temp_name, self.path)
+        except BaseException:
+            try:
+                os.unlink(temp_name)
+            except OSError:
+                pass
+            raise
 
 
 # Commits are mined from the repository itself, which is the ground truth being
@@ -379,9 +394,8 @@ class GitCapture:
         Returns:
             Dict mapping hook name to success status
         """
-        # ``Repo.git_dir`` is a ``str`` in GitPython, so wrap it before using ``/``.
-        hooks_dir = Path(self.repo.git_dir) / "hooks"
-        hooks_dir.mkdir(exist_ok=True)
+        hooks_dir = self._hooks_dir()
+        hooks_dir.mkdir(parents=True, exist_ok=True)
 
         results = {}
 
@@ -404,7 +418,7 @@ class GitCapture:
         Returns:
             Dict mapping hook name to success status
         """
-        hooks_dir = Path(self.repo.git_dir) / "hooks"
+        hooks_dir = self._hooks_dir()
         results = {}
 
         for hook_name in ["post-commit", "post-merge"]:
@@ -427,6 +441,21 @@ class GitCapture:
     # Private Methods
     # =========================================================================
 
+    def _hooks_dir(self) -> Path:
+        """The directory git actually runs hooks from.
+
+        ``git_dir/hooks`` is wrong for a linked worktree (hooks live in the common
+        dir) and whenever ``core.hooksPath`` is set; ``--git-path hooks`` honours
+        both. Its answer is relative to the directory git ran in.
+        """
+        # ``Repo.git_dir`` is a ``str`` in GitPython, so wrap it before using ``/``.
+        base = Path(self.repo.working_tree_dir or self.repo.git_dir)
+        try:
+            resolved = Path(self.repo.git.rev_parse("--git-path", "hooks").strip())
+        except git.GitCommandError:
+            return Path(self.repo.git_dir) / "hooks"
+        return resolved if resolved.is_absolute() else base / resolved
+
     def _parse_commit_message(self, message: str) -> tuple[str, str]:
         """
         Parse commit message to extract type and clean message.
@@ -436,15 +465,14 @@ class GitCapture:
         Returns:
             (category, clean_message)
         """
-        # Try conventional commit format
-        match = re.match(r"^(\w+)(?:\([^)]+\))?: (.+)", message)
+        # Conventional commit format, including the breaking-change ``!``. Only a
+        # known type counts: "WIP: ..." or "Note: ..." is prose, not a type.
+        match = re.match(r"^(\w+)(?:\([^)]+\))?!?: (.+)", message)
+        commit_type = match.group(1).upper() if match else None
 
-        if match:
-            commit_type = match.group(1).upper()
+        if match and commit_type in CommitType.__members__:
             clean_message = match.group(2)
-
-            # Map to episode category
-            category = CommitType.__members__.get(commit_type, CommitType.FEAT).value
+            category = CommitType.__members__[commit_type].value
         else:
             # No conventional format, infer from keywords
             clean_message = message.split("\n")[0]  # First line
@@ -601,8 +629,12 @@ class GitCapture:
 # visp-memory auto-capture hook
 # Automatically records commits to memory
 
+# Resolve the commit now: a background job that reads HEAD later would see a
+# newer commit after rapid commits and drop this one.
+ref=$(git rev-parse HEAD 2>/dev/null) || exit 0
+
 # Run visp-memory capture in background to avoid slowing down commits
-(visp-memory capture git commit --ref HEAD &) 2>/dev/null
+(visp-memory capture git commit --ref "$ref" >/dev/null 2>&1 &)
 
 exit 0
 """
@@ -614,7 +646,7 @@ exit 0
 # Automatically records merges to memory
 
 # Run visp-memory capture in background
-(visp-memory capture git merge &) 2>/dev/null
+(visp-memory capture git merge >/dev/null 2>&1 &)
 
 exit 0
 """

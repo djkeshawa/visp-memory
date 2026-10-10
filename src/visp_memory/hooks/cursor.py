@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict
 
 from visp_memory.core.clock import utc_now
-from visp_memory.core.instruction_markers import CURSOR_CONTEXT_MARKER
+from visp_memory.core.instruction_markers import CURSOR_CONTEXT_MARKER, neutralize_markers
 from visp_memory.core.verbs import (
     CAPTURE_VERBS,
     INTENT_LIFECYCLE_HEADLINE,
@@ -104,7 +104,7 @@ Memory context is automatically injected below:
         if self.dry_run:
             return True
         # Get memory context
-        context = self.get_memory_context(files=files, task=task)
+        context = neutralize_markers(self.get_memory_context(files=files, task=task))
 
         # Format for .cursorrules (plain text, no markdown decorations)
         formatted_context = f"""## Memory Context

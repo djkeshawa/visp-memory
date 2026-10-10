@@ -202,7 +202,7 @@ def bootstrap_project(
     try:
         import git  # noqa: F401  (presence check)
 
-        from visp_memory.capture.git import GitCapture
+        from visp_memory.capture.git import CaptureManifest, GitCapture, capture_content_hash
     except ImportError:
         report.errors.append(
             "git capture unavailable — install with: pip install 'visp-memory[capture]'"
@@ -230,8 +230,8 @@ def bootstrap_project(
 
     fix_counts: Counter[str] = Counter()
     fix_examples: dict[str, str] = {}
-    reverts: list[tuple[str, list[str]]] = []
-    rationales: list[tuple[str, str]] = []
+    reverts: list[tuple[str, str, list[str]]] = []
+    rationales: list[tuple[str, str, str]] = []
     plain_events: list[Any] = []
 
     for commit in commits:
@@ -249,7 +249,7 @@ def bootstrap_project(
         paths = _changed_paths(commit)
 
         if _REVERT_RE.search(subject):
-            reverts.append((subject, paths))
+            reverts.append((commit.hexsha, subject, paths))
             continue
 
         if _FIX_RE.search(subject):
@@ -260,14 +260,27 @@ def bootstrap_project(
                 fix_examples.setdefault(path, subject)
 
         if _RATIONALE_RE.search(message):
-            rationales.append((subject, message))
+            rationales.append((commit.hexsha, subject, message))
             continue
 
         plain_events.append(commit)
 
+    # Re-running bootstrap must not store the same warning or decision again. Each
+    # derived memory is keyed by what it came from: a commit, or a fragile file
+    # (whose fix count is part of the content, so a new fix refreshes it).
+    manifest = CaptureManifest(memory)
+
+    def _seen(kind: str, identity: str, content: Any) -> tuple[bool, str]:
+        content_hash = capture_content_hash(content)
+        status, _entry = manifest.check(kind, identity, content_hash)
+        return status == "unchanged", content_hash
+
     # --- Warnings: reverts -------------------------------------------------------
-    for subject, paths in reverts:
+    for sha, subject, paths in reverts:
         scope = ", ".join(sorted(paths)[:3]) if paths else "the codebase"
+        seen, content_hash = _seen("bootstrap_revert", sha, {"subject": subject, "paths": paths})
+        if seen:
+            continue
         try:
             memory_id = memory.warn(
                 area=scope,
@@ -279,6 +292,7 @@ def bootstrap_project(
                 tags=["git"],
                 _write_channel=WriteChannel.BOOTSTRAP,
             )
+            manifest.record("bootstrap_revert", sha, content_hash, [str(memory_id)])
             report.memory_ids.append(memory_id)
             report.warnings += 1
         except Exception as exc:
@@ -287,6 +301,9 @@ def bootstrap_project(
     # --- Warnings: repeatedly fixed files ----------------------------------------
     for path, count in fix_counts.most_common():
         if count < FRAGILE_FILE_MIN_FIXES:
+            continue
+        seen, content_hash = _seen("bootstrap_fragile", path, {"path": path, "count": count})
+        if seen:
             continue
         try:
             memory_id = memory.warn(
@@ -300,15 +317,19 @@ def bootstrap_project(
                 tags=["git"],
                 _write_channel=WriteChannel.BOOTSTRAP,
             )
+            manifest.record("bootstrap_fragile", path, content_hash, [str(memory_id)])
             report.memory_ids.append(memory_id)
             report.warnings += 1
         except Exception as exc:
             report.errors.append(f"fragile-file warning failed: {exc}")
 
     # --- Decisions: commits that explain themselves ------------------------------
-    for subject, message in rationales:
+    for sha, subject, message in rationales:
         body = message[len(subject) :].strip()
         reason = body or subject
+        seen, content_hash = _seen("bootstrap_decision", sha, {"message": message})
+        if seen:
+            continue
         try:
             memory_id = memory.decision(
                 what=subject,
@@ -316,6 +337,7 @@ def bootstrap_project(
                 tags=["git"],
                 _write_channel=WriteChannel.BOOTSTRAP,
             )
+            manifest.record("bootstrap_decision", sha, content_hash, [str(memory_id)])
             report.memory_ids.append(memory_id)
             report.decisions += 1
         except Exception as exc:

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict
 
 from visp_memory.core.clock import utc_now
-from visp_memory.core.instruction_markers import CLAUDE_CONTEXT_MARKER
+from visp_memory.core.instruction_markers import CLAUDE_CONTEXT_MARKER, neutralize_markers
 from visp_memory.core.verbs import (
     CAPTURE_VERBS,
     INTENT_LIFECYCLE_HEADLINE,
@@ -158,7 +158,7 @@ outcome against one.
         if self.dry_run:
             return True
         # Get memory context with special formatting for Claude
-        context = self.get_memory_context(files=files, task=task)
+        context = neutralize_markers(self.get_memory_context(files=files, task=task))
 
         # Format for CLAUDE.md
         formatted_context = f"""## Memory Context

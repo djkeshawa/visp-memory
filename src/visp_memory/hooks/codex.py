@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 from typing import Dict
 
-from visp_memory.core.instruction_markers import CODEX_CONTEXT_MARKER
+from visp_memory.core.instruction_markers import CODEX_CONTEXT_MARKER, neutralize_markers
 from visp_memory.core.verbs import (
     CAPTURE_VERBS,
     INTENT_NON_AUTHORITATIVE_NOTE,
@@ -21,10 +21,28 @@ from visp_memory.core.verbs import (
 from visp_memory.hooks.base import _replace_between_markers
 from visp_memory.hooks.generic import GenericAdapter
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    try:
+        import tomli as tomllib  # type: ignore[no-redef]
+    except ModuleNotFoundError:
+        tomllib = None  # type: ignore[assignment]
+
 CODEX_MARKER = "LLM-MEMORY CODEX MCP"
 AGENTS_MARKER = CODEX_CONTEXT_MARKER
 CODEX_MIGRATION_NOTE = (
     "Updated Codex MCP config: it now reads per-project settings from visp-memory.yaml."
+)
+# Fallback for when the config cannot be parsed: any spelling of a
+# ``mcp_servers.visp-memory`` table header, or a ``visp-memory`` key under
+# ``[mcp_servers]`` / an inline ``mcp_servers = { ... }`` table.
+_SERVER_KEY = r"""(?:"visp-memory"|'visp-memory'|visp-memory)"""
+_UNMANAGED_SERVER_RE = re.compile(
+    rf"^\s*\[\s*mcp_servers\s*\.\s*{_SERVER_KEY}\s*[\].]"
+    rf"|^\s*{_SERVER_KEY}\s*="
+    rf"|^\s*mcp_servers\s*=.*{_SERVER_KEY}\s*=",
+    re.MULTILINE,
 )
 _PINNED_MCP_SETTINGS = (
     "cwd =",
@@ -80,7 +98,7 @@ class CodexAdapter(GenericAdapter):
         if not self.context_file.exists():
             self.install()
 
-        context = self.get_memory_context(files=files, task=task)
+        context = neutralize_markers(self.get_memory_context(files=files, task=task))
         generated = f"""{self._workflow_instructions()}
 
 ## Visp Memory Context
@@ -227,6 +245,8 @@ Use visp-memory as the persistent project memory for this repository.
         new_content = self._remove_marked_section(
             content, f"{AGENTS_MARKER} START", f"{AGENTS_MARKER} END"
         )
+        if new_content is None:
+            return False
         if new_content == content:
             return True
 
@@ -243,6 +263,8 @@ Use visp-memory as the persistent project memory for this repository.
         new_content = self._remove_marked_section(
             content, f"# BEGIN {CODEX_MARKER}", f"# END {CODEX_MARKER}"
         )
+        if new_content is None:
+            return False
         if new_content == content:
             return True
 
@@ -288,20 +310,38 @@ Use visp-memory as the persistent project memory for this repository.
             before, after = collapsed.split(begin + end, 1)
             return f"{before}{block}{after.lstrip()}"
 
-        unmanaged_table = "[mcp_servers.visp-memory]" in content
-        if unmanaged_table:
+        if _declares_visp_memory_server(content):
             return None
 
         separator = "" if not content or content.endswith("\n") else "\n"
         return f"{content}{separator}\n{block}" if content else block
 
-    def _remove_marked_section(self, content: str, begin: str, end: str) -> str:
-        if begin not in content or end not in content:
+    def _remove_marked_section(self, content: str, begin: str, end: str) -> str | None:
+        """Drop the managed region; ``None`` when its markers are malformed."""
+        if begin not in content and end not in content:
             return content
 
-        before = content.split(begin)[0]
-        after = content.split(end, 1)[1]
-        return before + after
+        # Same well-formedness rule as every rewrite: each marker once, in order.
+        collapsed = _replace_between_markers(content, begin, end, "")
+        if collapsed is None:
+            return None
+        return collapsed.replace(begin + end, "", 1)
 
     def _toml_string(self, value: object) -> str:
         return str(value).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _declares_visp_memory_server(content: str) -> bool:
+    """Whether an unmanaged ``mcp_servers.visp-memory`` entry already exists.
+
+    Appending our block next to one would declare the table twice, which is
+    invalid TOML and breaks the user's whole Codex config.
+    """
+    if tomllib is not None:
+        try:
+            servers = tomllib.loads(content).get("mcp_servers")
+        except tomllib.TOMLDecodeError:
+            pass
+        else:
+            return isinstance(servers, dict) and "visp-memory" in servers
+    return bool(_UNMANAGED_SERVER_RE.search(content))

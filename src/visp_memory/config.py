@@ -54,6 +54,10 @@ ENV_OVERRIDES: dict[str, tuple[str, ...]] = {
     "VISP_MEMORY_SERVER_MAX_IMPORT_BODY_BYTES": ("server", "max_import_body_bytes"),
     "VISP_MEMORY_SERVER_SHARED": ("server", "shared"),
     "VISP_MEMORY_SERVER_JWT_EXPIRY_HOURS": ("server", "jwt_expiry_hours"),
+    # Documented for conversation capture; listed so a saved config file, which
+    # pins every field, cannot silently shadow them.
+    "VISP_MEMORY_CAPTURE_LLM_PROVIDER": ("capture", "llm_provider"),
+    "VISP_MEMORY_CAPTURE_LLM_MODEL": ("capture", "llm_model"),
     "VISP_MEMORY_LLM_PROVIDER": ("llm", "provider"),
     "VISP_MEMORY_LLM_MODEL": ("llm", "model"),
     "VISP_MEMORY_LLM_API_KEY": ("llm", "api_key"),
@@ -88,6 +92,19 @@ ENV_OVERRIDES: dict[str, tuple[str, ...]] = {
         "intel_projection_path",
     ),
 }
+
+#: Credentials that arrive from the environment and must never be written into a
+#: config file that sits in the repository and gets committed.
+SECRET_CONFIG_FIELDS: tuple[tuple[str, ...], ...] = (
+    ("embedding", "api_key"),
+    ("llm", "api_key"),
+    ("storage", "api_key"),
+    ("storage", "jwt_token"),
+    ("storage", "neo4j_password"),
+    ("server", "jwt_secret"),
+    ("server", "api_keys"),
+    ("server", "bootstrap_admin_password"),
+)
 
 
 def _coerce_env_value(target: BaseSettings, attr: str, value: str) -> Any:
@@ -422,8 +439,14 @@ class MemoryConfig(BaseSettings):
             except ImportError:
                 raise ImportError("PyYAML required for YAML config: pip install pyyaml")
         else:
-            data = json.loads(content)
+            data = json.loads(content) if content.strip() else None
 
+        # An empty or comment-only file parses to None: treat it as "no settings".
+        data = {} if data is None else data
+        if not isinstance(data, dict):
+            raise ValueError(
+                f"{path} must contain a mapping of settings, not {type(data).__name__}"
+            )
         config = cls(**data)
         config.apply_env_overrides()
         return config
@@ -466,6 +489,8 @@ class MemoryConfig(BaseSettings):
         path.parent.mkdir(parents=True, exist_ok=True)
 
         data = self.model_dump()
+        for section, field_name in SECRET_CONFIG_FIELDS:
+            data.get(section, {}).pop(field_name, None)
 
         # Convert Path objects to strings
         def convert_paths(obj):

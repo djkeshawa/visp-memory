@@ -28,7 +28,9 @@ from visp_memory.core.trust import WriteChannel, channel_policy, with_channel_pr
 INSTRUCTION_CATEGORY = "instruction"
 INSTRUCTION_BELIEF_TYPE = BeliefType.HYPOTHESIS.value
 INSTRUCTION_TAG = "imported_instruction"
-_HEADING_RE = re.compile(r"^#{1,6}\s+(.+)$", re.MULTILINE)
+# One line only: ``\s+`` would let a bare "#" swallow the next line as its title.
+_HEADING_RE = re.compile(r"^#{1,6}[ \t]+(\S.*)$")
+_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 
 # Well-known instruction files, relative to the project root. Globs allowed.
 INSTRUCTION_FILE_PATTERNS = (
@@ -67,10 +69,49 @@ class IngestReport:
 def discover_instruction_files(root: Path) -> list[Path]:
     """Find well-known instruction files under a project root, deterministically."""
     root = Path(root)
+    real_root = root.resolve()
     found: list[Path] = []
     for pattern in INSTRUCTION_FILE_PATTERNS:
-        found.extend(path for path in sorted(root.glob(pattern)) if path.is_file())
+        found.extend(
+            path
+            for path in sorted(root.glob(pattern))
+            if path.is_file() and _inside(path, real_root)
+        )
     return found
+
+
+def _inside(path: Path, real_root: Path) -> bool:
+    """Whether a path, after following symlinks, still lies within the project.
+
+    A committed ``AGENTS.md -> ~/.aws/credentials`` symlink must not turn
+    ingestion into a way of copying files from outside the repository.
+    """
+    try:
+        return path.resolve().is_relative_to(real_root)
+    except OSError:
+        return False
+
+
+def _heading_spans(text: str) -> list[tuple[int, str]]:
+    """(offset, title) of each markdown heading, ignoring fenced code blocks."""
+    headings: list[tuple[int, str]] = []
+    fence: str | None = None
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        stripped = line.rstrip("\r\n")
+        marker = _FENCE_RE.match(stripped)
+        if marker:
+            token = marker.group(1)
+            if fence is None:
+                fence = token
+            elif token[0] == fence[0] and len(token) >= len(fence):
+                fence = None
+        elif fence is None:
+            heading = _HEADING_RE.match(stripped)
+            if heading:
+                headings.append((offset, heading.group(1)))
+        offset += len(line)
+    return headings
 
 
 def split_sections(text: str) -> list[tuple[str, str]]:
@@ -80,18 +121,18 @@ def split_sections(text: str) -> list[tuple[str, str]]:
     visp-memory blocks are removed first.
     """
     cleaned = strip_managed_context(text)
-    matches = list(_HEADING_RE.finditer(cleaned))
+    headings = _heading_spans(cleaned)
     sections: list[tuple[str, str]] = []
 
-    preamble = cleaned[: matches[0].start()] if matches else cleaned
+    preamble = cleaned[: headings[0][0]] if headings else cleaned
     if preamble.strip():
         sections.append(("(preamble)", preamble.strip()))
 
-    for index, match in enumerate(matches):
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(cleaned)
-        body = cleaned[match.start() : end].strip()
+    for index, (start, title) in enumerate(headings):
+        end = headings[index + 1][0] if index + 1 < len(headings) else len(cleaned)
+        body = cleaned[start:end].strip()
         if body:
-            sections.append((match.group(1).strip(), body))
+            sections.append((title.strip(), body))
     return sections
 
 
