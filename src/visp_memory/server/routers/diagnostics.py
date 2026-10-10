@@ -16,7 +16,11 @@ from visp_memory.core.indexing import (
     to_plain_dict,
 )
 from visp_memory.server.auth import UserContext, get_current_user
-from visp_memory.server.authorization import require_admin, require_owner_or_admin
+from visp_memory.server.authorization import (
+    require_admin,
+    require_owner_or_admin,
+    require_token_project_access,
+)
 from visp_memory.server.routers.platform import append_audit_event
 from visp_memory.server.schemas import (
     EmbeddingIndexStatus,
@@ -45,7 +49,9 @@ async def get_storage_diagnostics(
     user: UserContext = Depends(get_current_user),
 ):
     """Return non-secret backend capabilities and schema compatibility."""
-    del user
+    # The token scope table classes /diagnostics/* as admin; hold sessions and
+    # anonymous callers to the same bar.
+    require_owner_or_admin(user)
     storage = request.app.state.storage
     return StorageDiagnosticsResponse(
         backend=request.app.state.storage_backend,
@@ -232,7 +238,7 @@ async def list_provider_diagnostics(
     request: Request, user: UserContext = Depends(get_current_user)
 ):
     """Return non-secret provider diagnostics for the dashboard and CLI."""
-    del user
+    require_owner_or_admin(user)
     runtime_config = load_config()
     embedding_provider = getattr(request.app.state, "embedding_provider", None)
     runtime_status = getattr(request.app.state, "embedding_runtime_status", None)
@@ -350,6 +356,7 @@ async def get_embedding_index_status(
     # tenant-filtered index report, expose this endpoint only to administrators
     # rather than presenting global counts as if they belonged to ``repo_id``.
     require_owner_or_admin(user)
+    require_token_project_access(repo_id, user)
     runtime_config = load_config()
     storage = request.app.state.storage
     embedding_provider = getattr(request.app.state, "embedding_provider", None)
@@ -378,6 +385,7 @@ async def reindex_embedding_index(
     # Rebuilding the embedding index mutates stored vectors; require an
     # administrator (a dry-run is also gated since it scans all matched rows).
     require_owner_or_admin(user)
+    require_token_project_access(payload.repo_id, user)
     result = rebuild_embedding_index(
         request.app.state.storage,
         scope=ReindexScope(

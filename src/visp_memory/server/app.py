@@ -46,6 +46,7 @@ from visp_memory.server.authorization import (
     has_admin_privileges,
     require_repo_scope_access,
 )
+from visp_memory.server.control_path_guard import ControlPathGuardMiddleware
 from visp_memory.server.import_body_limit import ImportBodyLimitMiddleware
 from visp_memory.server.local_owner_guard import LocalOwnerGuardMiddleware
 from visp_memory.server.owner_token import (
@@ -499,10 +500,13 @@ app.add_middleware(
 app.add_middleware(
     ImportBodyLimitMiddleware, max_body_bytes=lambda: config.server.max_import_body_bytes,
 )
-# Added last so it is outermost: a rebinding request is refused before CORS or
+# Added after the others so it wraps them: a rebinding request is refused before CORS or
 # routing sees it. It decides per request, and only while auth is disabled or the
 # local-owner view is being granted.
 app.add_middleware(LocalOwnerGuardMiddleware)
+# Outermost of all: a path with a control character (``/memories%0A``) routes like
+# its clean twin but misses every path-keyed rule, so it never gets that far.
+app.add_middleware(ControlPathGuardMiddleware)
 
 # Initialize Storage
 embedding_provider, embedding_runtime_status = get_server_embedding_runtime(config)

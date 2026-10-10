@@ -5,9 +5,11 @@ can be read and tested in one place. The first rules are the specific ones: a ro
 that returns memory content or the whole graph must not inherit a broader prefix
 that is cheaper to hold (``/repos/...`` is only ``project:read``).
 
-A path that matches no rule is still allowed with ``project:read`` -- that default
-is kept for compatibility -- but is reported as not explicit, and a test fails for
-any registered route that depends on it, so a new route has to be classified here.
+A GET or HEAD that matches no rule is still allowed with ``project:read`` -- that
+default is kept for compatibility -- but is reported as not explicit, and a test
+fails for any registered route that depends on it, so a new route has to be
+classified here. Any other method that matches no rule is refused: a path the
+table cannot classify must never be a write that ``project:read`` allows.
 """
 
 import re
@@ -48,6 +50,9 @@ def _scopes(*names: str) -> PatDecision:
 _OPEN = PatDecision(OPEN)
 _ADMIN = PatDecision(ADMIN)
 _DEFAULT = PatDecision(SCOPES, ("project:read",), explicit=False)
+_DEFAULT_WRITE = PatDecision(
+    DENIED, detail="No token scope covers this request", explicit=False
+)
 
 
 def _rule(pattern: str, read: PatDecision, write: PatDecision) -> _Rule:
@@ -94,6 +99,12 @@ _RULES = (
     _any_method(r"/turn-keys/search", _scopes("memory:read")),
     _rule(_prefix("recall-events"), _scopes("memory:read"), _scopes("memory:write")),
     _rule(r"/intents/usage", _scopes("intent:read"), _scopes("intent:write")),
+    # POSTs that only read memory content; ahead of the `graph` and `ai` prefixes,
+    # which would otherwise ask for memory:write and refuse memory:read.
+    _any_method(_prefix("graph-recall"), _scopes("memory:read")),
+    # Reads memory, but may also spend a configured model's tokens -- which every
+    # other model-calling route gates behind a write scope -- so it needs both.
+    _any_method(r"/ai/ask", _scopes("memory:read", "memory:write")),
     # Non-secret backend capabilities, which `connect` reads with any token.
     _rule(r"/diagnostics/capabilities", _scopes("project:read"), _ADMIN),
     # Owner-or-admin in the route itself; a token can only ever be the admin half.
@@ -122,4 +133,4 @@ def pat_scope_decision(method: str, path: str) -> PatDecision:
     for rule in _RULES:
         if rule.pattern.fullmatch(path):
             return rule.read if method.upper() in _READ_METHODS else rule.write
-    return _DEFAULT
+    return _DEFAULT if method.upper() in _READ_METHODS else _DEFAULT_WRITE
