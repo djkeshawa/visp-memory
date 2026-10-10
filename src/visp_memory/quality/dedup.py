@@ -23,6 +23,7 @@ except ImportError:
     # Without scikit-learn the cosine similarity is computed from numpy directly.
     SKLEARN_AVAILABLE = False
 
+from visp_memory.core.source_support import scope_signature
 from visp_memory.core.storage import BaseStorage, SemanticMemoryImmutableError
 from visp_memory.quality.secrets import redact_for_storage
 
@@ -264,6 +265,21 @@ class Deduplicator:
         embeddings = data["embeddings"]
         ids = data["ids"]
 
+        # The collection holds every repository's rows and every lifecycle state.
+        # Similarity alone is not a duplicate: a merge hard-deletes all but the
+        # first row of a group, so pairing across repositories deletes another
+        # repo's memory, and pairing a superseded predecessor with its active
+        # successor can delete the successor. Only active rows of the same
+        # repository and the same scope are comparable.
+        peek = getattr(self.storage, "peek_memory", None)
+        rows = [peek(mid) if callable(peek) else self.storage.get_memory(mid) for mid in ids]
+        keys = [
+            (row.get("repo_id"), scope_signature(row.get("metadata")))
+            if row and row.get("status", "active") == "active"
+            else None
+            for row in rows
+        ]
+
         if SKLEARN_AVAILABLE:
             matrix = np.array(embeddings)
             sim_matrix = cosine_similarity(matrix)
@@ -281,12 +297,12 @@ class Deduplicator:
         visited = set()
 
         for i in range(len(ids)):
-            if i in visited:
+            if i in visited or keys[i] is None:
                 continue
 
             group = []
             for j in range(i + 1, len(ids)):
-                if j in visited:
+                if j in visited or keys[j] != keys[i]:
                     continue
 
                 # Use proper 2D indexing for numpy arrays
@@ -297,10 +313,10 @@ class Deduplicator:
                 )
                 if similarity >= threshold:
                     if not group:
-                        group.append(self.storage.get_memory(ids[i]))
+                        group.append(rows[i])
                         visited.add(i)
 
-                    group.append(self.storage.get_memory(ids[j]))
+                    group.append(rows[j])
                     visited.add(j)
 
             if group:
@@ -330,6 +346,22 @@ class Deduplicator:
         primary_mem = self.storage.get_memory(primary_id)
         if not primary_mem:
             return None
+
+        # Duplicates are hard-deleted below, so refuse before touching anything
+        # when the merge would delete another repository's memory or keep a
+        # non-active (e.g. superseded) row over the rows it replaces.
+        if primary_mem.get("status", "active") != "active":
+            raise ValueError(
+                f"Refusing to merge into {primary_id}: its status is "
+                f"{primary_mem.get('status')!r}, not 'active'"
+            )
+        repo_ids = {primary_mem.get("repo_id")}
+        for oid in others:
+            mem = self.storage.get_memory(oid)
+            if mem:
+                repo_ids.add(mem.get("repo_id"))
+        if len(repo_ids) > 1:
+            raise ValueError("Refusing to merge memories that belong to different repositories")
 
         # Update content if provided
         if target_content and primary_mem.get("layer") == "semantic":

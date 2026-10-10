@@ -225,11 +225,8 @@ class GraphRecall:
                 }
             )
 
-        node_ids = [source_id]
-        if edge_path:
-            node_ids.append(target_id)
-            for edge in edge_path:
-                node_ids.extend([edge["source_id"], edge["target_id"]])
+        # Walk order, so each node's index in node_ids is its hop count.
+        node_ids = self._walk_node_ids(source_id, edge_path)
         nodes = self._nodes_for_ids(
             node_ids,
             repo_id,
@@ -294,11 +291,10 @@ class GraphRecall:
             edges = []
             explanation = "Memory is directly relevant to the query."
         else:
-            path = self._first_path(seed_ids, memory_id, relationships, depth)
+            seed_id, path = self._first_path(seed_ids, memory_id, relationships, depth)
             if path:
-                node_ids = [memory_id]
-                for edge in path:
-                    node_ids.extend([edge["source_id"], edge["target_id"]])
+                # Walk from the seed so distance is hops from the query's match.
+                node_ids = self._walk_node_ids(seed_id, path)
                 nodes = self._nodes_for_ids(
                     node_ids,
                     repo_id,
@@ -694,12 +690,23 @@ class GraphRecall:
         target_id: str,
         relationships: list[dict[str, Any]],
         depth: int,
-    ) -> list[dict[str, Any]] | None:
+    ) -> tuple[str | None, list[dict[str, Any]] | None]:
         for seed_id in seed_ids:
             path = self._shortest_edge_path(seed_id, target_id, relationships, depth)
             if path is not None:
-                return path
-        return None
+                return seed_id, path
+        return None, None
+
+    def _walk_node_ids(self, start_id: str, edge_path: list[dict[str, Any]]) -> list[str]:
+        """Node ids along ``edge_path`` in traversal order, starting at ``start_id``.
+
+        Edges are undirected for traversal, so an edge's stored source/target
+        order says nothing about which end is nearer the start.
+        """
+        node_ids = [start_id]
+        for edge in edge_path:
+            node_ids.append(self._other_id(node_ids[-1], edge))
+        return node_ids
 
     def _result(
         self,

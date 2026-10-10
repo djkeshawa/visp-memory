@@ -18,7 +18,7 @@ fact, which is usually the part worth keeping. Rewriting
 
 into
 
-    "deploy fails unless AWS_SECRET_ACCESS_KEY=[REDACTED:aws-secret-key]"
+    "deploy fails unless AWS_SECRET_ACCESS_KEY=[REDACTED:credential-assignment]"
 
 keeps the engineering fact and drops the credential. The finding is recorded on the
 memory so ``visp-memory audit`` can show that redaction happened.
@@ -45,7 +45,7 @@ _PLACEHOLDER_RE = re.compile(
     r"^(?:"
     r"x{3,}|\*{3,}|\.{3,}|"
     r"<[^>]*>|\$\{[^}]*\}|\$[A-Z_][A-Z0-9_]*|"
-    r"(?:your|my|the)[-_]?\w*|"
+    r"(?:your|my|the)[-_](?:secret|password|passwd|token|key|api[-_]?key)\w*|"
     r"change[-_]?me|replace[-_]?me|example|sample|dummy|fake|placeholder|"
     r"redacted|hidden|secret|password|token|apikey|api[-_]key|none|null|true|false"
     r")$",
@@ -95,7 +95,10 @@ PATTERNS: tuple[SecretPattern, ...] = (
     # Credentials embedded in a connection string: scheme://user:secret@host
     SecretPattern(
         "connection-string-password",
-        re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s:/@]+:([^\s@/]{3,})@"),
+        # The lookbehind (not ``\b``) pins the scheme to the start of its run of
+        # scheme characters, so a long "a.a.a..." run is scanned once, not once
+        # per position -- ``\b`` matched inside the run and made this quadratic.
+        re.compile(r"(?<![A-Za-z0-9_+.-])[a-z][a-z0-9+.-]*://[^\s:/@]+:([^\s@/]{3,})@"),
         group=1,
     ),
     SecretPattern(
@@ -108,7 +111,11 @@ PATTERNS: tuple[SecretPattern, ...] = (
     SecretPattern(
         "credential-assignment",
         re.compile(
-            r"\b(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|"
+            # Environment-style names end in the keyword (AWS_SECRET_ACCESS_KEY,
+            # DB_PASSWORD). ``_`` is a word character, so a leading ``\b`` never
+            # fired inside them; match the whole identifier from its start instead.
+            r"(?<![A-Za-z0-9_])(?:[A-Za-z0-9]*_)*"
+            r"(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|"
             r"auth[_-]?token|client[_-]?secret)\b\s*[=:]\s*"
             r"[\"']?([^\s\"',;)]{8,})[\"']?",
             re.IGNORECASE,

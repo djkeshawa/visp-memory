@@ -223,3 +223,31 @@ def test_similar_wording_does_not_replace_a_different_named_entity(memory):
     second = memory.learn(template.format("Willow"))
     assert second != first
     assert memory._storage.get_memory(first)["status"] == "active"
+
+
+def test_longer_restatement_with_fewer_details_does_not_replace_original(memory):
+    """Character length is not detail: a padded restatement that drops
+    "replica" must not supersede the memory that said it."""
+    old = "Billing service reads from the Postgres replica"
+    new = "Billing service reads from Postgres; the billing service reads from Postgres."
+    assert len(new) > len(old)
+
+    old_id = memory.learn(old)
+    result_id = memory.learn(new)
+
+    assert result_id == old_id
+    assert memory._storage.get_memory(old_id)["status"] == "active"
+    assert [m["content"] for m in memory._storage.list_memories(
+        layer="semantic", status="active", limit=10
+    )] == [old]
+
+
+def test_padded_extension_without_a_new_token_is_noop():
+    class _Storage:
+        def search_memories(self, **kwargs):
+            return [{"id": "old", "content": "Deploys run from main", "metadata": {}}]
+
+    decision = Reconciler(_Storage()).decide("Deploys run from main. Deploys run from main!")
+
+    assert decision.action == "noop"
+    assert decision.target_id == "old"

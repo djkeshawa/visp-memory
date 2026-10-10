@@ -124,7 +124,25 @@ If no, return JSON: {{"conflict": false}}
             result = json.loads(clean)
 
             if result.get("conflict"):
-                return ConflictVerdict.found(result)
+                # The model's ids are untrusted output. Only memories this
+                # detector was shown can be in conflict; anything else would let
+                # the caller supersede or link a row the check never saw.
+                candidate_ids = {memory["id"] for memory in relevant_memories}
+                reported = result.get("conflicting_ids") or []
+                if isinstance(reported, str):
+                    reported = [reported]
+                elif not isinstance(reported, list):
+                    reported = []
+                conflicting_ids = [
+                    cid for cid in dict.fromkeys(str(cid) for cid in reported)
+                    if cid in candidate_ids
+                ]
+                if not conflicting_ids:
+                    return ConflictVerdict.undetermined(
+                        "the conflict detector reported a contradiction but named "
+                        "none of the memories it was shown"
+                    )
+                return ConflictVerdict.found({**result, "conflicting_ids": conflicting_ids})
             return ConflictVerdict.clear()
 
         except Exception as e:
