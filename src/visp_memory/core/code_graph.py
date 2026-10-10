@@ -63,6 +63,12 @@ SUPPORTED_SCHEMA_VERSIONS = frozenset({"1.0"})
 #: Kit's read limit. A file above it is not a projection intel produced, and parsing
 #: an unbounded file is an unbounded allocation inside a recall.
 PROJECTION_MAX_BYTES = 16 * 1024 * 1024
+# A projection nests a handful of levels. Deeper input is refused before parsing:
+# the C JSON parser can exhaust the C stack and kill the process on deep nesting
+# rather than raise RecursionError, depending on the build and the thread's stack.
+PROJECTION_MAX_DEPTH = 64
+_JSON_STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
+_JSON_BRACKET_RE = re.compile(r"[\[\]{}]")
 
 #: Edge kinds that mean "this file depends on that file".
 DEPENDENCY_EDGE_KINDS = frozenset({"imports", "depends_on"})
@@ -598,6 +604,23 @@ def file_grain_edges(graph: FileGraph) -> tuple[tuple[str, str, str], ...]:
     return tuple(sorted(rows))
 
 
+def _json_nesting_exceeds(text: str, limit: int) -> bool:
+    """Whether JSON ``text`` opens more than ``limit`` arrays/objects at once.
+
+    Brackets inside string literals are not structure, so strings are blanked
+    first. Unbalanced input is left for the parser to reject.
+    """
+    depth = 0
+    for match in _JSON_BRACKET_RE.finditer(_JSON_STRING_RE.sub('""', text)):
+        if match.group() in "[{":
+            depth += 1
+            if depth > limit:
+                return True
+        else:
+            depth -= 1
+    return False
+
+
 def load_projection(path: Optional[Path]) -> GraphLoad:
     """Read and collapse a projection. Never raises; every failure means "no graph"."""
     if path is None:
@@ -624,11 +647,19 @@ def load_projection(path: Optional[Path]) -> GraphLoad:
         )
 
     try:
-        raw = json.loads(resolved.read_text(encoding="utf-8"))
+        text = resolved.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as error:
         return GraphLoad(
             GraphState.UNREADABLE, f"intel projection is unreadable: {error}", path=str(resolved)
         )
+    if _json_nesting_exceeds(text, PROJECTION_MAX_DEPTH):
+        return GraphLoad(
+            GraphState.MALFORMED,
+            f"intel projection nests deeper than {PROJECTION_MAX_DEPTH} levels",
+            path=str(resolved),
+        )
+    try:
+        raw = json.loads(text)
     except (json.JSONDecodeError, RecursionError) as error:
         # RecursionError: nesting deeper than the parser will follow is not a projection.
         return GraphLoad(

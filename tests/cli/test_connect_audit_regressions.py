@@ -75,7 +75,8 @@ def test_connect_refuses_the_shared_server_config_when_selected_explicitly(home,
     result = runner.invoke(app, ["connect", "--server-url", SERVER])
 
     assert result.exit_code == 1
-    assert "shared server" in result.output
+    # Rich wraps the message around the (long, on Windows) path; match the words.
+    assert "shared server" in " ".join(result.output.split())
     assert shared_config.read_bytes() == before
 
 
