@@ -16,11 +16,11 @@ START_HINT = "start it with `visp-memory serve --shared`"
 
 
 class MCPToolError(Exception):
-    """Raised out of ``call_tool`` so the SDK marks the result ``isError``.
+    """Raised out of ``call_tool``; the server answers with an ``isError`` result.
 
-    Every mcp 1.x release turns an exception from the tool function into an
-    error result carrying ``str(exception)`` as its text. Returning a
-    ``CallToolResult`` would only work on newer releases than the declared floor.
+    mcp 2.x turns an exception escaping a handler into a protocol error, which a
+    client shows as a failed request rather than a tool result the agent can read,
+    so ``on_call_tool`` catches this and returns ``str(exception)`` as error text.
     """
 
 

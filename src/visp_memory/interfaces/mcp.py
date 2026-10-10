@@ -57,30 +57,29 @@ try:
     from mcp.server import Server
     from mcp.server.stdio import stdio_server
     from mcp.types import (
+        CallToolResult,
         GetPromptResult,
+        ListPromptsResult,
+        ListResourcesResult,
+        ListResourceTemplatesResult,
+        ListToolsResult,
         Prompt,
         PromptArgument,
         PromptMessage,
+        ReadResourceResult,
         Resource,
         ResourceTemplate,
         SamplingMessage,
         TextContent,
+        TextResourceContents,
         Tool,
     )
-
-    # `AnyUrl` is a pydantic type that mcp.types re-exported up to 1.x and dropped in
-    # 2.0. Importing it from mcp.types made the whole block raise ImportError on mcp
-    # 2.x, silently setting MCP_AVAILABLE = False -- so a fresh `pip install
-    # visp-memory[mcp]` produced a server that reported itself as unavailable. It is
-    # only used as a type annotation, so take it from pydantic, which is a hard
-    # dependency and the original source in both versions.
-    from pydantic import AnyUrl
 
     MCP_AVAILABLE = True
 except ImportError:
     MCP_AVAILABLE = False
 
-from visp_memory import Memory
+from visp_memory import Memory, __version__
 from visp_memory.core.attribution import (
     WriterIdentity,
     bind_writer,
@@ -137,16 +136,14 @@ def _ensure_process_session() -> str:
         return _PROCESS_SESSION
 
 
-def _writer_for_call(server) -> WriterIdentity | None:
+def _writer_for_call(session) -> WriterIdentity | None:
     """Resolve writer labels from process configuration and MCP client info."""
     context = current_mcp_request_context()
     if context.transport == "http" or context.writer is not None:
         return context.writer
     try:
-        request_context = getattr(server, "request_context", None)
-        session = getattr(request_context, "session", None)
         client_params = getattr(session, "client_params", None)
-        client_info = getattr(client_params, "clientInfo", None)
+        client_info = getattr(client_params, "client_info", None)
     except Exception:
         client_info = None
     client_name = sanitize_label(getattr(client_info, "name", None))
@@ -240,6 +237,27 @@ def _unexpected_tool_failure(name: str) -> list[TextContent]:
             ),
         )
     ]
+
+
+def _input_validation_error(
+    tools: list[Tool], name: str, arguments: dict[str, Any]
+) -> str | None:
+    """Check arguments against the schema the caller was advertised.
+
+    mcp 1.x validated inside ``@server.call_tool()``; the 2.x lowlevel server does
+    not, and handlers trust schema bounds (importance ranges, enums, prompt caps).
+    A tool the caller was not advertised is left to the profile refusal.
+    """
+    import jsonschema  # ships with the mcp extra
+
+    tool = next((tool for tool in tools if tool.name == name), None)
+    if tool is None:
+        return None
+    try:
+        jsonschema.validate(arguments, tool.input_schema)
+    except jsonschema.ValidationError as error:
+        return f"Input validation error: {error.message}"
+    return None
 
 
 def _requires_explicit_scope() -> bool:
@@ -392,18 +410,13 @@ def create_mcp_server() -> "Server":
         raise ImportError("MCP package not installed. Install with: pip install visp-memory[mcp]")
 
     _ensure_process_session()
-    server = Server("visp-memory")
     memory = Memory()
-    # The HTTP wrapper needs the same Memory config to select the credential
-    # database. Keep this private attachment out of the public MCP API.
-    server._visp_memory = memory
 
     # =========================================================================
     # Tool Definitions
     # =========================================================================
 
-    @server.list_tools()
-    async def list_tools() -> list[Tool]:
+    def list_tools() -> list[Tool]:
         """List available memory tools, scoped to the active profile."""
         all_tools = build_tool_definitions()
         profile = _resolve_tool_profile()
@@ -423,8 +436,7 @@ def create_mcp_server() -> "Server":
     # Tool Handlers
     # =========================================================================
 
-    @server.call_tool()
-    async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+    async def call_tool(session, name: str, arguments: dict[str, Any]) -> list[TextContent]:
         """Handle tool calls."""
         # P10-US-07: the profile is enforced at DISPATCH, not only in
         # advertisement. Before this check the filter ran in list_tools while
@@ -468,13 +480,12 @@ def create_mcp_server() -> "Server":
                 max_tokens = max(64, min(int(arguments.get("max_tokens", 800)), 4000))
                 if not prompt:
                     raise ValueError("prompt is required")
-                request_context = getattr(server, "request_context", None)
-                session = getattr(request_context, "session", None)
-                client_params = getattr(session, "client_params", None)
-                capabilities = getattr(client_params, "capabilities", None)
+                capabilities = getattr(session, "client_capabilities", None)
                 create_message = getattr(session, "create_message", None)
                 supports_sampling = bool(
-                    getattr(capabilities, "sampling", None) and callable(create_message)
+                    getattr(capabilities, "sampling", None)
+                    and getattr(session, "can_send_request", False)
+                    and callable(create_message)
                 )
                 if supports_sampling:
                     sampled = await create_message(
@@ -515,7 +526,7 @@ def create_mcp_server() -> "Server":
                         )
                     )
                 return [TextContent(type="text", text=json.dumps(result, indent=2))]
-            with bind_writer(_writer_for_call(server)):
+            with bind_writer(_writer_for_call(session)):
                 result = await handle_tool(name, arguments, memory)
             return [TextContent(type="text", text=result)]
         except MCPAuthorizationError as error:
@@ -572,15 +583,13 @@ def create_mcp_server() -> "Server":
     # Resources
     # =========================================================================
 
-    @server.list_resource_templates()
-    async def list_resource_templates() -> list[ResourceTemplate]:
+    def list_resource_templates() -> list[ResourceTemplate]:
         """Advertise repository-scoped resources only to the HTTP transport."""
         if not _requires_explicit_scope():
             return []
         return _http_resource_templates()
 
-    @server.list_resources()
-    async def list_resources() -> list[Resource]:
+    def list_resources() -> list[Resource]:
         """List available memory resources."""
         if _requires_explicit_scope():
             return []
@@ -629,10 +638,8 @@ def create_mcp_server() -> "Server":
             ),
         ]
 
-    @server.read_resource()
-    async def read_resource(uri: AnyUrl) -> str:
+    def read_resource(uri_str: str) -> str:
         """Read a memory resource."""
-        uri_str = str(uri)
         if _requires_explicit_scope():
             return _read_http_resource(uri_str, memory)
         if uri_str == "memory://context":
@@ -711,8 +718,7 @@ def create_mcp_server() -> "Server":
     # Prompts
     # =========================================================================
 
-    @server.list_prompts()
-    async def list_prompts() -> list[Prompt]:
+    def list_prompts() -> list[Prompt]:
         """List available prompts."""
         if current_mcp_request_context().transport == "http":
             return []
@@ -751,8 +757,7 @@ def create_mcp_server() -> "Server":
             ),
         ]
 
-    @server.get_prompt()
-    async def get_prompt(name: str, arguments: dict[str, str] | None) -> GetPromptResult:
+    def get_prompt(name: str, arguments: dict[str, str] | None) -> GetPromptResult:
         """Get a prompt by name."""
         if current_mcp_request_context().transport == "http":
             raise ValueError(
@@ -840,6 +845,58 @@ def create_mcp_server() -> "Server":
         else:
             raise ValueError(f"Unknown prompt: {name}")
 
+    # =========================================================================
+    # mcp 2.x request handlers: (ctx, params) -> result model
+    # =========================================================================
+
+    async def on_list_tools(ctx, params) -> ListToolsResult:
+        return ListToolsResult(tools=list_tools())
+
+    async def on_call_tool(ctx, params) -> CallToolResult:
+        arguments = params.arguments or {}
+        invalid = _input_validation_error(list_tools(), params.name, arguments)
+        if invalid:
+            return CallToolResult(content=[TextContent(type="text", text=invalid)], is_error=True)
+        try:
+            content = await call_tool(ctx.session, params.name, arguments)
+        except MCPToolError as error:
+            return CallToolResult(
+                content=[TextContent(type="text", text=str(error))], is_error=True
+            )
+        return CallToolResult(content=content)
+
+    async def on_list_resource_templates(ctx, params) -> ListResourceTemplatesResult:
+        return ListResourceTemplatesResult(resource_templates=list_resource_templates())
+
+    async def on_list_resources(ctx, params) -> ListResourcesResult:
+        return ListResourcesResult(resources=list_resources())
+
+    async def on_read_resource(ctx, params) -> ReadResourceResult:
+        text = read_resource(params.uri)
+        return ReadResourceResult(
+            contents=[TextResourceContents(uri=params.uri, mime_type="text/plain", text=text)]
+        )
+
+    async def on_list_prompts(ctx, params) -> ListPromptsResult:
+        return ListPromptsResult(prompts=list_prompts())
+
+    async def on_get_prompt(ctx, params) -> GetPromptResult:
+        return get_prompt(params.name, params.arguments)
+
+    server = Server(
+        "visp-memory",
+        version=__version__,
+        on_list_tools=on_list_tools,
+        on_call_tool=on_call_tool,
+        on_list_resource_templates=on_list_resource_templates,
+        on_list_resources=on_list_resources,
+        on_read_resource=on_read_resource,
+        on_list_prompts=on_list_prompts,
+        on_get_prompt=on_get_prompt,
+    )
+    # The HTTP wrapper needs the same Memory config to select the credential
+    # database. Keep this private attachment out of the public MCP API.
+    server._visp_memory = memory
     return server
 
 

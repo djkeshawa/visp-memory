@@ -10,8 +10,8 @@ import logging
 import socket
 
 import pytest
-from mcp.types import CallToolRequest, CallToolRequestParams
 
+from tests.mcp_client import call_tool
 from visp_memory import Memory, MemoryConfig
 from visp_memory.interfaces import mcp as mcp_module
 
@@ -29,13 +29,7 @@ async def _call(monkeypatch, memory, tool, arguments=None):
     monkeypatch.setenv("VISP_MEMORY_MCP_PROFILE", "full")
     monkeypatch.setattr(mcp_module, "Memory", lambda *a, **k: memory)
     server = mcp_module.create_mcp_server()
-    result = await server.request_handlers[CallToolRequest](
-        CallToolRequest(
-            method="tools/call",
-            params=CallToolRequestParams(name=tool, arguments=arguments or {}),
-        )
-    )
-    return result.root
+    return await call_tool(server, tool, arguments)
 
 
 def _mcp_records(caplog):
@@ -65,7 +59,7 @@ async def test_stopped_server_is_reported_as_unavailable_with_url_and_hint(
         result = await _call(monkeypatch, offline_memory, tool)
 
     payload = json.loads(result.content[0].text)
-    assert result.isError is True
+    assert result.is_error is True
     assert payload["success"] is False
     assert payload["code"] == "server_unavailable"
     assert payload["server_url"] == url
@@ -89,7 +83,7 @@ async def test_server_refusal_is_reported_with_the_server_detail(
         result = await _call(monkeypatch, memory, "memory_list_intents")
 
     payload = json.loads(result.content[0].text)
-    assert result.isError is True
+    assert result.is_error is True
     assert payload["code"] == "server_rejected"
     assert payload["status_code"] == 400
     assert payload["detail"] == "repo_id is required"
@@ -111,6 +105,6 @@ async def test_unexpected_failure_keeps_the_generic_path(offline_memory, monkeyp
 
     text = result.content[0].text
     assert "super-secret" not in text
-    assert result.isError is False
+    assert result.is_error is False
     assert json.loads(text)["code"] == "request_failed"
     assert _mcp_records(caplog)[-1].exc_info is not None

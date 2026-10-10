@@ -44,8 +44,7 @@ DOCUMENTED_FULL_TOOL_COUNT = 36
 
 async def _advertised_payload_bytes(tmp_path, monkeypatch, profile: str) -> tuple[int, int]:
     """Return (tool count, serialized byte size) of what `profile` advertises."""
-    from mcp.types import ListToolsRequest
-
+    from tests.mcp_client import list_tools
     from visp_memory.interfaces.mcp import create_mcp_server
 
     config = MemoryConfig(repo_id="footprint-repo")
@@ -55,8 +54,7 @@ async def _advertised_payload_bytes(tmp_path, monkeypatch, profile: str) -> tupl
     monkeypatch.setenv("VISP_MEMORY_MCP_PROFILE", profile)
     with mock.patch("visp_memory.interfaces.mcp.Memory", return_value=memory):
         server = create_mcp_server()
-    response = await server.request_handlers[ListToolsRequest](ListToolsRequest())
-    tools = response.root.tools
+    tools = await list_tools(server)
     # What crosses the wire into the assistant's context: name, description,
     # input schema. Nothing else about a Tool costs the client anything.
     payload = json.dumps(
@@ -64,7 +62,7 @@ async def _advertised_payload_bytes(tmp_path, monkeypatch, profile: str) -> tupl
             {
                 "name": tool.name,
                 "description": tool.description,
-                "inputSchema": tool.inputSchema,
+                "inputSchema": tool.input_schema,
             }
             for tool in sorted(tools, key=lambda t: t.name)
         ],

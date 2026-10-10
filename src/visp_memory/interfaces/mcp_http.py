@@ -171,10 +171,13 @@ class StatelessMCPApp:
                             ),
                             b"",
                         )
+                        # The body is re-serialized below, so the SDK's
+                        # Content-Length no longer describes it; the server
+                        # falls back to chunked transfer encoding.
                         headers = [
                             (name, value)
                             for name, value in message.get("headers", [])
-                            if name.lower() != b"x-request-id"
+                            if name.lower() not in (b"x-request-id", b"content-length")
                         ]
                         headers.append((b"x-request-id", request_id.encode("ascii")))
                         outgoing = {**message, "headers": headers}

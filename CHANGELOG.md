@@ -19,6 +19,9 @@ tag has no section yet) as the GitHub release body. See
   are skipped by retention; purge them explicitly if needed.
 - A task brief no longer reports an active intent unless the task shares a topic word
   with it; otherwise it lists the missing intent under unknowns.
+- The `mcp` extra now requires the MCP Python SDK 2.x (`mcp>=2.0.0,<3.0.0`). An
+  environment that pins `mcp<2` for another tool cannot install `visp-memory[mcp]`
+  alongside it. Clients on older protocol versions still connect.
 
 ### Added
 
@@ -53,6 +56,9 @@ tag has no section yet) as the GitHub release body. See
   stop taking vector search slots.
 - Task briefs read the relationship graph once, read contradiction targets without
   counting an access, and keep the same fingerprint as trust scores decay.
+- The stateless HTTP MCP server (`visp-memory-mcp-http`) no longer sends a wrong
+  `Content-Length`, which made uvicorn drop every JSON response and left clients with
+  an empty reply.
 
 ## [0.8.1] - 2026-10-09
 

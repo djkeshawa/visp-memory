@@ -92,6 +92,68 @@ class _Client:
         await self._lifespan.__aexit__(*exc)
 
 
+async def _raw_asgi_post(app, payload):
+    """POST through the ASGI interface directly and return the sent messages.
+
+    httpx's ASGI transport ignores Content-Length; a real server (uvicorn/h11)
+    aborts a response whose body disagrees with it, so check it at this level.
+    """
+    import anyio
+
+    body = json.dumps(payload).encode()
+    messages = []
+    done = anyio.Event()
+    delivered = False
+
+    async def receive():
+        nonlocal delivered
+        if not delivered:
+            delivered = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        await done.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        messages.append(message)
+        if message["type"] == "http.response.body" and not message.get("more_body"):
+            done.set()
+
+    headers = [(name.encode(), value.encode()) for name, value in HEADERS.items()]
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/mcp",
+        "raw_path": b"/mcp",
+        "query_string": b"",
+        "root_path": "",
+        "headers": headers
+        + [(b"host", b"127.0.0.1"), (b"content-length", str(len(body)).encode())],
+        "client": ("127.0.0.1", 50000),
+        "server": ("127.0.0.1", 80),
+    }
+    async with app.lifespan():
+        await app(scope, receive, send)
+    return messages
+
+
+@pytest.mark.asyncio
+async def test_sanitized_json_response_never_declares_a_wrong_content_length(tmp_path):
+    # The transport re-serializes JSON bodies to strip error detail; forwarding the
+    # SDK's Content-Length then undercounts the body and uvicorn drops the response.
+    app = _build_app(tmp_path)
+    messages = await _raw_asgi_post(
+        app, _tool_call("memory_record", {"event": "length check", "repo_id": "http-repo"})
+    )
+    start = next(m for m in messages if m["type"] == "http.response.start")
+    sent = b"".join(m.get("body", b"") for m in messages if m["type"] == "http.response.body")
+    declared = {name.lower(): value for name, value in start["headers"]}.get(b"content-length")
+    assert declared is None or int(declared) == len(sent)
+    assert "Recorded event" in json.loads(sent)["result"]["content"][0]["text"]
+
+
 class TestStatelessTransport:
     @pytest.mark.asyncio
     async def test_tool_call_needs_no_handshake_and_no_session(self, tmp_path):
