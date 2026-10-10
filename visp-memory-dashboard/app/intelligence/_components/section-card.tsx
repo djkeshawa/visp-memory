@@ -15,13 +15,15 @@ interface SectionCardProps {
   kind: MemoryIntelligenceReportKind
   threshold: string
   isLoading: boolean
+  /** The load failed; an empty list then means "unknown", not "nothing found". */
+  unavailable?: boolean
   count: number
   emptyLabel: string
   unit: string
   children: ReactNode
 }
 
-export function SectionCard({ id, title, kind, threshold, isLoading, count, emptyLabel, unit, children }: SectionCardProps) {
+export function SectionCard({ id, title, kind, threshold, isLoading, unavailable = false, count, emptyLabel, unit, children }: SectionCardProps) {
   return (
     <section aria-labelledby={id} className="surface flex min-w-0 flex-col gap-3 rounded-2xl p-5">
       <div className="flex items-center justify-between gap-3">
@@ -36,7 +38,7 @@ export function SectionCard({ id, title, kind, threshold, isLoading, count, empt
           <div className="shimmer h-4 w-2/3 rounded" />
         </div>
       ) : count === 0 ? (
-        <p className="text-sm text-muted-foreground">{emptyLabel}</p>
+        <p className="text-sm text-muted-foreground">{unavailable ? "Unavailable." : emptyLabel}</p>
       ) : (
         <>
           <ul className="m-0 flex list-none flex-col p-0">{children}</ul>

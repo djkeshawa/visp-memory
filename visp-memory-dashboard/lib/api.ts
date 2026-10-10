@@ -252,8 +252,12 @@ export async function setAccountEnabled(userId: string, enabled: boolean): Promi
 }
 
 export async function logout(): Promise<void> {
-    await request("/auth/logout", { method: "POST" })
-    clearAuthCredentials()
+    try {
+        await request("/auth/logout", { method: "POST" })
+    } finally {
+        // Signing out must forget this browser's credentials even when the server call fails.
+        clearAuthCredentials()
+    }
 }
 
 export async function listPersonalAccessTokens(): Promise<PersonalAccessToken[]> {
@@ -329,6 +333,7 @@ async function readErrorDetail(res: Response): Promise<string | undefined> {
             const body = await res.json()
             const detail = body?.detail || body?.message || body?.error
             if (Array.isArray(detail)) return detail.map((item) => item?.msg || String(item)).join("; ")
+            if (detail && typeof detail === "object") return JSON.stringify(detail)
             if (detail) return String(detail)
         } else {
             const text = await res.text()
@@ -346,9 +351,15 @@ export async function getStats(repoId?: string | null): Promise<Stats> {
     // dashboard now, and this call must keep asking for the JSON.
     const res = await request(withQuery("/status", { repo_id: repoId }), { headers: authHeaders() })
     const data = await res.json()
+    if (data.stats_status === "unavailable") {
+        const detail = "Memory statistics are unavailable; the server could not count this project's memories."
+        // The response itself is a 200; report the outcome it describes, not the transport status.
+        throw new ApiError(detail, 503, detail, res.headers.get("X-Request-ID") || undefined)
+    }
     const stats = data.stats || data
 
     return {
+        partial: data.stats_status === "partial",
         totalMemories: stats.total_memories || 0,
         activeIntents: stats.active_intents || 0,
         knowledgeNodes: stats.memories_by_layer?.semantic || 0,

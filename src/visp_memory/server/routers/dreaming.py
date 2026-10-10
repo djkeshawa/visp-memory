@@ -11,6 +11,7 @@ from visp_memory.server.auth import UserContext, get_current_user
 from visp_memory.server.authorization import require_owner_or_admin, require_repo_writable
 
 router = APIRouter(prefix="/dreaming", tags=["dreaming"])
+# Repository IDs may contain "/", so suffix routes are registered before the bare GET.
 
 
 class Schedule(BaseModel):
@@ -40,16 +41,7 @@ async def execute(method, *args, **kwargs):
         raise HTTPException(409, str(error)) from error
 
 
-@router.get("/{repo_id}")
-async def status(request: Request, repo_id: str, user: UserContext = Depends(get_current_user)):
-    dream = service(request, repo_id, user)
-    return {
-        "settings": await execute(dream.settings, repo_id),
-        "runs": await execute(dream.history, repo_id),
-    }
-
-
-@router.put("/{repo_id}/schedule")
+@router.put("/{repo_id:path}/schedule")
 async def schedule(
     request: Request, repo_id: str, body: Schedule, user: UserContext = Depends(get_current_user)
 ):
@@ -57,17 +49,17 @@ async def schedule(
     return await execute(dream.configure, repo_id, **body.model_dump())
 
 
-@router.get("/{repo_id}/preview")
+@router.get("/{repo_id:path}/preview")
 async def preview(request: Request, repo_id: str, user: UserContext = Depends(get_current_user)):
     return await execute(service(request, repo_id, user).preview, repo_id)
 
 
-@router.post("/{repo_id}/run")
+@router.post("/{repo_id:path}/run")
 async def run(request: Request, repo_id: str, user: UserContext = Depends(get_current_user)):
     return await execute(service(request, repo_id, user).run, repo_id, actor_id=user.user_id)
 
 
-@router.post("/{repo_id}/runs/{run_id}/proposals/{proposal_id}")
+@router.post("/{repo_id:path}/runs/{run_id}/proposals/{proposal_id}")
 async def review(
     request: Request,
     repo_id: str,
@@ -86,10 +78,19 @@ async def review(
     )
 
 
-@router.post("/{repo_id}/actions/{action_id}/undo")
+@router.post("/{repo_id:path}/actions/{action_id}/undo")
 async def undo(
     request: Request, repo_id: str, action_id: str, user: UserContext = Depends(get_current_user)
 ):
     return await execute(
         service(request, repo_id, user).undo, repo_id, action_id, actor_id=user.user_id
     )
+
+
+@router.get("/{repo_id:path}")
+async def status(request: Request, repo_id: str, user: UserContext = Depends(get_current_user)):
+    dream = service(request, repo_id, user)
+    return {
+        "settings": await execute(dream.settings, repo_id),
+        "runs": await execute(dream.history, repo_id),
+    }

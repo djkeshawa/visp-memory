@@ -58,7 +58,8 @@ export default function TaskBriefPage() {
         previousFingerprint: checkForChanges ? brief?.fingerprint : null,
       })
       if (generation !== requestGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
-      setBrief(result)
+      // An unchanged reply carries no evidence; keep the brief on screen and only mark it unchanged.
+      setBrief((current) => (result.unchanged && current ? { ...current, unchanged: true } : result))
     } catch (error) {
       if (generation !== requestGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
       setErrorMessage(describeApiError(error))

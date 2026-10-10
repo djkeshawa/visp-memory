@@ -23,8 +23,9 @@ export function MemoryTotals({ stats, repoId, isLoading, unavailable }: MemoryTo
   const ready = !isLoading && !unavailable && !!stats
   const counts = MEMORY_LAYERS.map((layer) => ({ layer, value: stats?.byLayer?.[layer] }))
   const layered = counts.reduce((sum, item) => sum + (item.value || 0), 0)
+  const atLeast = stats?.partial ? "at least " : ""
   const summary = !ready || !stats ? (isLoading ? "Loading…" : "Unavailable")
-    : `${stats.totalMemories.toLocaleString()} memories · ${stats.connections.toLocaleString()} connections · ${stats.activeIntents.toLocaleString()} active intents`
+    : `${atLeast}${stats.totalMemories.toLocaleString()} memories · ${atLeast}${stats.connections.toLocaleString()} connections · ${atLeast}${stats.activeIntents.toLocaleString()} active intents`
 
   return (
     <section aria-label="Memory totals" aria-busy={isLoading} className="surface flex flex-col gap-5 rounded-2xl p-5 sm:p-6">
@@ -51,7 +52,7 @@ export function MemoryTotals({ stats, repoId, isLoading, unavailable }: MemoryTo
                 {config.label}
               </span>
               <span className="text-[28px] font-semibold leading-tight tracking-tight tabular-nums group-hover:text-highlight">
-                {ready ? (item.value ?? 0).toLocaleString() : "—"}
+                {ready ? `${stats?.partial ? "≥ " : ""}${(item.value ?? 0).toLocaleString()}` : "—"}
               </span>
               <span className="text-xs text-muted-foreground">{LAYER_DETAIL[item.layer].hint}</span>
             </Link>

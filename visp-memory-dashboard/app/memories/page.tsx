@@ -58,9 +58,9 @@ export default function MemoriesPage() {
         onRestore={(memory) => void library.restore(memory)}
         onPurge={(memory) => void library.purge(memory)}
       /> : null}
-      {!loading && memories.length === 0 ? (
+      {loading || error ? null : memories.length === 0 ? (
         <p className="surface rounded-2xl p-8 text-center text-sm text-muted-foreground">No {statusLabel} memories in this project.</p>
-      ) : !loading && filtering && visible.length === 0 ? (
+      ) : filtering && visible.length === 0 ? (
         <p className="surface rounded-2xl p-8 text-center text-sm text-muted-foreground">No memories on this page match the filter.</p>
       ) : null}
 

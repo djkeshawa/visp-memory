@@ -64,6 +64,7 @@ function HealthContent() {
         halflifeDays={halflifeDays}
         limit={limit}
         isLoading={isLoading}
+        hasError={!!errorMessage}
         onHalflife={setHalflifeDays}
         onLimit={setLimit}
         onPreview={() => void loadPreview()}

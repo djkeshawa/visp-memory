@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react"
 import {
   describeApiError,
   getEmbeddingIndexStatus,
+  isApiError,
   getModelRoutingStatus,
   getProviderDiagnostics,
   getStorageDiagnostics,
@@ -31,6 +32,8 @@ export function useDiagnostics() {
   const [reindexResult, setReindexResult] = useState<EmbeddingReindexResult | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // Search index and task-model routing are administrator-only; a 403 there hides only that section.
+  const [adminOnly, setAdminOnly] = useState({ embeddingIndex: false, modelRouting: false })
   const [testingProvider, setTestingProvider] = useState<string | null>(null)
   const [isReindexing, setIsReindexing] = useState(false)
   const [isTestingModel, setIsTestingModel] = useState(false)
@@ -52,28 +55,32 @@ export function useDiagnostics() {
     const requestedRepoId = selectedRepoId
     const generation = ++diagnosticsGenerationRef.current
     setIsLoading(true)
-    try {
-      const [providerData, indexData, storageData, modelData] = await Promise.all([
-        getProviderDiagnostics(),
-        getEmbeddingIndexStatus(requestedRepoId),
-        getStorageDiagnostics(),
-        getModelRoutingStatus(),
-      ])
-      if (generation !== diagnosticsGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
-      setProviders(providerData)
-      setEmbeddingIndex(indexData)
-      setStorageDiagnostics(storageData)
-      setModelRouting(modelData)
-      setLoadError(null)
-    } catch (error) {
-      if (generation !== diagnosticsGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
-      console.error("Failed to fetch diagnostics:", error)
-      setLoadError(describeApiError(error))
-    } finally {
-      if (generation === diagnosticsGenerationRef.current && selectedRepoIdRef.current === requestedRepoId) {
-        setIsLoading(false)
+    const [providerData, indexData, storageData, modelData] = await Promise.allSettled([
+      getProviderDiagnostics(),
+      getEmbeddingIndexStatus(requestedRepoId),
+      getStorageDiagnostics(),
+      getModelRoutingStatus(),
+    ])
+    if (generation !== diagnosticsGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
+    const isForbidden = (result: PromiseSettledResult<unknown>) =>
+      result.status === "rejected" && isApiError(result.reason) && result.reason.status === 403
+    const errors: unknown[] = []
+    const settle = <T,>(result: PromiseSettledResult<T>, apply: (value: T | null) => void, adminOnlySection = false) => {
+      if (result.status === "fulfilled") {
+        apply(result.value)
+        return
       }
+      apply(null)
+      if (!(adminOnlySection && isForbidden(result))) errors.push(result.reason)
     }
+    settle(providerData, (value) => setProviders(value ?? []))
+    settle(indexData, setEmbeddingIndex, true)
+    settle(storageData, setStorageDiagnostics)
+    settle(modelData, setModelRouting, true)
+    setAdminOnly({ embeddingIndex: isForbidden(indexData), modelRouting: isForbidden(modelData) })
+    if (errors.length > 0) console.error("Failed to fetch diagnostics:", errors)
+    setLoadError(errors.length > 0 ? describeApiError(errors[0]) : null)
+    setIsLoading(false)
   }
 
   const handleReindex = async (dryRun: boolean) => {
@@ -131,7 +138,7 @@ export function useDiagnostics() {
 
   return {
     providers, embeddingIndex, storageDiagnostics, modelRouting, reindexResult,
-    isLoading, loadError, testingProvider, isReindexing, isTestingModel, modelMessage,
+    isLoading, loadError, adminOnly, testingProvider, isReindexing, isTestingModel, modelMessage,
     loadDiagnostics, handleReindex, handleTest, handleModelTest,
   }
 }
