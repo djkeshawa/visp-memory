@@ -44,6 +44,7 @@ WRITE_TOOL_ARGS = {
     "memory_update_intent": {"intent_id": "intent-1"},
     "memory_close_intent": {"intent_id": "intent-1"},
     "memory_after_work": {"summary": "finished"},
+    "memory_session_start": {"task": "refactoring auth"},
     "memory_feedback_log": {"event_type": "used", "memory_id": "memory-1"},
     "memory_feedback_reset": {"confirm": True},
 }

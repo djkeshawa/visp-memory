@@ -11,7 +11,7 @@ What these tests pin, in order of what would hurt if it silently broke:
 - ``memory_model_task`` cannot hang waiting for sampling a stateless request
   can never deliver: with no client sampling capability it must take the
   server-side provider path and refuse with the repair when none is configured.
-- ``main`` refuses to bind a non-loopback address without a token.
+- ``main`` refuses to bind a non-loopback address without server authentication.
 """
 
 import asyncio
@@ -729,6 +729,8 @@ class TestMainGuards:
     def test_refuses_non_loopback_bind_without_token(self, monkeypatch, capsys):
         monkeypatch.setenv("VISP_MEMORY_MCP_HTTP_HOST", "0.0.0.0")
         monkeypatch.delenv("VISP_MEMORY_MCP_HTTP_TOKEN", raising=False)
+        # The guard follows enforced authentication, not the static token.
+        monkeypatch.setenv("VISP_MEMORY_SERVER_AUTH_ENABLED", "false")
         assert main() == 1
         out = capsys.readouterr().out
         assert "VISP_MEMORY_MCP_HTTP_TOKEN" in out

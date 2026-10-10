@@ -61,6 +61,14 @@ The command must be on the client's PATH and the client must launch it with the
 project as its working directory so normal `visp-memory.yaml` discovery works.
 Check the client's own configuration format when adapting this example.
 
+A stdio server started in an initialized project is pinned to that project's
+`repo_id`. Its tools and `memory://` resources read and write only that
+repository: a different `repo_id` argument, or an intent or memory ID that
+belongs to another repository, is refused. Set
+`VISP_MEMORY_MCP_ALLOW_REPO_OVERRIDE=true` only when a client should deliberately
+pass another `repo_id`; ID-addressed calls must then name the repository that
+owns the record.
+
 ## The everyday workflow
 
 | Moment | Tools |
@@ -198,8 +206,12 @@ schema-size measurement, not a token-billing or coding-quality result.
 
 `visp-memory-mcp-http` runs the stateless HTTP transport. Configure
 `VISP_MEMORY_MCP_HTTP_HOST` (default `127.0.0.1`), `VISP_MEMORY_MCP_HTTP_PORT`
-(default `8848`), and `VISP_MEMORY_MCP_HTTP_TOKEN`. A bearer token is required
-before binding beyond loopback.
+(default `8848`). Binding beyond loopback requires server authentication
+(`VISP_MEMORY_SERVER_AUTH_ENABLED`, on by default), so every request must carry
+a personal access token and acts as that token's principal.
+`VISP_MEMORY_MCP_HTTP_TOKEN` grants no memory scope and does not permit a
+network bind: with server authentication enabled it is ignored, and without it
+the token only gates requests on loopback.
 
 Clients should send project scope explicitly. Requests to `/mcp` do not depend
 on server-side session IDs. Tools and resources apply the authenticated user's
