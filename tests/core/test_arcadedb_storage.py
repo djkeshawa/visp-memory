@@ -154,19 +154,17 @@ class FakeArcadeDb:
                 if "RETURN AFTER" in sql:
                     return [record]
             return [] if "RETURN AFTER" in sql else None
-        if sql.startswith("DELETE FROM "):
+        if sql.startswith("DELETE FROM ") or sql.startswith("DELETE EDGE "):
+            kind = sql.split()[1]
             type_name = sql.split()[2]
-            if "WHERE memory_id = ?" in sql:
-                memory_id = params[0]
-                for record_id, record in list(self.records[type_name].items()):
-                    if record.get("memory_id") == memory_id:
-                        self.records[type_name].pop(record_id, None)
+            store = self.records[type_name] if kind == "FROM" else self.edges[type_name]
+            field = re.search(r"WHERE (\w+) = \?", sql).group(1)
+            if field == "id":
+                store.pop(params[0], None)
             else:
-                self.records[type_name].pop(params[0], None)
-            return None
-        if sql.startswith("DELETE EDGE "):
-            edge_type = sql.split()[2]
-            self.edges[edge_type].pop(params[0], None)
+                for record_id, record in list(store.items()):
+                    if record.get(field) == params[0]:
+                        store.pop(record_id, None)
             return None
         raise AssertionError(f"Unhandled SQL command: {sql}")
 
@@ -217,6 +215,12 @@ class FakeArcadeDb:
                         if row.get("layer") is None or row.get("layer") != "raw"
                     ]
                     continue
+                if condition.endswith(" LIKE ?"):
+                    field = condition.split(" LIKE ?", 1)[0]
+                    needle = params[param_index].strip("%")
+                    rows = [row for row in rows if needle in str(row.get(field) or "")]
+                    param_index += 1
+                    continue
                 field = condition.split(" = ?", 1)[0]
                 expected = params[param_index]
                 rows = [row for row in rows if row.get(field) == expected]
@@ -227,7 +231,7 @@ class FakeArcadeDb:
             field, direction = order_match.groups()
             rows.sort(key=lambda row: row.get(field) or "", reverse=direction == "DESC")
 
-        limit = params[-1] if params else len(rows)
+        limit = params[-1] if " LIMIT ?" in sql else len(rows)
         skip = params[-2] if " SKIP ? " in sql else 0
         return rows[skip : skip + limit]
 
@@ -709,8 +713,11 @@ def test_arcadedb_repository_purge_retains_repository_on_authority_cleanup_failu
     assert storage.get_repository("repo-a") is not None
     assert "ba-a" in fake_arcadedb.db.edges["BeliefAuthority"]
     assert "att-a" in fake_arcadedb.db.records["AuthorityAttestation"]
+    # delete_memory removes the authority graph atomically with the belief, so the
+    # failure surfaces there and the belief is retained alongside its attestation.
+    assert storage.peek_memory(belief_id) is not None
     assert any(
-        error["kind"] == "BeliefAuthority" and error["id"] == "ba-a"
+        error["kind"] == "memory" and error["id"] == belief_id
         for error in report["errors"]
     )
 
@@ -1681,3 +1688,78 @@ def test_arcadedb_signed_prohibition_replay_from_another_agent(
     assert storage.get_memory(belief_id)["metadata"]["written_by"]["agent"] == "alice"
     with pytest.raises(ProhibitionAuthorityError):
         write("bob", text="Never bypass review, ever")
+
+
+def test_arcadedb_search_finds_matches_below_the_importance_window(fake_arcadedb, tmp_path):
+    storage = ArcadeDbStorage(tmp_path)
+    for index in range(260):
+        storage.store_memory(
+            f"unrelated note number {index}", repo_id="r", importance=0.9, auto_link=False
+        )
+    target = storage.store_memory(
+        "the kafka consumer retries forever", repo_id="r", importance=0.5, auto_link=False
+    )
+
+    found = [memory["id"] for memory in storage.search_memories("kafka", repo_id="r")]
+
+    assert found == [target]
+
+
+def test_arcadedb_related_memories_exclude_non_servable_statuses(fake_arcadedb, tmp_path):
+    storage = ArcadeDbStorage(tmp_path)
+    first = storage.store_evidence("first evidence", repo_id="r")
+    second = storage.store_evidence("second evidence", repo_id="r")
+    old = storage.store_memory(
+        "API uses v1", layer="semantic", category="fact", repo_id="r", evidence_ids=[first]
+    )
+    new = storage.revise_memory(old, "API uses v2", evidence_ids=[second])
+    assert storage.peek_memory(old)["status"] == "superseded"
+    assert any(
+        old in (edge["source_id"], edge["target_id"])
+        for edge in storage.get_all_relationships(repo_id="r")
+    )
+
+    assert storage.get_related_memories(new) == []
+
+
+def test_arcadedb_delete_memory_drops_source_reference_and_attestation(
+    fake_arcadedb, tmp_path
+):
+    storage = ArcadeDbStorage(tmp_path)
+    source = storage.store_memory("source episode", repo_id="r", auto_link=False)
+    other = storage.store_memory("other source episode", repo_id="r", auto_link=False)
+    derived = storage.store_memory(
+        "derived episode", repo_id="r", source_ids=[source, other], auto_link=False
+    )
+    fake_arcadedb.db.records["AuthorityAttestation"]["att"] = {
+        "id": "att",
+        "belief_id": source,
+        "envelope": "full prohibition text",
+    }
+    fake_arcadedb.db.edges["BeliefAuthority"]["ba"] = {
+        "id": "ba",
+        "belief_id": source,
+        "attestation_id": "att",
+    }
+
+    assert storage.delete_memory(source) is True
+
+    assert storage.peek_memory(derived)["source_ids"] == [other]
+    assert "att" not in fake_arcadedb.db.records["AuthorityAttestation"]
+    assert "ba" not in fake_arcadedb.db.edges["BeliefAuthority"]
+
+
+def test_arcadedb_repository_restore_clears_archived_at(fake_arcadedb, tmp_path):
+    storage = ArcadeDbStorage(tmp_path)
+    storage.store_repository({"id": "r", "name": "r"})
+
+    assert storage.update_repository("r", status="archived") is True
+    assert storage.get_repository("r")["archived_at"]
+    assert storage.update_repository("r", status="active") is True
+
+    repository = storage.get_repository("r")
+    assert repository["status"] == "active"
+    assert repository.get("archived_at") is None
+    # Other None-valued fields still mean "unchanged".
+    assert storage.update_repository("r", description=None, name="renamed") is True
+    assert storage.get_repository("r").get("archived_at") is None

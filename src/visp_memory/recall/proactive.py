@@ -184,10 +184,36 @@ class ProactiveRecall:
             Dict with 'warnings', 'bugs', 'decisions', 'knowledge' and
             'active_intent' keys
         """
-        file_path = self._normalize_path(file_path)
-        repo_id = self.repo_id
         trust_results: List[TrustFilterResult] = []
         eligibility_results: List[EligibilityFilterResult] = []
+        results = self._file_context(
+            file_path, include_related, trust_results, eligibility_results
+        )
+        self._record_filters(results, trust_results, eligibility_results)
+        return results
+
+    def _record_filters(
+        self,
+        results: Dict[str, Any],
+        trust_results: List[TrustFilterResult],
+        eligibility_results: List[EligibilityFilterResult],
+    ) -> None:
+        self.last_trust_filter = TrustFilterResult.combine(trust_results).diagnostics()
+        self.last_eligibility_filter = EligibilityFilterResult.combine(
+            eligibility_results
+        ).diagnostics()
+        results["trust_filter"] = self.last_trust_filter
+        results["eligibility_filter"] = self.last_eligibility_filter
+
+    def _file_context(
+        self,
+        file_path: str,
+        include_related: bool,
+        trust_results: List[TrustFilterResult],
+        eligibility_results: List[EligibilityFilterResult],
+    ) -> Dict[str, Any]:
+        file_path = self._normalize_path(file_path)
+        repo_id = self.repo_id
 
         results = {
             "warnings": [],
@@ -347,13 +373,6 @@ class ProactiveRecall:
             )
 
         results["active_intent"] = self.active_intent()
-
-        self.last_trust_filter = TrustFilterResult.combine(trust_results).diagnostics()
-        self.last_eligibility_filter = EligibilityFilterResult.combine(
-            eligibility_results
-        ).diagnostics()
-        results["trust_filter"] = self.last_trust_filter
-        results["eligibility_filter"] = self.last_eligibility_filter
         return results
 
     def for_files(self, files: List[str]) -> Dict[str, Any]:
@@ -376,12 +395,25 @@ class ProactiveRecall:
             "decisions": [],
             "knowledge": [],
             "related": [],
+            "recent_changes": [],
         }
+        seen: Dict[str, set] = {key: set() for key in aggregated}
+        # One set of filter reports across every file, combined once, so the
+        # diagnostics describe the whole block rather than whichever file ran last.
+        trust_results: List[TrustFilterResult] = []
+        eligibility_results: List[EligibilityFilterResult] = []
         for file in files:
-            file_context = self.on_file_open(file)
+            file_context = self._file_context(file, True, trust_results, eligibility_results)
             for key in aggregated:
-                aggregated[key].extend(file_context.get(key, []))
+                for item in file_context.get(key, []):
+                    item_id = item.get("id")
+                    if item_id and item_id in seen[key]:
+                        continue
+                    if item_id:
+                        seen[key].add(item_id)
+                    aggregated[key].append(item)
         aggregated["active_intent"] = self.active_intent()
+        self._record_filters(aggregated, trust_results, eligibility_results)
         return aggregated
 
     def active_intent(self) -> Optional[str]:

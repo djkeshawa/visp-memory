@@ -4,9 +4,9 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from visp_memory.config import load_config
-from visp_memory.core.attribution import stamp_written_by, without_written_by
+from visp_memory.core.attribution import stamp_written_by
 from visp_memory.core.clock import utc_now
-from visp_memory.core.trust import WriteChannel
+from visp_memory.core.trust import RESERVED_METADATA_KEYS, WriteChannel
 from visp_memory.layers.intent import IntentMemory
 from visp_memory.server.attribution_metadata import preserve_written_by
 from visp_memory.server.auth import UserContext, get_current_user
@@ -94,8 +94,16 @@ async def create_intent(
     intent_repo_id = request_repo_id(intent.repo_id, config)
     require_repo_writable(storage, intent_repo_id, user)
 
-    # Add author attribution
-    context = stamp_written_by(without_written_by(intent.context))
+    # Add author attribution. Reserved keys are the server's to set, as in
+    # create_memory: a caller-supplied team_id would otherwise survive for a
+    # teamless user and plant the intent in another team's view.
+    context = stamp_written_by(
+        {
+            key: value
+            for key, value in (intent.context or {}).items()
+            if key not in RESERVED_METADATA_KEYS
+        }
+    )
     context["author_id"] = user.user_id
     if user.team_id:
         context["team_id"] = user.team_id

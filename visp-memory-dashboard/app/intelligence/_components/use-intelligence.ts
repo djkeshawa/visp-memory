@@ -7,9 +7,14 @@ import type { DecayPreviewItem, DuplicateCandidate, GraphLink, MemoryIntelligenc
 
 export const DECAY_HALFLIFE_DAYS = 30
 
+// Storage fills every link with default evidence (confidence "ambiguous", source "legacy" or
+// "unspecified", a stock reason), so only a real source or a cited file counts as evidence.
+const PLACEHOLDER_SOURCES = new Set(["legacy", "unspecified"])
+
 function hasRelationshipEvidence(link: GraphLink): boolean {
   const evidence = link.evidence
-  return Boolean(evidence?.reason || evidence?.confidence || evidence?.source)
+  if (!evidence) return false
+  return Boolean(evidence.source_file || (evidence.source && !PLACEHOLDER_SOURCES.has(evidence.source)))
 }
 
 /**

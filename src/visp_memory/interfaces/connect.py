@@ -11,7 +11,7 @@ from typing import Callable, Iterable
 import requests
 
 from visp_memory.config_discovery import find_config_file
-from visp_memory.core.paths import run_dir
+from visp_memory.core.paths import run_dir, shared_root
 from visp_memory.core.remote.errors import RemoteStorageError
 from visp_memory.core.remote_storage import RemoteStorage
 from visp_memory.core.storage import is_implicitly_registered
@@ -137,27 +137,32 @@ def _register_repository(remote: RemoteStorage, repo_id: str) -> bool:
         raise ConnectError(f"Could not register repository {repo_id!r}: {error}") from error
 
 
-def install_agent_config(target: str, *, project_root: Path, repo_id: str) -> list[str]:
-    """Run the same project integrations exposed by ``hooks install``."""
-    memory = SimpleNamespace(config=SimpleNamespace(repo_id=repo_id))
-    if target == "codex":
-        from visp_memory.hooks.codex import CODEX_MIGRATION_NOTE, CodexAdapter
-
-        adapter = CodexAdapter(memory, project_root=project_root)
-        results = adapter.install()
-        notes = [CODEX_MIGRATION_NOTE] if adapter.replaced_pinned_config else []
-    elif target == "claude-code":
-        from visp_memory.hooks.claude_code import ClaudeCodeAdapter
-        from visp_memory.hooks.claude_code_auto import install_auto_inject_hooks
-
-        adapter = ClaudeCodeAdapter(memory, project_root=project_root)
-        results = adapter.install()
-        results["claude_mcp_config"] = adapter.install_mcp_config()
-        install_auto_inject_hooks(project_root)
-        notes = []
-    else:
+def _agent_install(
+    target: str, *, project_root: Path, repo_id: str, dry_run: bool,
+) -> list[str]:
+    if target not in SUPPORTED_AGENT_CONFIGS:
         choices = ", ".join(sorted(SUPPORTED_AGENT_CONFIGS))
         raise ConnectError(f"Unknown agent config {target!r}; choose one of: {choices}")
+    memory = SimpleNamespace(config=SimpleNamespace(repo_id=repo_id))
+    try:
+        if target == "codex":
+            from visp_memory.hooks.codex import CODEX_MIGRATION_NOTE, CodexAdapter
+
+            adapter = CodexAdapter(memory, project_root=project_root, dry_run=dry_run)
+            results = adapter.install()
+            notes = [CODEX_MIGRATION_NOTE] if adapter.replaced_pinned_config else []
+        else:
+            from visp_memory.hooks.claude_code import ClaudeCodeAdapter
+            from visp_memory.hooks.claude_code_auto import install_auto_inject_hooks
+
+            adapter = ClaudeCodeAdapter(memory, project_root=project_root, dry_run=dry_run)
+            results = adapter.install()
+            results["claude_mcp_config"] = adapter.install_mcp_config()
+            install_auto_inject_hooks(project_root, dry_run=dry_run)
+            notes = []
+    except ValueError as error:
+        # The adapters refuse files they cannot parse rather than clobber them.
+        raise ConnectError(f"Could not install {target} integration: {error}") from error
 
     failed = [name for name, succeeded in results.items() if not succeeded]
     if failed:
@@ -165,6 +170,26 @@ def install_agent_config(target: str, *, project_root: Path, repo_id: str) -> li
             f"Could not install {target} integration: {', '.join(sorted(failed))}"
         )
     return notes
+
+
+def install_agent_config(target: str, *, project_root: Path, repo_id: str) -> list[str]:
+    """Run the same project integrations exposed by ``hooks install``."""
+    return _agent_install(target, project_root=project_root, repo_id=repo_id, dry_run=False)
+
+
+def preflight_agent_config(target: str, *, project_root: Path, repo_id: str) -> None:
+    """Parse and validate an integration's files without writing any of them."""
+    _agent_install(target, project_root=project_root, repo_id=repo_id, dry_run=True)
+
+
+def _refuse_shared_server_config(config_path: Path) -> None:
+    root = shared_root().expanduser().resolve()
+    if config_path.resolve().is_relative_to(root):
+        raise ConnectError(
+            f"Refusing to connect using {config_path}: it belongs to the shared server "
+            f"in {root}, not to a project. Run `visp-memory init` in the project first, "
+            "or unset VISP_MEMORY_CONFIG."
+        )
 
 
 def connect_project(
@@ -180,6 +205,7 @@ def connect_project(
     project_root = find_project_root(start_dir)
     selected = find_config_file(start_dir)
     config_path = selected[0] if selected else project_root / "visp-memory.yaml"
+    _refuse_shared_server_config(config_path)
     document = load_document(config_path)
     storage = _storage_document(document)
     resolved_repo_id = _repo_id(document, repo_id, project_root)
@@ -204,11 +230,25 @@ def connect_project(
             f"Unknown agent config {unknown_agents[0]!r}; choose one of: {choices}"
         )
 
+    # Fail on an unparseable agent file before the client config is switched, so
+    # a refusal never leaves the project half-connected.
+    for target in requested_agents:
+        preflight_agent_config(target, project_root=project_root, repo_id=resolved_repo_id)
+
     configured_url = os.environ.get("VISP_MEMORY_STORAGE_SERVER_URL") or storage.get("server_url")
     credentials_allowed = not (server_url is None and discovered is not None) or (
         isinstance(configured_url, str)
         and normalize_server_url(configured_url) == resolved_url
     )
+    stored_credentials = sorted(key for key in ("api_key", "jwt_token") if storage.get(key))
+    if not credentials_allowed and stored_credentials:
+        # Writing the discovered URL next to these credentials would send them to
+        # a server they were never configured for on every later command.
+        raise ConnectError(
+            f"Discovered server {resolved_url} is not the server configured for "
+            f"storage.{' and storage.'.join(stored_credentials)} in {config_path}. "
+            "Nothing was changed. Pass `--server-url` to choose the server explicitly."
+        )
     remote = _remote_storage(
         storage, resolved_url, resolved_repo_id, credentials_allowed=credentials_allowed,
     )

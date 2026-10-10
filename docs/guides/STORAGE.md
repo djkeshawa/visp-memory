@@ -69,12 +69,18 @@ Only a server in
 so for a server with credentials pass `--server-url` (or accept the fallback).
 API key and JWT credentials are withheld from an automatically discovered URL
 unless it matches `storage.server_url` (including its environment override).
+If the active config stores `storage.api_key` or `storage.jwt_token` for a
+different server, `connect` refuses and leaves the config unchanged rather than
+saving those credentials beside the discovered URL; pass `--server-url` to
+choose the server explicitly.
 
 The repository ID is, in order: `--repo`, then `repo_id` in the active
 project config, then the project root's directory name. Config selection uses
 the same discovery order as normal startup (including `VISP_MEMORY_CONFIG`).
 The project root is the discovered config's project base; failing that, the Git
-top-level directory; failing that, the current directory.
+top-level directory; failing that, the current directory. The shared server's own
+`~/.visp-memory/config.yaml` is never discovered as a project config, and
+`connect` refuses to edit it even when `VISP_MEMORY_CONFIG` selects it.
 
 `connect` updates that active config with `repo_id`, `storage.mode: client`, and
 `storage.server_url`, preserving unrelated settings. It creates `visp-memory.yaml`
@@ -97,8 +103,11 @@ omit turn-key hits when that route is unavailable, and retry legacy capability
 probes so upgrades become visible.
 
 To copy records from the project's previous local store, add
-`--migrate-local`. The import goes through the server and the old data directory
-is retained. The command refuses if any local records belong to a different
+`--migrate-local`. The source is the store local startup would open, so
+`VISP_MEMORY_STORAGE_DATA_DIR` and `VISP_MEMORY_STORAGE_BACKEND` apply. If a
+project still in local mode has no store there (missing or empty directory), the
+command refuses and leaves the config unchanged. The import goes through the
+server and the old data directory is retained. The command refuses if any local records belong to a different
 repository ID, names the source and target IDs, and leaves the config unchanged.
 Use `--repo <original-id>` for a store belonging to that repository; export/import
 repositories separately for a store containing multiple scopes. Never point

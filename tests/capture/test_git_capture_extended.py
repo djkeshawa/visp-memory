@@ -223,7 +223,7 @@ def test_install_and_uninstall_hooks_backup_foreign_files(memory, repo):
     )
     installed = foreign.read_text(encoding="utf-8")
     assert installed.startswith("#!/bin/sh\n")
-    assert "visp-memory capture git commit --ref HEAD" in installed
+    assert 'visp-memory capture git commit --ref "$ref"' in installed
     assert installed.rstrip().endswith("exit 0")
     merge_hook = hooks / "post-merge"
     merge_installed = merge_hook.read_text(encoding="utf-8")

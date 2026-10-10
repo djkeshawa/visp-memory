@@ -10,6 +10,7 @@ Supports two modes:
 from pathlib import Path
 from typing import Dict
 
+from visp_memory.core.instruction_markers import neutralize_markers
 from visp_memory.hooks.base import LLMToolAdapter, _replace_between_markers
 
 
@@ -185,8 +186,11 @@ class GenericAdapter(LLMToolAdapter):
         if self.dry_run:
             return True
 
-        # Get memory context
-        context = self.get_memory_context(files=files, task=task)
+        # Get memory context; recalled text must not be able to end the region.
+        context = neutralize_markers(
+            self.get_memory_context(files=files, task=task),
+            *([self.injection_marker] if self.injection_marker else []),
+        )
 
         # Add header
         full_context = (

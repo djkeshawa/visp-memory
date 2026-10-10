@@ -45,29 +45,25 @@ export function BriefResult({ brief, isLoading, canCheck, copied, onCheck, onCop
         {brief.abstained ? <Callout tone="warning">{brief.abstentionReason || "The brief abstained because it could not find reliable evidence."}</Callout> : null}
         {brief.truncated ? <Callout tone="warning">Truncated to fit the token budget{brief.metrics.omittedCount ? `: ${brief.metrics.omittedCount} candidate${brief.metrics.omittedCount === 1 ? "" : "s"} left out` : ""}. Raise the budget to include more.</Callout> : null}
       </div>
-      {!brief.unchanged ? (
-        <>
-          {SECTION_ORDER.map((name) => (
-            <SectionBlock key={name} name={name} items={brief.sections[name] ?? []} contradictions={name === "warnings" ? brief.contradictions : []} />
-          ))}
-          {evidenceCount === 0 && !brief.contradictions.length ? <p className="border-b border-border px-5 py-4 text-sm text-muted-foreground sm:px-6">No evidence was selected for this brief.</p> : null}
-          <section aria-labelledby="brief-unknowns" className="flex flex-col gap-2 px-5 py-4 sm:px-6">
-            <h3 id="brief-unknowns" className="eyebrow">Unknowns</h3>
-            {brief.unknowns.length ? (
-              <ul className="flex flex-col gap-1.5 text-sm">{brief.unknowns.map((unknown) => <li key={unknown}>{unknown}</li>)}</ul>
-            ) : <p className="text-sm text-muted-foreground">The server listed no unknowns to verify.</p>}
-            <p className="text-xs text-muted-foreground">
-              {brief.intent ? `Matched intent: ${brief.intent.description}` : "No active intent matched this task."} Ranking scores order candidates; they are not probabilities, and memory is not authoritative.
-            </p>
-            {brief.context ? (
-              <details className="well mt-2 rounded-xl p-3.5 text-sm">
-                <summary className="font-medium">Compiled context text</summary>
-                <pre className="mt-3 max-h-[28rem] overflow-auto whitespace-pre-wrap break-words font-mono text-[13px] leading-6">{brief.context}</pre>
-              </details>
-            ) : null}
-          </section>
-        </>
-      ) : null}
+      {SECTION_ORDER.map((name) => (
+        <SectionBlock key={name} name={name} items={brief.sections[name] ?? []} contradictions={name === "warnings" ? brief.contradictions : []} />
+      ))}
+      {evidenceCount === 0 && !brief.contradictions.length ? <p className="border-b border-border px-5 py-4 text-sm text-muted-foreground sm:px-6">No evidence was selected for this brief.</p> : null}
+      <section aria-labelledby="brief-unknowns" className="flex flex-col gap-2 px-5 py-4 sm:px-6">
+        <h3 id="brief-unknowns" className="eyebrow">Unknowns</h3>
+        {brief.unknowns.length ? (
+          <ul className="flex flex-col gap-1.5 text-sm">{brief.unknowns.map((unknown) => <li key={unknown}>{unknown}</li>)}</ul>
+        ) : <p className="text-sm text-muted-foreground">The server listed no unknowns to verify.</p>}
+        <p className="text-xs text-muted-foreground">
+          {brief.intent ? `Matched intent: ${brief.intent.description}` : "No active intent matched this task."} Ranking scores order candidates; they are not probabilities, and memory is not authoritative.
+        </p>
+        {brief.context ? (
+          <details className="well mt-2 rounded-xl p-3.5 text-sm">
+            <summary className="font-medium">Compiled context text</summary>
+            <pre className="mt-3 max-h-[28rem] overflow-auto whitespace-pre-wrap break-words font-mono text-[13px] leading-6">{brief.context}</pre>
+          </details>
+        ) : null}
+      </section>
     </section>
   )
 }

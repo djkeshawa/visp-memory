@@ -6,6 +6,7 @@ from visp_memory.core.attribution import without_written_by
 from visp_memory.core.clock import utc_now
 from visp_memory.core.team import Team, TeamManager, User
 from visp_memory.server.auth import UserContext, get_current_user
+from visp_memory.server.authorization import has_admin_privileges
 from visp_memory.server.schemas import (
     MemberAdd,
     TeamCreate,
@@ -18,7 +19,7 @@ router = APIRouter(prefix="/teams", tags=["teams"])
 
 
 def _require_admin(current_user: UserContext):
-    if not current_user.is_admin:
+    if not has_admin_privileges(current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Team management requires an admin user",
@@ -26,11 +27,11 @@ def _require_admin(current_user: UserContext):
 
 
 def _can_access_user(user_id: str, current_user: UserContext) -> bool:
-    return current_user.is_admin or current_user.user_id == user_id
+    return has_admin_privileges(current_user) or current_user.user_id == user_id
 
 
 def _can_access_team(team_id: str, current_user: UserContext) -> bool:
-    return current_user.is_admin or (
+    return has_admin_privileges(current_user) or (
         bool(current_user.team_id) and current_user.team_id == team_id
     )
 
@@ -180,7 +181,7 @@ async def get_user_teams(
 
     team_mgr = TeamManager(request.app.state.storage)
     teams = team_mgr.get_user_teams(user_id)
-    if not current_user.is_admin:
+    if not has_admin_privileges(current_user):
         teams = [team for team in teams if team.id == current_user.team_id]
 
     return [

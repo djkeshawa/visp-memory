@@ -12,6 +12,7 @@ import logging
 import re
 import sqlite3
 import threading
+import time
 import uuid
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
@@ -88,6 +89,13 @@ RECALL_EVENT_WEIGHTS: dict[str, float] = {
 REINFORCING_RECALL_EVENTS = frozenset({"used", "task_linked", "outcome_linked"})
 SENSITIVE_RECALL_METADATA_KEYS = {"prompt", "response", "query", "content", "messages"}
 STORAGE_SCHEMA_VERSION = 5
+
+
+def _py_lower(value: Any) -> Any:
+    """SQLite ``py_lower``: Python's Unicode lowercasing (SQLite's is ASCII-only)."""
+    return value.lower() if isinstance(value, str) else value
+
+
 _STORAGE_TABLE_NAMES = frozenset(
     {
         "audit_logs",
@@ -1064,6 +1072,23 @@ class BaseStorage(ABC):
         pass
 
 
+def _imported_replaces_belief_id(envelope: Any, belief: Dict[str, Any]) -> Optional[str]:
+    """Return the predecessor an imported prohibition's signed claim must name.
+
+    A revised prohibition signs the id of the belief it replaces, and the
+    revision records that id as ``metadata.revision_of``. Only a claim that
+    names a predecessor expects one, so unrelated ``revision_of`` metadata on an
+    original prohibition does not break its verification.
+    """
+    try:
+        claim = json.loads(envelope).get("claim") if isinstance(envelope, str) else None
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(claim, dict) or "replaces_belief_id" not in claim:
+        return None
+    return (belief.get("metadata") or {}).get("revision_of")
+
+
 class LocalStorage(BaseStorage):
     """Unified storage for structured data and vector embeddings (Local SQLite + Chroma)."""
 
@@ -1104,45 +1129,28 @@ class LocalStorage(BaseStorage):
         self._init_sqlite()
 
     def _init_sqlite(self):
-        """Initialize SQLite schema."""
-        with self._get_db() as conn:
-            existing_tables = {
-                row["name"]
-                for row in conn.execute(
-                    "SELECT name FROM sqlite_master "
-                    "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
-                ).fetchall()
-            }
-            stored_version = 0
-            if "schema_migrations" in existing_tables:
-                row = conn.execute(
-                    "SELECT MAX(version) AS version FROM schema_migrations"
-                ).fetchone()
-                stored_version = int(row["version"] or 0)
+        """Initialize SQLite schema.
 
-            if stored_version == 0 and existing_tables & _STORAGE_TABLE_NAMES:
-                raise StorageMigrationRequired(
-                    "Unversioned legacy storage requires an explicit migration; "
-                    "back up the database before converting it to schema "
-                    f"{STORAGE_SCHEMA_VERSION}"
-                )
-            if stored_version > STORAGE_SCHEMA_VERSION:
-                raise RuntimeError(
-                    "Storage schema is newer than this visp-memory build "
-                    f"({stored_version} > {STORAGE_SCHEMA_VERSION})"
-                )
-            if stored_version and stored_version < STORAGE_SCHEMA_VERSION:
-                raise StorageMigrationRequired(
-                    f"Storage schema {stored_version} requires explicit migration to "
-                    f"{STORAGE_SCHEMA_VERSION}; create a backup and run "
-                    "LocalStorage.migrate_schema(...)"
-                )
-            if stored_version == STORAGE_SCHEMA_VERSION:
-                self._validate_v5_schema(conn)
+        Compatibility checks run read-only first, so a store this build must not
+        open is never written. Every schema statement and the version row then
+        commit in a single ``BEGIN IMMEDIATE`` transaction: concurrent first opens
+        serialize on the write lock, and an interrupted first open leaves nothing
+        behind (closing the connection without a commit rolls it back).
+        """
+        with self._get_db() as conn:
+            self._check_schema_compatibility(conn)
 
             # Enable WAL only after compatibility checks: it persists in the
             # database header and legacy stores must remain byte-for-byte unchanged.
-            conn.execute("PRAGMA journal_mode=WAL")
+            # journal_mode cannot change inside a transaction, so it precedes BEGIN.
+            self._enable_wal(conn)
+            # Explicit transaction control, so the DDL below cannot autocommit
+            # piecemeal outside the transaction that records the schema version.
+            conn.isolation_level = None
+            conn.execute("BEGIN IMMEDIATE")
+            # Another process may have created the store (or abandoned a partial
+            # one) between the read-only checks and taking the write lock.
+            recovering = self._check_schema_compatibility(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -1258,11 +1266,12 @@ class LocalStorage(BaseStorage):
                     status TEXT DEFAULT 'active',
                     context TEXT DEFAULT '{}',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    repo_id TEXT DEFAULT NULL
                 )
             """)
 
-            # Migration: Check if repo_id column exists in intents
+            # Migration: Check if repo_id column exists in intents (legacy stores)
             try:
                 conn.execute("SELECT repo_id FROM intents LIMIT 1")
             except sqlite3.OperationalError:
@@ -1461,6 +1470,7 @@ class LocalStorage(BaseStorage):
                 "CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance)"
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_intents_status ON intents(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_intents_repo ON intents(repo_id)")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_intents_repo_status_priority "
                 "ON intents(repo_id, status, priority)"
@@ -1497,8 +1507,90 @@ class LocalStorage(BaseStorage):
                 "INSERT OR IGNORE INTO schema_migrations(version) VALUES (?)",
                 (STORAGE_SCHEMA_VERSION,),
             )
+            if recovering:
+                self._validate_v5_schema(conn)
 
-            conn.commit()
+            conn.execute("COMMIT")
+
+    @staticmethod
+    def _enable_wal(conn: sqlite3.Connection, timeout: float = 30.0) -> None:
+        """Switch to WAL, retrying while a concurrent first open holds the file.
+
+        Converting a fresh file needs an exclusive lock, and SQLite reports
+        "database is locked" for it without consulting the busy handler.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                return
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc) or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.02)
+
+    @classmethod
+    def _check_schema_compatibility(cls, conn: sqlite3.Connection) -> bool:
+        """Refuse a store this build must not open.
+
+        Returns True for the remains of an abandoned first open, which the
+        caller completes inside its schema transaction.
+        """
+        existing_tables = {
+            row["name"]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+        }
+        stored_version = 0
+        if "schema_migrations" in existing_tables:
+            row = conn.execute(
+                "SELECT MAX(version) AS version FROM schema_migrations"
+            ).fetchone()
+            stored_version = int(row["version"] or 0)
+
+        if stored_version == 0 and existing_tables & _STORAGE_TABLE_NAMES:
+            if cls._is_abandoned_first_open(conn, existing_tables):
+                return True
+            raise StorageMigrationRequired(
+                "Unversioned legacy storage requires an explicit migration; "
+                "back up the database before converting it to schema "
+                f"{STORAGE_SCHEMA_VERSION}"
+            )
+        if stored_version > STORAGE_SCHEMA_VERSION:
+            raise RuntimeError(
+                "Storage schema is newer than this visp-memory build "
+                f"({stored_version} > {STORAGE_SCHEMA_VERSION})"
+            )
+        if stored_version and stored_version < STORAGE_SCHEMA_VERSION:
+            raise StorageMigrationRequired(
+                f"Storage schema {stored_version} requires explicit migration to "
+                f"{STORAGE_SCHEMA_VERSION}; create a backup and run "
+                "LocalStorage.migrate_schema(...)"
+            )
+        if stored_version == STORAGE_SCHEMA_VERSION:
+            cls._validate_v5_schema(conn)
+        return False
+
+    @staticmethod
+    def _is_abandoned_first_open(conn: sqlite3.Connection, existing_tables: set) -> bool:
+        """Recognise a store left behind by a pre-transactional first open.
+
+        Earlier builds created ``schema_migrations`` first and recorded the version
+        last, each DDL statement autocommitting, so an interrupted or raced first
+        open left an empty ``schema_migrations`` beside some storage tables. A
+        genuine legacy store either predates ``schema_migrations`` or holds data;
+        only a store with no rows anywhere is safe to finish initializing.
+        """
+        if "schema_migrations" not in existing_tables:
+            return False
+        if not existing_tables <= _STORAGE_TABLE_NAMES | {"schema_migrations"}:
+            return False
+        return all(
+            conn.execute(f'SELECT 1 FROM "{table}" LIMIT 1').fetchone() is None
+            for table in existing_tables
+        )
 
     @staticmethod
     def _register_repositories_for_existing_scopes(conn: sqlite3.Connection) -> None:
@@ -1990,6 +2082,9 @@ class LocalStorage(BaseStorage):
                 repo_id=belief["repo_id"],
                 metadata=belief.get("metadata") or {},
                 evidence=evidence_claim,
+                expected_replaces_belief_id=_imported_replaces_belief_id(
+                    attestation.get("envelope"), belief
+                ),
             )
             if (
                 attestation_id != f"att-{verified.digest}"
@@ -2291,14 +2386,16 @@ class LocalStorage(BaseStorage):
                             values,
                         )
                 for layer, payload in vector_write_payloads.items():
-                    vector_collections[layer].upsert(**payload)
+                    self._write_vector_batches(vector_collections[layer].upsert, payload)
                 conn.commit()
             except Exception as exc:
                 conn.rollback()
                 residual_ids: List[str] = []
                 for layer, payload in vector_write_payloads.items():
                     try:
-                        vector_collections[layer].delete(ids=payload["ids"])
+                        self._write_vector_batches(
+                            vector_collections[layer].delete, {"ids": payload["ids"]}
+                        )
                     except Exception:
                         logger.error(
                             "Vector compensation failed for imported %s memory IDs",
@@ -2805,6 +2902,9 @@ class LocalStorage(BaseStorage):
             # persistent database-level setting applied once in _init_sqlite.
             conn.execute("PRAGMA busy_timeout=30000")
             conn.execute("PRAGMA foreign_keys=ON")
+            # SQLite's lower() folds ASCII only; lexical search compares against
+            # Python-lowered terms, so it needs Python's Unicode case mapping.
+            conn.create_function("py_lower", 1, _py_lower, deterministic=True)
             yield conn
         finally:
             conn.close()
@@ -2847,11 +2947,11 @@ class LocalStorage(BaseStorage):
         if layer not in self._collections:
             collection_name = self._collection_name(layer)
             try:
-                self._collections[layer] = client.get_collection(collection_name)
+                collection = client.get_collection(collection_name)
             except Exception:
                 # Create collection with cosine distance for proper similarity scores
                 # ChromaDB uses "hnsw:space" parameter - "cosine", "l2", or "ip" (inner product)
-                self._collections[layer] = client.create_collection(
+                collection = client.create_collection(
                     name=collection_name,
                     metadata={
                         "description": f"Memory embeddings for {layer} layer",
@@ -2859,9 +2959,40 @@ class LocalStorage(BaseStorage):
                         "embedding_dimension": self._embedding_dimension or 0,
                     },
                 )
-                self._backfill_collection(layer, self._collections[layer])
+                try:
+                    self._backfill_collection(layer, collection)
+                except Exception as exc:
+                    # A half-filled collection would be found by get_collection next
+                    # time and never backfilled again. Drop it so the next access
+                    # retries; until then the layer is served without vectors.
+                    logger.warning(
+                        "Vector backfill failed for %s; retrying on next access: %s",
+                        collection_name,
+                        exc,
+                    )
+                    try:
+                        client.delete_collection(collection_name)
+                    except Exception:
+                        pass
+                    return None
+            self._collections[layer] = collection
 
         return self._collections[layer]
+
+    def _vector_batch_size(self) -> int:
+        """Largest write Chroma accepts in one call (fallback 1000)."""
+        try:
+            size = int(self._get_chroma().get_max_batch_size())
+        except Exception:
+            return 1000
+        return size if size > 0 else 1000
+
+    def _write_vector_batches(self, write, payload: Dict[str, list]) -> None:
+        """Call ``write`` (upsert/delete) on ``payload`` in batches Chroma accepts."""
+        batch_size = self._vector_batch_size()
+        total = len(payload["ids"])
+        for start in range(0, total, batch_size):
+            write(**{key: values[start:start + batch_size] for key, values in payload.items()})
 
     def _collection_name(self, layer: MemoryLayer) -> str:
         """Keep dimensions and versioned retrieval instructions in separate spaces."""
@@ -3092,14 +3223,19 @@ class LocalStorage(BaseStorage):
                     for memory_id in payload["ids"]
                 )
                 continue
-            try:
-                collection.upsert(**payload)
-                reindexed += len(payload["ids"])
-            except Exception as exc:
-                errors.extend(
-                    {"id": memory_id, "error": exc.__class__.__name__}
-                    for memory_id in payload["ids"]
-                )
+            batch_size = self._vector_batch_size()
+            for start in range(0, len(payload["ids"]), batch_size):
+                batch = {
+                    key: values[start:start + batch_size] for key, values in payload.items()
+                }
+                try:
+                    collection.upsert(**batch)
+                    reindexed += len(batch["ids"])
+                except Exception as exc:
+                    errors.extend(
+                        {"id": memory_id, "error": exc.__class__.__name__}
+                        for memory_id in batch["ids"]
+                    )
 
         if self._turn_keys is not None:
             for memory in candidates:
@@ -3132,47 +3268,65 @@ class LocalStorage(BaseStorage):
         )
 
     def _backfill_collection(self, layer: MemoryLayer, collection) -> None:
-        """Populate a newly-created vector collection from SQLite memory rows."""
+        """Populate a newly-created vector collection from SQLite memory rows.
+
+        Every status is indexed, as ``rebuild_embedding_index`` does: vector
+        search filters on the status metadata, so a non-active row must still
+        have a vector to be found with ``status="archived"`` or ``"all"``. Rows
+        are read and written one Chroma batch at a time.
+        """
         if self._embedding_fn is None:
             return
 
-        memories = self.list_memories(layer=layer, limit=10000, order_by="created_at ASC")
-        if not memories:
-            return
-
-        ids = []
-        documents = []
-        metadatas = []
-        embeddings = []
-
-        for memory in memories:
-            try:
-                safe_content, _ = redact_for_storage(memory["content"], None)
-                embedding = self._embedding_fn(safe_content)
-            except Exception:
-                continue
-
-            metadata = {
-                "category": memory.get("category") or "general",
-                "importance": memory.get("importance") or 0.5,
-                "tags": self._json_serialize(memory.get("tags") or []),
-                "status": memory.get("status") or "active",
-            }
-            if memory.get("repo_id"):
-                metadata["repo_id"] = memory["repo_id"]
-
-            ids.append(memory["id"])
-            documents.append(safe_content)
-            metadatas.append(metadata)
-            embeddings.append(embedding)
-
-        if ids:
-            collection.upsert(
-                ids=ids,
-                documents=documents,
-                metadatas=metadatas,
-                embeddings=embeddings,
+        batch_size = self._vector_batch_size()
+        after_id = None
+        while True:
+            memories = self.list_memories(
+                layer=layer,
+                status="all",
+                limit=batch_size,
+                order_by="id ASC",
+                after_id=after_id,
             )
+            if not memories:
+                return
+            after_id = memories[-1]["id"]
+
+            ids = []
+            documents = []
+            metadatas = []
+            embeddings = []
+
+            for memory in memories:
+                try:
+                    safe_content, _ = redact_for_storage(memory["content"], None)
+                    embedding = self._embedding_fn(safe_content)
+                except Exception:
+                    continue
+
+                metadata = {
+                    "category": memory.get("category") or "general",
+                    "importance": memory.get("importance") or 0.5,
+                    "tags": self._json_serialize(memory.get("tags") or []),
+                    "status": memory.get("status") or "active",
+                }
+                if memory.get("repo_id"):
+                    metadata["repo_id"] = memory["repo_id"]
+
+                ids.append(memory["id"])
+                documents.append(safe_content)
+                metadatas.append(metadata)
+                embeddings.append(embedding)
+
+            if ids:
+                collection.upsert(
+                    ids=ids,
+                    documents=documents,
+                    metadatas=metadatas,
+                    embeddings=embeddings,
+                )
+            if len(memories) < batch_size:
+                return
 
     @staticmethod
     def _generate_id(content: str) -> str:
@@ -3664,37 +3818,41 @@ class LocalStorage(BaseStorage):
                 )
             conn.commit()
 
-        # Store in vector DB
-        collection = self._get_collection(layer)
-        if collection is not None:
-            metadata_dict = {
-                "category": category,
-                "importance": importance,
-                "tags": self._json_serialize(tags),
-                "status": status,
-            }
-            if repo_id:
-                metadata_dict["repo_id"] = repo_id
+        # Store in vector DB. The SQLite row is already committed above. If the
+        # vector write (including opening or backfilling the collection) fails we
+        # keep the structured row (it is the source of truth) but log loudly so
+        # the divergence is visible; rebuild_embedding_index /
+        # inspect_embedding_index can reconcile the stale vector index.
+        try:
+            collection = self._get_collection(layer)
+            if collection is not None:
+                metadata_dict = {
+                    "category": category,
+                    "importance": importance,
+                    "tags": self._json_serialize(tags),
+                    "status": status,
+                }
+                if repo_id:
+                    metadata_dict["repo_id"] = repo_id
 
-            add_kwargs = {"ids": [memory_id], "documents": [content], "metadatas": [metadata_dict]}
+                add_kwargs = {
+                    "ids": [memory_id],
+                    "documents": [content],
+                    "metadatas": [metadata_dict],
+                }
 
-            if embedding is not None:
-                add_kwargs["embeddings"] = [embedding]
+                if embedding is not None:
+                    add_kwargs["embeddings"] = [embedding]
 
-            # The SQLite row is already committed above. If the vector write
-            # fails we keep the structured row (it is the source of truth) but
-            # log loudly so the divergence is visible; rebuild_embedding_index
-            # / inspect_embedding_index can reconcile the stale vector index.
-            try:
                 collection.upsert(**add_kwargs)
-            except Exception as exc:
-                logger.warning(
-                    "Vector upsert failed for memory %s; SQLite row persisted but the "
-                    "vector index is now stale (run rebuild_embedding_index to "
-                    "reconcile): %s",
-                    memory_id,
-                    exc,
-                )
+        except Exception as exc:
+            logger.warning(
+                "Vector upsert failed for memory %s; SQLite row persisted but the "
+                "vector index is now stale (run rebuild_embedding_index to "
+                "reconcile): %s",
+                memory_id,
+                exc,
+            )
         self._index_turn_keys(memory_id)
 
         self._auto_link_memory(
@@ -3786,13 +3944,16 @@ class LocalStorage(BaseStorage):
                 return None
 
             if track_access:
+                # Same ISO-8601 form store_memory writes; SQLite's CURRENT_TIMESTAMP
+                # ("YYYY-MM-DD HH:MM:SS") would sort before it and break
+                # ORDER BY accessed_at.
                 conn.execute(
                     """
                     UPDATE memories
-                    SET access_count = access_count + 1, accessed_at = CURRENT_TIMESTAMP
+                    SET access_count = access_count + 1, accessed_at = ?
                     WHERE id = ?
                 """,
-                    (memory_id,),
+                    (utc_now().isoformat(), memory_id),
                 )
                 conn.commit()
 
@@ -3973,10 +4134,12 @@ class LocalStorage(BaseStorage):
         if terms:
             # A source episode can contain thousands of terms during auto-linking.
             # A table-valued parameter avoids SQLite's expression/variable limits
-            # without dropping the tail of the query or changing LIKE semantics.
+            # without dropping the tail of the query. instr() is a literal substring
+            # test (LIKE would treat % and _ in a term as wildcards), and py_lower
+            # folds case the same way the terms were folded, beyond ASCII.
             sql += (
                 " AND EXISTS (SELECT 1 FROM json_each(?) AS query_term"
-                " WHERE lower(memories.content) LIKE '%' || query_term.value || '%')"
+                " WHERE instr(py_lower(memories.content), query_term.value) > 0)"
             )
             params.append(json.dumps(terms))
 
@@ -4140,7 +4303,8 @@ class LocalStorage(BaseStorage):
             updates.append("status = ?")
             params.append(status)
             if status == "archived":
-                updates.append("archived_at = COALESCE(archived_at, CURRENT_TIMESTAMP)")
+                updates.append("archived_at = COALESCE(archived_at, ?)")
+                params.append(utc_now().isoformat())
             elif status == "active":
                 updates.append("archived_at = NULL")
 
@@ -4197,10 +4361,10 @@ class LocalStorage(BaseStorage):
         memory = self._get_memory_row(memory_id, track_access=False)
         if not memory:
             return
-        collection = self._get_collection(memory["layer"])
-        if collection is None:
-            return
         try:
+            collection = self._get_collection(memory["layer"])
+            if collection is None:
+                return
             metadata_dict = {
                 "category": memory.get("category", "general"),
                 "importance": memory.get("importance", 0.5),
@@ -4522,6 +4686,9 @@ class LocalStorage(BaseStorage):
         )
 
         with self._get_db() as conn:
+            # The existence check and the write must not interleave with another
+            # writer adding the same edge.
+            conn.execute("BEGIN IMMEDIATE")
             if relationship != self.AUTO_LINK_RELATIONSHIP:
                 conn.execute(
                     """
@@ -4540,30 +4707,48 @@ class LocalStorage(BaseStorage):
                         source_id,
                     ),
                 )
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO relationships (
-                    id, source_id, target_id, relationship, strength,
-                    confidence, confidence_score, source, source_file,
-                    source_location, reason, created_by
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-                (
-                    rel_id,
-                    source_id,
-                    target_id,
-                    relationship,
-                    strength,
-                    evidence_data["confidence"],
-                    evidence_data["confidence_score"],
-                    evidence_data["source"],
-                    evidence_data["source_file"],
-                    evidence_data["source_location"],
-                    evidence_data["reason"],
-                    evidence_data["created_by"],
-                ),
+            # An edge is identified by (source, target, relationship), as the graph
+            # backends MERGE it: re-adding one refreshes its strength and evidence
+            # under the existing id instead of accumulating duplicates.
+            existing = conn.execute(
+                "SELECT id FROM relationships "
+                "WHERE source_id = ? AND target_id = ? AND relationship = ? "
+                "ORDER BY created_at, rowid LIMIT 1",
+                (source_id, target_id, relationship),
+            ).fetchone()
+            evidence_values = (
+                strength,
+                evidence_data["confidence"],
+                evidence_data["confidence_score"],
+                evidence_data["source"],
+                evidence_data["source_file"],
+                evidence_data["source_location"],
+                evidence_data["reason"],
+                evidence_data["created_by"],
             )
+            if existing is not None:
+                rel_id = existing["id"]
+                conn.execute(
+                    """
+                    UPDATE relationships SET
+                        strength = ?, confidence = ?, confidence_score = ?, source = ?,
+                        source_file = ?, source_location = ?, reason = ?, created_by = ?
+                    WHERE id = ?
+                """,
+                    (*evidence_values, rel_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO relationships (
+                        id, source_id, target_id, relationship, strength,
+                        confidence, confidence_score, source, source_file,
+                        source_location, reason, created_by
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (rel_id, source_id, target_id, relationship, *evidence_values),
+                )
             conn.commit()
 
         return rel_id
@@ -4826,10 +5011,10 @@ class LocalStorage(BaseStorage):
                 conn.execute(
                     """
                     UPDATE memories
-                    SET access_count = access_count + 1, accessed_at = CURRENT_TIMESTAMP
+                    SET access_count = access_count + 1, accessed_at = ?
                     WHERE id = ?
                     """,
-                    (memory_id,),
+                    (utc_now().isoformat(), memory_id),
                 )
             conn.commit()
         return event_id

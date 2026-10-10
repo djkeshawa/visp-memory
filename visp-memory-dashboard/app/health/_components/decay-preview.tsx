@@ -24,12 +24,14 @@ interface DecayPreviewProps {
   halflifeDays: number
   limit: number
   isLoading: boolean
+  /** A failed load is reported by the page; the empty state would wrongly read as "no memories". */
+  hasError: boolean
   onHalflife: (value: number) => void
   onLimit: (value: number) => void
   onPreview: () => void
 }
 
-export function DecayPreview({ preview, halflifeDays, limit, isLoading, onHalflife, onLimit, onPreview }: DecayPreviewProps) {
+export function DecayPreview({ preview, halflifeDays, limit, isLoading, hasError, onHalflife, onLimit, onPreview }: DecayPreviewProps) {
   const candidates = preview?.candidates ?? []
   return (
     <section aria-labelledby="decay-heading" className="surface overflow-hidden rounded-2xl">
@@ -72,7 +74,7 @@ export function DecayPreview({ preview, halflifeDays, limit, isLoading, onHalfli
             </tbody>
           </table>
         </div>
-      ) : (
+      ) : hasError ? null : (
         <p className="border-t border-border p-6 text-sm text-muted-foreground">No active memories found.</p>
       )}
     </section>

@@ -105,7 +105,7 @@ def handle_pre_tool_use(payload: dict[str, Any], memory=None) -> Optional[dict[s
 
         state_path = _session_state_path(memory, session_id)
         injected = _load_injected(state_path)
-        normalized = str(file_path).replace("\\", "/")
+        normalized = _project_relative(file_path, payload.get("cwd"))
         if normalized in injected:
             return None
 
@@ -161,6 +161,29 @@ def _extract_file_path(payload: dict[str, Any]) -> Optional[str]:
         if value:
             return str(value)
     return None
+
+
+def _project_relative(file_path: str, cwd: Any = None) -> str:
+    """Express a tool's file path the way memories name files: repo-relative.
+
+    Claude Code passes absolute paths in ``tool_input``, while warnings and
+    decisions are recorded against paths like ``src/auth.py``; an absolute path
+    therefore matched nothing and the hook silently injected no context.
+    """
+    normalized = str(file_path).replace("\\", "/")
+    candidate = Path(normalized)
+    if not candidate.is_absolute():
+        return normalized
+    try:
+        base = Path(str(cwd)) if cwd else Path.cwd()
+        for root, path in ((base, candidate), (base.resolve(), candidate.resolve())):
+            try:
+                return path.relative_to(root).as_posix()
+            except ValueError:
+                continue
+    except OSError:
+        pass
+    return normalized
 
 
 def _session_state_path(memory, session_id: str) -> Path:

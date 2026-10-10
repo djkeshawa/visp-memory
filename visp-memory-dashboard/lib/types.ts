@@ -190,6 +190,8 @@ export interface MemoryMergePreview {
 }
 
 export interface Stats {
+  /** True when the server stopped counting at its scan limit, so every count is a lower bound. */
+  partial: boolean
   totalMemories: number
   activeIntents: number
   knowledgeNodes: number

@@ -150,9 +150,14 @@ class Reconciler:
                 "add", None, best_overlap, "Similar content exists in a different category."
             )
 
-        new_is_longer = len(_normalize(content)) > len(_normalize(str(best.get("content", ""))))
+        # Detail is measured in distinct tokens, not characters: a restatement
+        # that repeats itself or pads its wording is longer without saying more,
+        # and letting it supersede would drop the detail the original carried.
+        adds_detail = best_extends and len(new_tokens) > len(
+            _tokens(str(best.get("content", "")))
+        )
 
-        if best_overlap >= self.noop_threshold and not (best_extends and new_is_longer):
+        if best_overlap >= self.noop_threshold and not adds_detail:
             return ReconcileDecision(
                 "noop",
                 best["id"],
@@ -160,7 +165,7 @@ class Reconciler:
                 "An existing memory already states this.",
             )
 
-        if new_is_longer:
+        if adds_detail:
             return ReconcileDecision(
                 "update",
                 best["id"],

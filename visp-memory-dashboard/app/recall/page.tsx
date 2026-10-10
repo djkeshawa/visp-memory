@@ -44,7 +44,8 @@ function RecallContent() {
       if (generation !== requestGenerationRef.current || selectedRepoIdRef.current !== requestedRepoId) return
       console.error("Search failed:", error)
       setErrorMessage(describeApiError(error))
-      setResults([])
+      // null, not []: a failed search has no results to report, so it must not read as "No results found".
+      setResults(null)
     } finally {
       if (generation === requestGenerationRef.current && selectedRepoIdRef.current === requestedRepoId) {
         setIsLoading(false)
@@ -66,9 +67,9 @@ function RecallContent() {
     setSelectedId(null)
     setErrorMessage(null)
     setIsLoading(false)
-    // The project resolves from the URL after the first render; wait for it so the
-    // handed-over search runs in the right scope.
-    const handedOver = selectedRepoId ? peekRecallQuery() : ""
+    // The project provider renders this page only once the selection is final, so a null
+    // project here means there are no projects, not that one is still loading.
+    const handedOver = peekRecallQuery()
     if (!handedOver) return
     void search.current(handedOver)
     const timer = window.setTimeout(clearRecallQuery, 0)

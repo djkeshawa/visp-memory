@@ -78,6 +78,7 @@ async def test_server_refusal_is_reported_with_the_server_detail(
     # A client with no project scope sends an unscoped read, which a shared
     # server refuses with 400 — the refusal this path must surface verbatim.
     memory._storage.repo_id = None
+    memory.config.repo_id = None
 
     with caplog.at_level(logging.WARNING):
         result = await _call(monkeypatch, memory, "memory_list_intents")

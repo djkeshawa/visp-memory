@@ -1,3 +1,5 @@
+from urllib.parse import quote
+
 import pytest
 
 from visp_memory.server.app import app
@@ -100,3 +102,35 @@ async def test_review_merge_decision_is_accepted_and_respects_protection(client)
     refused = await client.post(path, headers=HEADERS, json={"decision": "merge"})
     assert refused.status_code == 409
     assert all(app.state.storage.get_memory(mid)["status"] == "active" for mid in ids)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repo_id", ["org/project", "org/team/project"])
+async def test_dreaming_routes_accept_slash_repository_ids(client, repo_id):
+    ids = [
+        app.state.storage.store_memory("Repeatable backup note", repo_id=repo_id, auto_link=False)
+        for _ in range(2)
+    ]
+    path = f"/dreaming/{quote(repo_id, safe='')}"
+    preview = await client.get(f"{path}/preview", headers=HEADERS)
+    assert preview.status_code == 200, preview.text
+    schedule = await client.put(
+        f"{path}/schedule", headers=HEADERS, json={"enabled": True, "interval_hours": 24}
+    )
+    assert schedule.status_code == 200, schedule.text
+    result = await client.post(f"{path}/run", headers=HEADERS)
+    assert result.status_code == 200, result.text
+    proposal = result.json()["proposals"][0]
+    review = await client.post(
+        f"{path}/runs/{result.json()['id']}/proposals/{proposal['id']}",
+        headers=HEADERS,
+        json={"decision": "dismiss"},
+    )
+    assert review.status_code != 404, review.text
+    undo = await client.post(f"{path}/actions/{proposal['action_id']}/undo", headers=HEADERS)
+    assert undo.status_code == 200, undo.text
+    assert all(app.state.storage.get_memory(mid)["status"] == "active" for mid in ids)
+    status = await client.get(path, headers=HEADERS)
+    assert status.status_code == 200, status.text
+    assert status.json()["settings"]["enabled"]
+    assert status.json()["runs"][0]["proposals"][0]["resolution"] == "undone"

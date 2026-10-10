@@ -125,7 +125,7 @@ def test_versioned_embeddings_rebuild_revision_brief_and_reopen(graph, monkeypat
         return {"embedding": [1.0, 0.0, 0.0]}
 
     monkeypatch.setitem(sys.modules, "ollama", SimpleNamespace(
-        Client=lambda host: SimpleNamespace(embeddings=embed),
+        Client=lambda host, **_: SimpleNamespace(embeddings=embed),
     ))
     provider = OllamaProvider(model="nomic-embed-text", host="http://unused")
     with Neo4jStorage(**connection, embedding_fn=provider.embed) as storage:

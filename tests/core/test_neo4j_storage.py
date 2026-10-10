@@ -296,6 +296,8 @@ def test_neo4j_get_related_memories_includes_evidence_defaults():
 
     related = storage.get_related_memories("source")
 
+    # Cypher types are uppercase; the storage contract (SQLite) is lowercase.
+    assert related[0]["relationship"] == "related_to"
     assert related[0]["relationship_evidence"] == {
         "confidence": "ambiguous",
         "confidence_score": 0.6,
@@ -340,7 +342,7 @@ def test_neo4j_get_all_relationships_includes_evidence_metadata():
             "id": "rel-1",
             "source_id": "source",
             "target_id": "target",
-            "relationship": "RESOLVED_BY",
+            "relationship": "resolved_by",
             "strength": 0.7,
             "evidence": {
                 "confidence": "manual",
@@ -416,7 +418,7 @@ def nomic_graph(monkeypatch):
         return {"embedding": [1.0, 0.0, 0.0]}
 
     monkeypatch.setitem(sys.modules, "ollama", SimpleNamespace(
-        Client=lambda host: SimpleNamespace(embeddings=embed),
+        Client=lambda host=None, **kwargs: SimpleNamespace(embeddings=embed),
     ))
     provider = OllamaProvider(model="nomic-embed-text", host="http://unused")
     driver = FakeDriver(1)
@@ -919,3 +921,102 @@ def test_neo4j_memory_listing_forwards_offset_and_ordering():
     assert "SKIP $offset" in query
     assert params["limit"] == 25
     assert params["offset"] == 50
+
+
+def test_neo4j_vector_search_fills_scope_starved_by_global_top_k_lexically():
+    # queryNodes ranks the whole index before the repo filter: nearer nodes in
+    # another repo can leave this scope empty. The keyword pass fills the rest.
+    storage = neo4j_storage_with_delete_count(0)
+    storage._embedding_fn = storage._query_embedding_fn = lambda text: [0.1, 0.2]
+    session = storage.driver.session_obj
+    belief = {"id": "b-belief", "content": "kafka retries are capped", "repo_id": "repo-b"}
+    vector_hit = {"id": "b-vector", "content": "kafka consumer", "repo_id": "repo-b"}
+    session.query_results["db.index.vector.queryNodes"] = lambda _params: FakeResult(
+        records=[{"m": vector_hit, "score": 0.9}]
+    )
+    keyword_params = []
+
+    def keyword(params):
+        keyword_params.append(params)
+        return FakeResult(records=[{"m": belief, "score": 1.0}])
+
+    session.query_results["toLower(m.content) CONTAINS term"] = keyword
+
+    results = storage.search_memories("kafka retries", repo_id="repo-b", limit=5)
+
+    assert [m["id"] for m in results] == ["b-vector", "b-belief"]
+    assert [m["retrieval_method"] for m in results] == ["vector", "keyword"]
+    assert keyword_params[0]["exclude_ids"] == ["b-vector"]
+    assert keyword_params[0]["limit"] == 4
+    assert keyword_params[0]["repo_id"] == "repo-b"
+
+    keyword_params.clear()
+    storage.search_memories("kafka retries", repo_id="repo-b", limit=5, retrieval_channel="vector")
+    assert keyword_params == []
+
+
+def test_neo4j_related_memories_exclude_non_servable_statuses():
+    storage = neo4j_storage_with_delete_count(1)
+
+    storage.get_related_memories("new")
+
+    query, params = storage.driver.session_obj.calls[0]
+    assert "NOT related.status IN $non_servable" in query
+    assert params["non_servable"] == ["deleted", "merged", "superseded"]
+
+
+def test_neo4j_stats_count_only_active_memories():
+    storage = neo4j_storage_with_delete_count(1)
+
+    storage.get_stats(repo_id="repo-a")
+
+    memory_queries = [
+        query for query, _ in storage.driver.session_obj.calls if "MATCH (m:Memory)" in query
+    ]
+    assert len(memory_queries) == 2
+    assert all("coalesce(m.status, 'active') = 'active'" in query for query in memory_queries)
+    assert all("m.repo_id = $repo_id" in query for query in memory_queries)
+
+
+def test_neo4j_delete_memory_removes_authority_attestation_in_same_session():
+    storage = neo4j_storage_with_delete_count(1)
+
+    assert storage.delete_memory("belief") is True
+
+    calls = storage.driver.session_obj.calls
+    attestation = [
+        (query, params) for query, params in calls if "AuthorityAttestation" in query
+    ]
+    assert attestation == [
+        ("MATCH (a:AuthorityAttestation {belief_id: $id}) DETACH DELETE a", {"id": "belief"})
+    ]
+    assert calls.index(attestation[0]) < len(calls) - 1  # before the memory delete
+
+
+def test_neo4j_redacting_update_keeps_existing_quality_flags():
+    storage = neo4j_storage_with_delete_count(1)
+    session = storage.driver.session_obj
+    stored = {"id": "m", "content": "x", "quality_flags": '["needs_review"]'}
+    session.query_results["MATCH (m:Memory {id: $id}) RETURN m"] = lambda _params: FakeResult(
+        single_value={"m": stored, "layer": "episodic"}
+    )
+    secret = "deploy with token ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
+
+    assert storage.update_memory("m", content=secret) is True
+
+    params = next(p for q, p in session.calls if "SET m.content" in q)
+    assert "ghp_" not in params["content"]
+    assert params["quality_flags"] == [
+        "needs_review",
+        "secret_redacted",
+        "secret_redacted:github-token",
+    ]
+
+    session.calls.clear()
+    storage.update_memory("m", content=secret, quality_flags=["caller"])
+    params = next(p for q, p in session.calls if "SET m.content" in q)
+    assert params["quality_flags"] == [
+        "caller",
+        "secret_redacted",
+        "secret_redacted:github-token",
+    ]

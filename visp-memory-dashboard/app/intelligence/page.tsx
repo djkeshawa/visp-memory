@@ -61,7 +61,7 @@ function IntelligenceContent() {
             title={section.title}
             kind={section.kind}
             threshold={thresholdText(key, report?.thresholds ?? {})}
-            isLoading={isLoading}
+            isLoading={isLoading} unavailable={!!errorMessage}
             count={section.items.length}
             emptyLabel={`No ${section.title.toLowerCase()} returned.`}
             unit="findings"
@@ -71,20 +71,20 @@ function IntelligenceContent() {
         ))}
         <SectionCard
           id="section-graph-evidence" title="Graph evidence" kind="stored_fact" threshold="Links that record how they were established"
-          isLoading={isLoading} count={graphEvidence.length} emptyLabel="No graph evidence returned." unit="links"
+          isLoading={isLoading} unavailable={!!errorMessage} count={graphEvidence.length} emptyLabel="No graph evidence returned." unit="links"
         >
           <GraphEvidenceItems links={graphEvidence} />
         </SectionCard>
         <SectionCard
           id="section-duplicates" title="Duplicates" kind="inferred_recommendation" threshold="Memories in the same layer with similar text"
-          isLoading={isLoading} count={duplicates.length} emptyLabel="No duplicate candidates returned." unit="candidates"
+          isLoading={isLoading} unavailable={!!errorMessage} count={duplicates.length} emptyLabel="No duplicate candidates returned." unit="candidates"
         >
           <DuplicateItems candidates={duplicates} />
         </SectionCard>
         <SectionCard
           id="section-freshness" title="Freshness" kind="inferred_recommendation"
           threshold={`Projected importance decay, ${DECAY_HALFLIFE_DAYS}-day half-life; stable memories are hidden`}
-          isLoading={isLoading} count={freshness.length} emptyLabel="No stale freshness candidates returned." unit="memories"
+          isLoading={isLoading} unavailable={!!errorMessage} count={freshness.length} emptyLabel="No stale freshness candidates returned." unit="memories"
         >
           <FreshnessItems candidates={freshness} />
         </SectionCard>

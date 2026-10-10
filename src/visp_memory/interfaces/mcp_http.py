@@ -14,11 +14,13 @@ Usage:
 Configuration (environment):
     VISP_MEMORY_MCP_HTTP_HOST   Bind address (default 127.0.0.1).
     VISP_MEMORY_MCP_HTTP_PORT   Port (default 8848).
-    VISP_MEMORY_MCP_HTTP_TOKEN  Optional compatibility bearer token. Required
-                                to bind a non-loopback address. In an
-                                authentication-enabled deployment, requests
-                                must carry a valid ``llmm_`` personal access
-                                token so every request gets its own principal.
+    VISP_MEMORY_MCP_HTTP_TOKEN  Optional compatibility bearer token. It grants
+                                no memory scope: with server authentication
+                                disabled it only gates requests, and with it
+                                enabled it is ignored. It does not permit a
+                                non-loopback bind; only server authentication
+                                (``llmm_`` personal access tokens, one
+                                principal per request) does.
 
 Everything the stdio server reads still applies — ``VISP_MEMORY_MCP_PROFILE``,
 the project config discovered from the working directory, and the
@@ -553,19 +555,34 @@ def main() -> int:
     port = int(os.environ.get("VISP_MEMORY_MCP_HTTP_PORT", str(DEFAULT_PORT)))
     token = os.environ.get("VISP_MEMORY_MCP_HTTP_TOKEN") or None
 
-    if token is None and host not in LOOPBACK_HOSTS:
-        print(
-            f"Refused: binding {host} without a token exposes the memory write surface "
-            "to the network. Set VISP_MEMORY_MCP_HTTP_TOKEN, or bind a loopback address "
-            "and put an authenticating proxy in front."
-        )
-        return 1
-
-    import uvicorn
-
     from visp_memory.config import load_config
 
     config = load_config()
+    auth_enforced = bool(config.server.auth_enabled)
+    # The static token is not a credential for tool calls: with server auth
+    # enabled the PAT check replaces it, and without it the token principal has
+    # no memory scope. So it cannot be what makes a network bind safe; only
+    # per-request PAT authentication can.
+    if not auth_enforced and host not in LOOPBACK_HOSTS:
+        print(
+            f"Refused: binding {host} without server authentication exposes the memory "
+            "surface to the network. VISP_MEMORY_MCP_HTTP_TOKEN does not authorize tool "
+            "calls; enable server authentication (VISP_MEMORY_SERVER_AUTH_ENABLED=true) so "
+            "every request needs a personal access token, or bind a loopback address and "
+            "put an authenticating proxy in front."
+        )
+        return 1
+    if token is not None:
+        logger.warning(
+            "VISP_MEMORY_MCP_HTTP_TOKEN is %s; it grants no memory scope. Use personal "
+            "access tokens with server authentication enabled.",
+            "ignored because server authentication is enabled"
+            if auth_enforced
+            else "only a request gate here",
+        )
+
+    import uvicorn
+
     auth_store = None
     if config.server.auth_enabled:
         try:

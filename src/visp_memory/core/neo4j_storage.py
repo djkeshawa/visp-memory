@@ -27,6 +27,7 @@ from visp_memory.core.ranking import (
     text_similarity,
 )
 from visp_memory.core.storage import (
+    NON_SERVABLE_STATUSES,
     STORAGE_SCHEMA_VERSION,
     BaseStorage,
     LocalStorage,
@@ -54,6 +55,11 @@ def _normalize_relationship_type(relationship: str) -> str:
             "and must start with a letter or underscore"
         )
     return rel_type
+
+
+def _relationship_name(rel_type: Optional[str]) -> Optional[str]:
+    """Map a stored Cypher type back to the lowercase storage-contract name."""
+    return rel_type.lower() if isinstance(rel_type, str) else rel_type
 
 
 class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, Neo4jTurnKeys, BaseStorage):
@@ -726,6 +732,7 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, Neo4jTurnKeys, BaseStorage):
             AND ($category IS NULL OR m.category = $category)
             AND ($status = 'all' OR m.status = $status OR ($status = 'active' AND m.status IS NULL))
             AND m.importance >= $min_importance
+            AND NOT m.id IN $exclude_ids
             AND any(term IN $terms WHERE toLower(m.content) CONTAINS term)
             WITH m, toFloat(size([term IN $terms WHERE toLower(m.content) CONTAINS term]))
                 / size($terms) AS score
@@ -765,38 +772,42 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, Neo4jTurnKeys, BaseStorage):
                 LIMIT $limit
             """
 
+        search_params = dict(
+            query=query,
+            vector_limit=vector_limit,
+            layer=layer,
+            exclude_raw=exclude_raw,
+            repo_id=repo_id,
+            category=category,
+            status=status,
+            min_importance=min_importance,
+            exclude_ids=[],
+        )
         try:
             results = self._run_memory_search(
-                cypher,
-                query=query,
-                embedding=embedding,
-                limit=limit,
-                vector_limit=vector_limit,
-                layer=layer,
-                exclude_raw=exclude_raw,
-                repo_id=repo_id,
-                category=category,
-                status=status,
-                min_importance=min_importance,
+                cypher, embedding=embedding, limit=limit, **search_params
             )
-            return results
         except Exception as e:
             if not embedding or retrieval_channel == "vector":
                 raise
             logger.warning(f"Vector search failed; falling back to text search: {e}")
             return self._run_memory_search(
-                fallback_cypher,
-                query=query,
-                embedding=None,
-                limit=limit,
-                vector_limit=vector_limit,
-                layer=layer,
-                exclude_raw=exclude_raw,
-                repo_id=repo_id,
-                category=category,
-                status=status,
-                min_importance=min_importance,
+                fallback_cypher, embedding=None, limit=limit, **search_params
             )
+        # queryNodes ranks the whole index before the scope filter, so nearer nodes
+        # in other repositories can starve this scope. Fill the remainder lexically,
+        # as SQLite does after its vector pass.
+        if embedding and retrieval_channel != "vector" and len(results) < limit:
+            search_params["exclude_ids"] = [memory["id"] for memory in results]
+            results.extend(
+                self._run_memory_search(
+                    fallback_cypher,
+                    embedding=None,
+                    limit=limit - len(results),
+                    **search_params,
+                )
+            )
+        return results
 
     def _run_memory_search(self, cypher: str, **params) -> List[Dict[str, Any]]:
         params["terms"] = list(dict.fromkeys(re.findall(r"\w+", params["query"].lower())))
@@ -899,13 +910,16 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, Neo4jTurnKeys, BaseStorage):
 
         if content is not None:
             original_content = content
-            content, redaction_flags = redact_for_storage(
-                content,
-                kwargs.get("quality_flags") or [],
-            )
+            content, _ = redact_for_storage(content, None)
             kwargs["content"] = content
             if content != original_content:
-                kwargs["quality_flags"] = redaction_flags
+                # Merge onto the caller's flags, else the stored ones (SQLite parity):
+                # recording a redaction must not wipe existing quality flags.
+                base_flags = kwargs.get("quality_flags")
+                if base_flags is None:
+                    current = self.peek_memory(memory_id)
+                    base_flags = (current or {}).get("quality_flags") or []
+                _, kwargs["quality_flags"] = redact_for_storage(original_content, base_flags)
 
         for k, v in kwargs.items():
             if k not in self._UPDATABLE_FIELDS:
@@ -1138,6 +1152,11 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, Neo4jTurnKeys, BaseStorage):
                 "MATCH (e:RecallFeedback {memory_id: $id}) DETACH DELETE e", id=memory_id,
             ).consume()
             self._remove_turn_keys_tx(session, memory_id)
+            # The attestation carries the full prohibition text; it must not outlive
+            # its belief (SQLite cascades it with the row).
+            session.run(
+                "MATCH (a:AuthorityAttestation {belief_id: $id}) DETACH DELETE a", id=memory_id,
+            ).consume()
             session.run(
                 "MATCH (m:Memory) WHERE $id IN m.source_ids "
                 "SET m.source_ids = [x IN m.source_ids WHERE x <> $id]",
@@ -1390,6 +1409,7 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, Neo4jTurnKeys, BaseStorage):
 
         query = f"""
             MATCH (m:Memory {{id: $id}})-[r{rel_clause}]-(related:Memory)
+            WHERE related.status IS NULL OR NOT related.status IN $non_servable
             RETURN related, type(r) as rel_type, r.weight as strength,
                 r.confidence as confidence,
                 r.confidence_score as confidence_score,
@@ -1402,7 +1422,11 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, Neo4jTurnKeys, BaseStorage):
         """
 
         with self.driver.session() as session:
-            result = session.run(query, id=memory_id)
+            # Edges outlive the memory at their far end; never serve deleted,
+            # merged or superseded neighbours (SQLite parity, MG-030).
+            result = session.run(
+                query, id=memory_id, non_servable=sorted(NON_SERVABLE_STATUSES)
+            )
             items = []
             seen_ids = set()
             for record in result:
@@ -1410,7 +1434,7 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, Neo4jTurnKeys, BaseStorage):
                 if item.get("id") in seen_ids:
                     continue
                 seen_ids.add(item.get("id"))
-                item["relationship"] = record["rel_type"]
+                item["relationship"] = _relationship_name(record["rel_type"])
                 item["strength"] = record["strength"]
                 item["relationship_evidence"] = self._normalize_relationship_evidence(
                     {
@@ -1457,7 +1481,7 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, Neo4jTurnKeys, BaseStorage):
                     "id": rec.get("id") or f"{rec['source']}-{rec['target']}",
                     "source_id": rec["source"],
                     "target_id": rec["target"],
-                    "relationship": rec["type"],
+                    "relationship": _relationship_name(rec["type"]),
                     "strength": rec.get("weight", 1.0),
                     "evidence": self._normalize_relationship_evidence(
                         {
@@ -1561,11 +1585,12 @@ class Neo4jStorage(Neo4jFeedback, Neo4jGovernance, Neo4jTurnKeys, BaseStorage):
 
             # Base match clause
             match_clause = "MATCH (m:Memory)"
-            where_clause = ""
+            # Only servable memories count, matching SQLite and ArcadeDB.
+            where_clause = " WHERE coalesce(m.status, 'active') = 'active'"
             params = {}
 
             if repo_id:
-                where_clause = " WHERE m.repo_id = $repo_id"
+                where_clause += " AND m.repo_id = $repo_id"
                 params["repo_id"] = repo_id
 
             # Count by layer

@@ -192,10 +192,13 @@ class HybridRetriever:
         memory: dict[str, Any], *, files: list[str], symbols: list[str]
     ) -> bool:
         metadata = memory.get("metadata") or {}
-        memory_files = set(metadata.get("files") or metadata.get("applies_to") or [])
+        # Same spelling rule as the structural channel, so "./src/x.py" or
+        # "src\\x.py" still matches the memory about src/x.py.
+        memory_files = set(HybridRetriever._memory_files(memory))
+        query_files = {normalize_path(value) for value in files or []} - {""}
         memory_symbols = set(metadata.get("symbols") or [])
         return bool(
-            (files and memory_files.intersection(files))
+            (query_files and memory_files.intersection(query_files))
             or (symbols and memory_symbols.intersection(symbols))
         )
 

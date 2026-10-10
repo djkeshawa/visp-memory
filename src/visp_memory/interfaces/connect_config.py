@@ -1,6 +1,9 @@
 """Edit client settings without silently discarding a project's config text."""
 
 import json
+import os
+import shutil
+import tempfile
 from pathlib import Path
 
 import yaml
@@ -123,7 +126,12 @@ def _edit_simple_yaml(content: str, merged: dict) -> str | None:
         content = content[:start] + replacement + content[end:]
     # Marks handle quoted '#' and multiline values; equality catches any
     # structure too unusual for this deliberately minimal editor.
-    return content if yaml.safe_load(content) == merged else None
+    try:
+        unchanged = yaml.safe_load(content) == merged
+    except yaml.YAMLError:
+        # An edit that no longer parses is exactly the unusual case to hand back.
+        return None
+    return content if unchanged else None
 
 
 def _save_backup(path: Path) -> Path:
@@ -135,6 +143,24 @@ def _save_backup(path: Path) -> Path:
     with backup.open("xb") as stream:
         stream.write(path.read_bytes())
     return backup
+
+
+def _replace_atomically(path: Path, data: bytes) -> None:
+    """Never leave a truncated config behind if the write is interrupted."""
+    descriptor, temporary = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp",
+    )
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if path.exists():
+            shutil.copymode(path, temporary)
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
 
 
 def write_client_config(path: Path, document: dict, repo_id: str, server_url: str) -> str | None:
@@ -155,7 +181,7 @@ def write_client_config(path: Path, document: dict, repo_id: str, server_url: st
                 note = f"Saved {backup}; YAML comments were not kept in {path}."
         if original != content:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(content.encode("utf-8"))
+            _replace_atomically(path, content.encode("utf-8"))
         return note
     except (OSError, yaml.YAMLError) as error:
         raise ConnectError(f"Cannot write {path}: {error}") from error

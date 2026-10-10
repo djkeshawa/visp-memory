@@ -224,6 +224,21 @@ def _intents_matching(memory: Memory, query: str, repo: str = None) -> int:
     )
 
 
+def _gitignore_entries(data_dir: Path) -> list[str]:
+    """Name exactly the store, never a parent the user's own files live in.
+
+    Visp Memory's own `.visp-memory/` directory is ignored whole. Any other
+    location is ignored by its full relative path, so `--data src/memstore`
+    does not hide `src/`. A store outside the project (absolute or `..`) is
+    not this repository's to ignore.
+    """
+    if data_dir.is_absolute() or data_dir.anchor or ".." in data_dir.parts or not data_dir.parts:
+        return []
+    if data_dir.parts[0] == ".visp-memory":
+        return [".visp-memory/"]
+    return [f"{data_dir.as_posix()}/"]
+
+
 def ensure_gitignored(project_root: Path, data_dir: Path) -> list[str]:
     """Add this tool's own store to .gitignore. Returns what was added.
 
@@ -251,7 +266,7 @@ def ensure_gitignored(project_root: Path, data_dir: Path) -> list[str]:
         return []
 
     present = {line.strip().rstrip("/") for line in existing.splitlines()}
-    wanted = [f"{data_dir.parts[0]}/"] if data_dir.parts else []
+    wanted = _gitignore_entries(data_dir)
 
     missing = [entry for entry in wanted if entry.rstrip("/") not in present]
     if not missing:
@@ -633,16 +648,35 @@ def _storage_doctor_status(config: MemoryConfig) -> dict[str, Any]:
         )
         return status
 
-    try:
-        status_path = Path(config.storage.data_dir)
-        status_path.mkdir(parents=True, exist_ok=True)
-        status["connected"] = True
-        status["status"] = "accessible"
-        status["status_message"] = "Data directory is writable."
-    except Exception as exc:
+    # Diagnose without side effects: doctor must not create the store it inspects.
+    status_path = Path(config.storage.data_dir)
+    if status_path.is_dir():
+        writable = os.access(status_path, os.W_OK | os.X_OK)
+        status["connected"] = writable
+        status["status"] = "accessible" if writable else "unwritable_data_dir"
+        status["status_message"] = (
+            "Data directory is writable."
+            if writable
+            else f"Data directory is not writable: {status_path}"
+        )
+        return status
+    if status_path.exists():
         status["connected"] = False
         status["status"] = "unwritable_data_dir"
-        status["status_message"] = str(exc)
+        status["status_message"] = f"Data path exists but is not a directory: {status_path}"
+        return status
+
+    parent = status_path.parent
+    while not parent.exists() and parent != parent.parent:
+        parent = parent.parent
+    creatable = parent.is_dir() and os.access(parent, os.W_OK | os.X_OK)
+    status["connected"] = creatable
+    status["status"] = "not_created" if creatable else "unwritable_data_dir"
+    status["status_message"] = (
+        "Data directory does not exist yet; it will be created on first write."
+        if creatable
+        else f"Data directory does not exist and {parent} is not writable."
+    )
     return status
 
 
@@ -1019,7 +1053,7 @@ def connect(
             report=lambda message: console.print(message, markup=False, soft_wrap=True),
             agent_configs=agent_config or (),
         )
-    except (ConnectError, OSError, UnicodeError) as error:
+    except (ConnectError, OSError, UnicodeError, ValueError) as error:
         console.print(f"[red]Error:[/red] {error}")
         raise typer.Exit(1)
 
@@ -1241,8 +1275,9 @@ def warn(
 @app.command()
 def convention(
     rule: str = typer.Argument(..., help="The convention/rule"),
-    rationale: str = typer.Option(None, "--rationale", "-r", help="Why this convention exists"),
-    repo: str = typer.Option(None, "--repo", "-rp", help="Repository context"),
+    rationale: str = typer.Option(None, "--rationale", help="Why this convention exists"),
+    # -r is --repo on every command; -rp is kept for scripts written before that.
+    repo: str = typer.Option(None, "--repo", "-r", "-rp", help="Repository context"),
 ):
     """Establish a convention or best practice."""
     memory = get_memory()
@@ -1672,6 +1707,20 @@ def context(
         console.print(Markdown(ctx))
 
 
+_AUDIT_PAGE_SIZE = 1000  # The server caps one /memories page at 1000 rows.
+
+
+def _iter_all_memories(storage, **filters):
+    """Yield every matching memory, a page at a time: audit must not stop at one page."""
+    offset = 0
+    while True:
+        page = storage.list_memories(limit=_AUDIT_PAGE_SIZE, offset=offset, **filters)
+        yield from page
+        if len(page) < _AUDIT_PAGE_SIZE:
+            return
+        offset += len(page)
+
+
 @app.command()
 def audit(
     tier: str = typer.Option(
@@ -1705,7 +1754,7 @@ def audit(
     redacted = 0
 
     for layer in ("episodic", "semantic", "intent"):
-        for item in memory._storage.list_memories(layer=layer, repo_id=scope, limit=1000):
+        for item in _iter_all_memories(memory._storage, layer=layer, repo_id=scope):
             assessment = assess(item)
             counts[assessment.tier.value] = counts.get(assessment.tier.value, 0) + 1
             if assessment.quarantined:
@@ -1744,9 +1793,10 @@ def audit(
                     "total": sum(counts.values()),
                     "by_provenance": counts,
                     "quarantined": quarantined,
-                    "pending_review": len(
-                        memory._storage.list_memories(
-                            repo_id=scope, status="quarantined", limit=1000
+                    "pending_review": sum(
+                        1
+                        for _ in _iter_all_memories(
+                            memory._storage, repo_id=scope, status="quarantined"
                         )
                     ),
                     "stale": stale,
@@ -1772,8 +1822,8 @@ def audit(
     # this command's whole purpose is that nothing in the store is invisible.
     # Proposals from `visp learn` sat at status='quarantined' while audit —
     # which iterates active rows — reported "quarantined: 0".
-    pending_review = len(
-        memory._storage.list_memories(repo_id=scope, status="quarantined", limit=1000)
+    pending_review = sum(
+        1 for _ in _iter_all_memories(memory._storage, repo_id=scope, status="quarantined")
     )
     if pending_review:
         console.print(
@@ -2901,8 +2951,11 @@ def repo_context(
     )
 
     if "error" in context:
-        console.print(f"[red]{context['error']}[/red]")
-        return
+        if format == "json":
+            console.print_json(json.dumps({"error": context["error"]}, default=str))
+        else:
+            console.print(f"[red]{context['error']}[/red]")
+        raise typer.Exit(1)
 
     if format == "json":
         console.print_json(json.dumps(context, default=str))

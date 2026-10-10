@@ -9,7 +9,7 @@ def test_post_commit_hook_uses_cli_ref_option():
 
     script = capture._generate_post_commit_script()
 
-    assert "visp-memory capture git commit --ref HEAD" in script
+    assert 'visp-memory capture git commit --ref "$ref"' in script
     assert "visp-memory capture git commit HEAD" not in script
 
 

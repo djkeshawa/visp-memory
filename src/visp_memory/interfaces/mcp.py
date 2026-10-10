@@ -201,6 +201,14 @@ class MCPAuthorizationError(RuntimeError):
     """A safe, actionable authorization refusal for an MCP client."""
 
 
+class MCPUsageError(ValueError):
+    """A deliberate argument refusal whose message is fixed text, safe to return.
+
+    Raise it only with messages written here, never with caller- or backend-
+    supplied text: unlike any other exception, its message reaches the client.
+    """
+
+
 def _mcp_error_payload(code: str, message: str, **extra: Any) -> dict[str, Any]:
     """Return the stable, correlated shape used for client-visible MCP errors."""
     payload: dict[str, Any] = {
@@ -479,7 +487,7 @@ def create_mcp_server() -> "Server":
                 system_prompt = str(arguments.get("system_prompt", ""))
                 max_tokens = max(64, min(int(arguments.get("max_tokens", 800)), 4000))
                 if not prompt:
-                    raise ValueError("prompt is required")
+                    raise MCPUsageError("prompt is required")
                 _http_preflight(name, arguments, memory)
                 capabilities = getattr(session, "client_capabilities", None)
                 create_message = getattr(session, "create_message", None)
@@ -548,6 +556,17 @@ def create_mcp_server() -> "Server":
                     ),
                 )
             ]
+        except MCPUsageError as error:
+            # A deliberate argument check: its fixed text is the repair the
+            # model needs, so it is returned rather than redacted like an
+            # arbitrary exception would be.
+            logger.info(
+                "MCP invalid arguments request_id=%s tool=%s: %s",
+                current_mcp_request_context().request_id,
+                name,
+                error,
+            )
+            raise MCPToolError(_mcp_error_text("invalid_arguments", str(error))) from None
         except ModelUnavailableError:
             # Keep the operator repair, but never echo provider-generated text.
             logger.warning(
@@ -644,17 +663,21 @@ def create_mcp_server() -> "Server":
         """Read a memory resource."""
         if _requires_explicit_scope():
             return _read_http_resource(uri_str, memory)
+        # A stdio process is pinned to its project. The layer reads below do
+        # not apply config.repo_id themselves, so an omitted scope would read
+        # every repository, including the quarantine bucket.
+        repo_id = memory.config.repo_id
         if uri_str == "memory://context":
-            return memory.context(format="text")
+            return memory.context(format="text", repo_id=repo_id)
 
         elif uri_str == "memory://warnings":
-            warnings = memory.semantic.get_warnings()
+            warnings = memory.semantic.get_warnings(repo_id=repo_id)
             if not warnings:
                 return "No warnings."
             return "\n".join(f"- {w['content']}" for w in warnings)
 
         elif uri_str == "memory://goals":
-            intents = memory.intent.get_active()
+            intents = memory.intent.get_active(repo_id=repo_id)
             if not intents:
                 return "No active goals."
             priority_labels = {0: "LOW", 1: "NORMAL", 2: "HIGH", 3: "CRITICAL"}
@@ -665,13 +688,13 @@ def create_mcp_server() -> "Server":
             return "\n".join(lines)
 
         elif uri_str == "memory://conventions":
-            conventions = memory.semantic.get_conventions()
+            conventions = memory.semantic.get_conventions(repo_id=repo_id)
             if not conventions:
                 return "No conventions established."
             return "\n".join(f"- {c['content']}" for c in conventions)
 
         elif uri_str == "memory://stats":
-            return json.dumps(memory.stats(), indent=2)
+            return json.dumps(memory.stats(repo_id=repo_id), indent=2)
 
         elif uri_str.startswith("memory://file/"):
             # Extract file path from URI
@@ -679,7 +702,7 @@ def create_mcp_server() -> "Server":
 
             from visp_memory.recall.proactive import ProactiveRecall
 
-            recall = ProactiveRecall(memory)
+            recall = ProactiveRecall(memory, repo_id=repo_id)
 
             context = recall.on_file_open(file_path)
             formatted = recall.format_injection(context, format="markdown")
@@ -688,7 +711,7 @@ def create_mcp_server() -> "Server":
 
         elif uri_str == "memory://session":
             # Get current session context
-            summary = memory.intent.summarize()
+            summary = memory.intent.summarize(repo_id=repo_id)
 
             lines = ["# Current Session\n"]
 
@@ -705,7 +728,7 @@ def create_mcp_server() -> "Server":
                 lines.append("")
 
             # Add recent activity
-            recent = memory.episodic.recent(limit=5)
+            recent = memory.episodic.recent(limit=5, repo_id=repo_id)
             if recent:
                 lines.append("\n**Recent Activity:**")
                 for r in recent:
@@ -874,7 +897,9 @@ def create_mcp_server() -> "Server":
         return ListResourcesResult(resources=list_resources())
 
     async def on_read_resource(ctx, params) -> ReadResourceResult:
-        text = read_resource(params.uri)
+        # Resource reads are synchronous storage work; like handle_tool, keep
+        # them off the event loop so one slow read cannot stall HTTP callers.
+        text = await anyio.to_thread.run_sync(read_resource, params.uri)
         return ReadResourceResult(
             contents=[TextResourceContents(uri=params.uri, mime_type="text/plain", text=text)]
         )
@@ -883,7 +908,7 @@ def create_mcp_server() -> "Server":
         return ListPromptsResult(prompts=list_prompts())
 
     async def on_get_prompt(ctx, params) -> GetPromptResult:
-        return get_prompt(params.name, params.arguments)
+        return await anyio.to_thread.run_sync(get_prompt, params.name, params.arguments)
 
     server = Server(
         "visp-memory",
@@ -908,9 +933,13 @@ def _handle_context(args: dict[str, Any], memory: Memory) -> str:
     from visp_memory.core.lexical_ranking import validate_ranking_strategy
 
     context_selection = args.get("context_selection", "default")
-    validate_context_selection(context_selection)
     ranking_strategy = args.get("ranking_strategy", "default")
-    validate_ranking_strategy(ranking_strategy)
+    try:
+        validate_context_selection(context_selection)
+        validate_ranking_strategy(ranking_strategy)
+    except ValueError as error:
+        # Both validators raise fixed text naming the allowed values.
+        raise MCPUsageError(str(error)) from None
     fmt = args.get("format", "text")
     if args.get("query"):
         from visp_memory.core.context_compiler import ContextCompiler
@@ -944,7 +973,9 @@ def _handle_context(args: dict[str, Any], memory: Memory) -> str:
         )
     if (context_selection != "default" or ranking_strategy != "default"
             or args.get("as_of") is not None):
-        raise ValueError("query is required for ranking_strategy or as_of context selection")
+        raise MCPUsageError(
+            "query is required for ranking_strategy or as_of context selection"
+        )
     include_history = args.get("include_history", True)
     ctx = memory.context(
         format=fmt,
@@ -1449,6 +1480,7 @@ _WRITE_TOOLS = frozenset(
         "memory_update_intent",
         "memory_close_intent",
         "memory_after_work",
+        "memory_session_start",
         "memory_feedback_log",
         "memory_feedback_reset",
     }
@@ -1653,6 +1685,56 @@ def _refuse_stdio_repo_override(args: dict[str, Any], memory: Memory) -> str | N
     )
 
 
+def _refuse_stdio_foreign_record_ids(args: dict[str, Any], memory: Memory) -> str | None:
+    """Keep ID-addressed stdio calls inside the repository the call is scoped to.
+
+    The stdio twin of ``_http_validate_record_ids``. Intent and memory IDs are
+    global, and the layer methods behind ``memory_update_intent``,
+    ``memory_close_intent``, the graph tools, and feedback act on whatever row
+    the ID names, so a process pinned to one project could otherwise read or
+    rewrite another project's records (or the quarantine bucket) by ID. The
+    scope is the call's ``repo_id`` (which ``_refuse_stdio_repo_override`` has
+    already held to the pinned one unless the override is enabled), else the
+    configured repo. An unscoped project has no pin, so nothing is checked; an
+    unknown ID is left to the handler's own not-found answer.
+    """
+    if _requires_explicit_scope():
+        return None
+    configured = memory.config.repo_id
+    if not (isinstance(configured, str) and configured.strip()):
+        return None
+    requested = args.get("repo_id")
+    scope = (
+        requested.strip() if isinstance(requested, str) and requested.strip() else configured
+    ).strip()
+
+    memory_ids: list[Any] = [
+        args[key] for key in ("memory_id", "source_id", "target_id") if args.get(key)
+    ]
+    memory_ids.extend(args.get("memory_ids") or [])
+    intent_id = args.get("intent_id")
+    if not memory_ids and not intent_id:
+        return None
+
+    peek_memory = getattr(memory._storage, "peek_memory", None) or memory._storage.get_memory
+    for memory_id in memory_ids:
+        record = peek_memory(str(memory_id))
+        if record and record.get("repo_id") != scope:
+            return (
+                f"Refused: memory {memory_id!r} is not in repository {scope!r}, the scope "
+                "of this stdio MCP process."
+            )
+    if intent_id:
+        intents = memory._storage.get_active_intents(repo_id=None, status="all")
+        intent = next((item for item in intents if item.get("id") == intent_id), None)
+        if intent and intent.get("repo_id") != scope:
+            return (
+                f"Refused: intent {intent_id!r} is not in repository {scope!r}, the scope "
+                "of this stdio MCP process."
+            )
+    return None
+
+
 def _handle_recording(name: str, args: dict[str, Any], memory: Memory) -> str:
     """Handle recording tools."""
     if name == "memory_record":
@@ -1682,7 +1764,7 @@ def _handle_knowledge(name: str, args: dict[str, Any], memory: Memory) -> str:
     """Handle knowledge tools."""
     if name == "memory_learn":
         if "epistemic_status" in args:
-            raise ValueError(
+            raise MCPUsageError(
                 "initial epistemic status is assigned by the memory service"
             )
         mem_id = memory.learn(
@@ -1745,7 +1827,9 @@ def _handle_intent(name: str, args: dict[str, Any], memory: Memory) -> str:
     elif name == "memory_update_intent":
         if args.get("workflow_report") is not None:
             if any(args.get(key) is not None for key in ("description", "priority", "status")):
-                raise ValueError("Send a workflow report separately from ordinary intent edits")
+                raise MCPUsageError(
+                    "Send a workflow report separately from ordinary intent edits"
+                )
             principal = current_mcp_request_context().principal
             may_manage_workflow = principal is None
             if principal is not None:
@@ -1869,14 +1953,16 @@ def _handle_utility(name: str, args: dict[str, Any], memory: Memory) -> str:
         return json.dumps(stats, indent=2)
 
     elif name == "memory_list_warnings":
-        warnings = memory.semantic.get_warnings(repo_id=args.get("repo_id"))
+        warnings = memory.semantic.get_warnings(
+            repo_id=args.get("repo_id") or memory.config.repo_id
+        )
         if not warnings:
             return "No warnings."
         return "\n".join(f"- {w['content']}" for w in warnings)
 
     elif name == "memory_list_intents":
         intents = memory._storage.get_active_intents(
-            repo_id=args.get("repo_id"),
+            repo_id=args.get("repo_id") or memory.config.repo_id,
             status=args.get("status", "active"),
         )
         if not intents:
@@ -1921,7 +2007,7 @@ def _handle_feedback(name: str, args: dict[str, Any], memory: Memory) -> str:
         return json.dumps(
             memory.inspect_utility_signals(
                 memory_id=args.get("memory_id"),
-                repo_id=args.get("repo_id"),
+                repo_id=args.get("repo_id") or memory.config.repo_id,
                 event_type=args.get("event_type"),
                 limit=args.get("limit", 50),
             ),
@@ -1991,7 +2077,9 @@ def _dispatch_tool(name: str, args: dict[str, Any], memory: Memory) -> str:
             memory, current_mcp_request_context().principal, args["repo_id"]
         )
 
-    refusal = _refuse_stdio_repo_override(args, memory)
+    refusal = _refuse_stdio_repo_override(args, memory) or _refuse_stdio_foreign_record_ids(
+        args, memory
+    )
     if refusal is not None:
         return refusal
 

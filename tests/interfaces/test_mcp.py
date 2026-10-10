@@ -301,12 +301,15 @@ class TestMCPServer:
             config.embedding.provider = "noop"
             memory = Memory(config=config)
 
-            with pytest.raises(ValueError, match="repo_id.*required"):
-                await handle_tool(
-                    "memory_session_start",
-                    {"task": "Must not create an unscoped task"},
-                    memory,
-                )
+            # memory_session_start records a task, so the write guard refuses it
+            # with the repair named instead of raising into an opaque failure.
+            result = await handle_tool(
+                "memory_session_start",
+                {"task": "Must not create an unscoped task"},
+                memory,
+            )
+            assert result.startswith("Refused:")
+            assert "repo_id" in result
 
             assert memory._storage.get_active_intents() == []
 

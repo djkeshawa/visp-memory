@@ -385,13 +385,21 @@ class RemoteStorage(RemoteRecallMixin, RemoteAdminMixin, RemotePortabilityMixin,
         try:
             if kwargs.get("content") is not None:
                 original_content = kwargs["content"]
-                content, redaction_flags = redact_for_storage(
-                    original_content,
-                    kwargs.get("quality_flags") or [],
-                )
+                content, _ = redact_for_storage(original_content, None)
                 kwargs["content"] = content
                 if content != original_content:
-                    kwargs["quality_flags"] = redaction_flags
+                    # The server only sees redacted text, so it cannot record the
+                    # redaction itself; send it merged onto the caller's flags, else
+                    # the stored ones, so existing quality flags are not wiped.
+                    base_flags = kwargs.get("quality_flags")
+                    if base_flags is None:
+                        current = self.get_memory(memory_id)
+                        if current is None:
+                            return False
+                        base_flags = current.get("quality_flags") or []
+                    _, kwargs["quality_flags"] = redact_for_storage(
+                        original_content, base_flags
+                    )
             response = self.session.patch(f"{self.server_url}/memories/{memory_id}", json=kwargs)
             if response.status_code == 404:
                 return False

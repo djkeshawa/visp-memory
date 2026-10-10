@@ -32,8 +32,16 @@ function SettingsContent() {
         />
       ) : null}
 
+      {!d.isLoading && d.adminOnly.embeddingIndex ? (
+        <p className="surface rounded-xl p-4 text-sm text-muted-foreground">Search index diagnostics require an administrator.</p>
+      ) : null}
+
       {d.modelRouting ? (
         <TaskModelSection routing={d.modelRouting} message={d.modelMessage} isTesting={d.isTestingModel} onTest={() => void d.handleModelTest()} />
+      ) : null}
+
+      {!d.isLoading && d.adminOnly.modelRouting ? (
+        <p className="surface rounded-xl p-4 text-sm text-muted-foreground">Task model routing requires an administrator.</p>
       ) : null}
 
       {!d.isLoading && d.providers.length === 0 && !d.loadError ? (

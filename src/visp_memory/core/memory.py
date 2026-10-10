@@ -471,12 +471,16 @@ class Memory:
         authority does not; the contradiction is still recorded as an edge, so
         the disagreement stays visible rather than being silently applied.
         """
-        from visp_memory.core.trust import TIER_POLICIES, Provenance
+        from visp_memory.core.trust import TIER_POLICIES, provenance_of
 
         def authority(memory_id: str) -> float:
-            record = self._storage.peek_memory(memory_id) or {}
-            tier = Provenance.parse(record.get("source"))
-            policy = TIER_POLICIES.get(tier)
+            # Effective provenance, not the ``source`` field: a belief established
+            # from weaker episodes keeps its channel's source but carries the
+            # lower tier in its tags, and that lower tier is what it may claim.
+            record = self._storage.peek_memory(memory_id)
+            if not record:
+                return 0.0
+            policy = TIER_POLICIES.get(provenance_of(record))
             return float(getattr(policy, "base_trust", 0.0) or 0.0)
 
         new_authority = authority(superseding_id)

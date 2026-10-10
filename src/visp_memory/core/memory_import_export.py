@@ -15,7 +15,13 @@ from visp_memory.core.beliefs import migrate_legacy_belief_fields
 from visp_memory.core.clock import parse_utc, utc_now
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID
 from visp_memory.core.storage import EvidenceUnsupportedError
-from visp_memory.core.trust import WriteChannel, channel_policy, with_channel_provenance
+from visp_memory.core.trust import (
+    Provenance,
+    WriteChannel,
+    channel_policy,
+    with_channel_provenance,
+    with_provenance,
+)
 
 REDACTED_SECRET = "***REDACTED***"
 _SENSITIVE_CONFIG_KEYS = {
@@ -359,6 +365,12 @@ def _quarantine_format2_graph(data: Dict[str, Any]) -> Dict[str, Any]:
     transformed.setdefault("belief_authority", [])
     exported_at = parse_utc(transformed.get("exported_at"))
     fallback_created_at = exported_at or parse_utc("1970-01-01T00:00:00+00:00")
+    # Format 2 carried no governed provenance, so nothing in it may claim a tier:
+    # trust reads ``provenance:*`` tags before ``source``, so both are reset.
+    for items in (transformed.get("memories") or {}).values():
+        for item in items or []:
+            item["source"] = "unknown"
+            item["tags"] = with_provenance(item.get("tags"), Provenance.UNKNOWN)
     for item in (transformed.get("memories") or {}).get("semantic", []):
         legacy_category = item.get("category")
         belief_type, epistemic_status = migrate_legacy_belief_fields(
@@ -367,7 +379,6 @@ def _quarantine_format2_graph(data: Dict[str, Any]) -> Dict[str, Any]:
         item["category"] = belief_type
         item["belief_type"] = belief_type
         item["epistemic_status"] = epistemic_status
-        item["source"] = "unknown"
         item["quality_flags"] = list(
             dict.fromkeys([*(item.get("quality_flags") or []), "legacy_unreviewed"])
         )
