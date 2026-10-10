@@ -239,6 +239,27 @@ def _unexpected_tool_failure(name: str) -> list[TextContent]:
     ]
 
 
+def _input_validation_error(
+    tools: list[Tool], name: str, arguments: dict[str, Any]
+) -> str | None:
+    """Check arguments against the schema the caller was advertised.
+
+    mcp 1.x validated inside ``@server.call_tool()``; the 2.x lowlevel server does
+    not, and handlers trust schema bounds (importance ranges, enums, prompt caps).
+    A tool the caller was not advertised is left to the profile refusal.
+    """
+    import jsonschema  # ships with the mcp extra
+
+    tool = next((tool for tool in tools if tool.name == name), None)
+    if tool is None:
+        return None
+    try:
+        jsonschema.validate(arguments, tool.input_schema)
+    except jsonschema.ValidationError as error:
+        return f"Input validation error: {error.message}"
+    return None
+
+
 def _requires_explicit_scope() -> bool:
     """Treat HTTP as scoped even for callers that build the legacy context shape."""
     context = current_mcp_request_context()
@@ -832,8 +853,12 @@ def create_mcp_server() -> "Server":
         return ListToolsResult(tools=list_tools())
 
     async def on_call_tool(ctx, params) -> CallToolResult:
+        arguments = params.arguments or {}
+        invalid = _input_validation_error(list_tools(), params.name, arguments)
+        if invalid:
+            return CallToolResult(content=[TextContent(type="text", text=invalid)], is_error=True)
         try:
-            content = await call_tool(ctx.session, params.name, params.arguments or {})
+            content = await call_tool(ctx.session, params.name, arguments)
         except MCPToolError as error:
             return CallToolResult(
                 content=[TextContent(type="text", text=str(error))], is_error=True

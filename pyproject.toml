@@ -56,7 +56,8 @@ api = [
 ]
 # The server is built on the mcp 2.x lowlevel API (constructor `on_*` handlers);
 # the 1.x decorator API it replaced does not exist in 2.x, and 3.x is unreleased.
-mcp = ["mcp>=2.0.0,<3.0.0"]
+# jsonschema checks tool arguments, which the 2.x server no longer does itself.
+mcp = ["mcp>=2.0.0,<3.0.0", "jsonschema>=4.20.0"]
 capture = [
     "defusedxml>=0.7.1",
     "gitpython>=3.1.0",
