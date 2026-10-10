@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Callable
 
@@ -19,7 +20,10 @@ from visp_memory.interfaces.connect_source import source_repository_ids
 
 
 def local_data_dir(storage: dict, project_root: Path) -> Path:
-    configured = storage.get("data_dir", ".visp-memory/data")
+    """Resolve the store local startup would open: the env override wins, like load_config."""
+    configured = os.environ.get("VISP_MEMORY_STORAGE_DATA_DIR") or storage.get(
+        "data_dir", ".visp-memory/data"
+    )
     if not isinstance(configured, (str, Path)):
         raise ConnectError("storage.data_dir must be a filesystem path")
     path = Path(configured).expanduser()
@@ -28,23 +32,30 @@ def local_data_dir(storage: dict, project_root: Path) -> Path:
     return path.resolve()
 
 
-def _local_memory_config(storage_document: dict, project_root: Path, repo_id: str) -> MemoryConfig:
+def _local_memory_config(
+    storage_document: dict, project_root: Path, repo_id: str,
+) -> tuple[MemoryConfig, str]:
     storage_values = {
         key: value
         for key, value in storage_document.items()
         if key in StorageConfig.model_fields
     }
+    config = MemoryConfig(repo_id=repo_id, project_name=project_root.name)
     try:
-        storage = StorageConfig(**storage_values)
+        config.storage = StorageConfig(**storage_values)
+        # Startup applies deployment env overrides (backend, data_dir, ...) on top
+        # of the file; the migration source must be that same store.
+        config.apply_env_overrides()
     except ValueError as error:
         raise ConnectError(f"Cannot open the existing local store: {error}") from error
+    config.repo_id = repo_id
+    storage = config.storage
+    configured_mode = storage.mode
     storage.mode = "local"
     storage.data_dir = local_data_dir(storage_document, project_root)
-    config = MemoryConfig(repo_id=repo_id, project_name=project_root.name)
-    config.storage = storage
     # Export does not need semantic inference, and must not contact a provider.
     config.embedding.provider = "noop"
-    return config
+    return config, configured_mode
 
 
 def _refuse_other_repositories(memory: Memory, target: str) -> None:
@@ -106,13 +117,23 @@ def prepare_local_records(
     *,
     report: Callable[[str], None],
 ) -> tuple[dict, Path]:
-    config = _local_memory_config(storage_document, project_root, repo_id)
+    config, configured_mode = _local_memory_config(storage_document, project_root, repo_id)
     source = config.storage.data_dir
     try:
-        populated = source.is_dir() and any(source.iterdir())
+        populated = config.storage.backend != "sqlite" or (
+            source.is_dir() and any(source.iterdir())
+        )
     except OSError as error:
         raise ConnectError(f"Cannot inspect local data directory {source}: {error}") from error
     if not populated:
+        if configured_mode != "client":
+            # The project still reads a local store; switching it to client mode
+            # after importing nothing would strand whatever it actually used.
+            raise ConnectError(
+                f"No local store to migrate at {source} (missing or empty). "
+                "Refusing migration and config changes. Check storage.data_dir or "
+                "VISP_MEMORY_STORAGE_DATA_DIR, or connect without --migrate-local."
+            )
         graph = {}
         _report_source(graph, source, report)
         return graph, source

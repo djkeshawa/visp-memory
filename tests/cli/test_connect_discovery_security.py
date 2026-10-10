@@ -63,8 +63,17 @@ def test_discovered_url_only_gets_credentials_when_configured(
             captured.append(kwargs)
 
     monkeypatch.setattr("visp_memory.interfaces.connect.RemoteStorage", CapturingRemote)
+    before = (tmp_path / "visp-memory.json").read_bytes()
     result = runner.invoke(app, ["connect"])
-    assert result.exit_code == 0, result.output
     expected = "test-secret" if configured and configured.rstrip("/").endswith(":9123") else None
+    if credentials == "config" and expected is None:
+        # Stored credentials must not end up beside a server URL they were not
+        # configured for, so connect refuses instead of rewriting the config.
+        assert result.exit_code == 1
+        assert "--server-url" in result.output
+        assert captured == []
+        assert (tmp_path / "visp-memory.json").read_bytes() == before
+        return
+    assert result.exit_code == 0, result.output
     assert captured[0]["api_key"] == expected
     assert captured[0]["jwt_token"] == expected

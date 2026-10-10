@@ -25,6 +25,9 @@ def test_connect_migrates_local_records_through_the_shared_server(
     original_database = local_data / "memories.db"
     assert original_database.is_file()
     monkeypatch.chdir(project)
+    # tests/conftest.py points this at the in-process server's store; a user's
+    # shell does not, and migration now reads it as the local source.
+    monkeypatch.delenv("VISP_MEMORY_STORAGE_DATA_DIR", raising=False)
 
     result = CliRunner().invoke(
         app,
