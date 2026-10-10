@@ -14,6 +14,9 @@ THRESHOLDS = {
     "section_limit": 10,
 }
 
+# Relationship names that record a disagreement between two memories.
+_CONTRADICTION_RELATIONSHIPS = frozenset({"contradicts", "conflicts_with"})
+
 SECTION_TITLES = {
     "high_impact_memories": "High-impact memories",
     "fragile_areas": "Fragile areas",
@@ -80,7 +83,7 @@ class MemoryIntelligenceReporter:
             "contradiction_candidates": self._section(
                 "contradiction_candidates",
                 "stored_fact",
-                self._contradiction_candidates(memories, section_limit),
+                self._contradiction_candidates(memories, relationships, section_limit),
             ),
             "cross_repo_risks": self._section(
                 "cross_repo_risks",
@@ -289,22 +292,37 @@ class MemoryIntelligenceReporter:
         return sorted(items, key=lambda item: item["id"])[:limit]
 
     def _contradiction_candidates(
-        self, memories: list[dict[str, Any]], limit: int
+        self,
+        memories: list[dict[str, Any]],
+        relationships: list[dict[str, Any]],
+        limit: int,
     ) -> list[dict[str, Any]]:
+        # Memory.learn records a detected contradiction as an edge, not a flag.
+        contradicted = {
+            memory_id
+            for relationship in relationships
+            if str(relationship.get("relationship") or "").casefold()
+            in _CONTRADICTION_RELATIONSHIPS
+            for memory_id in (relationship.get("source_id"), relationship.get("target_id"))
+            if memory_id
+        }
         items = []
         for memory in memories:
             metadata = memory.get("metadata") or {}
             flags = memory.get("quality_flags") or []
-            if metadata.get("conflict") or "contradiction" in flags:
+            has_edge = memory.get("id") in contradicted
+            if metadata.get("conflict") or "contradiction" in flags or has_edge:
                 items.append(
                     _item(
                         "memory",
                         memory["id"],
                         _snippet(memory.get("content", "")),
-                        "Stored conflict metadata or contradiction flag is present.",
+                        "Stored conflict metadata, contradiction flag or contradiction "
+                        "relationship is present.",
                         {
                             "quality_flags": flags,
                             "has_conflict_metadata": bool(metadata.get("conflict")),
+                            "has_contradiction_relationship": has_edge,
                         },
                     )
                 )

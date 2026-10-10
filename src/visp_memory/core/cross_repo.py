@@ -60,7 +60,10 @@ class CrossRepoContext:
         # Look for warnings, breaking changes, etc.
         all_memories = []
         for rid in relevant_repos:
-            mems = self.storage.list_memories(repo_id=rid, limit=50)
+            # One mixed page of the newest rows would let routine episodes push
+            # every warning out of the window, so warning, breaking-change and
+            # semantic rows are each read on their own page.
+            mems = self._repo_memories(rid)
             visible = [
                 memory for memory in mems
                 if memory_filter is None or memory_filter(memory)
@@ -86,6 +89,21 @@ class CrossRepoContext:
             "knowledge": knowledge[:20],  # Limit knowledge
             "monitored_repos": relevant_repos,
         }
+
+    def _repo_memories(self, repo_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        pages = [
+            self.storage.list_memories(repo_id=repo_id, limit=limit),
+            self.storage.list_memories(repo_id=repo_id, layer="semantic", limit=limit),
+            *(
+                self.storage.list_memories(repo_id=repo_id, category=category, limit=limit)
+                for category in sorted(_WARNING_CATEGORIES | _BREAKING_CATEGORIES)
+            ),
+        ]
+        by_id: Dict[str, Dict[str, Any]] = {}
+        for page in pages:
+            for memory in page:
+                by_id.setdefault(memory["id"], memory)
+        return list(by_id.values())
 
     def _resolve_relevant_repos(
         self, repo_id: str, include_dependencies: bool, max_depth: int

@@ -1064,6 +1064,23 @@ class BaseStorage(ABC):
         pass
 
 
+def _imported_replaces_belief_id(envelope: Any, belief: Dict[str, Any]) -> Optional[str]:
+    """Return the predecessor an imported prohibition's signed claim must name.
+
+    A revised prohibition signs the id of the belief it replaces, and the
+    revision records that id as ``metadata.revision_of``. Only a claim that
+    names a predecessor expects one, so unrelated ``revision_of`` metadata on an
+    original prohibition does not break its verification.
+    """
+    try:
+        claim = json.loads(envelope).get("claim") if isinstance(envelope, str) else None
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(claim, dict) or "replaces_belief_id" not in claim:
+        return None
+    return (belief.get("metadata") or {}).get("revision_of")
+
+
 class LocalStorage(BaseStorage):
     """Unified storage for structured data and vector embeddings (Local SQLite + Chroma)."""
 
@@ -1990,6 +2007,9 @@ class LocalStorage(BaseStorage):
                 repo_id=belief["repo_id"],
                 metadata=belief.get("metadata") or {},
                 evidence=evidence_claim,
+                expected_replaces_belief_id=_imported_replaces_belief_id(
+                    attestation.get("envelope"), belief
+                ),
             )
             if (
                 attestation_id != f"att-{verified.digest}"

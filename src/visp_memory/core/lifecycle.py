@@ -257,7 +257,9 @@ class MemoryLifecycleManager:
         metadata = dict(memory.get("metadata") or {})
         deletion = metadata.pop("deletion", {})
         previous_status = deletion.get("previous_status", "active")
-        if previous_status not in {"active", "archived"}:
+        # Restoring undoes the delete, not the review: a quarantined or superseded
+        # row goes back to that state rather than straight into the served set.
+        if previous_status not in {"active", "archived", "quarantined", "superseded"}:
             previous_status = "active"
         return self.storage.update_memory(memory_id, status=previous_status, metadata=metadata)
 
@@ -366,13 +368,22 @@ class MemoryLifecycleManager:
     def retention_preview(self, repo_id: str, *, retention_days: int = 30) -> dict[str, Any]:
         cutoff = utc_now() - timedelta(days=max(30, retention_days))
         candidates: list[str] = []
+        retained: list[dict[str, str]] = []
         for memory in self.storage.list_memories(repo_id=repo_id, status="all", limit=100000):
             parsed = parse_utc(self._retired_at(memory))
-            if parsed and parsed <= cutoff:
-                candidates.append(memory["id"])
+            if not parsed or parsed > cutoff:
+                continue
+            metadata = memory.get("metadata") or {}
+            # A hold protects that one memory; it must not stop retention for
+            # every other expired row in the repository.
+            if metadata.get("pinned") or metadata.get("hold"):
+                retained.append({"id": memory["id"], "reason": "Memory is pinned or held"})
+                continue
+            candidates.append(memory["id"])
         return {
             "repo_id": repo_id,
             "retention_days": max(30, retention_days),
+            "retained": retained,
             **self.purge_preview(candidates),
         }
 
