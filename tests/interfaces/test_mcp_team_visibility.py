@@ -103,7 +103,7 @@ def team_server(tmp_path, monkeypatch):
 async def test_mcp_http_tools_filter_records_before_using_them(team_server, tool, arguments):
     app, _, _, hidden = team_server
     async with app.lifespan(), httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
     ) as client:
         response = await client.post(
             "/mcp", headers=HEADERS,
@@ -126,7 +126,7 @@ async def test_refused_hidden_id_does_not_increase_the_memory_access_count(team_
     app, memory, _, hidden = team_server
     before = memory._storage.peek_memory(hidden)["access_count"]
     async with app.lifespan(), httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
     ) as client:
         response = await client.post(
             "/mcp", headers=HEADERS,
@@ -153,7 +153,7 @@ async def test_mcp_intent_creator_can_connect_a_workflow_report(
 ):
     app, memory, _, _ = team_server
     async with app.lifespan(), httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
     ) as client:
         created = await client.post(
             "/mcp", headers=HEADERS,
@@ -208,7 +208,7 @@ async def test_mcp_refuses_a_padded_repository_id_it_could_not_scope_exactly(
         "scopes": ["memory:read", "memory:write"], "repo_ids": [repo_id],
     })
     async with app.lifespan(), httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
     ) as client:
         response = await client.post(
             "/mcp", headers=HEADERS,
@@ -232,7 +232,7 @@ async def test_mcp_refuses_a_padded_repository_id_it_could_not_scope_exactly(
 async def test_mcp_http_resources_apply_record_visibility(team_server, resource):
     app, _, _, hidden = team_server
     async with app.lifespan(), httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
     ) as client:
         response = await client.post(
             "/mcp", headers=HEADERS,

@@ -22,6 +22,20 @@ tag has no section yet) as the GitHub release body. See
 - The `mcp` extra now requires the MCP Python SDK 2.x (`mcp>=2.0.0,<3.0.0`). An
   environment that pins `mcp<2` for another tool cannot install `visp-memory[mcp]`
   alongside it. Clients on older protocol versions still connect.
+- JWTs must carry `exp` and `sub`; a token without them, or with a malformed claim, is
+  refused with 401. A JWT's `scopes` and `repo_ids` claims are now enforced like a
+  PAT's, so a narrowed JWT can no longer do everything its account can.
+- With authentication disabled, the REST API and `visp-memory-mcp-http` accept only
+  loopback `Host` names (HTTP 421) and refuse cross-origin writes from other pages
+  (HTTP 403). Add other names with `VISP_MEMORY_SERVER_ALLOWED_HOSTS`
+  (comma-separated; `*` turns the Host check off).
+- `memory_model_task` over HTTP MCP requires an administrator token, like
+  `POST /ai/test`. A server started with a static `--token` has no administrator
+  principal, so the tool is refused there. On the provider path the tool's
+  `max_tokens` (default 800) now caps the output, even when the configured cap is
+  higher.
+- `POST /auth/login` answers 429 with `Retry-After` after repeated failures from one
+  address, or for one username from one address.
 
 ### Added
 
@@ -59,6 +73,26 @@ tag has no section yet) as the GitHub release body. See
 - The stateless HTTP MCP server (`visp-memory-mcp-http`) no longer sends a wrong
   `Content-Length`, which made uvicorn drop every JSON response and left clients with
   an empty reply.
+
+### Security
+
+- With authentication disabled, a page that rebinds its hostname to `127.0.0.1` could
+  read and write the store through the REST API or HTTP MCP. Both now check the
+  `Host` and `Origin` headers.
+- JWT `scopes` and `repo_ids` claims were parsed but not enforced.
+- An admin token restricted to some projects could purge memories, run retention or
+  verify consistency in other projects.
+- Any HTTP MCP principal could run an arbitrary prompt on the server's model provider
+  through `memory_model_task`. The tool's `max_tokens` now also reaches the provider,
+  and can only lower the operator's cap.
+- Password login verified hashes on the event loop, had no guess limit, and answered
+  faster for unknown usernames.
+- Quarantined memories (the reserved unscoped scope) were readable and writable by
+  id through `/memories/{id}` and its sub-routes; those routes now answer 404.
+- A `project:read` token could read memory content through
+  `/repos/{repo_id}/context` when the repository id contained `/`.
+- Any authenticated user could register another team's implicitly created project
+  and take over its untagged records.
 
 ## [0.8.1] - 2026-10-09
 

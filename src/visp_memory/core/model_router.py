@@ -64,7 +64,9 @@ class ModelRouter:
         *,
         system_prompt: Optional[str] = None,
         sampling_callback: Optional[Callable[[str, str], str]] = None,
+        max_output_tokens: Optional[int] = None,
     ) -> dict[str, str]:
+        """Run one completion; ``max_output_tokens`` may lower the configured cap, not raise it."""
         if sampling_callback is not None:
             return {
                 "text": sampling_callback(prompt, system_prompt or ""),
@@ -85,7 +87,10 @@ class ModelRouter:
         text = self._client.completion(
             prompt,
             system_prompt=system_prompt,
-            max_output_tokens=self.config.max_output_tokens,
+            max_output_tokens=min(
+                max_output_tokens or self.config.max_output_tokens,
+                self.config.max_output_tokens,
+            ),
             timeout=self.config.timeout_seconds,
         )
         return {

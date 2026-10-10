@@ -11,7 +11,7 @@ from typing import Optional
 import jwt
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from starlette.routing import get_route_path
 
 from visp_memory.config import load_config
@@ -52,9 +52,22 @@ class UserContext(BaseModel):
     #: or grant account, team, provider, routing, or broader tenant access.
     owner_maintenance: bool = False
 
+    @property
+    def is_scoped_token(self) -> bool:
+        """Whether this principal's rights are bounded by token scopes and projects.
+
+        Every personal access token is. A JWT is when its claims narrow it: its
+        ``scopes`` claim lacks ``*`` or its ``repo_ids`` claim names projects. A
+        JWT with neither claim is an unrestricted credential, as it always was;
+        one that carries them used to have them parsed and then ignored.
+        """
+        if self.auth_type == "pat":
+            return True
+        return self.auth_type == "jwt" and ("*" not in self.scopes or bool(self.repo_ids))
+
     def allows(self, scope: str) -> bool:
         return (
-            (self.is_admin and self.auth_type != "pat")
+            (self.is_admin and not self.is_scoped_token)
             or "*" in self.scopes
             or scope in self.scopes
         )
@@ -118,8 +131,8 @@ def routed_path(request: Request) -> str:
 
 
 def _authorize_pat_request(request: Request, user: UserContext) -> UserContext:
-    """Apply least-privilege scopes to personal access tokens."""
-    if user.auth_type != "pat":
+    """Apply least-privilege scopes to personal access tokens and scoped JWTs."""
+    if not user.is_scoped_token:
         return user
     decision = pat_scope_decision(request.method, routed_path(request))
     if decision.kind == OPEN:
@@ -215,30 +228,29 @@ async def get_current_user(
             )
 
         try:
+            # A token without `exp` would be valid forever; refuse it rather than
+            # let one leaked credential outlive every rotation.
             payload = jwt.decode(
-                token, config.server.jwt_secret, algorithms=[config.server.jwt_algorithm]
+                token,
+                config.server.jwt_secret,
+                algorithms=[config.server.jwt_algorithm],
+                options={"require": ["exp", "sub"]},
             )
-            user_id: str = payload.get("sub")
-            if user_id is None:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid authentication token",
-                )
-
-            return _authorize_pat_request(request, UserContext(
-                user_id=user_id,
-                username=payload.get("username", user_id),
+            principal = UserContext(
+                user_id=payload["sub"],
+                username=payload.get("username", payload["sub"]),
                 team_id=payload.get("team_id"),
                 is_admin=payload.get("is_admin", False),
                 auth_type="jwt",
                 scopes=payload.get("scopes", ["*"]),
                 repo_ids=payload.get("repo_ids", []),
-            ))
-        except jwt.PyJWTError:
+            )
+        except (jwt.PyJWTError, ValidationError):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Could not validate credentials",
             )
+        return _authorize_pat_request(request, principal)
 
     # 3. Browser session cookie.
     session_token = request.cookies.get(SESSION_COOKIE_NAME)

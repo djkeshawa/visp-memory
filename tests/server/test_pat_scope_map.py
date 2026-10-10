@@ -5,10 +5,14 @@ so a token that could only read project metadata could also export the whole
 memory graph and search memory content. Every route is now classified on purpose.
 """
 
+import importlib
 import itertools
+import pkgutil
+import re
 
 import pytest
 
+from visp_memory.server import routers
 from visp_memory.server.app import app
 from visp_memory.server.pat_scopes import ADMIN, DENIED, OPEN, pat_scope_decision
 
@@ -288,3 +292,30 @@ async def test_slash_repo_portability_cannot_bypass_pat_rules(client):
     )
     assert response.status_code == 403
     assert "cannot import" in response.json()["detail"]
+
+
+def _path_routes():
+    # The router modules, not `app.routes`: FastAPI includes routers lazily, so the
+    # app's own list holds wrappers rather than the templates with `:path` in them.
+    for module_info in pkgutil.iter_modules(routers.__path__):
+        module = importlib.import_module(f"{routers.__name__}.{module_info.name}")
+        for route in getattr(getattr(module, "router", None), "routes", ()):
+            if ":path}" in getattr(route, "path", ""):
+                for method in sorted(getattr(route, "methods", None) or ()):
+                    yield method, route.path
+
+
+@pytest.mark.parametrize("method,template", sorted(set(_path_routes())))
+def test_a_multi_segment_repository_id_gets_the_same_decision(method, template):
+    # Repository ids are `{repo_id:path}`; a rule written as `[^/]+` would stop
+    # matching `org/app` and let the request fall through to a cheaper prefix.
+    single = re.sub(r"\{[^}]+:path\}", "app", template)
+    nested = re.sub(r"\{[^}]+:path\}", "org/app", template)
+    assert pat_scope_decision(method, nested) == pat_scope_decision(method, single)
+
+
+@pytest.mark.asyncio
+async def test_a_project_read_token_cannot_read_a_nested_repositorys_context(client):
+    response = await client.get("/repos/org/app/context", headers=pat(["project:read"]))
+    assert response.status_code == 403, response.text
+    assert "memory:read" in response.json()["detail"]

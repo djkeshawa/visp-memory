@@ -49,7 +49,7 @@ async def scoped_server(tmp_path: Path, request):
         mock.patch("visp_memory.server.routers.memories.load_config", return_value=config),
         mock.patch.object(server_app, "config", config),
     ):
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
             yield client, storage
 
 

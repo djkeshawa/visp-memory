@@ -12,7 +12,22 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from visp_memory.core.storage import BaseStorage
+from visp_memory.core.storage import IMPLICIT_REGISTRATION_KEY, BaseStorage
+
+#: Metadata keys only the store may write. ``registration: implicit`` marks a row a
+#: write created for itself, and such a row may be taken over by anyone who
+#: registers the scope -- so a registration that carried the marker would stay
+#: open to takeover after it was claimed.
+RESERVED_REPOSITORY_METADATA_KEYS = frozenset({IMPLICIT_REGISTRATION_KEY})
+
+
+def declared_repository_metadata(metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Caller-supplied repository metadata without the keys the store reserves."""
+    return {
+        key: value
+        for key, value in (metadata or {}).items()
+        if key not in RESERVED_REPOSITORY_METADATA_KEYS
+    }
 
 
 class DependencyType(str, Enum):
@@ -79,7 +94,7 @@ class RepositoryManager:
             "tech_stack": repo.tech_stack,
             "team_id": repo.team_id,
             "status": repo.status,
-            "metadata": repo.metadata,
+            "metadata": declared_repository_metadata(repo.metadata),
         }
         return self.storage.store_repository(repo_dict)
 

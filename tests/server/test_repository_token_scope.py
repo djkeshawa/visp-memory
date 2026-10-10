@@ -122,3 +122,41 @@ async def test_repository_context_forwards_time_and_scope_constraints(client, re
         "/repos/allowed/context", headers=headers, params={"environment": " "},
     )
     assert invalid.status_code == 422
+
+
+def _foreign_memory_id():
+    memory = app.state.storage.list_memories(repo_id="foreign", status="all", limit=1)[0]
+    return memory["id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method,path,body",
+    [
+        ("POST", "/memories/purge/preview", "preview"),
+        ("DELETE", "/memories/{id}/purge?confirmation={id}", None),
+        ("GET", "/maintenance/retention-preview?repo_id=foreign", None),
+        ("POST", "/maintenance/retention?repo_id=foreign&confirmation=foreign", None),
+        ("GET", "/maintenance/verify?repo_id=foreign", None),
+        ("GET", "/maintenance/verify", None),
+    ],
+)
+async def test_admin_maintenance_obeys_the_token_project_allowlist(
+    client, repositories, method, path, body
+):
+    memory_id = _foreign_memory_id()
+    response = await client.request(
+        method,
+        path.format(id=memory_id),
+        json={"memory_ids": [memory_id]} if body else None,
+        headers=project_token(scopes=["*"], repo_ids=["allowed"]),
+    )
+    assert response.status_code == 404, response.text
+    assert app.state.storage.get_memory(memory_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_admin_maintenance_still_serves_the_tokens_own_project(client, repositories):
+    headers = project_token(scopes=["*"], repo_ids=["allowed"])
+    response = await client.get("/maintenance/verify?repo_id=allowed", headers=headers)
+    assert response.status_code == 200, response.text

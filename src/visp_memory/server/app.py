@@ -500,7 +500,8 @@ app.add_middleware(
     ImportBodyLimitMiddleware, max_body_bytes=lambda: config.server.max_import_body_bytes,
 )
 # Added last so it is outermost: a rebinding request is refused before CORS or
-# routing sees it. It decides per request and only in local-owner mode.
+# routing sees it. It decides per request, and only while auth is disabled or the
+# local-owner view is being granted.
 app.add_middleware(LocalOwnerGuardMiddleware)
 
 # Initialize Storage
@@ -546,7 +547,7 @@ def _get_scoped_stats(repo_id: str | None, user: UserContext) -> dict:
     """
     storage = app.state.storage
     if (has_admin_privileges(user) or user.is_local_owner) and not (
-        user.auth_type == "pat" and user.repo_ids and repo_id is None
+        user.is_scoped_token and user.repo_ids and repo_id is None
     ):
         # Every row is visible to this principal, so the aggregate is exact and
         # nothing has to be read into memory to count it.
