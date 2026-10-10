@@ -23,6 +23,7 @@ from visp_memory.core.clock import parse_utc, utc_now
 from visp_memory.core.eligibility import UNSCOPED_REPO_ID
 from visp_memory.core.ranking import rank_memory_results, text_similarity, utility_rank_adjustment
 from visp_memory.core.storage import (
+    NON_SERVABLE_STATUSES,
     REINFORCING_RECALL_EVENTS,
     REPOSITORY_PURGE_PAGE_SIZE,
     STORAGE_SCHEMA_VERSION,
@@ -1048,11 +1049,18 @@ class ArcadeDbStorage(BaseStorage):
         record_id: str,
         updates: Dict[str, Any],
         json_fields: set[str] = None,
+        nullable_fields: set[str] = None,
     ) -> bool:
         if self._get_record(type_name, record_id) is None:
             return False
         json_fields = json_fields or set()
-        field_names = [field for field, value in updates.items() if value is not None]
+        # None means "leave unchanged" except for fields the caller clears explicitly.
+        nullable_fields = nullable_fields or set()
+        field_names = [
+            field
+            for field, value in updates.items()
+            if value is not None or field in nullable_fields
+        ]
         if not field_names:
             return False
         assignments = ", ".join(f"{field} = ?" for field in field_names)
@@ -1500,25 +1508,36 @@ class ArcadeDbStorage(BaseStorage):
         # Push the exclusion into the query so raw rows do not fill the candidate cap
         # ahead of lower-importance episodic/semantic/intent matches.
         exclude_raw = layer is None
-        candidates = self._query_memories(
-            layer=layer,
-            repo_id=repo_id,
-            category=category,
-            status=status,
-            limit=max(limit * 4, 50),
-            order_by="importance DESC",
-            exclude_raw=exclude_raw,
-        )
         terms = [term.lower() for term in query.split() if term.strip()]
+        # The term filter runs here, not in SQL, so page through the importance
+        # order until the candidate window holds that many *matches* (or rows run
+        # out); a single fixed page missed matches below the most important rows.
+        window = max(limit * 4, 50)
+        page_size = max(window, 200)
+        offset = 0
         results = []
-        for memory in candidates:
-            if float(memory.get("importance") or 0.0) < min_importance:
-                continue
-            content = str(memory.get("content", ""))
-            if terms and not any(term in content.lower() for term in terms):
-                continue
-            memory["similarity"] = text_similarity(query, content)
-            results.append(memory)
+        while len(results) < window:
+            candidates = self._query_memories(
+                layer=layer,
+                repo_id=repo_id,
+                category=category,
+                status=status,
+                limit=page_size,
+                offset=offset,
+                order_by="importance DESC",
+                exclude_raw=exclude_raw,
+            )
+            for memory in candidates:
+                if float(memory.get("importance") or 0.0) < min_importance:
+                    continue
+                content = str(memory.get("content", ""))
+                if terms and not any(term in content.lower() for term in terms):
+                    continue
+                memory["similarity"] = text_similarity(query, content)
+                results.append(memory)
+            if len(candidates) < page_size:
+                break
+            offset += page_size
 
         self._attach_recall_utility_scores(results)
         return rank_memory_results(results, query=query, limit=limit)
@@ -1662,8 +1681,46 @@ class ArcadeDbStorage(BaseStorage):
                     "DELETE FROM RecallFeedback WHERE memory_id = ?",
                     memory_id,
                 )
+                # The attestation carries the full prohibition text; it must not
+                # outlive its belief (SQLite cascades it with the row).
+                db.command(
+                    "sql",
+                    f"DELETE EDGE {self.BELIEF_AUTHORITY_EDGE} WHERE belief_id = ?",
+                    memory_id,
+                )
+                db.command(
+                    "sql", "DELETE FROM AuthorityAttestation WHERE belief_id = ?", memory_id
+                )
+                self._drop_deleted_source_reference(db, memory_id)
                 db.command("sql", f"DELETE FROM {self.MEMORY_TYPE} WHERE id = ?", memory_id)
         return True
+
+    def _drop_deleted_source_reference(self, db, memory_id: str) -> None:
+        """Remove a deleted memory from every survivor's ``source_ids`` (MG-033).
+
+        Runs inside the caller's transaction. LIKE only narrows the scan; the
+        parsed list decides, since a substring can hit an unrelated id.
+        """
+        rows = self._rows(
+            db.query(
+                "sql",
+                f"SELECT FROM {self.MEMORY_TYPE} WHERE source_ids LIKE ? ORDER BY id ASC",
+                f"%{memory_id}%",
+            )
+        )
+        for row in rows:
+            survivor_id = self._record_get(row, "id")
+            current = self._json_deserialize(self._record_get(row, "source_ids"))
+            if survivor_id == memory_id or not isinstance(current, list):
+                continue
+            if memory_id not in current:
+                continue
+            db.command(
+                "sql",
+                f"UPDATE {self.MEMORY_TYPE} SET source_ids = ? WHERE id = ?",
+                self._json_serialize([source for source in current if source != memory_id]),
+                survivor_id,
+            )
 
     def get_collection(self, layer: str):
         return None
@@ -1862,6 +1919,10 @@ class ArcadeDbStorage(BaseStorage):
             if record is None:
                 continue
             memory = self._memory_record_to_dict(record)
+            # Edges outlive the memory at their far end; never serve deleted,
+            # merged or superseded neighbours (SQLite parity, MG-030).
+            if memory.get("status") in NON_SERVABLE_STATUSES:
+                continue
             memory["relationship"] = edge.get("relationship")
             memory["strength"] = edge.get("strength")
             memory["relationship_evidence"] = edge.get("evidence")
@@ -2077,6 +2138,7 @@ class ArcadeDbStorage(BaseStorage):
             repo_id,
             updates,
             json_fields=self.RECORD_JSON_FIELDS["Repository"],
+            nullable_fields={"archived_at"},
         )
 
     def _purge_repository_children(

@@ -1355,3 +1355,36 @@ def test_remote_capabilities_retry_the_legacy_404_fallback():
         ("http://memory.example/diagnostics/capabilities", None),
         ("http://memory.example/diagnostics/capabilities", None),
     ]
+
+
+def test_remote_redacting_update_keeps_existing_quality_flags():
+    secret = "deploy with token ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
+    storage = remote_storage_with(
+        FakeResponse(payload={"id": "m1", "quality_flags": ["needs_review"]})
+    )
+
+    assert storage.update_memory("m1", content=secret) is True
+
+    payload = storage.session.last_patch_json
+    assert "ghp_" not in payload["content"]
+    # The server only receives redacted text, so the client records the redaction
+    # merged onto the stored flags instead of replacing them.
+    assert payload["quality_flags"] == [
+        "needs_review",
+        "secret_redacted",
+        "secret_redacted:github-token",
+    ]
+    assert storage.session.get_calls == [("http://memory.example/memories/m1", None)]
+
+    storage.session.get_calls.clear()
+    storage.update_memory("m1", content=secret, quality_flags=["caller"])
+    assert storage.session.last_patch_json["quality_flags"] == [
+        "caller",
+        "secret_redacted",
+        "secret_redacted:github-token",
+    ]
+    assert storage.session.get_calls == []
+
+    storage.update_memory("m1", content="plain text")
+    assert "quality_flags" not in storage.session.last_patch_json
+    assert storage.session.get_calls == []
