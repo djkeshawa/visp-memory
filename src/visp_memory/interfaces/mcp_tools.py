@@ -201,7 +201,7 @@ def _http_scoped_tool(tool: "Tool") -> "Tool":
     alter the stdio contract or the profile footprint assertions. The runtime
     preflight remains authoritative because MCP clients may ignore JSON Schema.
     """
-    schema = copy.deepcopy(tool.inputSchema)
+    schema = copy.deepcopy(tool.input_schema)
     properties = schema.setdefault("properties", {})
     properties.setdefault(
         "repo_id",
@@ -214,7 +214,7 @@ def _http_scoped_tool(tool: "Tool") -> "Tool":
     if "repo_id" not in required:
         required.append("repo_id")
     schema["required"] = required
-    return tool.model_copy(update={"inputSchema": schema})
+    return tool.model_copy(update={"input_schema": schema})
 
 
 def build_tool_definitions() -> list["Tool"]:
@@ -235,7 +235,7 @@ def build_tool_definitions() -> list["Tool"]:
                 "warnings, knowledge, history, constraints, contradictions, and unknowns. "
                 "Call this before planning or editing."
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "required": ["task"],
                 "properties": {
@@ -291,7 +291,7 @@ def build_tool_definitions() -> list["Tool"]:
             description=(
                 "Get full project memory context including goals, warnings, and conventions."
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "format": {
@@ -345,7 +345,7 @@ def build_tool_definitions() -> list["Tool"]:
         Tool(
             name="memory_recall",
             description="Search memories for past decisions, knowledge, and events.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "ranking_strategy": {
@@ -423,7 +423,7 @@ def build_tool_definitions() -> list["Tool"]:
         Tool(
             name="memory_remember",
             description="Recall the latest memory in the current repository scope.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "repo_id": {"type": "string", "description": "Repository/project ID"},
@@ -439,7 +439,7 @@ def build_tool_definitions() -> list["Tool"]:
         Tool(
             name="memory_relevant",
             description="Get memories relevant to specific files or a task.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "task": {"type": "string", "description": "Task description"},
@@ -454,7 +454,7 @@ def build_tool_definitions() -> list["Tool"]:
         Tool(
             name="memory_trace",
             description="Trace query-relevant memories through evidence-backed relationships.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Recall query"},
@@ -472,7 +472,7 @@ def build_tool_definitions() -> list["Tool"]:
         Tool(
             name="memory_neighbors",
             description="Get a compact evidence-backed neighborhood for a memory.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "memory_id": {"type": "string", "description": "Memory ID"},
@@ -491,7 +491,7 @@ def build_tool_definitions() -> list["Tool"]:
         Tool(
             name="memory_path",
             description="Find the shortest evidence-backed path between two memories.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "source_id": {"type": "string", "description": "Source memory ID"},
@@ -509,7 +509,7 @@ def build_tool_definitions() -> list["Tool"]:
         Tool(
             name="memory_why_relevant",
             description="Explain why a memory is relevant to a query.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Recall query"},
@@ -532,7 +532,7 @@ def build_tool_definitions() -> list["Tool"]:
                 "Get proactive context for a specific file "
                 "(warnings, bugs, decisions, knowledge)."
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "file_path": {"type": "string", "description": "Path to the file"},
@@ -548,7 +548,7 @@ def build_tool_definitions() -> list["Tool"]:
         Tool(
             name="memory_find_error",
             description="Find similar past errors with fixes and workarounds.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "error_message": {
@@ -575,7 +575,7 @@ def build_tool_definitions() -> list["Tool"]:
         Tool(
             name="memory_directory_context",
             description="Get aggregated knowledge for an entire directory.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "dir_path": {"type": "string", "description": "Directory path"},
@@ -594,7 +594,7 @@ def build_tool_definitions() -> list["Tool"]:
             description=(
                 "Start a work session: set the current task and return project/task memory."
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "task": {"type": "string", "description": "Task being started"},
@@ -620,7 +620,7 @@ def build_tool_definitions() -> list["Tool"]:
             description=(
                 "Recall warnings, conventions, decisions, and past bugs before editing files."
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "task": {"type": "string", "description": "Task description"},
@@ -646,7 +646,7 @@ def build_tool_definitions() -> list["Tool"]:
             description=(
                 "Record the useful end-of-work memory: summary, decisions, bugs, warnings."
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "summary": {"type": "string", "description": "What changed or was learned"},
@@ -697,7 +697,7 @@ def build_tool_definitions() -> list["Tool"]:
         Tool(
             name="memory_record",
             description="Record an event (bug fix, change, discovery).",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "event": {"type": "string", "description": "What happened"},
@@ -738,7 +738,7 @@ def build_tool_definitions() -> list["Tool"]:
         Tool(
             name="memory_decision",
             description="Record an architecture or design decision with reasoning.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "what": {"type": "string", "description": "What was decided"},
@@ -760,7 +760,7 @@ def build_tool_definitions() -> list["Tool"]:
         Tool(
             name="memory_learn",
             description="Establish semantic knowledge - a fact, pattern, or rule.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "knowledge": {
@@ -809,7 +809,7 @@ def build_tool_definitions() -> list["Tool"]:
         Tool(
             name="memory_warn",
             description="Add a warning about a fragile or dangerous area.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "area": {"type": "string", "description": "Area/file/module to warn about"},
@@ -832,7 +832,7 @@ def build_tool_definitions() -> list["Tool"]:
         Tool(
             name="memory_issue",
             description="Document a known issue with optional workaround.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "issue": {"type": "string", "description": "Issue description"},
@@ -853,7 +853,7 @@ def build_tool_definitions() -> list["Tool"]:
         Tool(
             name="memory_goal",
             description="Set a goal or intent with optional constraints.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "goal": {"type": "string", "description": "Goal description"},
@@ -879,7 +879,7 @@ def build_tool_definitions() -> list["Tool"]:
         Tool(
             name="memory_working_on",
             description="Set what is currently being worked on. Helps track context.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "task": {"type": "string", "description": "What you're working on"},
@@ -902,7 +902,7 @@ def build_tool_definitions() -> list["Tool"]:
                 "Record an assisted task-completion outcome. "
                 "Intent status remains externally owned and unchanged."
             ),
-            inputSchema={"type": "object", "properties": {}},
+            input_schema={"type": "object", "properties": {}},
         ),
         Tool(
             name="memory_update_intent",
@@ -912,7 +912,7 @@ def build_tool_definitions() -> list["Tool"]:
                 "Send workflow_report separately to mirror an explicit external task status, "
                 "with ordered revisions and completion evidence (SQLite storage)."
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "workflow_report": _workflow_report_schema(),
@@ -935,7 +935,7 @@ def build_tool_definitions() -> list["Tool"]:
         Tool(
             name="memory_close_intent",
             description="Close an intent by ID without marking it completed.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "intent_id": {"type": "string", "description": "Intent ID to close"},
@@ -947,17 +947,17 @@ def build_tool_definitions() -> list["Tool"]:
         Tool(
             name="memory_stats",
             description="Get memory statistics - counts of memories by type and layer.",
-            inputSchema={"type": "object", "properties": {}},
+            input_schema={"type": "object", "properties": {}},
         ),
         Tool(
             name="memory_list_warnings",
             description="List all warnings about fragile areas.",
-            inputSchema={"type": "object", "properties": {}},
+            input_schema={"type": "object", "properties": {}},
         ),
         Tool(
             name="memory_list_intents",
             description="List all active goals and intents.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "repo_id": {"type": "string", "description": "Repository/project ID"},
@@ -973,7 +973,7 @@ def build_tool_definitions() -> list["Tool"]:
         Tool(
             name="memory_feedback_log",
             description="Log recall utility feedback for surfaced, used, or dismissed memory.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "memory_id": {"type": "string", "description": "Single memory ID"},
@@ -1005,7 +1005,7 @@ def build_tool_definitions() -> list["Tool"]:
         Tool(
             name="memory_feedback_inspect",
             description="Inspect aggregate recall utility feedback signals.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "memory_id": {"type": "string", "description": "Filter by memory ID"},
@@ -1018,7 +1018,7 @@ def build_tool_definitions() -> list["Tool"]:
         Tool(
             name="memory_feedback_reset",
             description="Reset recall utility feedback signals matching filters.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "memory_id": {"type": "string", "description": "Filter by memory ID"},
@@ -1036,19 +1036,19 @@ def build_tool_definitions() -> list["Tool"]:
         Tool(
             name="memory_compress",
             description="Compress old episodic memories into semantic knowledge.",
-            inputSchema={"type": "object", "properties": {}},
+            input_schema={"type": "object", "properties": {}},
         ),
         Tool(
             name="memory_decay",
             description="Apply decay to old, unused memories.",
-            inputSchema={"type": "object", "properties": {}},
+            input_schema={"type": "object", "properties": {}},
         ),
         Tool(
             name="memory_decay_preview",
             description=(
                 "Preview memory strength and which memories would decay without mutating them."
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "repo_id": {"type": "string", "description": "Repository/project ID"},
@@ -1074,7 +1074,7 @@ def build_tool_definitions() -> list["Tool"]:
                 "Record assisted completion outcomes for active goals without "
                 "changing their status. Requires confirm=true."
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "confirm": {
@@ -1091,7 +1091,7 @@ def build_tool_definitions() -> list["Tool"]:
                 "Run an LLM-required memory task. Uses the connected MCP client's model "
                 "through sampling when supported, otherwise the configured server provider."
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "required": ["task", "prompt"],
                 "properties": {

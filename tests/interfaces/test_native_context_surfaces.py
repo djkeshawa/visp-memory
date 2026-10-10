@@ -81,7 +81,7 @@ def test_cli_brief_uses_native_hybrid(memory, monkeypatch, ranking):
 def test_mcp_advertises_native_ranking_and_time():
     tools = {tool.name: tool for tool in build_tool_definitions()}
     for name in ("memory_context", "memory_prepare_task"):
-        properties = tools[name].inputSchema["properties"]
+        properties = tools[name].input_schema["properties"]
         assert properties["ranking_strategy"]["enum"] == ["default", "hybrid", "hybrid_union"]
         assert properties["context_selection"]["enum"] == ["default", "coverage"]
         assert "as_of" in properties

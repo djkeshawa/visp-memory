@@ -82,6 +82,6 @@ def test_mcp_schema_advertises_default_and_hybrid():
     from visp_memory.interfaces.mcp_tools import build_tool_definitions
 
     tool = next(t for t in build_tool_definitions() if t.name == "memory_recall")
-    option = tool.inputSchema["properties"]["ranking_strategy"]
+    option = tool.input_schema["properties"]["ranking_strategy"]
     assert option["enum"] == ["default", "hybrid", "hybrid_union"]
     assert option["default"] == "default"

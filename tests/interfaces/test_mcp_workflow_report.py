@@ -58,5 +58,5 @@ def test_nested_report_schema_validates_real_payload(monkeypatch):
                 "evidence": [{"description": "Tests"}],
             },
         },
-        tool.inputSchema,
+        tool.input_schema,
     )

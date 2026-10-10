@@ -55,8 +55,7 @@ def test_unscoped_memory_operations_use_the_configured_project(client_memory):
 async def test_mcp_tools_succeed_in_client_mode_on_a_shared_server(
     client_memory, monkeypatch, tool, arguments, expected
 ):
-    from mcp.types import CallToolRequest, CallToolRequestParams
-
+    from tests.mcp_client import call_tool
     from visp_memory.interfaces import mcp as mcp_module
 
     monkeypatch.setenv("VISP_MEMORY_MCP_PROFILE", "full")
@@ -65,15 +64,10 @@ async def test_mcp_tools_succeed_in_client_mode_on_a_shared_server(
     monkeypatch.setattr(mcp_module, "Memory", lambda *a, **k: memory)
     server = mcp_module.create_mcp_server()
 
-    result = await server.request_handlers[CallToolRequest](
-        CallToolRequest(
-            method="tools/call",
-            params=CallToolRequestParams(name=tool, arguments=arguments),
-        )
-    )
+    result = await call_tool(server, tool, arguments)
 
-    text = result.root.content[0].text
-    assert result.root.isError is False
+    text = result.content[0].text
+    assert result.is_error is False
     assert expected in text, text
     with pytest.raises(json.JSONDecodeError):
         json.loads(text)

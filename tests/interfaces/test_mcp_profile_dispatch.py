@@ -77,15 +77,9 @@ class TestDispatchEnforcement:
         finally:
             mcp_module.Memory = original  # type: ignore[assignment]
 
-        from mcp.types import CallToolRequest, CallToolRequestParams
+        from tests.mcp_client import call_tool
 
-        handler = server.request_handlers[CallToolRequest]
-        request = CallToolRequest(
-            method="tools/call",
-            params=CallToolRequestParams(name=name, arguments=arguments),
-        )
-        result = await handler(request)
-        return result.root.content
+        return (await call_tool(server, name, arguments)).content
 
     async def test_readonly_profile_refuses_a_write_tool_at_dispatch(
         self, tmp_path, monkeypatch

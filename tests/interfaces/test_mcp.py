@@ -45,17 +45,13 @@ class TestMCPServer:
             pytest.skip("MCP not installed")
         monkeypatch.delenv("VISP_MEMORY_AGENT", raising=False)
         monkeypatch.setenv("VISP_MEMORY_SESSION", "session-a")
-        server = SimpleNamespace(
-            request_context=SimpleNamespace(
-                session=SimpleNamespace(
-                    client_params=SimpleNamespace(
-                        clientInfo=SimpleNamespace(name="Codex", version="2.1")
-                    )
-                )
+        session = SimpleNamespace(
+            client_params=SimpleNamespace(
+                client_info=SimpleNamespace(name="Codex", version="2.1")
             )
         )
 
-        assert _writer_for_call(server) == WriterIdentity(
+        assert _writer_for_call(session) == WriterIdentity(
             "Codex", "session-a", "Codex/2.1"
         )
 
@@ -67,17 +63,13 @@ class TestMCPServer:
             pytest.skip("MCP not installed")
         monkeypatch.setenv("VISP_MEMORY_AGENT", "codex-cli")
         monkeypatch.setenv("VISP_MEMORY_SESSION", "session-env")
-        server = SimpleNamespace(
-            request_context=SimpleNamespace(
-                session=SimpleNamespace(
-                    client_params=SimpleNamespace(
-                        clientInfo=SimpleNamespace(name="ClaudeDesktop", version="1.0")
-                    )
-                )
+        session = SimpleNamespace(
+            client_params=SimpleNamespace(
+                client_info=SimpleNamespace(name="ClaudeDesktop", version="1.0")
             )
         )
 
-        assert _writer_for_call(server) == WriterIdentity(
+        assert _writer_for_call(session) == WriterIdentity(
             "codex-cli", "session-env", "ClaudeDesktop/1.0"
         )
 
@@ -95,10 +87,10 @@ class TestMCPServer:
         monkeypatch.delenv("VISP_MEMORY_AGENT", raising=False)
         monkeypatch.delenv("VISP_MEMORY_SESSION", raising=False)
         _ensure_process_session()
-        server = SimpleNamespace()
+        session = SimpleNamespace()
 
-        first = _writer_for_call(server)
-        second = _writer_for_call(server)
+        first = _writer_for_call(session)
+        second = _writer_for_call(session)
 
         assert first.session
         assert first.session == second.session
@@ -108,8 +100,7 @@ class TestMCPServer:
     async def test_mcp_dispatch_binds_the_writer_for_tool_execution(
         self, tmp_path, monkeypatch
     ):
-        from mcp.types import CallToolRequest, CallToolRequestParams
-
+        from tests.mcp_client import call_tool
         from visp_memory.core.attribution import WriterIdentity, current_writer
         from visp_memory.interfaces import mcp as mcp_module
 
@@ -131,23 +122,23 @@ class TestMCPServer:
             return "ok"
 
         monkeypatch.setattr(mcp_module, "handle_tool", capture_writer)
-        request = CallToolRequest(
-            method="tools/call",
-            params=CallToolRequestParams(
-                name="memory_record", arguments={"event": "dispatch event"}
-            ),
+        from mcp.types import Implementation
+
+        await call_tool(
+            server,
+            "memory_record",
+            {"event": "dispatch event"},
+            client_info=Implementation(name="Codex", version="2.1"),
         )
 
-        await server.request_handlers[CallToolRequest](request)
-
-        assert captured == [WriterIdentity("codex", "dispatch-session", None)]
+        # The environment agent wins; the connected client's info labels the write.
+        assert captured == [WriterIdentity("codex", "dispatch-session", "Codex/2.1")]
 
     @pytest.mark.asyncio
     async def test_mcp_learn_schema_is_closed_and_has_no_signing_surface(
         self, tmp_path, monkeypatch
     ):
-        from mcp.types import ListToolsRequest
-
+        from tests.mcp_client import list_tools
         from visp_memory.interfaces.mcp import MCP_AVAILABLE, create_mcp_server
 
         if not MCP_AVAILABLE:
@@ -161,9 +152,8 @@ class TestMCPServer:
         monkeypatch.setenv("VISP_MEMORY_MCP_PROFILE", "full")
         with mock.patch("visp_memory.interfaces.mcp.Memory", return_value=memory):
             server = create_mcp_server()
-        response = await server.request_handlers[ListToolsRequest](ListToolsRequest())
-        tools = {tool.name: tool for tool in response.root.tools}
-        properties = tools["memory_learn"].inputSchema["properties"]
+        tools = {tool.name: tool for tool in await list_tools(server)}
+        properties = tools["memory_learn"].input_schema["properties"]
 
         assert properties["category"]["enum"] == [
             "fact",
@@ -217,8 +207,7 @@ class TestMCPServer:
     async def test_guarded_tools_advertise_string_or_array_runtime_scope(
         self, tmp_path, monkeypatch
     ):
-        from mcp.types import ListToolsRequest
-
+        from tests.mcp_client import list_tools
         from visp_memory.interfaces.mcp import (
             MCP_AVAILABLE,
             RUNTIME_SCOPE_SCHEMA,
@@ -235,8 +224,7 @@ class TestMCPServer:
         monkeypatch.setenv("VISP_MEMORY_MCP_PROFILE", "full")
         with mock.patch("visp_memory.interfaces.mcp.Memory", return_value=memory):
             server = create_mcp_server()
-        response = await server.request_handlers[ListToolsRequest](ListToolsRequest())
-        tools = {tool.name: tool for tool in response.root.tools}
+        tools = {tool.name: tool for tool in await list_tools(server)}
 
         guarded_names = {
             "memory_prepare_task",
@@ -250,7 +238,7 @@ class TestMCPServer:
             "memory_before_change",
         }
         for name in guarded_names:
-            properties = tools[name].inputSchema["properties"]
+            properties = tools[name].input_schema["properties"]
             assert properties["environment"] == RUNTIME_SCOPE_SCHEMA
             assert properties["task_type"] == RUNTIME_SCOPE_SCHEMA
         for name in {
@@ -259,7 +247,7 @@ class TestMCPServer:
             "memory_path",
             "memory_why_relevant",
         }:
-            assert tools[name].inputSchema["properties"]["as_of"] == {
+            assert tools[name].input_schema["properties"]["as_of"] == {
                 "type": "string",
                 "format": "date-time",
             }
