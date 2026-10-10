@@ -30,7 +30,10 @@ tag has no section yet) as the GitHub release body. See
   (HTTP 403). Add other names with `VISP_MEMORY_SERVER_ALLOWED_HOSTS`
   (comma-separated; `*` turns the Host check off).
 - `memory_model_task` over HTTP MCP requires an administrator token, like
-  `POST /ai/test`.
+  `POST /ai/test`. A server started with a static `--token` has no administrator
+  principal, so the tool is refused there. On the provider path the tool's
+  `max_tokens` (default 800) now caps the output, even when the configured cap is
+  higher.
 - `POST /auth/login` answers 429 with `Retry-After` after repeated failures from one
   address, or for one username from one address.
 
